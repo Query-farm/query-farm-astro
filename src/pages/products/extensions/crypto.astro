@@ -10,7 +10,10 @@ import ExtensionCard from '../../../components/products/ExtensionCard.astro';
 import ExtensionInfo from '../../../components/products/ExtensionInfo.astro';
 import ExtensionChangelog from '../../../components/products/ExtensionChangelog.astro';
 import DuckDBExtensionFunctionDoc from '../../../components/docs/DuckDBExtensionFunctionDoc.astro';
-import { cryptoFunctions, extensionMetadata } from '../../../data/crypto-functions';
+import DuckDBExtensionPragmaDoc from '../../../components/docs/DuckDBExtensionPragmaDoc.astro';
+import DuckDBExtensionSecretDoc from '../../../components/docs/DuckDBExtensionSecretDoc.astro';
+import DuckDBExtensionMacroDoc from '../../../components/docs/DuckDBExtensionMacroDoc.astro';
+import { cryptoFunctions, cryptoPragmas, cryptoSecrets, cryptoMacros, extensionMetadata } from '../../../data/crypto-functions';
 import { getExtensionsByIds } from '../../../data/extensions';
 
 // Use extension metadata
@@ -28,6 +31,72 @@ const categories = cryptoFunctions.reduce((acc, fn) => {
 // Sort categories
 const categoryOrder = ['Hashing', 'HMAC', 'Password', 'Key Generation', 'Auditing', 'Aggregation'];
 const sortedCategories = categoryOrder.filter(cat => categories[cat]);
+
+// Create unified extension contents (functions + macros + pragmas + secrets)
+interface ExtensionContent {
+  id: string;
+  name: string;
+  type: 'scalar' | 'table' | 'aggregate' | 'macro' | 'pragma' | 'secret';
+  category: string;
+  description: string;
+  href: string;
+}
+
+const extensionContents: ExtensionContent[] = [
+  // Add all functions
+  ...cryptoFunctions.map(fn => ({
+    id: fn.id,
+    name: fn.name + '()',
+    type: fn.type,
+    category: fn.category,
+    description: fn.description.split('.')[0],
+    href: `#${fn.id}`
+  })),
+  // Add all macros
+  ...cryptoMacros.map(macro => ({
+    id: macro.id,
+    name: macro.name + '()',
+    type: 'macro' as const,
+    category: macro.category,
+    description: macro.description.split('.')[0],
+    href: `#${macro.id}`
+  })),
+  // Add all pragmas
+  ...cryptoPragmas.map(pragma => ({
+    id: pragma.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    name: pragma.name,
+    type: 'pragma' as const,
+    category: 'Configuration',
+    description: pragma.description.split('.')[0],
+    href: `#${pragma.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+  })),
+  // Add all secrets
+  ...cryptoSecrets.map(secret => ({
+    id: secret.id,
+    name: secret.name,
+    type: 'secret' as const,
+    category: secret.category,
+    description: secret.description.split('.')[0],
+    href: `#${secret.id}`
+  }))
+];
+
+// Group extension contents by category
+const contentCategories = extensionContents.reduce((acc, item) => {
+  if (!acc[item.category]) {
+    acc[item.category] = [];
+  }
+  acc[item.category].push(item);
+  return acc;
+}, {} as Record<string, ExtensionContent[]>);
+
+// Sort content categories (functions first, then macros, then Configuration, then Secrets)
+const sortedContentCategories = [
+  ...categoryOrder,
+  'Data Privacy', 'Security', 'Data Integrity', 'Encryption',
+  'Configuration',
+  'Cloud Storage', 'Database Connections'
+].filter(cat => contentCategories[cat]);
 
 // Related extensions - just list the IDs
 const relatedExtensionIds = ['hashfunctions'];
@@ -286,13 +355,14 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
     </div>
   </section>
 
-  <!-- Functions Index -->
+
+  <!-- Extension Contents Index -->
   <section id="functions-index" class="py-16 lg:py-24 bg-soil-50">
     <div class="section-container">
       <SectionHeader
         eyebrow="Reference"
-        title="Functions Index"
-        description="Quick reference to all available cryptographic functions organized by category."
+        title="Extension Contents"
+        description="Quick reference to all available functions and settings organized by category."
         class="mb-12"
       />
 
@@ -302,15 +372,15 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
             <table class="w-full text-sm">
               <thead class="bg-soil-100 border-b-2 border-soil-300">
                 <tr>
-                  <th class="px-4 py-3 text-left font-semibold text-soil-900">Function</th>
+                  <th class="px-4 py-3 text-left font-semibold text-soil-900">Name</th>
                   <th class="px-4 py-3 text-left font-semibold text-soil-900">Type</th>
                   <th class="px-4 py-3 text-left font-semibold text-soil-900">Description</th>
                 </tr>
               </thead>
               <tbody>
-                {sortedCategories.map((categoryName, catIndex) => {
+                {sortedContentCategories.map((categoryName, catIndex) => {
                   const categoryId = categoryName.toLowerCase().replace(/\s+/g, '-');
-                  const funcs = categories[categoryName];
+                  const items = contentCategories[categoryName];
 
                   return (
                     <>
@@ -321,27 +391,42 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
                         </td>
                       </tr>
 
-                      {/* Function Rows */}
-                      {funcs.map((fn, fnIndex) => (
+                      {/* Content Rows */}
+                      {items.map((item, itemIndex) => (
                         <tr
-                          class={`hover:bg-soil-50 cursor-pointer ${fnIndex === funcs.length - 1 && catIndex !== sortedCategories.length - 1 ? 'border-b border-soil-300' : ''}`}
-                          onclick={`window.location.hash='${fn.id}'`}
+                          class={`hover:bg-soil-50 cursor-pointer ${itemIndex === items.length - 1 && catIndex !== sortedContentCategories.length - 1 ? 'border-b border-soil-300' : ''}`}
+                          onclick={`window.location.hash='${item.id}'`}
                         >
                           <td class="px-4 py-3">
-                            <a href={`#${fn.id}`} class="font-mono text-harvest-700 hover:text-harvest-800 font-medium">
-                              {fn.name}()
+                            <a href={item.href} class="font-mono text-harvest-700 hover:text-harvest-800 font-medium">
+                              {item.name}
                             </a>
                           </td>
                           <td class="px-4 py-3">
-                            {fn.type === 'scalar' && <Badge variant="info" size="sm">Scalar</Badge>}
-                            {fn.type === 'table' && <Badge variant="success" size="sm">Table</Badge>}
-                            {fn.type === 'aggregate' && (
+                            {item.type === 'scalar' && <Badge variant="info" size="sm">Scalar Function</Badge>}
+                            {item.type === 'table' && <Badge variant="success" size="sm">Table Function</Badge>}
+                            {item.type === 'aggregate' && (
                               <span class="inline-flex items-center font-medium rounded-md border px-2 py-1 text-xs bg-orange-100 text-orange-800 border-orange-300">
-                                Aggregate
+                                Aggregate Function
+                              </span>
+                            )}
+                            {item.type === 'macro' && (
+                              <span class="inline-flex items-center font-medium rounded-md border px-2 py-1 text-xs bg-teal-100 text-teal-800 border-teal-300">
+                                Macro
+                              </span>
+                            )}
+                            {item.type === 'pragma' && (
+                              <span class="inline-flex items-center font-medium rounded-md border px-2 py-1 text-xs bg-purple-100 text-purple-800 border-purple-300">
+                                Pragma
+                              </span>
+                            )}
+                            {item.type === 'secret' && (
+                              <span class="inline-flex items-center font-medium rounded-md border px-2 py-1 text-xs bg-indigo-100 text-indigo-800 border-indigo-300">
+                                Secret
                               </span>
                             )}
                           </td>
-                          <td class="px-4 py-3 text-soil-700">{fn.description.split('.')[0]}</td>
+                          <td class="px-4 py-3 text-soil-700">{item.description}</td>
                         </tr>
                       ))}
                     </>
@@ -372,6 +457,66 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
       </div>
     </div>
   </section>
+
+  <!-- Extension Macros -->
+  {cryptoMacros && cryptoMacros.length > 0 && (
+    <section id="macros" class="py-16 lg:py-24 bg-soil-50">
+      <div class="section-container">
+        <SectionHeader
+          eyebrow="SQL Macros"
+          title="Extension Macros"
+          description="Convenience macros that simplify common cryptographic operations and provide shorthand syntax for frequently used patterns."
+          class="mb-12"
+        />
+
+        <div class="max-w-6xl mx-auto">
+          {cryptoMacros.map((macro) => (
+            <DuckDBExtensionMacroDoc {...macro} />
+          ))}
+        </div>
+      </div>
+    </section>
+  )}
+
+  <!-- Settings/Pragmas Section -->
+  {cryptoPragmas && cryptoPragmas.length > 0 && (
+    <section id="settings" class="py-16 lg:py-24 bg-white">
+      <div class="section-container">
+        <SectionHeader
+          eyebrow="Configuration"
+          title="Extension Settings"
+          description="Configure the crypto extension behavior using these pragma settings."
+          class="mb-12"
+        />
+
+        <div class="max-w-6xl mx-auto">
+          {cryptoPragmas.map((pragma) => (
+            <DuckDBExtensionPragmaDoc {...pragma} />
+          ))}
+        </div>
+      </div>
+    </section>
+  )}
+
+  <!-- Extension Secrets -->
+  {cryptoSecrets && cryptoSecrets.length > 0 && (
+    <section id="secrets" class="py-16 lg:py-24 bg-soil-50">
+      <div class="section-container">
+        <SectionHeader
+          eyebrow="Security"
+          title="Extension Secrets"
+          description="DuckDB secrets for securely storing credentials and encryption keys used by the crypto extension."
+          class="mb-12"
+        />
+
+        <div class="max-w-6xl mx-auto">
+          {cryptoSecrets.map((secret) => (
+            <DuckDBExtensionSecretDoc {...secret} />
+          ))}
+        </div>
+      </div>
+    </section>
+  )}
 
   <!-- Back to Top -->
   <section class="py-8 bg-white border-t border-soil-200">

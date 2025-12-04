@@ -11,6 +11,44 @@ export const extensionMetadata = {
   }
 };
 
+// Pragma/Settings interface
+export interface Pragma {
+  name: string;
+  default: string | number | boolean;
+  description: string;
+  type?: 'string' | 'number' | 'boolean';
+  validValues?: string[];
+  example?: string;
+}
+
+// Secret interface
+export interface SecretParameter {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+}
+
+export interface Secret {
+  id: string;
+  name: string;
+  type: string; // e.g., "S3", "Azure Blob", "GCS"
+  category: string;
+  description: string;
+  parameters: SecretParameter[];
+  examples: FunctionExample[];
+}
+
+// Macro interface
+export interface Macro {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  definition: string;
+  examples: FunctionExample[];
+}
+
 // Type definitions for function documentation
 export interface FunctionParameter {
   name: string;
@@ -488,5 +526,445 @@ WHERE upload_batch_id = 'batch_123';`
       }
     ],
     tags: ['merkle-tree', 'aggregation', 'blockchain', 'tamper-proof', 'efficient-verification', 'cryptographic']
+  }
+];
+
+// Extension pragmas/settings
+export const cryptoPragmas: Pragma[] = [
+  {
+    name: 'crypto_default_hash_algorithm',
+    default: 'sha256',
+    type: 'string',
+    validValues: ['sha256', 'sha512', 'blake2b'],
+    description: 'Sets the default hashing algorithm used by crypto functions when no algorithm is explicitly specified.',
+    example: "SET crypto_default_hash_algorithm = 'sha512';"
+  },
+  {
+    name: 'crypto_enable_timing_safe_compare',
+    default: true,
+    type: 'boolean',
+    description: 'Enables constant-time comparison for password verification to prevent timing attacks. Should always be enabled in production.',
+    example: "SET crypto_enable_timing_safe_compare = true;"
+  },
+  {
+    name: 'crypto_max_key_generation_batch',
+    default: 1000,
+    type: 'number',
+    description: 'Maximum number of cryptographic keys that can be generated in a single batch operation. Prevents excessive memory usage.',
+    example: "SET crypto_max_key_generation_batch = 500;"
+  },
+  {
+    name: 'crypto_bcrypt_default_cost',
+    default: 10,
+    type: 'number',
+    description: 'Default cost factor for bcrypt password hashing (4-31). Higher values are more secure but slower. Recommended: 10-12 for most applications.',
+    example: "SET crypto_bcrypt_default_cost = 12;"
+  }
+];
+
+// Extension secrets
+export const cryptoSecrets: Secret[] = [
+  {
+    id: 'aws-s3-crypto',
+    name: 'aws_s3_crypto',
+    type: 'S3',
+    category: 'Cloud Storage',
+    description: 'AWS S3 credentials for encrypting and decrypting data stored in S3 buckets. Enables server-side encryption with customer-provided keys (SSE-C) and client-side encryption workflows.',
+    parameters: [
+      {
+        name: 'access_key_id',
+        type: 'VARCHAR',
+        required: true,
+        description: 'AWS access key ID for authentication'
+      },
+      {
+        name: 'secret_access_key',
+        type: 'VARCHAR',
+        required: true,
+        description: 'AWS secret access key for authentication'
+      },
+      {
+        name: 'region',
+        type: 'VARCHAR',
+        required: true,
+        description: 'AWS region where the S3 bucket is located (e.g., us-east-1)'
+      },
+      {
+        name: 'session_token',
+        type: 'VARCHAR',
+        required: false,
+        description: 'Temporary session token for AWS STS credentials'
+      },
+      {
+        name: 'encryption_key',
+        type: 'VARCHAR',
+        required: false,
+        description: 'Base64-encoded 256-bit AES key for client-side encryption'
+      }
+    ],
+    examples: [
+      {
+        description: 'Create an S3 secret with encryption key',
+        code: `CREATE SECRET aws_s3_crypto (
+  TYPE S3,
+  access_key_id 'AKIAIOSFODNN7EXAMPLE',
+  secret_access_key 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+  region 'us-east-1',
+  encryption_key 'YourBase64EncodedEncryptionKey=='
+);`
+      },
+      {
+        description: 'Read encrypted data from S3',
+        code: `SELECT *
+FROM read_parquet('s3://my-bucket/encrypted-data/*.parquet')
+WHERE created_at > '2024-01-01';`
+      },
+      {
+        description: 'Write encrypted data to S3',
+        code: `COPY (
+  SELECT
+    crypto_sha256(user_id) AS anonymous_id,
+    transaction_amount,
+    created_at
+  FROM transactions
+)
+TO 's3://my-bucket/encrypted-output/data.parquet'
+(FORMAT PARQUET, ENCRYPTION 'AES-256');`
+      }
+    ]
+  },
+  {
+    id: 'azure-blob-crypto',
+    name: 'azure_blob_crypto',
+    type: 'Azure Blob',
+    category: 'Cloud Storage',
+    description: 'Azure Blob Storage credentials for encrypted data operations. Supports Azure Storage encryption at rest and customer-managed keys.',
+    parameters: [
+      {
+        name: 'account_name',
+        type: 'VARCHAR',
+        required: true,
+        description: 'Azure Storage account name'
+      },
+      {
+        name: 'account_key',
+        type: 'VARCHAR',
+        required: true,
+        description: 'Azure Storage account key for authentication'
+      },
+      {
+        name: 'connection_string',
+        type: 'VARCHAR',
+        required: false,
+        description: 'Full Azure Storage connection string (alternative to account_name + account_key)'
+      },
+      {
+        name: 'encryption_scope',
+        type: 'VARCHAR',
+        required: false,
+        description: 'Azure encryption scope for customer-managed keys'
+      }
+    ],
+    examples: [
+      {
+        description: 'Create an Azure Blob secret',
+        code: `CREATE SECRET azure_blob_crypto (
+  TYPE AZURE,
+  account_name 'mystorageaccount',
+  account_key 'your-account-key-here==',
+  encryption_scope 'my-encryption-scope'
+);`
+      },
+      {
+        description: 'Query encrypted blob storage',
+        code: `SELECT *
+FROM read_csv('azure://mycontainer/encrypted-data/*.csv')
+LIMIT 100;`
+      }
+    ]
+  },
+  {
+    id: 'gcs-crypto',
+    name: 'gcs_crypto',
+    type: 'GCS',
+    category: 'Cloud Storage',
+    description: 'Google Cloud Storage credentials for encrypted data operations. Supports customer-supplied encryption keys (CSEK) and Cloud KMS integration.',
+    parameters: [
+      {
+        name: 'service_account_key',
+        type: 'VARCHAR',
+        required: true,
+        description: 'JSON service account key for authentication'
+      },
+      {
+        name: 'project_id',
+        type: 'VARCHAR',
+        required: true,
+        description: 'GCP project ID'
+      },
+      {
+        name: 'encryption_key',
+        type: 'VARCHAR',
+        required: false,
+        description: 'Base64-encoded customer-supplied encryption key (CSEK)'
+      },
+      {
+        name: 'kms_key_name',
+        type: 'VARCHAR',
+        required: false,
+        description: 'Cloud KMS key resource name for encryption'
+      }
+    ],
+    examples: [
+      {
+        description: 'Create a GCS secret with CSEK',
+        code: `CREATE SECRET gcs_crypto (
+  TYPE GCS,
+  service_account_key '{"type":"service_account",...}',
+  project_id 'my-project-id',
+  encryption_key 'YourBase64EncodedCSEKKey=='
+);`
+      },
+      {
+        description: 'Access encrypted GCS data',
+        code: `SELECT COUNT(*) AS total_records
+FROM read_parquet('gs://my-bucket/encrypted-data/*.parquet');`
+      }
+    ]
+  },
+  {
+    id: 'database-crypto',
+    name: 'database_crypto',
+    type: 'Database',
+    category: 'Database Connections',
+    description: 'Encrypted database connection credentials for secure access to external databases. Stores connection strings and credentials with encryption at rest.',
+    parameters: [
+      {
+        name: 'connection_string',
+        type: 'VARCHAR',
+        required: true,
+        description: 'Database connection string (supports PostgreSQL, MySQL, SQL Server)'
+      },
+      {
+        name: 'username',
+        type: 'VARCHAR',
+        required: true,
+        description: 'Database username'
+      },
+      {
+        name: 'password',
+        type: 'VARCHAR',
+        required: true,
+        description: 'Database password (encrypted at rest)'
+      },
+      {
+        name: 'ssl_cert',
+        type: 'VARCHAR',
+        required: false,
+        description: 'SSL certificate for encrypted connections'
+      },
+      {
+        name: 'ssl_key',
+        type: 'VARCHAR',
+        required: false,
+        description: 'SSL private key for encrypted connections'
+      }
+    ],
+    examples: [
+      {
+        description: 'Create a PostgreSQL secret with SSL',
+        code: `CREATE SECRET database_crypto (
+  TYPE POSTGRES,
+  connection_string 'host=db.example.com port=5432 dbname=mydb',
+  username 'dbuser',
+  password 'securepassword123',
+  ssl_cert 'path/to/client-cert.pem',
+  ssl_key 'path/to/client-key.pem'
+);`
+      },
+      {
+        description: 'Query external database securely',
+        code: `ATTACH 'host=db.example.com' AS external_db (TYPE POSTGRES, SECRET database_crypto);
+
+SELECT *
+FROM external_db.public.sensitive_data
+WHERE department = 'Finance';`
+      }
+    ]
+  }
+];
+
+// Extension macros
+export const cryptoMacros: Macro[] = [
+  {
+    id: 'hash_pii',
+    name: 'hash_pii',
+    category: 'Data Privacy',
+    description: 'Convenience macro for hashing personally identifiable information (PII) fields using SHA-256. Simplifies anonymization workflows by providing a shorthand for common hashing operations.',
+    definition: "CREATE MACRO hash_pii(field) AS crypto_sha256(CAST(field AS VARCHAR));",
+    examples: [
+      {
+        description: 'Anonymize PII fields in a query',
+        code: `SELECT
+  hash_pii(email) AS user_hash,
+  hash_pii(phone) AS phone_hash,
+  order_total,
+  created_at
+FROM orders
+LIMIT 10;`,
+        outputTable: {
+          columns: [
+            { name: 'user_hash', align: 'left' },
+            { name: 'phone_hash', align: 'left' },
+            { name: 'order_total', align: 'right' },
+            { name: 'created_at', align: 'left' }
+          ],
+          rows: [
+            ['a591a6d40bf42040...', 'f7c3bc1d808e04732...', 125.50, '2024-01-15'],
+            ['3c59dc048e88461f...', '1679091c5a880faf6...', 89.99, '2024-01-16']
+          ]
+        }
+      },
+      {
+        description: 'Create anonymized export',
+        code: `COPY (
+  SELECT
+    hash_pii(customer_email) AS customer_id,
+    hash_pii(customer_phone) AS phone_id,
+    product_category,
+    purchase_amount
+  FROM sales
+  WHERE created_at >= '2024-01-01'
+) TO 'anonymized_sales.parquet' (FORMAT PARQUET);`
+      }
+    ]
+  },
+  {
+    id: 'secure_compare',
+    name: 'secure_compare',
+    category: 'Security',
+    description: 'Timing-safe string comparison macro that prevents timing attacks. Uses constant-time comparison to ensure the comparison duration does not leak information about the strings being compared.',
+    definition: "CREATE MACRO secure_compare(a, b) AS crypto_hmac_sha256(CAST(a AS VARCHAR), 'compare') = crypto_hmac_sha256(CAST(b AS VARCHAR), 'compare');",
+    examples: [
+      {
+        description: 'Safely compare sensitive tokens',
+        code: `SELECT
+  token_id,
+  secure_compare(stored_token, input_token) AS is_valid
+FROM api_tokens
+WHERE user_id = 12345;`,
+        outputTable: {
+          columns: [
+            { name: 'token_id', align: 'left' },
+            { name: 'is_valid', align: 'left' }
+          ],
+          rows: [
+            ['tok_abc123', true],
+            ['tok_def456', false]
+          ]
+        }
+      }
+    ]
+  },
+  {
+    id: 'fingerprint_row',
+    name: 'fingerprint_row',
+    category: 'Data Integrity',
+    description: 'Generates a cryptographic fingerprint for an entire row by concatenating all column values and hashing them. Useful for change detection, deduplication, and data integrity verification.',
+    definition: "CREATE MACRO fingerprint_row(cols) AS crypto_sha256(CAST(cols AS VARCHAR));",
+    examples: [
+      {
+        description: 'Detect changed records',
+        code: `SELECT
+  id,
+  fingerprint_row(STRUCT_PACK(*)) AS row_hash,
+  name,
+  email,
+  updated_at
+FROM users
+WHERE updated_at > CURRENT_DATE - INTERVAL 7 DAYS;`
+      },
+      {
+        description: 'Deduplicate records based on content',
+        code: `WITH fingerprinted AS (
+  SELECT
+    *,
+    fingerprint_row(STRUCT_PACK(name, email, phone)) AS content_hash
+  FROM contacts
+)
+SELECT DISTINCT ON (content_hash)
+  name,
+  email,
+  phone
+FROM fingerprinted
+ORDER BY content_hash, created_at DESC;`
+      }
+    ]
+  },
+  {
+    id: 'encrypt_field',
+    name: 'encrypt_field',
+    category: 'Encryption',
+    description: 'Simplified field encryption macro using AES-256. Wraps complex encryption operations into an easy-to-use function for encrypting sensitive data at rest.',
+    definition: "CREATE MACRO encrypt_field(plaintext, key) AS encode(crypto_aes_encrypt(CAST(plaintext AS VARCHAR), key));",
+    examples: [
+      {
+        description: 'Encrypt sensitive fields before storage',
+        code: `INSERT INTO secure_storage (id, encrypted_ssn, encrypted_credit_card)
+SELECT
+  id,
+  encrypt_field(ssn, 'your-encryption-key') AS encrypted_ssn,
+  encrypt_field(credit_card, 'your-encryption-key') AS encrypted_credit_card
+FROM sensitive_data;`
+      }
+    ]
+  },
+  {
+    id: 'audit_hash_chain',
+    name: 'audit_hash_chain',
+    category: 'Auditing',
+    description: 'Creates a hash chain for audit trail records by combining the current record hash with the previous hash. Ensures tamper-evident logging where any modification breaks the chain.',
+    definition: "CREATE MACRO audit_hash_chain(current_data, previous_hash) AS crypto_sha256(CAST(current_data AS VARCHAR) || COALESCE(previous_hash, ''));",
+    examples: [
+      {
+        description: 'Build tamper-evident audit log',
+        code: `WITH audit_chain AS (
+  SELECT
+    id,
+    action,
+    user_id,
+    created_at,
+    LAG(hash) OVER (ORDER BY created_at) AS prev_hash,
+    audit_hash_chain(
+      STRUCT_PACK(id, action, user_id, created_at),
+      LAG(hash) OVER (ORDER BY created_at)
+    ) AS hash
+  FROM audit_log
+)
+SELECT * FROM audit_chain
+ORDER BY created_at;`
+      },
+      {
+        description: 'Verify audit trail integrity',
+        code: `WITH audit_chain AS (
+  SELECT
+    *,
+    LAG(hash) OVER (ORDER BY created_at) AS prev_hash,
+    audit_hash_chain(
+      STRUCT_PACK(id, action, user_id, created_at),
+      LAG(hash) OVER (ORDER BY created_at)
+    ) AS computed_hash
+  FROM audit_log
+)
+SELECT
+  id,
+  action,
+  CASE
+    WHEN hash = computed_hash THEN 'Valid'
+    ELSE 'Tampered'
+  END AS integrity_status
+FROM audit_chain;`
+      }
+    ]
   }
 ];
