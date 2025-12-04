@@ -49,6 +49,32 @@ export interface Macro {
   examples: FunctionExample[];
 }
 
+// Filesystem interface
+export interface Filesystem {
+  id: string;
+  name: string;
+  description: string;
+  category?: string;
+}
+
+// Storage Extension interface
+export interface StorageParameter {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+  default?: string;
+}
+
+export interface StorageExtension {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  parameters: StorageParameter[];
+  examples: FunctionExample[];
+}
+
 // Type definitions for function documentation
 export interface FunctionParameter {
   name: string;
@@ -77,7 +103,7 @@ export interface FunctionExample {
 export interface FunctionDocData {
   id: string;
   name: string;
-  type: 'scalar' | 'table' | 'aggregate';
+  type: 'scalar' | 'table' | 'aggregate' | 'copy';
   category: string; // e.g., "Hashing", "Password", "Key Generation"
   returnType?: string; // e.g., "VARCHAR", "BOOLEAN", "INTEGER" - for scalar/aggregate functions
   parameters: FunctionParameter[];
@@ -88,6 +114,7 @@ export interface FunctionDocData {
   parametersTitle?: string;
   relatedFunctions?: string[]; // Array of function IDs to look up
   tags?: string[]; // Descriptive tags for search and categorization
+  options?: FunctionParameter[]; // For copy functions - options that can be specified
 }
 
 // Example function data
@@ -526,6 +553,226 @@ WHERE upload_batch_id = 'batch_123';`
       }
     ],
     tags: ['merkle-tree', 'aggregation', 'blockchain', 'tamper-proof', 'efficient-verification', 'cryptographic']
+  },
+  {
+    id: 'copy_encrypted_parquet',
+    name: 'COPY_ENCRYPTED_PARQUET',
+    type: 'copy',
+    category: 'Data Export',
+    parameters: [
+      {
+        name: 'query',
+        type: 'SELECT query',
+        paramType: 'positional',
+        description: 'The SELECT query whose results will be exported'
+      },
+      {
+        name: 'file_path',
+        type: 'VARCHAR',
+        paramType: 'positional',
+        description: 'Destination file path for the encrypted Parquet file'
+      }
+    ],
+    options: [
+      {
+        name: 'ENCRYPTION_KEY',
+        type: 'VARCHAR',
+        paramType: 'named',
+        description: 'Base64-encoded AES-256 encryption key for client-side encryption'
+      },
+      {
+        name: 'ENCRYPTION_ALGORITHM',
+        type: 'VARCHAR',
+        paramType: 'named',
+        default: "'AES-256'",
+        description: "Encryption algorithm to use: 'AES-256' or 'AES-128'"
+      },
+      {
+        name: 'COMPRESSION',
+        type: 'VARCHAR',
+        paramType: 'named',
+        default: "'SNAPPY'",
+        description: "Compression codec: 'SNAPPY', 'GZIP', 'ZSTD', or 'NONE'"
+      },
+      {
+        name: 'ROW_GROUP_SIZE',
+        type: 'INTEGER',
+        paramType: 'named',
+        default: '100000',
+        description: 'Number of rows per Parquet row group'
+      }
+    ],
+    description: 'Exports query results to an encrypted Parquet file with client-side encryption. The entire file is encrypted at rest using AES-256, ensuring data confidentiality during storage and transit. Compatible with standard Parquet readers when decryption keys are provided.',
+    examples: [
+      {
+        description: 'Export encrypted user data to Parquet',
+        code: `COPY (
+  SELECT user_id, email, created_at, subscription_tier
+  FROM users
+  WHERE created_at > '2024-01-01'
+)
+TO 'encrypted_users.parquet'
+WITH (
+  ENCRYPTION_KEY 'YourBase64EncodedKey==',
+  COMPRESSION 'ZSTD'
+);`
+      },
+      {
+        description: 'Export with custom row group size for large datasets',
+        code: `COPY (
+  SELECT transaction_id, amount, timestamp, customer_id
+  FROM transactions
+  WHERE amount > 1000
+)
+TO 's3://my-bucket/encrypted-transactions.parquet'
+WITH (
+  ENCRYPTION_KEY 'YourBase64EncodedKey==',
+  ROW_GROUP_SIZE 500000,
+  COMPRESSION 'SNAPPY'
+);`
+      }
+    ],
+    tags: ['export', 'parquet', 'encryption', 'data-export', 'client-side-encryption', 'compression']
+  },
+  {
+    id: 'copy_encrypted_csv',
+    name: 'COPY_ENCRYPTED_CSV',
+    type: 'copy',
+    category: 'Data Export',
+    parameters: [
+      {
+        name: 'query',
+        type: 'SELECT query',
+        paramType: 'positional',
+        description: 'The SELECT query whose results will be exported'
+      },
+      {
+        name: 'file_path',
+        type: 'VARCHAR',
+        paramType: 'positional',
+        description: 'Destination file path for the encrypted CSV file'
+      }
+    ],
+    options: [
+      {
+        name: 'ENCRYPTION_KEY',
+        type: 'VARCHAR',
+        paramType: 'named',
+        description: 'Encryption key for securing the CSV file contents'
+      },
+      {
+        name: 'DELIMITER',
+        type: 'VARCHAR',
+        paramType: 'named',
+        default: "','",
+        description: 'Field delimiter character'
+      },
+      {
+        name: 'HEADER',
+        type: 'BOOLEAN',
+        paramType: 'named',
+        default: 'true',
+        description: 'Include column headers in the output'
+      },
+      {
+        name: 'QUOTE',
+        type: 'VARCHAR',
+        paramType: 'named',
+        default: '"',
+        description: 'Quote character for string fields'
+      }
+    ],
+    description: 'Exports query results to an encrypted CSV file. The CSV file is encrypted before being written to disk, protecting sensitive data in a portable text format. Useful for secure data exchange with systems that require CSV input.',
+    examples: [
+      {
+        description: 'Export encrypted customer data to CSV',
+        code: `COPY (
+  SELECT customer_id, name, email, phone
+  FROM customers
+  WHERE region = 'US'
+)
+TO 'encrypted_customers.csv'
+WITH (
+  ENCRYPTION_KEY 'YourSecureKey123',
+  HEADER true,
+  DELIMITER ','
+);`
+      }
+    ],
+    tags: ['export', 'csv', 'encryption', 'data-export', 'text-format', 'portable']
+  },
+  {
+    id: 'copy_signed_json',
+    name: 'COPY_SIGNED_JSON',
+    type: 'copy',
+    category: 'Data Export',
+    parameters: [
+      {
+        name: 'query',
+        type: 'SELECT query',
+        paramType: 'positional',
+        description: 'The SELECT query whose results will be exported'
+      },
+      {
+        name: 'file_path',
+        type: 'VARCHAR',
+        paramType: 'positional',
+        description: 'Destination file path for the signed JSON file'
+      }
+    ],
+    options: [
+      {
+        name: 'SIGNING_KEY',
+        type: 'VARCHAR',
+        paramType: 'named',
+        description: 'HMAC signing key for generating digital signatures'
+      },
+      {
+        name: 'FORMAT',
+        type: 'VARCHAR',
+        paramType: 'named',
+        default: "'ARRAY'",
+        description: "JSON format: 'ARRAY' (array of objects) or 'NEWLINE_DELIMITED' (JSONL)"
+      },
+      {
+        name: 'PRETTY',
+        type: 'BOOLEAN',
+        paramType: 'named',
+        default: 'false',
+        description: 'Pretty-print the JSON output with indentation'
+      }
+    ],
+    description: 'Exports query results to a cryptographically signed JSON file. Each record is signed with HMAC-SHA256, enabling tamper detection and data integrity verification. The signature is included in the output, allowing consumers to verify authenticity.',
+    examples: [
+      {
+        description: 'Export signed API response data',
+        code: `COPY (
+  SELECT api_key, rate_limit, created_at, permissions
+  FROM api_keys
+  WHERE status = 'active'
+)
+TO 'signed_api_keys.json'
+WITH (
+  SIGNING_KEY 'your-hmac-secret-key',
+  FORMAT 'ARRAY',
+  PRETTY true
+);`
+      },
+      {
+        description: 'Export newline-delimited signed events',
+        code: `COPY (
+  SELECT event_id, event_type, user_id, timestamp, payload
+  FROM audit_events
+  WHERE timestamp > CURRENT_DATE - INTERVAL 7 DAYS
+)
+TO 'signed_events.jsonl'
+WITH (
+  SIGNING_KEY 'audit-signing-key',
+  FORMAT 'NEWLINE_DELIMITED'
+);`
+      }
+    ],
+    tags: ['export', 'json', 'signing', 'data-export', 'integrity', 'tamper-detection', 'hmac']
   }
 ];
 
@@ -968,3 +1215,380 @@ FROM audit_chain;`
     ]
   }
 ];
+
+// Extension filesystems
+export const cryptoFilesystems: Filesystem[] = [
+  {
+    id: 'encrypted-s3',
+    name: 'encrypted_s3',
+    description: 'Virtual filesystem for reading and writing encrypted data to Amazon S3. Automatically handles client-side encryption and decryption using AES-256 with customer-provided keys. Seamlessly integrates with DuckDB\'s S3 filesystem while adding transparent encryption layer.',
+    category: 'Cloud Storage'
+  },
+  {
+    id: 'encrypted-azure',
+    name: 'encrypted_azure',
+    description: 'Virtual filesystem for Azure Blob Storage with built-in encryption support. Provides transparent encryption and decryption using Azure-compatible encryption standards. Works with customer-managed keys and Azure Key Vault integration.',
+    category: 'Cloud Storage'
+  },
+  {
+    id: 'encrypted-local',
+    name: 'encrypted_local',
+    description: 'Local filesystem overlay that provides transparent file-level encryption. All files are automatically encrypted at rest using AES-256. Ideal for storing sensitive data on disk while maintaining DuckDB\'s standard file access patterns.',
+    category: 'Local Storage'
+  },
+  {
+    id: 'vault-secrets',
+    name: 'vault',
+    description: 'HashiCorp Vault integration filesystem for reading secrets and credentials directly from Vault. Enables secure access to centrally managed secrets without storing credentials in query scripts or configuration files.',
+    category: 'Secret Management'
+  }
+];
+
+// Extension storage extensions
+export const cryptoStorageExtensions: StorageExtension[] = [
+  {
+    id: 'encrypted-postgres',
+    name: 'ENCRYPTED_POSTGRES',
+    category: 'Encrypted Database Storage',
+    description: 'Attach to PostgreSQL databases with automatic client-side encryption and decryption. All data transferred between DuckDB and PostgreSQL is encrypted using AES-256, protecting sensitive information in transit and at rest.',
+    parameters: [
+      {
+        name: 'host',
+        type: 'VARCHAR',
+        required: true,
+        description: 'PostgreSQL server hostname or IP address'
+      },
+      {
+        name: 'port',
+        type: 'INTEGER',
+        required: false,
+        description: 'PostgreSQL server port number',
+        default: '5432'
+      },
+      {
+        name: 'database',
+        type: 'VARCHAR',
+        required: true,
+        description: 'Name of the PostgreSQL database to attach'
+      },
+      {
+        name: 'user',
+        type: 'VARCHAR',
+        required: true,
+        description: 'PostgreSQL username for authentication'
+      },
+      {
+        name: 'password',
+        type: 'VARCHAR',
+        required: false,
+        description: 'PostgreSQL password (can use secrets instead)'
+      },
+      {
+        name: 'encryption_key',
+        type: 'VARCHAR',
+        required: true,
+        description: 'Base64-encoded AES-256 encryption key for data encryption'
+      },
+      {
+        name: 'ssl_mode',
+        type: 'VARCHAR',
+        required: false,
+        description: 'SSL connection mode (disable, require, verify-ca, verify-full)',
+        default: 'require'
+      }
+    ],
+    examples: [
+      {
+        description: 'Attach an encrypted PostgreSQL database using connection parameters',
+        code: `-- Attach encrypted PostgreSQL database
+ATTACH 'secure_db' (
+  TYPE ENCRYPTED_POSTGRES,
+  host 'db.example.com',
+  database 'production',
+  user 'analytics_user',
+  password 'secret123',
+  encryption_key 'base64_encoded_key_here=='
+);
+
+-- Query encrypted data
+SELECT * FROM secure_db.users LIMIT 5;`,
+        output: 'Database attached successfully. All queries automatically encrypt/decrypt data.'
+      },
+      {
+        description: 'Use with DuckDB secrets for credential management',
+        code: `-- Create secret for PostgreSQL credentials
+CREATE SECRET pg_creds (
+  TYPE POSTGRES,
+  host 'db.example.com',
+  user 'analytics_user',
+  password 'secret123'
+);
+
+-- Attach using secret reference
+ATTACH 'secure_db' (
+  TYPE ENCRYPTED_POSTGRES,
+  secret pg_creds,
+  database 'production',
+  encryption_key 'base64_encoded_key_here=='
+);`
+      }
+    ]
+  },
+  {
+    id: 'encrypted-mysql',
+    name: 'ENCRYPTED_MYSQL',
+    category: 'Encrypted Database Storage',
+    description: 'Connect to MySQL databases with transparent encryption layer. Provides client-side encryption for all data transfers, ensuring sensitive information remains protected even when the MySQL server is compromised.',
+    parameters: [
+      {
+        name: 'host',
+        type: 'VARCHAR',
+        required: true,
+        description: 'MySQL server hostname or IP address'
+      },
+      {
+        name: 'port',
+        type: 'INTEGER',
+        required: false,
+        description: 'MySQL server port number',
+        default: '3306'
+      },
+      {
+        name: 'database',
+        type: 'VARCHAR',
+        required: true,
+        description: 'Name of the MySQL database to attach'
+      },
+      {
+        name: 'user',
+        type: 'VARCHAR',
+        required: true,
+        description: 'MySQL username for authentication'
+      },
+      {
+        name: 'password',
+        type: 'VARCHAR',
+        required: false,
+        description: 'MySQL password (can use secrets instead)'
+      },
+      {
+        name: 'encryption_key',
+        type: 'VARCHAR',
+        required: true,
+        description: 'Base64-encoded AES-256 encryption key'
+      }
+    ],
+    examples: [
+      {
+        description: 'Attach encrypted MySQL database',
+        code: `ATTACH 'analytics_db' (
+  TYPE ENCRYPTED_MYSQL,
+  host 'mysql.example.com',
+  database 'analytics',
+  user 'analyst',
+  password 'password123',
+  encryption_key 'your_base64_key=='
+);
+
+-- Access encrypted tables
+SELECT COUNT(*) FROM analytics_db.transactions;`
+      }
+    ]
+  },
+  {
+    id: 'vault-db',
+    name: 'VAULT_DB',
+    category: 'Secret Management Storage',
+    description: 'Attach to databases using credentials dynamically fetched from HashiCorp Vault. Eliminates hardcoded credentials and provides automatic credential rotation, audit logging, and centralized secret management.',
+    parameters: [
+      {
+        name: 'vault_addr',
+        type: 'VARCHAR',
+        required: true,
+        description: 'HashiCorp Vault server address (e.g., https://vault.example.com:8200)'
+      },
+      {
+        name: 'vault_token',
+        type: 'VARCHAR',
+        required: true,
+        description: 'Vault authentication token or AppRole credentials'
+      },
+      {
+        name: 'secret_path',
+        type: 'VARCHAR',
+        required: true,
+        description: 'Path to database credentials in Vault (e.g., secret/data/postgres/prod)'
+      },
+      {
+        name: 'db_type',
+        type: 'VARCHAR',
+        required: true,
+        description: 'Database type (postgres, mysql, sqlite, etc.)'
+      },
+      {
+        name: 'refresh_interval',
+        type: 'INTEGER',
+        required: false,
+        description: 'Credential refresh interval in seconds for automatic rotation',
+        default: '3600'
+      }
+    ],
+    examples: [
+      {
+        description: 'Attach database using Vault-managed credentials',
+        code: `-- Attach using Vault for credential management
+ATTACH 'prod_db' (
+  TYPE VAULT_DB,
+  vault_addr 'https://vault.company.com:8200',
+  vault_token 'hvs.CAESIJ...',
+  secret_path 'secret/data/databases/production',
+  db_type 'postgres'
+);
+
+-- Credentials automatically rotated based on Vault policies
+SELECT * FROM prod_db.customers;`
+      },
+      {
+        description: 'Use Vault AppRole authentication',
+        code: `-- Attach with AppRole for service authentication
+ATTACH 'analytics' (
+  TYPE VAULT_DB,
+  vault_addr 'https://vault.company.com:8200',
+  vault_token 'role_id=xxx&secret_id=yyy',
+  secret_path 'database/creds/analytics-role',
+  db_type 'postgres',
+  refresh_interval 1800
+);`
+      }
+    ]
+  }
+];
+
+// Technical Overview interfaces
+interface BulletPoint {
+  label: string;
+  description: string;
+}
+
+interface UseCase {
+  title: string;
+  description: string;
+}
+
+export interface TechnicalOverviewSection {
+  icon: string;
+  title: string;
+  description: string;
+  bulletPoints?: BulletPoint[];
+  useCases?: UseCase[];
+  iconBgColor?: string;
+  iconTextColor?: string;
+  bulletColor?: string;
+}
+
+export interface TechnicalOverview {
+  eyebrow?: string;
+  title: string;
+  description?: string;
+  sections: TechnicalOverviewSection[];
+}
+
+// Technical Overview content
+export const technicalOverview: TechnicalOverview = {
+  eyebrow: "Technical Overview",
+  title: "Why Use Crypto Functions?",
+  description: "Understanding when and how to leverage cryptographic capabilities in your data workflows.",
+  sections: [
+    {
+      icon: '🔒',
+      title: 'Data Security & Compliance',
+      description: 'Modern data systems must handle sensitive information securely. This extension provides enterprise-grade cryptographic primitives directly within DuckDB, eliminating the need to export sensitive data to external systems for encryption or hashing.',
+      iconBgColor: 'bg-harvest-100',
+      iconTextColor: 'text-harvest-700',
+      bulletColor: 'text-harvest-600',
+      bulletPoints: [
+        {
+          label: 'Password Storage',
+          description: 'Use bcrypt hashing for secure password storage with automatic salt generation and configurable work factors.'
+        },
+        {
+          label: 'PII Protection',
+          description: 'Hash or encrypt personally identifiable information (PII) to meet GDPR, CCPA, and HIPAA requirements.'
+        },
+        {
+          label: 'Data Masking',
+          description: 'Create consistent, irreversible hashes for data anonymization in analytics and testing environments.'
+        }
+      ]
+    },
+    {
+      icon: '✓',
+      title: 'Data Integrity & Verification',
+      description: 'Ensure data hasn\'t been tampered with by generating cryptographic fingerprints and audit trails. Detect unauthorized modifications and maintain chain-of-custody for critical data.',
+      iconBgColor: 'bg-grain-100',
+      iconTextColor: 'text-grain-700',
+      bulletColor: 'text-grain-600',
+      bulletPoints: [
+        {
+          label: 'Blockchain-Style Auditing',
+          description: 'Build immutable audit trails using hash chaining to detect any tampering with historical records.'
+        },
+        {
+          label: 'Aggregate Verification',
+          description: 'Generate Merkle roots and aggregate hashes to verify entire datasets with a single value.'
+        },
+        {
+          label: 'Checksum Validation',
+          description: 'Quickly validate data integrity during ETL pipelines and data transfers.'
+        }
+      ]
+    },
+    {
+      icon: '⚡',
+      title: 'Performance & Scalability',
+      description: 'Native DuckDB extensions leverage columnar processing and vectorized execution for high-performance cryptographic operations on large datasets without moving data out of the database.',
+      iconBgColor: 'bg-duck-100',
+      iconTextColor: 'text-duck-700',
+      bulletColor: 'text-duck-600',
+      bulletPoints: [
+        {
+          label: 'In-Database Processing',
+          description: 'Process millions of rows without data serialization or network overhead.'
+        },
+        {
+          label: 'Vectorized Operations',
+          description: 'Benefit from DuckDB\'s SIMD optimizations for batch hashing and encryption.'
+        },
+        {
+          label: 'Zero-Copy Architecture',
+          description: 'Avoid expensive data transfers between database and application layers.'
+        }
+      ]
+    },
+    {
+      icon: '🎯',
+      title: 'Common Use Cases',
+      description: '',
+      iconBgColor: 'bg-soil-200',
+      iconTextColor: 'text-soil-700',
+      useCases: [
+        {
+          title: 'Financial Services',
+          description: 'Transaction verification, audit trails for compliance, and secure customer data handling.'
+        },
+        {
+          title: 'Healthcare Systems',
+          description: 'HIPAA-compliant patient data encryption, secure medical record hashing, and audit logging.'
+        },
+        {
+          title: 'Data Engineering',
+          description: 'ETL pipeline checksums, data deduplication via hashing, and secure data lake operations.'
+        },
+        {
+          title: 'SaaS Applications',
+          description: 'Multi-tenant data isolation, API key management, and secure password authentication.'
+        }
+      ]
+    }
+  ]
+};
