@@ -1,3 +1,16 @@
+// Extension metadata
+export const extensionMetadata = {
+  name: 'crypto',
+  displayName: 'Crypto Functions',
+  icon: '🔐',
+  description: 'Comprehensive cryptographic functions for secure data handling including hashing, encryption, and digital signatures.',
+  githubUrl: 'https://github.com/queryfarm/duckdb-crypto',
+  cta: {
+    title: 'Ready to Secure Your Data?',
+    description: 'Install the Crypto extension today and start using enterprise-grade cryptography in DuckDB.'
+  }
+};
+
 // Type definitions for function documentation
 export interface FunctionParameter {
   name: string;
@@ -13,10 +26,14 @@ export interface ReturnColumn {
   description: string;
 }
 
-export interface RelatedFunction {
-  name: string;
-  id: string;
+export interface FunctionExample {
   description: string;
+  code: string;
+  output?: string;
+  outputTable?: {
+    columns: { name: string; align?: 'left' | 'right' | 'center' }[];
+    rows: (string | number | boolean)[][];
+  };
 }
 
 export interface FunctionDocData {
@@ -24,15 +41,15 @@ export interface FunctionDocData {
   name: string;
   type: 'scalar' | 'table' | 'aggregate';
   category: string; // e.g., "Hashing", "Password", "Key Generation"
-  signature: string; // DEPRECATED: Use returnType instead
-  returnType?: string; // e.g., "VARCHAR", "BOOLEAN", "INTEGER"
+  returnType?: string; // e.g., "VARCHAR", "BOOLEAN", "INTEGER" - for scalar/aggregate functions
   parameters: FunctionParameter[];
   returns?: string; // Human-readable description of return value
-  returnsTable?: ReturnColumn[];
+  returnsTable?: ReturnColumn[]; // For table functions
   description: string;
-  examples: string;
+  examples: FunctionExample[];
   parametersTitle?: string;
-  relatedFunctions?: RelatedFunction[];
+  relatedFunctions?: string[]; // Array of function IDs to look up
+  tags?: string[]; // Descriptive tags for search and categorization
 }
 
 // Example function data
@@ -42,7 +59,6 @@ export const cryptoFunctions: FunctionDocData[] = [
     name: 'crypto_sha256',
     type: 'scalar',
     category: 'Hashing',
-    signature: `<span class="text-harvest-700">crypto_sha256</span>(<span class="text-duck-700">input</span>: <span class="text-blue-600">VARCHAR</span>) → <span class="text-blue-600">VARCHAR</span>`, // DEPRECATED
     returnType: 'VARCHAR',
     parameters: [
       {
@@ -54,30 +70,31 @@ export const cryptoFunctions: FunctionDocData[] = [
     ],
     returns: '64-character hexadecimal string representing the SHA-256 hash',
     description: 'Computes the SHA-256 cryptographic hash of the input string. SHA-256 is part of the SHA-2 family and produces a 256-bit (32-byte) hash value. Commonly used for data integrity verification and anonymization.',
-    examples: `-- Basic usage
-SELECT crypto_sha256('Hello, World!') AS hash;
--- Result: a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e
-
--- Anonymize email addresses for analytics
-SELECT
+    examples: [
+      {
+        description: 'Basic usage',
+        code: "SELECT crypto_sha256('Hello, World!') AS hash;",
+        output: 'a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e'
+      },
+      {
+        description: 'Anonymize email addresses for analytics',
+        code: `SELECT
   crypto_sha256(email) AS user_id,
   COUNT(*) AS purchases
 FROM orders
 GROUP BY crypto_sha256(email)
 ORDER BY purchases DESC
-LIMIT 10;`,
-    relatedFunctions: [
-      { name: 'crypto_sha512', id: 'crypto_sha512', description: 'More secure 512-bit hash alternative' },
-      { name: 'crypto_hash_agg', id: 'crypto_hash_agg', description: 'Aggregate multiple values into single hash' },
-      { name: 'crypto_hmac_sha256', id: 'crypto_hmac_sha256', description: 'Create authenticated hash with secret key' }
-    ]
+LIMIT 10;`
+      }
+    ],
+    relatedFunctions: ['crypto_sha512', 'crypto_hash_agg', 'crypto_hmac_sha256'],
+    tags: ['hashing', 'sha-256', 'cryptographic', 'integrity', 'anonymization', 'deterministic']
   },
   {
     id: 'crypto_sha512',
     name: 'crypto_sha512',
     type: 'scalar',
     category: 'Hashing',
-    signature: `<span class="text-harvest-700">crypto_sha512</span>(<span class="text-duck-700">input</span>: <span class="text-blue-600">VARCHAR</span>) → <span class="text-blue-600">VARCHAR</span>`, // DEPRECATED
     returnType: 'VARCHAR',
     parameters: [
       {
@@ -89,19 +106,21 @@ LIMIT 10;`,
     ],
     returns: '128-character hexadecimal string representing the SHA-512 hash',
     description: 'Computes the SHA-512 cryptographic hash of the input. More secure than SHA-256 with a 512-bit output. Recommended for high-security applications.',
-    examples: `SELECT crypto_sha512('sensitive data') AS hash;
--- Result: 128-character hex string`,
-    relatedFunctions: [
-      { name: 'crypto_sha256', id: 'crypto_sha256', description: 'Faster 256-bit hash alternative' },
-      { name: 'crypto_hash_agg', id: 'crypto_hash_agg', description: 'Aggregate hash with SHA-512 option' }
-    ]
+    examples: [
+      {
+        description: 'Hash sensitive data with SHA-512',
+        code: "SELECT crypto_sha512('sensitive data') AS hash;",
+        output: '128-character hex string'
+      }
+    ],
+    relatedFunctions: ['crypto_sha256', 'crypto_hash_agg'],
+    tags: ['hashing', 'sha-512', 'cryptographic', 'integrity', 'high-security', 'deterministic']
   },
   {
     id: 'crypto_hmac_sha256',
     name: 'crypto_hmac_sha256',
     type: 'scalar',
     category: 'HMAC',
-    signature: `<span class="text-harvest-700">crypto_hmac_sha256</span>(<span class="text-duck-700">message</span>: <span class="text-blue-600">VARCHAR</span>, <span class="text-duck-700">key</span>: <span class="text-blue-600">VARCHAR</span>) → <span class="text-blue-600">VARCHAR</span>`, // DEPRECATED
     returnType: 'VARCHAR',
     parameters: [
       {
@@ -120,19 +139,23 @@ LIMIT 10;`,
     parametersTitle: 'Parameters (Positional)',
     returns: '64-character hexadecimal HMAC signature',
     description: 'Creates an HMAC (Hash-based Message Authentication Code) signature using SHA-256. Used for API authentication, webhook verification, and message integrity.',
-    examples: `-- Sign API requests
-SELECT
+    examples: [
+      {
+        description: 'Sign API requests with HMAC',
+        code: `SELECT
   request_id,
   payload,
   crypto_hmac_sha256(payload, 'my_secret_key') AS signature
 FROM api_requests;`
+      }
+    ],
+    tags: ['hmac', 'signing', 'authentication', 'api-security', 'webhook', 'message-integrity']
   },
   {
     id: 'crypto_bcrypt',
     name: 'crypto_bcrypt',
     type: 'scalar',
     category: 'Password',
-    signature: `<span class="text-harvest-700">crypto_bcrypt</span>(<span class="text-duck-700">password</span>: <span class="text-blue-600">VARCHAR</span>, <span class="text-purple-600">cost</span> := <span class="text-blue-600">INTEGER</span> = 10) → <span class="text-blue-600">VARCHAR</span>`, // DEPRECATED
     returnType: 'VARCHAR',
     parameters: [
       {
@@ -151,27 +174,30 @@ FROM api_requests;`
     ],
     returns: 'Bcrypt hash string containing salt and hash (60 characters)',
     description: 'Hashes a password using the bcrypt algorithm with automatic salt generation. Recommended for password storage. The cost parameter controls computational cost (2^cost iterations).',
-    examples: `-- Hash with default cost (10)
-INSERT INTO users (username, password_hash)
-VALUES ('alice', crypto_bcrypt('secret_password'));
-
--- Hash with custom cost for higher security (using named parameter)
-INSERT INTO admin_users (username, password_hash)
-VALUES ('admin', crypto_bcrypt('admin_password', cost := 12));
-
--- Another example with explicit named parameter
-SELECT crypto_bcrypt('my_password', cost := 14) AS secure_hash;`,
-    relatedFunctions: [
-      { name: 'crypto_bcrypt_verify', id: 'crypto_bcrypt_verify', description: 'Verify password against bcrypt hash' },
-      { name: 'crypto_hash_agg', id: 'crypto_hash_agg', description: 'Not for passwords - use for data aggregation' }
-    ]
+    examples: [
+      {
+        description: 'Hash password with default cost (10)',
+        code: `INSERT INTO users (username, password_hash)
+VALUES ('alice', crypto_bcrypt('secret_password'));`
+      },
+      {
+        description: 'Hash with custom cost for higher security',
+        code: `INSERT INTO admin_users (username, password_hash)
+VALUES ('admin', crypto_bcrypt('admin_password', cost := 12));`
+      },
+      {
+        description: 'Explicit named parameter syntax',
+        code: "SELECT crypto_bcrypt('my_password', cost := 14) AS secure_hash;"
+      }
+    ],
+    relatedFunctions: ['crypto_bcrypt_verify'],
+    tags: ['password', 'bcrypt', 'hashing', 'authentication', 'slow-hash', 'salted', 'secure-storage']
   },
   {
     id: 'crypto_bcrypt_verify',
     name: 'crypto_bcrypt_verify',
     type: 'scalar',
     category: 'Password',
-    signature: `<span class="text-harvest-700">crypto_bcrypt_verify</span>(<span class="text-duck-700">password</span>: <span class="text-blue-600">VARCHAR</span>, <span class="text-duck-700">hash</span>: <span class="text-blue-600">VARCHAR</span>) → <span class="text-blue-600">BOOLEAN</span>`, // DEPRECATED
     returnType: 'BOOLEAN',
     parameters: [
       {
@@ -190,20 +216,24 @@ SELECT crypto_bcrypt('my_password', cost := 14) AS secure_hash;`,
     parametersTitle: 'Parameters (Positional)',
     returns: 'TRUE if password matches hash, FALSE otherwise',
     description: 'Verifies a plaintext password against a bcrypt hash. Timing-safe comparison to prevent timing attacks.',
-    examples: `-- Verify user login
-SELECT
+    examples: [
+      {
+        description: 'Verify user login credentials',
+        code: `SELECT
   user_id,
   username,
   crypto_bcrypt_verify('user_input', password_hash) AS is_valid
 FROM users
 WHERE username = 'alice';`
+      }
+    ],
+    tags: ['password', 'bcrypt', 'verification', 'authentication', 'timing-safe', 'login']
   },
   {
     id: 'crypto_generate_keys',
     name: 'crypto_generate_keys',
     type: 'table',
     category: 'Key Generation',
-    signature: `<span class="text-harvest-700">crypto_generate_keys</span>(<span class="text-duck-700">count</span>: <span class="text-blue-600">INTEGER</span>, <span class="text-purple-600">key_size</span> := <span class="text-blue-600">INTEGER</span> = 2048) → TABLE(key_id INTEGER, public_key VARCHAR, private_key VARCHAR, created_at TIMESTAMP)`,
     parameters: [
       {
         name: 'count',
@@ -226,23 +256,41 @@ WHERE username = 'alice';`
       { name: 'created_at', type: 'TIMESTAMP', description: 'Generation timestamp' }
     ],
     description: 'Generates RSA public/private key pairs in bulk. Useful for provisioning multiple users or services with cryptographic keys. Returns a table where each row contains one complete key pair.',
-    examples: `-- Generate 10 RSA key pairs with default 2048-bit keys
-SELECT * FROM crypto_generate_keys(10);
-
--- Generate 5 high-security 4096-bit key pairs
-SELECT * FROM crypto_generate_keys(5, key_size := 4096);
-
--- Store generated keys in a table
-CREATE TABLE user_keys AS
+    examples: [
+      {
+        description: 'Generate 10 RSA key pairs with default 2048-bit keys',
+        code: 'SELECT * FROM crypto_generate_keys(10) LIMIT 3;',
+        outputTable: {
+          columns: [
+            { name: 'key_id', align: 'right' },
+            { name: 'public_key', align: 'left' },
+            { name: 'private_key', align: 'left' },
+            { name: 'created_at', align: 'left' }
+          ],
+          rows: [
+            [1, '-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEF...', '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0B...', '2025-12-03 15:30:45.123'],
+            [2, '-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEF...', '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0B...', '2025-12-03 15:30:45.234'],
+            [3, '-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEF...', '-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0B...', '2025-12-03 15:30:45.345']
+          ]
+        }
+      },
+      {
+        description: 'Generate 5 high-security 4096-bit key pairs',
+        code: 'SELECT * FROM crypto_generate_keys(5, key_size := 4096);'
+      },
+      {
+        description: 'Store generated keys in a table',
+        code: `CREATE TABLE user_keys AS
 SELECT
   key_id,
   public_key,
   private_key,
   created_at
-FROM crypto_generate_keys(100);
-
--- Generate keys and immediately assign to users
-INSERT INTO user_keypairs (user_id, public_key, private_key)
+FROM crypto_generate_keys(100);`
+      },
+      {
+        description: 'Generate keys and immediately assign to users',
+        code: `INSERT INTO user_keypairs (user_id, public_key, private_key)
 SELECT
   u.user_id,
   k.public_key,
@@ -250,13 +298,15 @@ SELECT
 FROM users u
 CROSS JOIN LATERAL crypto_generate_keys(1) k
 WHERE u.needs_keypair = true;`
+      }
+    ],
+    tags: ['rsa', 'key-generation', 'public-key', 'private-key', 'asymmetric', 'bulk-operation', 'cryptography']
   },
   {
     id: 'crypto_audit_trail',
     name: 'crypto_audit_trail',
     type: 'table',
     category: 'Auditing',
-    signature: `<span class="text-harvest-700">crypto_audit_trail</span>(<span class="text-duck-700">table_name</span>: <span class="text-blue-600">VARCHAR</span>, <span class="text-duck-700">operation</span>: <span class="text-blue-600">VARCHAR</span>) → TABLE(record_hash VARCHAR, previous_hash VARCHAR, sequence_num INTEGER, chain_valid BOOLEAN)`,
     parameters: [
       {
         name: 'table_name',
@@ -279,11 +329,29 @@ WHERE u.needs_keypair = true;`
       { name: 'chain_valid', type: 'BOOLEAN', description: 'Whether the audit chain is valid' }
     ],
     description: 'Creates a cryptographic audit trail for database operations using blockchain-style hash chaining. Each record contains a hash of its data plus the previous record\'s hash, making tampering detectable.',
-    examples: `-- Generate audit trail for financial transactions
-SELECT * FROM crypto_audit_trail('financial_transactions', 'INSERT');
-
--- Verify audit chain integrity
-WITH audit AS (
+    examples: [
+      {
+        description: 'Generate audit trail for financial transactions',
+        code: "SELECT * FROM crypto_audit_trail('financial_transactions', 'INSERT') LIMIT 5;",
+        outputTable: {
+          columns: [
+            { name: 'record_hash', align: 'left' },
+            { name: 'previous_hash', align: 'left' },
+            { name: 'sequence_num', align: 'right' },
+            { name: 'chain_valid', align: 'center' }
+          ],
+          rows: [
+            ['a7f3b2c8d1e9f0a5b3c7d4e8f1a2b5c9d0e7f3a6b8c1d4e7f0a3b6c9d2e5', '0000000000000000000000000000000000000000000000000000000000000000', 1, true],
+            ['b8c1d4e7f0a3b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5', 'a7f3b2c8d1e9f0a5b3c7d4e8f1a2b5c9d0e7f3a6b8c1d4e7f0a3b6c9d2e5', 2, true],
+            ['c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e7f0a3b6', 'b8c1d4e7f0a3b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5', 3, true],
+            ['d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e7f0a3b6c9d2e5f8a1b4c7', 'c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e7f0a3b6', 4, true],
+            ['e1f4a7b0c3d6e9f2a5b8c1d4e7f0a3b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8', 'd0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e7f0a3b6c9d2e5f8a1b4c7', 5, true]
+          ]
+        }
+      },
+      {
+        description: 'Verify audit chain integrity and detect tampering',
+        code: `WITH audit AS (
   SELECT * FROM crypto_audit_trail('sensitive_data', 'UPDATE')
 )
 SELECT
@@ -295,14 +363,28 @@ SELECT
     ELSE 'Valid'
   END AS status
 FROM audit
-WHERE NOT chain_valid;`
+WHERE NOT chain_valid;`,
+        outputTable: {
+          columns: [
+            { name: 'sequence_num', align: 'right' },
+            { name: 'record_hash', align: 'left' },
+            { name: 'chain_valid', align: 'center' },
+            { name: 'status', align: 'left' }
+          ],
+          rows: [
+            [42, 'f2a5b8c1d4e7f0a3b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6', false, 'TAMPERING DETECTED!'],
+            [103, 'a3b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e7', false, 'TAMPERING DETECTED!']
+          ]
+        }
+      }
+    ],
+    tags: ['auditing', 'blockchain', 'hash-chain', 'tamper-detection', 'compliance', 'forensics', 'immutable']
   },
   {
     id: 'crypto_hash_agg',
     name: 'crypto_hash_agg',
     type: 'aggregate',
     category: 'Aggregation',
-    signature: `<span class="text-harvest-700">crypto_hash_agg</span>(<span class="text-duck-700">value</span>: <span class="text-blue-600">VARCHAR</span>, <span class="text-purple-600">algorithm</span> := <span class="text-blue-600">VARCHAR</span> = 'sha256') → <span class="text-blue-600">VARCHAR</span>`, // DEPRECATED
     returnType: 'VARCHAR',
     parameters: [
       {
@@ -321,23 +403,28 @@ WHERE NOT chain_valid;`
     ],
     returns: 'Aggregated hash combining all input values',
     description: 'Aggregates multiple values into a single cryptographic hash. Order-independent - produces the same hash regardless of row order. Useful for creating fingerprints of entire datasets or groups.',
-    examples: `-- Generate fingerprint for all users
-SELECT crypto_hash_agg(email) AS users_fingerprint
-FROM users;
-
--- Hash all transaction IDs for a daily batch
-SELECT
+    examples: [
+      {
+        description: 'Generate fingerprint for all users',
+        code: `SELECT crypto_hash_agg(email) AS users_fingerprint
+FROM users;`
+      },
+      {
+        description: 'Hash all transaction IDs for a daily batch',
+        code: `SELECT
   DATE(created_at) AS batch_date,
   crypto_hash_agg(transaction_id) AS batch_hash
 FROM transactions
-GROUP BY DATE(created_at);
-
--- Use SHA-512 for higher security
-SELECT crypto_hash_agg(sensitive_field, algorithm := 'sha512') AS secure_hash
-FROM sensitive_table;
-
--- Detect data changes by comparing hashes
-WITH current_hash AS (
+GROUP BY DATE(created_at);`
+      },
+      {
+        description: 'Use SHA-512 for higher security',
+        code: `SELECT crypto_hash_agg(sensitive_field, algorithm := 'sha512') AS secure_hash
+FROM sensitive_table;`
+      },
+      {
+        description: 'Detect data changes by comparing hashes',
+        code: `WITH current_hash AS (
   SELECT crypto_hash_agg(data_column) AS hash FROM production_table
 ),
 backup_hash AS (
@@ -349,13 +436,15 @@ SELECT
     ELSE 'Data has changed!'
   END AS status
 FROM current_hash c, backup_hash b;`
+      }
+    ],
+    tags: ['aggregation', 'fingerprint', 'dataset-hash', 'order-independent', 'integrity', 'data-verification']
   },
   {
     id: 'crypto_merkle_root',
     name: 'crypto_merkle_root',
     type: 'aggregate',
     category: 'Aggregation',
-    signature: `<span class="text-harvest-700">crypto_merkle_root</span>(<span class="text-duck-700">value</span>: <span class="text-blue-600">VARCHAR</span>) → <span class="text-blue-600">VARCHAR</span>`, // DEPRECATED
     returnType: 'VARCHAR',
     parameters: [
       {
@@ -367,15 +456,18 @@ FROM current_hash c, backup_hash b;`
     ],
     returns: 'Merkle root hash (64-character hex string)',
     description: 'Computes a Merkle tree root hash for a set of values. Like blockchain transaction verification - any change to input data produces a different root. More efficient than concatenating all values for large datasets.',
-    examples: `-- Calculate Merkle root for a block of transactions
-SELECT
+    examples: [
+      {
+        description: 'Calculate Merkle root for a block of transactions',
+        code: `SELECT
   block_id,
   crypto_merkle_root(transaction_hash) AS merkle_root
 FROM blockchain_transactions
-GROUP BY block_id;
-
--- Verify data integrity using Merkle root
-WITH daily_blocks AS (
+GROUP BY block_id;`
+      },
+      {
+        description: 'Verify data integrity using Merkle root',
+        code: `WITH daily_blocks AS (
   SELECT
     DATE(timestamp) AS date,
     crypto_merkle_root(record_id::VARCHAR) AS merkle_root
@@ -386,11 +478,15 @@ SELECT
   date,
   merkle_root,
   LAG(merkle_root) OVER (ORDER BY date) AS previous_root
-FROM daily_blocks;
-
--- Create tamper-evident file manifest
-SELECT crypto_merkle_root(file_hash) AS manifest_hash
+FROM daily_blocks;`
+      },
+      {
+        description: 'Create tamper-evident file manifest',
+        code: `SELECT crypto_merkle_root(file_hash) AS manifest_hash
 FROM uploaded_files
 WHERE upload_batch_id = 'batch_123';`
+      }
+    ],
+    tags: ['merkle-tree', 'aggregation', 'blockchain', 'tamper-proof', 'efficient-verification', 'cryptographic']
   }
 ];

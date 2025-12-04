@@ -358,8 +358,34 @@ export const extensions: Extension[] = [
       'Macro support',
       'Auto-escaping for security'
     ]
+  },
+  {
+    id: 'hashfunctions',
+    name: 'Hash Functions',
+    description: 'High-performance hashing functions including MurmurHash, CityHash, and xxHash for fast non-cryptographic hashing operations.',
+    category: 'performance',
+    status: 'stable',
+    icon: '#️⃣',
+    githubUrl: 'https://github.com/queryfarm/duckdb-hashfunctions',
+    docsUrl: 'https://docs.query.farm/extensions/hashfunctions',
+    features: [
+      'MurmurHash3 (32-bit and 128-bit)',
+      'CityHash family (64-bit and 128-bit)',
+      'xxHash (32-bit and 64-bit)',
+      'Optimized for hash table operations',
+      'Non-cryptographic but very fast',
+      'Collision-resistant hashing'
+    ]
   }
 ];
+
+export const getExtensionById = (id: string): Extension | undefined => {
+  return extensions.find(ext => ext.id === id);
+};
+
+export const getExtensionsByIds = (ids: string[]): Extension[] => {
+  return ids.map(id => getExtensionById(id)).filter(Boolean) as Extension[];
+};
 
 export const extensionsByCategory = () => {
   return extensions.reduce((acc, ext) => {
