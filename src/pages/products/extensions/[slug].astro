@@ -19,11 +19,44 @@ import DuckDBExtensionLogStorageDoc from '../../../components/docs/DuckDBExtensi
 import DuckDBExtensionTechnicalOverview from '../../../components/docs/DuckDBExtensionTechnicalOverview.astro';
 import DuckDBExtensionContentsTable from '../../../components/docs/DuckDBExtensionContentsTable.astro';
 import DuckDBExtensionFunctionReference from '../../../components/docs/DuckDBExtensionFunctionReference.astro';
-import { cryptoFunctions, cryptoPragmas, cryptoSecrets, cryptoMacros, cryptoFilesystems, cryptoStorageExtensions, cryptoLogTypes, cryptoLogStorageTypes, extensionMetadata, technicalOverview } from '../../../data/crypto-functions';
-import { getExtensionsByIds } from '../../../data/extensions';
+import { extensions, getExtensionsByIds } from '../../../data/extensions';
+import { getExtensionData } from '../../../data/extension-loader';
+
+export async function getStaticPaths() {
+  return extensions.map(ext => ({
+    params: { slug: ext.id },
+    props: { extensionId: ext.id }
+  }));
+}
+
+interface Props {
+  extensionId: string;
+}
+
+const { extensionId } = Astro.props;
+
+// Load extension data
+const extensionData = await getExtensionData(extensionId);
+
+if (!extensionData) {
+  return Astro.redirect('/products/extensions');
+}
+
+const {
+  metadata,
+  technicalOverview,
+  functions = [],
+  pragmas = [],
+  secrets = [],
+  macros = [],
+  filesystems = [],
+  storageExtensions = [],
+  logTypes = [],
+  logStorageTypes = []
+} = extensionData;
 
 // Use extension metadata
-const GITHUB_URL = extensionMetadata.githubUrl;
+const GITHUB_URL = metadata.githubUrl;
 
 // Create unified extension contents (functions + macros + pragmas + secrets + filesystems + storage + logging)
 interface ExtensionContent {
@@ -60,7 +93,7 @@ const mapToContent = <T extends { id: string; name: string; category: string; de
 
 const extensionContents: ExtensionContent[] = [
   // Functions keep their original type (scalar/table/aggregate)
-  ...cryptoFunctions.map(fn => ({
+  ...functions.map(fn => ({
     id: fn.id,
     name: fn.name + '()',
     type: fn.type,
@@ -69,16 +102,16 @@ const extensionContents: ExtensionContent[] = [
     href: `#${fn.id}`
   })),
   // All other types use the helper
-  ...mapToContent(cryptoMacros, 'macro', { nameSuffix: '()' }),
-  ...mapToContent(cryptoPragmas, 'pragma', {
+  ...mapToContent(macros, 'macro', { nameSuffix: '()' }),
+  ...mapToContent(pragmas, 'pragma', {
     defaultCategory: 'Configuration',
     idTransform: (p) => p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
   }),
-  ...mapToContent(cryptoSecrets, 'secret'),
-  ...mapToContent(cryptoFilesystems, 'filesystem', { nameSuffix: '://', defaultCategory: 'Filesystems' }),
-  ...mapToContent(cryptoStorageExtensions, 'storage'),
-  ...mapToContent(cryptoLogTypes, 'logtype'),
-  ...mapToContent(cryptoLogStorageTypes, 'logstorage')
+  ...mapToContent(secrets, 'secret'),
+  ...mapToContent(filesystems, 'filesystem', { nameSuffix: '://', defaultCategory: 'Filesystems' }),
+  ...mapToContent(storageExtensions, 'storage'),
+  ...mapToContent(logTypes, 'logtype'),
+  ...mapToContent(logStorageTypes, 'logstorage')
 ];
 
 // Group extension contents by category
@@ -90,124 +123,50 @@ const contentCategories = extensionContents.reduce((acc, item) => {
 // Automatically discover and sort all categories alphabetically
 const sortedContentCategories = Object.keys(contentCategories).sort();
 
-// Related extensions - just list the IDs
-const relatedExtensionIds = ['hashfunctions'];
+// Related extensions - TODO: make this configurable per extension
+const relatedExtensionIds: string[] = [];
 const relatedExtensions = getExtensionsByIds(relatedExtensionIds);
 
-// Changelog data
-const changelogEntries = [
+// Changelog data - TODO: add changelog support to ExtensionData interface
+const changelogEntries: any[] = [];
+
+// Hero actions - conditionally include Browse Contents
+const heroActions = [
+  // Only show Browse Contents if there are extension contents
+  ...(extensionContents.length > 0 ? [{
+    label: 'Browse Contents',
+    href: '#functions-index',
+    icon: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />'
+  }] : []),
   {
-    version: '2.1.0',
-    date: '2024-11-15',
-    type: 'minor' as const,
-    changes: [
-      {
-        category: 'added' as const,
-        items: [
-          'Added Argon2 password hashing support for enhanced security',
-          'New crypto_uuid_v4() function for generating random UUIDs',
-          'Support for custom cost factors in bcrypt (4-31 range)'
-        ]
-      },
-      {
-        category: 'changed' as const,
-        items: [
-          'Improved performance of SHA-512 hashing by 40% using vectorized operations',
-          'Enhanced error messages for invalid key sizes in RSA generation'
-        ]
-      },
-      {
-        category: 'fixed' as const,
-        items: [
-          'Fixed memory leak in crypto_generate_keys() for large batch operations',
-          'Corrected Merkle tree root calculation for odd-numbered datasets'
-        ]
-      }
-    ]
+    label: 'Install Instructions',
+    href: '#quick-install',
+    icon: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />'
   },
   {
-    version: '2.0.1',
-    date: '2024-10-08',
-    type: 'patch' as const,
-    changes: [
-      {
-        category: 'fixed' as const,
-        items: [
-          'Fixed crash when using crypto_audit_trail with empty tables',
-          'Resolved base64 encoding issue with Unicode characters'
-        ]
-      },
-      {
-        category: 'security' as const,
-        items: [
-          'Updated bcrypt library to address CVE-2024-xxxxx timing attack vulnerability'
-        ]
-      }
-    ]
-  },
-  {
-    version: '2.0.0',
-    date: '2024-09-20',
-    type: 'major' as const,
-    changes: [
-      {
-        category: 'added' as const,
-        items: [
-          'Introduced table-returning functions: crypto_generate_keys() and crypto_audit_trail()',
-          'Aggregate functions: crypto_hash_agg() and crypto_merkle_root()',
-          'Base64 encoding/decoding utilities'
-        ]
-      },
-      {
-        category: 'changed' as const,
-        items: [
-          'Breaking: Renamed crypto_hash() to crypto_sha256() for clarity',
-          'Default bcrypt cost increased from 8 to 10 for better security'
-        ]
-      },
-      {
-        category: 'removed' as const,
-        items: [
-          'Deprecated MD5 hashing (moved to crypto_md5_legacy())'
-        ]
-      }
-    ]
+    label: 'View on GitHub',
+    href: metadata.githubUrl,
+    icon: '<path fill-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clip-rule="evenodd" fill="currentColor" />'
   }
 ];
 ---
 
 <PageLayout
-  title="crypto - DuckDB Extension"
-  description="Comprehensive cryptographic functions for secure data handling including hashing, encryption, and digital signatures."
+  title={`${metadata.displayName} - DuckDB Extension`}
+  description={metadata.description}
   showBreadcrumbs={true}
   breadcrumbs={[
     { name: 'Products', href: '/products' },
     { name: 'Extensions', href: '/products/extensions' },
-    { name: 'crypto', href: '/products/extensions/crypto' }
+    { name: metadata.displayName, href: `/products/extensions/${extensionId}` }
   ]}
 >
   <!-- Hero Section -->
   <ExtensionHero
-    name={extensionMetadata.name}
-    icon={extensionMetadata.icon}
-    description={extensionMetadata.description}
-    actions={[
-      {
-        label: 'Browse Contents',
-        href: '#functions-index',
-        icon: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />'
-      },
-      {
-        label: 'Install Instructions',
-        href: '#quick-install',
-        icon: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />'
-      },
-      {
-        label: 'View on GitHub',
-        href: GITHUB_URL,
-        icon: '<path fill-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" clip-rule="evenodd" fill="currentColor" />'
-      }
-    ]}
+    name={metadata.displayName}
+    icon={metadata.icon}
+    description={metadata.description}
+    actions={heroActions}
   />
 
   <!-- Quick Install -->
@@ -217,13 +176,13 @@ const changelogEntries = [
         <h2 class="text-2xl font-bold text-soil-900 mb-4">Quick Install</h2>
         <CodeBlock
           code={`-- Install the extension
-INSTALL crypto FROM 'query.farm';
+INSTALL ${metadata.name} FROM 'query.farm';
 
 -- Load it into your session
-LOAD crypto;
+LOAD ${metadata.name};
 
--- Start using cryptographic functions
-SELECT crypto_sha256('Hello, World!') AS hash;`}
+-- Start using ${metadata.displayName.toLowerCase()} functions
+SELECT ${metadata.name}_sha256('Hello, World!') AS hash;`}
           lang="sql"
         />
       </div>
@@ -231,35 +190,41 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
   </section>
 
   <!-- Technical Overview -->
-  <DuckDBExtensionTechnicalOverview
-    eyebrow={technicalOverview.eyebrow}
-    title={technicalOverview.title}
-    description={technicalOverview.description}
-    sections={technicalOverview.sections}
-  />
+  {technicalOverview && (
+    <DuckDBExtensionTechnicalOverview
+      eyebrow={technicalOverview.eyebrow}
+      title={technicalOverview.title}
+      description={technicalOverview.description}
+      sections={technicalOverview.sections}
+    />
+  )}
 
   <!-- Extension Contents Index -->
-  <DuckDBExtensionContentsTable
-    contents={extensionContents}
-    categoryOrder={sortedContentCategories}
-  />
+  {extensionContents.length > 0 && (
+    <DuckDBExtensionContentsTable
+      contents={extensionContents}
+      categoryOrder={sortedContentCategories}
+    />
+  )}
 
   <!-- Function Reference -->
-  <DuckDBExtensionFunctionReference functions={cryptoFunctions} />
+  {functions && functions.length > 0 && (
+    <DuckDBExtensionFunctionReference functions={functions} />
+  )}
 
   <!-- Extension Macros -->
-  {cryptoMacros && cryptoMacros.length > 0 && (
+  {macros && macros.length > 0 && (
     <section id="macros" class="py-16 lg:py-24 bg-soil-50">
       <div class="section-container">
         <SectionHeader
           eyebrow="SQL Macros"
-          title="Extension Macros"
+          title="Macros"
           description="Convenience macros that simplify common cryptographic operations and provide shorthand syntax for frequently used patterns."
           class="mb-12"
         />
 
         <div class="max-w-6xl mx-auto">
-          {cryptoMacros.map((macro) => (
+          {macros.map((macro) => (
             <DuckDBExtensionMacroDoc {...macro} />
           ))}
         </div>
@@ -268,23 +233,23 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
   )}
 
   <!-- Extension Logging -->
-  {((cryptoLogTypes && cryptoLogTypes.length > 0) || (cryptoLogStorageTypes && cryptoLogStorageTypes.length > 0)) && (
+  {((logTypes && logTypes.length > 0) || (logStorageTypes && logStorageTypes.length > 0)) && (
     <section id="logging" class="py-16 lg:py-24 bg-white">
       <div class="section-container">
         <SectionHeader
           eyebrow="Logging Integration"
-          title="Extension Logging"
+          title="Logging"
           description="DuckDB logging subsystem integration for monitoring cryptographic operations and storing audit trails."
           class="mb-12"
         />
 
         <div class="max-w-6xl mx-auto space-y-12">
           {/* Log Types */}
-          {cryptoLogTypes && cryptoLogTypes.length > 0 && (
+          {logTypes && logTypes.length > 0 && (
             <div>
               <h3 class="text-xl font-bold text-soil-900 mb-6 pb-2 border-b border-soil-200">Log Types</h3>
               <div class="space-y-8">
-                {cryptoLogTypes.map((logType) => (
+                {logTypes.map((logType) => (
                   <DuckDBExtensionLogTypeDoc {...logType} />
                 ))}
               </div>
@@ -292,11 +257,11 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
           )}
 
           {/* Log Storage Types */}
-          {cryptoLogStorageTypes && cryptoLogStorageTypes.length > 0 && (
+          {logStorageTypes && logStorageTypes.length > 0 && (
             <div>
               <h3 class="text-xl font-bold text-soil-900 mb-6 pb-2 border-b border-soil-200">Log Storage Types</h3>
               <div class="space-y-8">
-                {cryptoLogStorageTypes.map((logStorage) => (
+                {logStorageTypes.map((logStorage) => (
                   <DuckDBExtensionLogStorageDoc {...logStorage} />
                 ))}
               </div>
@@ -308,18 +273,18 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
   )}
 
   <!-- Extension Storage Extensions -->
-  {cryptoStorageExtensions && cryptoStorageExtensions.length > 0 && (
+  {storageExtensions && storageExtensions.length > 0 && (
     <section id="storage-extensions" class="py-16 lg:py-24 bg-white">
       <div class="section-container">
         <SectionHeader
           eyebrow="Database Storage"
-          title="Extension Storage Extensions"
+          title="Storage Extensions"
           description="Storage extensions that enable secure database attachments with encryption, secret management, and credential rotation."
           class="mb-12"
         />
 
         <div class="max-w-6xl mx-auto">
-          {cryptoStorageExtensions.map((storage) => (
+          {storageExtensions.map((storage) => (
             <DuckDBExtensionStorageDoc {...storage} />
           ))}
         </div>
@@ -328,18 +293,18 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
   )}
 
   <!-- Settings/Pragmas Section -->
-  {cryptoPragmas && cryptoPragmas.length > 0 && (
+  {pragmas && pragmas.length > 0 && (
     <section id="settings" class="py-16 lg:py-24 bg-white">
       <div class="section-container">
         <SectionHeader
           eyebrow="Configuration"
-          title="Extension Settings"
-          description="Configure the crypto extension behavior using these pragma settings."
+          title="Settings"
+          description={`Configure the ${metadata.displayName.toLowerCase()} extension behavior using these pragma settings.`}
           class="mb-12"
         />
 
         <div class="max-w-6xl mx-auto">
-          {cryptoPragmas.map((pragma) => (
+          {pragmas.map((pragma) => (
             <DuckDBExtensionPragmaDoc {...pragma} />
           ))}
         </div>
@@ -348,18 +313,18 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
   )}
 
   <!-- Extension Secrets -->
-  {cryptoSecrets && cryptoSecrets.length > 0 && (
+  {secrets && secrets.length > 0 && (
     <section id="secrets" class="py-16 lg:py-24 bg-soil-50">
       <div class="section-container">
         <SectionHeader
           eyebrow="Security"
-          title="Extension Secrets"
-          description="DuckDB secrets for securely storing credentials and encryption keys used by the crypto extension."
+          title="Secrets"
+          description={`DuckDB secrets for securely storing credentials and encryption keys used by the ${metadata.displayName.toLowerCase()} extension.`}
           class="mb-12"
         />
 
         <div class="max-w-6xl mx-auto">
-          {cryptoSecrets.map((secret) => (
+          {secrets.map((secret) => (
             <DuckDBExtensionSecretDoc {...secret} />
           ))}
         </div>
@@ -368,18 +333,18 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
   )}
 
   <!-- Extension Filesystems -->
-  {cryptoFilesystems && cryptoFilesystems.length > 0 && (
+  {filesystems && filesystems.length > 0 && (
     <section id="filesystems" class="py-16 lg:py-24 bg-white">
       <div class="section-container">
         <SectionHeader
           eyebrow="Virtual Filesystems"
-          title="Extension Filesystems"
+          title="Filesystems"
           description="Virtual filesystem implementations that provide transparent encryption and secure access to data storage."
           class="mb-12"
         />
 
         <div class="max-w-6xl mx-auto">
-          {cryptoFilesystems.map((filesystem) => (
+          {filesystems.map((filesystem) => (
             <DuckDBExtensionFilesystemDoc {...filesystem} />
           ))}
         </div>
@@ -401,60 +366,62 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
     </div>
   </section>
 
-  <!-- Changelog -->
-  <div id="changelog">
-    <ExtensionChangelog entries={changelogEntries} />
-  </div>
+  <!-- Changelog (if entries exist) -->
+  {changelogEntries && changelogEntries.length > 0 && (
+    <div id="changelog">
+      <ExtensionChangelog entries={changelogEntries} />
+    </div>
+  )}
 
   <!-- Extension Info -->
   <div id="extension-info">
     <ExtensionInfo
       githubUrl={GITHUB_URL}
-      githubStars={1247}
-      license="MIT"
-      pricing="free"
-      usageStats={{ count: 324000, period: "the last 60 days" }}
-      platforms={['Linux', 'Windows', 'macOS', 'WASM']}
-      duckdbVersions={['1.4', '1.5']}
+      license={metadata.license || 'MIT'}
+      pricing={metadata.pricing || 'free'}
+      platforms={metadata.platforms || ['Linux', 'Windows', 'macOS', 'WASM']}
+      duckdbVersions={metadata.duckdbVersions || ['1.4', '1.5']}
     />
   </div>
 
-  <!-- Related Extensions -->
-  <section class="py-16 lg:py-24 bg-soil-50">
-    <div class="section-container">
-      <div class="max-w-6xl mx-auto">
-        <SectionHeader
-          eyebrow="You might also like"
-          title="Related Extensions"
-          description="Extensions that complement crypto for your data workflows."
-          align="center"
-          class="mb-12"
-        />
-        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {relatedExtensions.map((ext) => (
-            <ExtensionCard
-              id={ext.id}
-              name={ext.name}
-              description={ext.description}
-              category={ext.category}
-              status={ext.status}
-              icon={ext.icon}
-              features={ext.features}
-            />
-          ))}
+  <!-- Related Extensions (if any exist) -->
+  {relatedExtensions && relatedExtensions.length > 0 && (
+    <section class="py-16 lg:py-24 bg-soil-50">
+      <div class="section-container">
+        <div class="max-w-6xl mx-auto">
+          <SectionHeader
+            eyebrow="You might also like"
+            title="Related Extensions"
+            description={`Extensions that complement ${metadata.displayName.toLowerCase()} for your data workflows.`}
+            align="center"
+            class="mb-12"
+          />
+          <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {relatedExtensions.map((ext) => (
+              <ExtensionCard
+                id={ext.id}
+                name={ext.name}
+                description={ext.description}
+                category={ext.category}
+                status={ext.status}
+                icon={ext.icon}
+                features={ext.features}
+              />
+            ))}
+          </div>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
+  )}
 
   <!-- CTA -->
   <section class="py-16 lg:py-24 bg-gradient-to-br from-soil-900 to-soil-800 text-white">
     <div class="section-container text-center">
       <h2 class="text-3xl md:text-4xl font-bold mb-6">
-        {extensionMetadata.cta.title}
+        {metadata.cta.title}
       </h2>
       <p class="text-xl text-soil-300 mb-8 max-w-2xl mx-auto">
-        {extensionMetadata.cta.description}
+        {metadata.cta.description}
       </p>
       <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
         <Button href={GITHUB_URL} variant="primary" size="lg" external>

@@ -1,5 +1,18 @@
-// Extension metadata
-export const extensionMetadata = {
+import type {
+  ExtensionData,
+  ExtensionMetadata,
+  FunctionDocData,
+  Pragma,
+  Secret,
+  Macro,
+  Filesystem,
+  StorageExtension,
+  LogType,
+  LogStorageType,
+  TechnicalOverview
+} from '../extension-types';
+
+const metadata: ExtensionMetadata = {
   name: 'crypto',
   displayName: 'Crypto Functions',
   icon: '🔐',
@@ -8,144 +21,14 @@ export const extensionMetadata = {
   cta: {
     title: 'Ready to Secure Your Data?',
     description: 'Install the Crypto extension today and start using enterprise-grade cryptography in DuckDB.'
-  }
+  },
+  license: 'MIT',
+  pricing: 'free',
+  platforms: ['Linux', 'Windows', 'macOS', 'WASM'],
+  duckdbVersions: ['1.4', '1.5']
 };
 
-// Pragma/Settings interface
-export interface Pragma {
-  name: string;
-  default: string | number | boolean;
-  description: string;
-  type?: 'string' | 'number' | 'boolean';
-  validValues?: string[];
-  example?: string;
-}
-
-// Secret interface
-export interface SecretParameter {
-  name: string;
-  type: string;
-  required: boolean;
-  description: string;
-}
-
-export interface Secret {
-  id: string;
-  name: string;
-  type: string; // e.g., "S3", "Azure Blob", "GCS"
-  category: string;
-  description: string;
-  parameters: SecretParameter[];
-  examples: FunctionExample[];
-}
-
-// Macro interface
-export interface Macro {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  definition: string;
-  examples: FunctionExample[];
-}
-
-// Filesystem interface
-export interface Filesystem {
-  id: string;
-  name: string;
-  description: string;
-  category?: string;
-}
-
-// Storage Extension interface
-export interface StorageParameter {
-  name: string;
-  type: string;
-  required: boolean;
-  description: string;
-  default?: string;
-}
-
-export interface StorageExtension {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  parameters: StorageParameter[];
-  examples: FunctionExample[];
-}
-
-// Log Type interface
-export interface LogType {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  examples: FunctionExample[];
-}
-
-// Log Storage Type interface
-export interface LogStorageParameter {
-  name: string;
-  type: string;
-  required: boolean;
-  description: string;
-  default?: string;
-}
-
-export interface LogStorageType {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  parameters: LogStorageParameter[];
-  examples: FunctionExample[];
-}
-
-// Type definitions for function documentation
-export interface FunctionParameter {
-  name: string;
-  type: string;
-  paramType: 'positional' | 'named';
-  default?: string;
-  description: string;
-}
-
-export interface ReturnColumn {
-  name: string;
-  type: string;
-  description: string;
-}
-
-export interface FunctionExample {
-  description: string;
-  code: string;
-  output?: string;
-  outputTable?: {
-    columns: { name: string; align?: 'left' | 'right' | 'center' }[];
-    rows: (string | number | boolean)[][];
-  };
-}
-
-export interface FunctionDocData {
-  id: string;
-  name: string;
-  type: 'scalar' | 'table' | 'aggregate' | 'copy';
-  category: string; // e.g., "Hashing", "Password", "Key Generation"
-  returnType?: string; // e.g., "VARCHAR", "BOOLEAN", "INTEGER" - for scalar/aggregate functions
-  parameters: FunctionParameter[];
-  returns?: string; // Human-readable description of return value
-  returnsTable?: ReturnColumn[]; // For table functions
-  description: string;
-  examples: FunctionExample[];
-  parametersTitle?: string;
-  relatedFunctions?: string[]; // Array of function IDs to look up
-  tags?: string[]; // Descriptive tags for search and categorization
-  options?: FunctionParameter[]; // For copy functions - options that can be specified
-}
-
-// Example function data
-export const cryptoFunctions: FunctionDocData[] = [
+const functions: FunctionDocData[] = [
   {
     id: 'crypto_sha256',
     name: 'crypto_sha256',
@@ -803,8 +686,7 @@ WITH (
   }
 ];
 
-// Extension pragmas/settings
-export const cryptoPragmas: Pragma[] = [
+const pragmas: Pragma[] = [
   {
     name: 'crypto_default_hash_algorithm',
     default: 'sha256',
@@ -836,8 +718,7 @@ export const cryptoPragmas: Pragma[] = [
   }
 ];
 
-// Extension secrets
-export const cryptoSecrets: Secret[] = [
+const secrets: Secret[] = [
   {
     id: 'aws-s3-crypto',
     name: 'aws_s3_crypto',
@@ -1068,8 +949,7 @@ WHERE department = 'Finance';`
   }
 ];
 
-// Extension macros
-export const cryptoMacros: Macro[] = [
+const macros: Macro[] = [
   {
     id: 'hash_pii',
     name: 'hash_pii',
@@ -1243,8 +1123,7 @@ FROM audit_chain;`
   }
 ];
 
-// Extension filesystems
-export const cryptoFilesystems: Filesystem[] = [
+const filesystems: Filesystem[] = [
   {
     id: 'encrypted-s3',
     name: 'encrypted_s3',
@@ -1271,8 +1150,7 @@ export const cryptoFilesystems: Filesystem[] = [
   }
 ];
 
-// Extension storage extensions
-export const cryptoStorageExtensions: StorageExtension[] = [
+const storageExtensions: StorageExtension[] = [
   {
     id: 'encrypted-postgres',
     name: 'ENCRYPTED_POSTGRES',
@@ -1491,8 +1369,7 @@ ATTACH 'analytics' (
   }
 ];
 
-// Extension log types
-export const cryptoLogTypes: LogType[] = [
+const logTypes: LogType[] = [
   {
     id: 'crypto-operation-log',
     name: 'CryptoOperationLog',
@@ -1584,8 +1461,7 @@ SELECT * FROM duckdb_logs() WHERE log_type = 'HashCollisionLog';`
   }
 ];
 
-// Extension log storage types
-export const cryptoLogStorageTypes: LogStorageType[] = [
+const logStorageTypes: LogStorageType[] = [
   {
     id: 'siem-log-storage',
     name: 'SIEM',
@@ -1773,37 +1649,7 @@ SELECT * FROM logs_db.duckdb_crypto_logs ORDER BY timestamp DESC LIMIT 10;`
   }
 ];
 
-// Technical Overview interfaces
-interface BulletPoint {
-  label: string;
-  description: string;
-}
-
-interface UseCase {
-  title: string;
-  description: string;
-}
-
-export interface TechnicalOverviewSection {
-  icon: string;
-  title: string;
-  description: string;
-  bulletPoints?: BulletPoint[];
-  useCases?: UseCase[];
-  iconBgColor?: string;
-  iconTextColor?: string;
-  bulletColor?: string;
-}
-
-export interface TechnicalOverview {
-  eyebrow?: string;
-  title: string;
-  description?: string;
-  sections: TechnicalOverviewSection[];
-}
-
-// Technical Overview content
-export const technicalOverview: TechnicalOverview = {
+const technicalOverview: TechnicalOverview = {
   eyebrow: "Technical Overview",
   title: "Why Use Crypto Functions?",
   description: "Understanding when and how to leverage cryptographic capabilities in your data workflows.",
@@ -1901,3 +1747,18 @@ export const technicalOverview: TechnicalOverview = {
     }
   ]
 };
+
+const cryptoExtension: ExtensionData = {
+  metadata,
+  technicalOverview,
+  functions,
+  pragmas,
+  secrets,
+  macros,
+  filesystems,
+  storageExtensions,
+  logTypes,
+  logStorageTypes
+};
+
+export default cryptoExtension;
