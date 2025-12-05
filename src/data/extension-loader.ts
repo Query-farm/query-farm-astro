@@ -23,6 +23,16 @@ const extensionMdxRegistry: Record<string, () => Promise<{ default: any; Content
 };
 
 /**
+ * Cookbook MDX registry mapping extension IDs to their cookbook content modules.
+ * Add new extensions here when they have cookbook MDX files.
+ */
+const cookbookMdxRegistry: Record<string, () => Promise<{ default: any; Content: any }>> = {
+  crypto: () => import('./extensions/crypto-cookbook.mdx'),
+  // Future extensions:
+  // 'hashfunctions': () => import('./extensions/hashfunctions-cookbook.mdx'),
+};
+
+/**
  * Loads detailed extension data for a given extension ID.
  * Returns null if no detailed data exists (only basic metadata available).
  */
@@ -123,4 +133,31 @@ export async function loadExtensionMdx(extensionId: string): Promise<{ Content: 
  */
 export function hasExtensionMdx(extensionId: string): boolean {
   return extensionId in extensionMdxRegistry;
+}
+
+/**
+ * Loads Cookbook MDX content component for a given extension ID.
+ * Returns null if no cookbook content exists for the extension.
+ */
+export async function loadCookbookMdx(extensionId: string): Promise<{ Content: any } | null> {
+  const loader = cookbookMdxRegistry[extensionId];
+
+  if (!loader) {
+    return null;
+  }
+
+  try {
+    const module = await loader();
+    return { Content: module.Content };
+  } catch (error) {
+    console.error(`Failed to load cookbook MDX content for "${extensionId}":`, error);
+    return null;
+  }
+}
+
+/**
+ * Checks if an extension has cookbook content available.
+ */
+export function hasCookbookMdx(extensionId: string): boolean {
+  return extensionId in cookbookMdxRegistry;
 }

@@ -9,7 +9,9 @@ import type {
   StorageExtension,
   LogType,
   LogStorageType,
-  TechnicalOverview
+  TechnicalOverview,
+  PricingInfo,
+  PlatformInfo
 } from '../extension-types';
 
 const metadata: ExtensionMetadata = {
@@ -23,9 +25,26 @@ const metadata: ExtensionMetadata = {
     description: 'Install the Crypto extension today and start using enterprise-grade cryptography in DuckDB.'
   },
   license: 'MIT',
-  pricing: 'free',
-  platforms: ['Linux', 'Windows', 'macOS', 'WASM'],
-  duckdbVersions: ['1.4', '1.5'],
+  pricing: 'paid',
+  firstRelease: '2024-03-15',
+  lastRelease: '2025-01-15',
+  binarySize: '2.4 MB',
+  writtenIn: 'C++',
+  sourceAvailable: 'https://github.com/Query-farm/duckdb-crypto',
+  dependencies: [],
+  usageStats: {
+    count: 12500,
+    period: 'last 30 days'
+  },
+  githubStars: 245,
+  platforms: [
+    { platform: 'Linux', architectures: ['x86_64', 'aarch64'] },
+    { platform: 'macOS', architectures: ['Apple Silicon', 'Intel'] },
+    { platform: 'Windows', architectures: ['x86_64'] },
+    { platform: 'WASM', architectures: [] }
+  ] as PlatformInfo[],
+  duckdbVersions: ['1.1.0', '1.1.1', '1.1.2', '1.1.3'],
+  unsupportedVersions: ['1.0.0', '0.10.3', '0.10.2', '0.10.1'],
   relatedExtensions: ['hashfunctions', 'data-validator', 'bitfilters'],
   image: '/images/extensions/crypto.svg'
 };
@@ -1739,6 +1758,69 @@ const technicalOverview: TechnicalOverview = {
   ]
 };
 
+const pricing: PricingInfo = {
+  eyebrow: "Commercial Extension",
+  title: "Pricing",
+  description: "Unlike many DuckDB extensions, the Crypto extension is a commercially licensed product. This allows us to provide enterprise-grade security features, dedicated support, and continuous development. Start with a 15-day free trial to evaluate.",
+  trialDays: 15,
+  registrationRequired: true,
+  registrationUrl: "https://query.farm/register",
+  tiers: [
+    {
+      name: "Base License",
+      price: "$1,000",
+      period: "monthly",
+      description: "Up to 5 concurrent instances",
+      highlighted: true,
+      features: [
+        "5 concurrent instances included",
+        "All cryptographic functions",
+        "Unlimited queries per instance",
+        "Email & chat support",
+        "SLA guarantee"
+      ]
+    },
+    {
+      name: "Additional Capacity",
+      price: "$2,500",
+      period: "monthly",
+      description: "Per 10 additional instances",
+      features: [
+        "Add 10 more concurrent instances",
+        "Stack multiple add-ons as needed",
+        "Same feature set as base license",
+        "Volume discounts available",
+        "Contact us for 50+ instances"
+      ]
+    }
+  ],
+  termsMarkdown: `
+<h4>License Terms</h4>
+<p>The Crypto extension is licensed based on concurrent instances. An instance is defined as a single DuckDB process with the extension loaded. The base license covers up to 5 concurrent instances across your infrastructure.</p>
+
+<h4>Instance Counting</h4>
+<p>Instances are counted based on unique license key activations within a rolling 24-hour window. Development and testing environments do not count against your instance limit when using the provided development key.</p>
+
+<h4>Academic & Research Discounts</h4>
+<p>We offer significant discounts for educational and research institutions:</p>
+<ul>
+  <li><strong>Universities & Colleges:</strong> 75% discount on all plans for accredited educational institutions.</li>
+  <li><strong>Research Institutions:</strong> 50% discount for non-profit research organizations.</li>
+  <li><strong>Students:</strong> Free access for individual students with a valid .edu email address (limited to 1 instance).</li>
+</ul>
+<p>To apply for academic pricing, <a href="/company/contact">contact us</a> with proof of institutional affiliation.</p>
+
+<h4>Trial Period</h4>
+<p>Your 15-day free trial includes full access to all features with up to 2 concurrent instances. No credit card is required to start. At the end of the trial, you can purchase a subscription or the extension will revert to evaluation mode.</p>
+
+<h4>Refund Policy</h4>
+<p>We offer a 30-day money-back guarantee for all paid subscriptions. If you're not satisfied, contact support for a full refund.</p>
+
+<h4>Support</h4>
+<p>All paid plans include email and chat support with response times within 24 hours on business days. For mission-critical deployments, ask about our premium support options.</p>
+  `
+};
+
 const cryptoExtension: ExtensionData = {
   metadata,
   technicalOverview,
@@ -1749,7 +1831,8 @@ const cryptoExtension: ExtensionData = {
   filesystems,
   storageExtensions,
   logTypes,
-  logStorageTypes
+  logStorageTypes,
+  pricing
 };
 
 export default cryptoExtension;

@@ -159,6 +159,12 @@ export interface TechnicalOverview {
   sections: TechnicalOverviewSection[];
 }
 
+// Platform with architecture support
+export interface PlatformInfo {
+  platform: string;
+  architectures: string[];
+}
+
 // Extension Metadata Types
 export interface ExtensionMetadata {
   name: string;
@@ -173,13 +179,46 @@ export interface ExtensionMetadata {
   // Optional extension info
   license?: string;
   pricing?: 'free' | 'paid' | 'freemium';
-  platforms?: string[];
-  duckdbVersions?: string[];
+  firstRelease?: string; // ISO date string (e.g., '2024-03-01')
+  lastRelease?: string; // ISO date string (e.g., '2025-01-15')
+  binarySize?: string; // Human-readable size (e.g., '2.4 MB')
+  writtenIn?: string; // Programming language (e.g., 'C++', 'Rust')
+  sourceAvailable?: boolean | string; // true/false or URL to source
+  dependencies?: string[]; // List of required extension names
+  usageStats?: {
+    count: number;
+    period: string; // e.g., "last 60 days"
+  };
+  githubStars?: number;
+  platforms?: PlatformInfo[];
+  duckdbVersions?: string[]; // Supported versions (e.g., ['1.1.0', '1.1.1', '1.1.2'])
+  unsupportedVersions?: string[]; // Older unsupported versions (e.g., ['1.0.0', '0.10.0'])
   // Related extensions (referenced by extension ID from extensions.ts)
   relatedExtensions?: string[];
   // Detailed image for extension page and social sharing (1200x630px recommended)
   // Falls back to icon emoji if not provided
   image?: string;
+}
+
+// Pricing Types
+export interface PricingTier {
+  name: string;
+  price: string;
+  period: 'monthly' | 'yearly' | 'one-time';
+  description?: string;
+  features?: string[];
+  highlighted?: boolean;
+}
+
+export interface PricingInfo {
+  eyebrow?: string;
+  title?: string;
+  description?: string;
+  tiers: PricingTier[];
+  trialDays?: number;
+  registrationRequired?: boolean;
+  registrationUrl?: string;
+  termsMarkdown?: string;
 }
 
 // Complete Extension Data Structure
@@ -194,4 +233,5 @@ export interface ExtensionData {
   storageExtensions?: StorageExtension[];
   logTypes?: LogType[];
   logStorageTypes?: LogStorageType[];
+  pricing?: PricingInfo;
 }

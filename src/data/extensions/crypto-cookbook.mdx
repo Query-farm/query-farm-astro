@@ -1,0 +1,151 @@
+## Encrypting Sensitive Data
+
+Protect PII (Personally Identifiable Information) in your database by encrypting sensitive columns.
+
+### Encrypt a Column with AES-256-GCM
+
+```sql
+-- Create a table with sensitive data
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY,
+    email VARCHAR,
+    ssn VARCHAR
+);
+
+-- Insert some data
+INSERT INTO users VALUES
+    (1, 'alice@example.com', '123-45-6789'),
+    (2, 'bob@example.com', '987-65-4321');
+
+-- Generate a secure encryption key (store this safely!)
+SELECT crypto_random_bytes(32) AS encryption_key;
+
+-- Create an encrypted view of the SSN column
+SELECT
+    id,
+    email,
+    crypto_aes_encrypt(
+        ssn::BLOB,
+        '\x0123456789abcdef0123456789abcdef'::BLOB,  -- Your 32-byte key
+        'aes-256-gcm'
+    ) AS encrypted_ssn
+FROM users;
+```
+
+## Secure Password Storage
+
+Never store passwords in plain text. Use Argon2id for secure password hashing.
+
+### Hash Passwords with Argon2id
+
+```sql
+-- Hash a password for storage
+SELECT crypto_argon2_hash(
+    'user_password',
+    16,  -- salt length
+    3,   -- iterations (time cost)
+    65536,  -- memory in KB
+    1    -- parallelism
+) AS password_hash;
+
+-- Verify a password against stored hash
+SELECT crypto_argon2_verify(
+    'user_password',
+    stored_hash
+) AS is_valid;
+```
+
+## Generating Secure Tokens
+
+Create secure random tokens for API keys, session IDs, or verification codes.
+
+### Generate API Keys
+
+```sql
+-- Generate a 32-byte random token as hex string
+SELECT crypto_encode(
+    crypto_random_bytes(32),
+    'hex'
+) AS api_key;
+
+-- Generate a URL-safe base64 token
+SELECT crypto_encode(
+    crypto_random_bytes(24),
+    'base64'
+) AS session_token;
+```
+
+## Data Integrity with HMAC
+
+Use HMAC to verify data hasn't been tampered with.
+
+### Sign and Verify Data
+
+```sql
+-- Create an HMAC signature
+SELECT crypto_hmac(
+    'important data to protect',
+    'your-secret-key',
+    'sha256'
+) AS signature;
+
+-- Verify by comparing signatures
+WITH signed_data AS (
+    SELECT
+        'important data to protect' AS data,
+        crypto_hmac('important data to protect', 'your-secret-key', 'sha256') AS original_sig
+)
+SELECT
+    data,
+    original_sig = crypto_hmac(data, 'your-secret-key', 'sha256') AS is_valid
+FROM signed_data;
+```
+
+## Hashing for Deduplication
+
+Use fast hashing algorithms to identify duplicate records.
+
+### Find Duplicate Files by Content Hash
+
+```sql
+-- Hash file contents to find duplicates
+CREATE TABLE files (
+    path VARCHAR,
+    content BLOB
+);
+
+-- Find duplicates by comparing BLAKE3 hashes
+WITH hashed_files AS (
+    SELECT
+        path,
+        crypto_blake3(content) AS content_hash
+    FROM files
+)
+SELECT
+    content_hash,
+    list(path) AS duplicate_paths,
+    count(*) AS count
+FROM hashed_files
+GROUP BY content_hash
+HAVING count(*) > 1;
+```
+
+## Key Derivation for Multi-Tenant Encryption
+
+Derive unique encryption keys for each tenant from a master key.
+
+### Derive Tenant-Specific Keys
+
+```sql
+-- Derive a unique key for each tenant using HKDF
+SELECT
+    tenant_id,
+    crypto_hkdf(
+        master_key,           -- Your master secret key
+        tenant_id::BLOB,      -- Salt: unique per tenant
+        'tenant-encryption',  -- Info: context string
+        32,                   -- Output key length
+        'sha256'
+    ) AS tenant_key
+FROM tenants;
+```
