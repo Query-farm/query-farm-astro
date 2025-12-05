@@ -178,6 +178,11 @@ export interface ExtensionMetadata {
   pricing?: 'free' | 'paid' | 'freemium';
   platforms?: string[];
   duckdbVersions?: string[];
+  // Related extensions (referenced by extension ID from extensions.ts)
+  relatedExtensions?: string[];
+  // Detailed image for extension page and social sharing (1200x630px recommended)
+  // Falls back to icon emoji if not provided
+  image?: string;
 }
 
 // Complete Extension Data Structure

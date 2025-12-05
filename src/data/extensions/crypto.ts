@@ -25,7 +25,9 @@ const metadata: ExtensionMetadata = {
   license: 'MIT',
   pricing: 'free',
   platforms: ['Linux', 'Windows', 'macOS', 'WASM'],
-  duckdbVersions: ['1.4', '1.5']
+  duckdbVersions: ['1.4', '1.5'],
+  relatedExtensions: ['hashfunctions', 'data-validator', 'bitfilters'],
+  image: '/images/extensions/crypto.svg'
 };
 
 const functions: FunctionDocData[] = [
