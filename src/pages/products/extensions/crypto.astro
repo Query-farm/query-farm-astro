@@ -9,14 +9,17 @@ import ExtensionHero from '../../../components/products/ExtensionHero.astro';
 import ExtensionCard from '../../../components/products/ExtensionCard.astro';
 import ExtensionInfo from '../../../components/products/ExtensionInfo.astro';
 import ExtensionChangelog from '../../../components/products/ExtensionChangelog.astro';
-import DuckDBExtensionFunctionDoc from '../../../components/docs/DuckDBExtensionFunctionDoc.astro';
 import DuckDBExtensionPragmaDoc from '../../../components/docs/DuckDBExtensionPragmaDoc.astro';
 import DuckDBExtensionSecretDoc from '../../../components/docs/DuckDBExtensionSecretDoc.astro';
 import DuckDBExtensionMacroDoc from '../../../components/docs/DuckDBExtensionMacroDoc.astro';
 import DuckDBExtensionFilesystemDoc from '../../../components/docs/DuckDBExtensionFilesystemDoc.astro';
 import DuckDBExtensionStorageDoc from '../../../components/docs/DuckDBExtensionStorageDoc.astro';
+import DuckDBExtensionLogTypeDoc from '../../../components/docs/DuckDBExtensionLogTypeDoc.astro';
+import DuckDBExtensionLogStorageDoc from '../../../components/docs/DuckDBExtensionLogStorageDoc.astro';
 import DuckDBExtensionTechnicalOverview from '../../../components/docs/DuckDBExtensionTechnicalOverview.astro';
-import { cryptoFunctions, cryptoPragmas, cryptoSecrets, cryptoMacros, cryptoFilesystems, cryptoStorageExtensions, extensionMetadata, technicalOverview } from '../../../data/crypto-functions';
+import DuckDBExtensionContentsTable from '../../../components/docs/DuckDBExtensionContentsTable.astro';
+import DuckDBExtensionFunctionReference from '../../../components/docs/DuckDBExtensionFunctionReference.astro';
+import { cryptoFunctions, cryptoPragmas, cryptoSecrets, cryptoMacros, cryptoFilesystems, cryptoStorageExtensions, cryptoLogTypes, cryptoLogStorageTypes, extensionMetadata, technicalOverview } from '../../../data/crypto-functions';
 import { getExtensionsByIds } from '../../../data/extensions';
 
 // Use extension metadata
@@ -35,11 +38,11 @@ const categories = cryptoFunctions.reduce((acc, fn) => {
 const categoryOrder = ['Hashing', 'HMAC', 'Password', 'Key Generation', 'Auditing', 'Aggregation', 'Data Export'];
 const sortedCategories = categoryOrder.filter(cat => categories[cat]);
 
-// Create unified extension contents (functions + macros + pragmas + secrets + filesystems + storage)
+// Create unified extension contents (functions + macros + pragmas + secrets + filesystems + storage + logging)
 interface ExtensionContent {
   id: string;
   name: string;
-  type: 'scalar' | 'table' | 'aggregate' | 'copy' | 'macro' | 'pragma' | 'secret' | 'filesystem' | 'storage';
+  type: 'scalar' | 'table' | 'aggregate' | 'copy' | 'macro' | 'pragma' | 'secret' | 'filesystem' | 'storage' | 'logtype' | 'logstorage';
   category: string;
   description: string;
   href: string;
@@ -99,6 +102,24 @@ const extensionContents: ExtensionContent[] = [
     category: storage.category,
     description: storage.description.split('.')[0],
     href: `#${storage.id}`
+  })),
+  // Add all log types
+  ...cryptoLogTypes.map(logType => ({
+    id: logType.id,
+    name: logType.name,
+    type: 'logtype' as const,
+    category: logType.category,
+    description: logType.description.split('.')[0],
+    href: `#${logType.id}`
+  })),
+  // Add all log storage types
+  ...cryptoLogStorageTypes.map(logStorage => ({
+    id: logStorage.id,
+    name: logStorage.name,
+    type: 'logstorage' as const,
+    category: logStorage.category,
+    description: logStorage.description.split('.')[0],
+    href: `#${logStorage.id}`
   }))
 ];
 
@@ -111,14 +132,16 @@ const contentCategories = extensionContents.reduce((acc, item) => {
   return acc;
 }, {} as Record<string, ExtensionContent[]>);
 
-// Sort content categories (functions first, then macros, then Configuration, then Secrets, then Filesystems, then Storage)
+// Sort content categories (functions first, then macros, then Configuration, then Secrets, then Filesystems, then Storage, then Logging)
 const sortedContentCategories = [
   ...categoryOrder,
   'Data Privacy', 'Security', 'Data Integrity', 'Encryption',
   'Configuration',
   'Cloud Storage', 'Database Connections',
   'Local Storage', 'Secret Management',
-  'Encrypted Database Storage', 'Secret Management Storage'
+  'Encrypted Database Storage', 'Secret Management Storage',
+  'Security Logging', 'Data Quality Logging',
+  'External Log Storage', 'Cloud Log Storage', 'Database Log Storage'
 ].filter(cat => contentCategories[cat]);
 
 // Related extensions - just list the IDs
@@ -224,7 +247,7 @@ const changelogEntries = [
     description={extensionMetadata.description}
     actions={[
       {
-        label: 'Browse Functions',
+        label: 'Browse Contents',
         href: '#functions-index',
         icon: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />'
       },
@@ -269,123 +292,14 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
     sections={technicalOverview.sections}
   />
 
-
   <!-- Extension Contents Index -->
-  <section id="functions-index" class="py-16 lg:py-24 bg-soil-50">
-    <div class="section-container">
-      <SectionHeader
-        eyebrow="Reference"
-        title="Extension Contents"
-        description="Quick reference to all available functions and settings organized by category."
-        class="mb-12"
-      />
-
-      <div class="max-w-6xl mx-auto">
-        <Card padding="none" class="overflow-hidden">
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-              <thead class="bg-soil-100 border-b-2 border-soil-300">
-                <tr>
-                  <th class="px-4 py-3 text-left font-semibold text-soil-900">Name</th>
-                  <th class="px-4 py-3 text-left font-semibold text-soil-900">Type</th>
-                  <th class="px-4 py-3 text-left font-semibold text-soil-900">Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedContentCategories.map((categoryName, catIndex) => {
-                  const categoryId = categoryName.toLowerCase().replace(/\s+/g, '-');
-                  const items = contentCategories[categoryName];
-
-                  return (
-                    <>
-                      {/* Category Header Row (spans all columns) */}
-                      <tr id={`functions-index-${categoryId}`} class="scroll-mt-32">
-                        <td colspan="3" class="px-4 py-3 bg-earth-200 border-y border-earth-400">
-                          <span class="font-bold text-soil-900">{categoryName}</span>
-                        </td>
-                      </tr>
-
-                      {/* Content Rows */}
-                      {items.map((item, itemIndex) => (
-                        <tr
-                          class={`hover:bg-soil-50 cursor-pointer ${itemIndex === items.length - 1 && catIndex !== sortedContentCategories.length - 1 ? 'border-b border-soil-300' : ''}`}
-                          onclick={`window.location.hash='${item.id}'`}
-                        >
-                          <td class="px-4 py-3">
-                            <a href={item.href} class="font-mono text-harvest-700 hover:text-harvest-800 font-medium">
-                              {item.name}
-                            </a>
-                          </td>
-                          <td class="px-4 py-3">
-                            {item.type === 'scalar' && <Badge variant="info" size="sm">Scalar Function</Badge>}
-                            {item.type === 'table' && <Badge variant="success" size="sm">Table Function</Badge>}
-                            {item.type === 'aggregate' && (
-                              <span class="inline-flex items-center font-medium rounded-md border px-2 py-1 text-xs bg-orange-100 text-orange-800 border-orange-300">
-                                Aggregate Function
-                              </span>
-                            )}
-                            {item.type === 'copy' && (
-                              <span class="inline-flex items-center font-medium rounded-md border px-2 py-1 text-xs bg-blue-100 text-blue-800 border-blue-300">
-                                Copy Function
-                              </span>
-                            )}
-                            {item.type === 'macro' && (
-                              <span class="inline-flex items-center font-medium rounded-md border px-2 py-1 text-xs bg-teal-100 text-teal-800 border-teal-300">
-                                Macro
-                              </span>
-                            )}
-                            {item.type === 'pragma' && (
-                              <span class="inline-flex items-center font-medium rounded-md border px-2 py-1 text-xs bg-purple-100 text-purple-800 border-purple-300">
-                                Pragma
-                              </span>
-                            )}
-                            {item.type === 'secret' && (
-                              <span class="inline-flex items-center font-medium rounded-md border px-2 py-1 text-xs bg-indigo-100 text-indigo-800 border-indigo-300">
-                                Secret
-                              </span>
-                            )}
-                            {item.type === 'filesystem' && (
-                              <span class="inline-flex items-center font-medium rounded-md border px-2 py-1 text-xs bg-cyan-100 text-cyan-800 border-cyan-300">
-                                Filesystem
-                              </span>
-                            )}
-                            {item.type === 'storage' && (
-                              <span class="inline-flex items-center font-medium rounded-md border px-2 py-1 text-xs bg-emerald-100 text-emerald-800 border-emerald-300">
-                                Storage Extension
-                              </span>
-                            )}
-                          </td>
-                          <td class="px-4 py-3 text-soil-700">{item.description}</td>
-                        </tr>
-                      ))}
-                    </>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      </div>
-    </div>
-  </section>
+  <DuckDBExtensionContentsTable
+    contents={extensionContents}
+    categoryOrder={sortedContentCategories}
+  />
 
   <!-- Function Reference -->
-  <section class="py-16 lg:py-24 bg-white">
-    <div class="section-container">
-      <SectionHeader
-        eyebrow="API Reference"
-        title="Function Documentation"
-        description="Detailed documentation for each function including signatures, parameters, and examples."
-        class="mb-12"
-      />
-
-      <div class="max-w-6xl mx-auto">
-        {cryptoFunctions.map((fn) => (
-          <DuckDBExtensionFunctionDoc {...fn} />
-        ))}
-      </div>
-    </div>
-  </section>
+  <DuckDBExtensionFunctionReference functions={cryptoFunctions} />
 
   <!-- Extension Macros -->
   {cryptoMacros && cryptoMacros.length > 0 && (
@@ -402,6 +316,46 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
           {cryptoMacros.map((macro) => (
             <DuckDBExtensionMacroDoc {...macro} />
           ))}
+        </div>
+      </div>
+    </section>
+  )}
+
+  <!-- Extension Logging -->
+  {((cryptoLogTypes && cryptoLogTypes.length > 0) || (cryptoLogStorageTypes && cryptoLogStorageTypes.length > 0)) && (
+    <section id="logging" class="py-16 lg:py-24 bg-white">
+      <div class="section-container">
+        <SectionHeader
+          eyebrow="Logging Integration"
+          title="Extension Logging"
+          description="DuckDB logging subsystem integration for monitoring cryptographic operations and storing audit trails."
+          class="mb-12"
+        />
+
+        <div class="max-w-6xl mx-auto space-y-12">
+          {/* Log Types */}
+          {cryptoLogTypes && cryptoLogTypes.length > 0 && (
+            <div>
+              <h3 class="text-xl font-bold text-soil-900 mb-6 pb-2 border-b border-soil-200">Log Types</h3>
+              <div class="space-y-8">
+                {cryptoLogTypes.map((logType) => (
+                  <DuckDBExtensionLogTypeDoc {...logType} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Log Storage Types */}
+          {cryptoLogStorageTypes && cryptoLogStorageTypes.length > 0 && (
+            <div>
+              <h3 class="text-xl font-bold text-soil-900 mb-6 pb-2 border-b border-soil-200">Log Storage Types</h3>
+              <div class="space-y-8">
+                {cryptoLogStorageTypes.map((logStorage) => (
+                  <DuckDBExtensionLogStorageDoc {...logStorage} />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </section>

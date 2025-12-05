@@ -75,6 +75,33 @@ export interface StorageExtension {
   examples: FunctionExample[];
 }
 
+// Log Type interface
+export interface LogType {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  examples: FunctionExample[];
+}
+
+// Log Storage Type interface
+export interface LogStorageParameter {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+  default?: string;
+}
+
+export interface LogStorageType {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  parameters: LogStorageParameter[];
+  examples: FunctionExample[];
+}
+
 // Type definitions for function documentation
 export interface FunctionParameter {
   name: string;
@@ -1459,6 +1486,288 @@ ATTACH 'analytics' (
   db_type 'postgres',
   refresh_interval 1800
 );`
+      }
+    ]
+  }
+];
+
+// Extension log types
+export const cryptoLogTypes: LogType[] = [
+  {
+    id: 'crypto-operation-log',
+    name: 'CryptoOperationLog',
+    category: 'Security Logging',
+    description: 'Logs all cryptographic operations performed by the extension including hashing, encryption, and key generation. Captures operation type, input size, algorithm used, and execution time for security auditing and performance monitoring.',
+    examples: [
+      {
+        description: 'Enable crypto operation logging',
+        code: `-- Enable logging for crypto operations
+SET log_crypto_operations = true;
+
+-- Perform some crypto operations
+SELECT crypto_sha256('test data');
+SELECT crypto_bcrypt_hash('password123');
+SELECT crypto_hmac('message', 'secret', 'sha256');
+
+-- View the log entries
+SELECT * FROM duckdb_logs() WHERE log_type = 'CryptoOperationLog';`,
+        outputTable: {
+          columns: [
+            { name: 'timestamp', align: 'left' },
+            { name: 'operation', align: 'left' },
+            { name: 'algorithm', align: 'left' },
+            { name: 'input_size', align: 'right' },
+            { name: 'duration_ms', align: 'right' }
+          ],
+          rows: [
+            ['2024-12-04 10:15:23', 'hash', 'SHA256', '9', '0.12'],
+            ['2024-12-04 10:15:24', 'hash', 'bcrypt', '13', '45.67'],
+            ['2024-12-04 10:15:25', 'hmac', 'SHA256', '7', '0.08']
+          ]
+        }
+      }
+    ]
+  },
+  {
+    id: 'key-access-log',
+    name: 'KeyAccessLog',
+    category: 'Security Logging',
+    description: 'Tracks all access to encryption keys and secrets managed by the crypto extension. Records key identifiers, access timestamps, and the context of key usage for compliance and security monitoring.',
+    examples: [
+      {
+        description: 'Track key access events',
+        code: `-- Enable key access logging
+SET log_key_access = true;
+
+-- Use keys for encryption
+SELECT crypto_encrypt(data, 'key_id_123') FROM sensitive_table;
+
+-- View key access logs
+SELECT * FROM duckdb_logs() WHERE log_type = 'KeyAccessLog';`,
+        outputTable: {
+          columns: [
+            { name: 'timestamp', align: 'left' },
+            { name: 'key_id', align: 'left' },
+            { name: 'operation', align: 'left' },
+            { name: 'user', align: 'left' }
+          ],
+          rows: [
+            ['2024-12-04 10:20:15', 'key_id_123', 'encrypt', 'analytics_user'],
+            ['2024-12-04 10:20:16', 'key_id_123', 'encrypt', 'analytics_user']
+          ]
+        }
+      }
+    ]
+  },
+  {
+    id: 'hash-collision-log',
+    name: 'HashCollisionLog',
+    category: 'Data Quality Logging',
+    description: 'Detects and logs potential hash collisions when using fingerprinting or deduplication features. Helps identify data quality issues and potential security concerns in hash-based operations.',
+    examples: [
+      {
+        description: 'Monitor for hash collisions',
+        code: `-- Enable collision detection logging
+SET log_hash_collisions = true;
+
+-- Perform batch hashing with collision detection
+SELECT
+  id,
+  crypto_sha256(data) as hash,
+  COUNT(*) OVER (PARTITION BY crypto_sha256(data)) as collision_count
+FROM large_dataset;
+
+-- Check collision log
+SELECT * FROM duckdb_logs() WHERE log_type = 'HashCollisionLog';`
+      }
+    ]
+  }
+];
+
+// Extension log storage types
+export const cryptoLogStorageTypes: LogStorageType[] = [
+  {
+    id: 'siem-log-storage',
+    name: 'SIEM',
+    category: 'External Log Storage',
+    description: 'Send log events to Security Information and Event Management (SIEM) systems like Splunk, Elastic, or Datadog. Supports HTTP/HTTPS endpoints with authentication and batching for efficient log transmission.',
+    parameters: [
+      {
+        name: 'endpoint',
+        type: 'VARCHAR',
+        required: true,
+        description: 'SIEM HTTP endpoint URL for log ingestion'
+      },
+      {
+        name: 'api_key',
+        type: 'VARCHAR',
+        required: true,
+        description: 'API key or authentication token for SIEM access'
+      },
+      {
+        name: 'batch_size',
+        type: 'INTEGER',
+        required: false,
+        description: 'Number of log events to batch before sending',
+        default: '100'
+      },
+      {
+        name: 'batch_timeout_ms',
+        type: 'INTEGER',
+        required: false,
+        description: 'Maximum time to wait before sending partial batch',
+        default: '5000'
+      },
+      {
+        name: 'compression',
+        type: 'BOOLEAN',
+        required: false,
+        description: 'Enable gzip compression for log transmission',
+        default: 'true'
+      }
+    ],
+    examples: [
+      {
+        description: 'Configure SIEM log storage for Datadog',
+        code: `-- Configure log storage to send to Datadog
+SET log_storage = 'SIEM';
+SET log_storage_config = '{
+  "endpoint": "https://http-intake.logs.datadoghq.com/v1/input",
+  "api_key": "your_datadog_api_key",
+  "batch_size": 50,
+  "batch_timeout_ms": 3000,
+  "compression": true
+}';
+
+-- Enable crypto operation logging
+SET log_crypto_operations = true;
+
+-- All crypto operations will now be sent to Datadog
+SELECT crypto_sha256('test');`,
+        output: 'Log storage configured. Crypto operations will be sent to Datadog SIEM.'
+      }
+    ]
+  },
+  {
+    id: 's3-log-storage',
+    name: 'S3',
+    category: 'Cloud Log Storage',
+    description: 'Store log events in Amazon S3 buckets with automatic partitioning by date and log type. Supports encryption at rest and configurable retention policies.',
+    parameters: [
+      {
+        name: 'bucket',
+        type: 'VARCHAR',
+        required: true,
+        description: 'S3 bucket name for log storage'
+      },
+      {
+        name: 'prefix',
+        type: 'VARCHAR',
+        required: false,
+        description: 'S3 key prefix for organizing logs',
+        default: 'duckdb-logs/'
+      },
+      {
+        name: 'region',
+        type: 'VARCHAR',
+        required: true,
+        description: 'AWS region where the bucket is located'
+      },
+      {
+        name: 'format',
+        type: 'VARCHAR',
+        required: false,
+        description: 'Log file format (json, parquet, csv)',
+        default: 'parquet'
+      },
+      {
+        name: 'partition_by',
+        type: 'VARCHAR',
+        required: false,
+        description: 'Partitioning strategy (date, hour, logtype)',
+        default: 'date'
+      },
+      {
+        name: 'encryption',
+        type: 'VARCHAR',
+        required: false,
+        description: 'S3 server-side encryption (SSE-S3, SSE-KMS)',
+        default: 'SSE-S3'
+      }
+    ],
+    examples: [
+      {
+        description: 'Configure S3 log storage with Parquet format',
+        code: `-- Set up S3 log storage
+SET log_storage = 'S3';
+SET log_storage_config = '{
+  "bucket": "my-company-duckdb-logs",
+  "prefix": "production/crypto-logs/",
+  "region": "us-east-1",
+  "format": "parquet",
+  "partition_by": "date",
+  "encryption": "SSE-KMS"
+}';
+
+-- Logs will be written to:
+-- s3://my-company-duckdb-logs/production/crypto-logs/date=2024-12-04/CryptoOperationLog.parquet
+SELECT crypto_sha256('test');`
+      }
+    ]
+  },
+  {
+    id: 'postgres-log-storage',
+    name: 'PostgreSQL',
+    category: 'Database Log Storage',
+    description: 'Store log events in a PostgreSQL database table with full SQL query capabilities. Ideal for centralized logging across multiple DuckDB instances with long-term retention.',
+    parameters: [
+      {
+        name: 'connection_string',
+        type: 'VARCHAR',
+        required: true,
+        description: 'PostgreSQL connection string'
+      },
+      {
+        name: 'table_name',
+        type: 'VARCHAR',
+        required: false,
+        description: 'Table name for storing logs',
+        default: 'duckdb_logs'
+      },
+      {
+        name: 'auto_create_table',
+        type: 'BOOLEAN',
+        required: false,
+        description: 'Automatically create table if it does not exist',
+        default: 'true'
+      },
+      {
+        name: 'async_write',
+        type: 'BOOLEAN',
+        required: false,
+        description: 'Write logs asynchronously to avoid blocking queries',
+        default: 'true'
+      }
+    ],
+    examples: [
+      {
+        description: 'Store logs in PostgreSQL for centralized monitoring',
+        code: `-- Configure PostgreSQL log storage
+SET log_storage = 'PostgreSQL';
+SET log_storage_config = '{
+  "connection_string": "postgresql://user:pass@localhost:5432/logs",
+  "table_name": "duckdb_crypto_logs",
+  "auto_create_table": true,
+  "async_write": true
+}';
+
+-- All logs now written to PostgreSQL
+SET log_crypto_operations = true;
+SELECT crypto_bcrypt_hash('password');
+
+-- Query logs from PostgreSQL
+ATTACH 'logs_db' (TYPE POSTGRES, connection_string 'postgresql://user:pass@localhost:5432/logs');
+SELECT * FROM logs_db.duckdb_crypto_logs ORDER BY timestamp DESC LIMIT 10;`
       }
     ]
   }
