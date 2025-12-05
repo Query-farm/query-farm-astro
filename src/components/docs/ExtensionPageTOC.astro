@@ -1,0 +1,190 @@
+---
+interface TOCItem {
+  id: string;
+  label: string;
+  icon?: string;
+}
+
+interface Props {
+  items: TOCItem[];
+}
+
+const { items } = Astro.props;
+---
+
+<nav
+  id="extension-toc"
+  class="absolute left-4 z-40 hidden xl:block"
+  aria-label="Table of contents"
+>
+  <div class="bg-white/95 backdrop-blur-sm rounded-xl shadow-lg border border-soil-200 p-3 max-w-[200px]">
+    <div class="text-xs font-semibold text-soil-500 uppercase tracking-wider mb-2 px-2">
+      On this page
+    </div>
+    <ul class="space-y-0.5">
+      {items.map((item) => (
+        <li>
+          <a
+            href={`#${item.id}`}
+            class="toc-link group flex items-center gap-2 px-2 py-1.5 text-sm text-soil-600 hover:text-harvest-700 hover:bg-harvest-50 rounded-lg transition-colors"
+            data-section={item.id}
+          >
+            {item.icon && (
+              <span class="w-4 h-4 flex-shrink-0 opacity-60 group-hover:opacity-100 transition-opacity" set:html={item.icon} />
+            )}
+            <span class="truncate">{item.label}</span>
+          </a>
+        </li>
+      ))}
+    </ul>
+  </div>
+</nav>
+
+<script>
+  function initTOC() {
+    const toc = document.getElementById('extension-toc');
+    const tocLinks = document.querySelectorAll('.toc-link');
+    const quickInstall = document.getElementById('quick-install');
+
+    if (!toc) return;
+
+    // Calculate the original position (slightly below quick-install)
+    let originalTop = 200; // fallback
+    const stickyTop = 100; // top position when stuck (below nav bar)
+
+    function calculateOriginalPosition() {
+      if (quickInstall) {
+        const rect = quickInstall.getBoundingClientRect();
+        originalTop = rect.top + window.scrollY + 24; // 24px below quick-install start
+      }
+    }
+
+    // Set initial position
+    calculateOriginalPosition();
+    toc.style.top = `${originalTop}px`;
+
+    // Update TOC position based on scroll - sticky behavior
+    function updateTOCPosition() {
+      const scrollY = window.scrollY;
+      const threshold = originalTop - stickyTop;
+
+      if (scrollY >= threshold) {
+        // Stick to top
+        toc.classList.remove('absolute');
+        toc.classList.add('fixed');
+        toc.style.top = `${stickyTop}px`;
+      } else {
+        // Stay at original position
+        toc.classList.remove('fixed');
+        toc.classList.add('absolute');
+        toc.style.top = `${originalTop}px`;
+      }
+    }
+
+    // Get all section IDs from TOC links
+    const sectionIds = Array.from(tocLinks).map(link =>
+      (link as HTMLAnchorElement).dataset.section
+    ).filter(Boolean) as string[];
+
+    // Highlight active section based on scroll position
+    function updateActiveSection() {
+      const scrollPosition = window.scrollY + window.innerHeight / 3;
+
+      let activeId: string | null = null;
+
+      for (const id of sectionIds) {
+        const section = document.getElementById(id);
+        if (section) {
+          const rect = section.getBoundingClientRect();
+          const sectionTop = rect.top + window.scrollY;
+
+          if (scrollPosition >= sectionTop) {
+            activeId = id;
+          }
+        }
+      }
+
+      // Update link styles
+      tocLinks.forEach(link => {
+        const linkSection = (link as HTMLAnchorElement).dataset.section;
+        if (linkSection === activeId) {
+          link.classList.add('bg-harvest-100', 'text-harvest-700', 'font-medium');
+          link.classList.remove('text-soil-600');
+        } else {
+          link.classList.remove('bg-harvest-100', 'text-harvest-700', 'font-medium');
+          link.classList.add('text-soil-600');
+        }
+      });
+    }
+
+    // Smooth scroll to section on click
+    tocLinks.forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        const targetId = (link as HTMLAnchorElement).dataset.section;
+        if (targetId) {
+          const target = document.getElementById(targetId);
+          if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            // Update URL without triggering scroll
+            history.pushState(null, '', `#${targetId}`);
+          }
+        }
+      });
+    });
+
+    // Throttle scroll handler for performance
+    let ticking = false;
+    function onScroll() {
+      if (!ticking) {
+        requestAnimationFrame(() => {
+          updateTOCPosition();
+          updateActiveSection();
+          ticking = false;
+        });
+        ticking = true;
+      }
+    }
+
+    // Initial state
+    updateTOCPosition();
+    updateActiveSection();
+
+    // Listen for scroll
+    window.addEventListener('scroll', onScroll, { passive: true });
+
+    // Recalculate on resize
+    window.addEventListener('resize', () => {
+      calculateOriginalPosition();
+      updateTOCPosition();
+    }, { passive: true });
+  }
+
+  // Initialize on page load
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initTOC);
+  } else {
+    initTOC();
+  }
+
+  // Re-initialize on Astro page transitions
+  document.addEventListener('astro:page-load', initTOC);
+</script>
+
+<style>
+  #extension-toc {
+    /* Position in the left margin, outside main content */
+    left: max(1rem, calc((100vw - 1280px) / 2 - 220px));
+  }
+
+  @media (max-width: 1536px) {
+    #extension-toc {
+      left: 0.75rem;
+    }
+  }
+
+  /* Ensure smooth transitions */
+  .toc-link {
+    transition: all 0.15s ease;
+  }
+</style>
