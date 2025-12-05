@@ -150,9 +150,6 @@ export interface TechnicalOverviewSection {
   description: string;
   bulletPoints?: BulletPoint[];
   useCases?: UseCase[];
-  iconBgColor?: string;
-  iconTextColor?: string;
-  bulletColor?: string;
 }
 
 export interface TechnicalOverview {

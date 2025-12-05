@@ -1660,9 +1660,6 @@ const technicalOverview: TechnicalOverview = {
       icon: '🔒',
       title: 'Data Security & Compliance',
       description: 'Modern data systems must handle sensitive information securely. This extension provides enterprise-grade cryptographic primitives directly within DuckDB, eliminating the need to export sensitive data to external systems for encryption or hashing.',
-      iconBgColor: 'bg-harvest-100',
-      iconTextColor: 'text-harvest-700',
-      bulletColor: 'text-harvest-600',
       bulletPoints: [
         {
           label: 'Password Storage',
@@ -1682,9 +1679,6 @@ const technicalOverview: TechnicalOverview = {
       icon: '✓',
       title: 'Data Integrity & Verification',
       description: 'Ensure data hasn\'t been tampered with by generating cryptographic fingerprints and audit trails. Detect unauthorized modifications and maintain chain-of-custody for critical data.',
-      iconBgColor: 'bg-grain-100',
-      iconTextColor: 'text-grain-700',
-      bulletColor: 'text-grain-600',
       bulletPoints: [
         {
           label: 'Blockchain-Style Auditing',
@@ -1704,9 +1698,6 @@ const technicalOverview: TechnicalOverview = {
       icon: '⚡',
       title: 'Performance & Scalability',
       description: 'Native DuckDB extensions leverage columnar processing and vectorized execution for high-performance cryptographic operations on large datasets without moving data out of the database.',
-      iconBgColor: 'bg-duck-100',
-      iconTextColor: 'text-duck-700',
-      bulletColor: 'text-duck-600',
       bulletPoints: [
         {
           label: 'In-Database Processing',
@@ -1726,8 +1717,6 @@ const technicalOverview: TechnicalOverview = {
       icon: '🎯',
       title: 'Common Use Cases',
       description: '',
-      iconBgColor: 'bg-soil-200',
-      iconTextColor: 'text-soil-700',
       useCases: [
         {
           title: 'Financial Services',
