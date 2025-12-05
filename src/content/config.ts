@@ -13,12 +13,4 @@ const blog = defineCollection({
   }),
 });
 
-const extensionDetails = defineCollection({
-  type: 'content',
-  schema: z.object({
-    title: z.string().optional(),
-    description: z.string().optional(),
-  }),
-});
-
-export const collections = { blog, 'extension-details': extensionDetails };
+export const collections = { blog };

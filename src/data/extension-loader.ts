@@ -13,6 +13,16 @@ const extensionDataRegistry: Record<string, () => Promise<{ default: ExtensionDa
 };
 
 /**
+ * Extension MDX registry mapping extension IDs to their MDX content modules.
+ * Add new extensions here when they have technical details MDX files.
+ */
+const extensionMdxRegistry: Record<string, () => Promise<{ default: any; Content: any }>> = {
+  crypto: () => import('./extensions/crypto.mdx'),
+  // Future extensions:
+  // 'hashfunctions': () => import('./extensions/hashfunctions.mdx'),
+};
+
+/**
  * Loads detailed extension data for a given extension ID.
  * Returns null if no detailed data exists (only basic metadata available).
  */
@@ -86,4 +96,31 @@ export function hasDetailedData(extensionId: string): boolean {
  */
 export function getExtensionIdsWithDetailedData(): string[] {
   return Object.keys(extensionDataRegistry);
+}
+
+/**
+ * Loads MDX content component for a given extension ID.
+ * Returns null if no MDX content exists for the extension.
+ */
+export async function loadExtensionMdx(extensionId: string): Promise<{ Content: any } | null> {
+  const loader = extensionMdxRegistry[extensionId];
+
+  if (!loader) {
+    return null;
+  }
+
+  try {
+    const module = await loader();
+    return { Content: module.Content };
+  } catch (error) {
+    console.error(`Failed to load MDX content for "${extensionId}":`, error);
+    return null;
+  }
+}
+
+/**
+ * Checks if an extension has MDX content available.
+ */
+export function hasExtensionMdx(extensionId: string): boolean {
+  return extensionId in extensionMdxRegistry;
 }

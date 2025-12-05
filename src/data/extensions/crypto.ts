@@ -14,9 +14,9 @@ import type {
 
 const metadata: ExtensionMetadata = {
   name: 'crypto',
-  displayName: 'Crypto Functions',
+  displayName: 'Crypto',
   icon: '🔐',
-  description: 'Comprehensive cryptographic functions for secure data handling including hashing, encryption, and digital signatures.',
+  description: 'Cryptographic functions for secure data handling including hashing, encryption, and digital signatures.',
   githubUrl: 'https://github.com/queryfarm/duckdb-crypto',
   cta: {
     title: 'Ready to Secure Your Data?',
