@@ -25,19 +25,6 @@ import { getExtensionsByIds } from '../../../data/extensions';
 // Use extension metadata
 const GITHUB_URL = extensionMetadata.githubUrl;
 
-// Group functions by category
-const categories = cryptoFunctions.reduce((acc, fn) => {
-  if (!acc[fn.category]) {
-    acc[fn.category] = [];
-  }
-  acc[fn.category].push(fn);
-  return acc;
-}, {} as Record<string, typeof cryptoFunctions>);
-
-// Sort categories
-const categoryOrder = ['Hashing', 'HMAC', 'Password', 'Key Generation', 'Auditing', 'Aggregation', 'Data Export'];
-const sortedCategories = categoryOrder.filter(cat => categories[cat]);
-
 // Create unified extension contents (functions + macros + pragmas + secrets + filesystems + storage + logging)
 interface ExtensionContent {
   id: string;
@@ -48,8 +35,31 @@ interface ExtensionContent {
   href: string;
 }
 
+// Helper to map items to extension content format
+const mapToContent = <T extends { id: string; name: string; category: string; description: string }>(
+  items: T[],
+  type: ExtensionContent['type'],
+  options?: {
+    nameSuffix?: string;
+    defaultCategory?: string;
+    idTransform?: (item: T) => string;
+  }
+): ExtensionContent[] => {
+  return items.map(item => {
+    const id = options?.idTransform ? options.idTransform(item) : item.id;
+    return {
+      id,
+      name: item.name + (options?.nameSuffix || ''),
+      type,
+      category: item.category || options?.defaultCategory || item.category,
+      description: item.description.split('.')[0],
+      href: `#${id}`
+    };
+  });
+};
+
 const extensionContents: ExtensionContent[] = [
-  // Add all functions
+  // Functions keep their original type (scalar/table/aggregate)
   ...cryptoFunctions.map(fn => ({
     id: fn.id,
     name: fn.name + '()',
@@ -58,91 +68,27 @@ const extensionContents: ExtensionContent[] = [
     description: fn.description.split('.')[0],
     href: `#${fn.id}`
   })),
-  // Add all macros
-  ...cryptoMacros.map(macro => ({
-    id: macro.id,
-    name: macro.name + '()',
-    type: 'macro' as const,
-    category: macro.category,
-    description: macro.description.split('.')[0],
-    href: `#${macro.id}`
-  })),
-  // Add all pragmas
-  ...cryptoPragmas.map(pragma => ({
-    id: pragma.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-    name: pragma.name,
-    type: 'pragma' as const,
-    category: 'Configuration',
-    description: pragma.description.split('.')[0],
-    href: `#${pragma.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
-  })),
-  // Add all secrets
-  ...cryptoSecrets.map(secret => ({
-    id: secret.id,
-    name: secret.name,
-    type: 'secret' as const,
-    category: secret.category,
-    description: secret.description.split('.')[0],
-    href: `#${secret.id}`
-  })),
-  // Add all filesystems
-  ...cryptoFilesystems.map(fs => ({
-    id: fs.id,
-    name: fs.name + '://',
-    type: 'filesystem' as const,
-    category: fs.category || 'Filesystems',
-    description: fs.description.split('.')[0],
-    href: `#${fs.id}`
-  })),
-  // Add all storage extensions
-  ...cryptoStorageExtensions.map(storage => ({
-    id: storage.id,
-    name: storage.name,
-    type: 'storage' as const,
-    category: storage.category,
-    description: storage.description.split('.')[0],
-    href: `#${storage.id}`
-  })),
-  // Add all log types
-  ...cryptoLogTypes.map(logType => ({
-    id: logType.id,
-    name: logType.name,
-    type: 'logtype' as const,
-    category: logType.category,
-    description: logType.description.split('.')[0],
-    href: `#${logType.id}`
-  })),
-  // Add all log storage types
-  ...cryptoLogStorageTypes.map(logStorage => ({
-    id: logStorage.id,
-    name: logStorage.name,
-    type: 'logstorage' as const,
-    category: logStorage.category,
-    description: logStorage.description.split('.')[0],
-    href: `#${logStorage.id}`
-  }))
+  // All other types use the helper
+  ...mapToContent(cryptoMacros, 'macro', { nameSuffix: '()' }),
+  ...mapToContent(cryptoPragmas, 'pragma', {
+    defaultCategory: 'Configuration',
+    idTransform: (p) => p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  }),
+  ...mapToContent(cryptoSecrets, 'secret'),
+  ...mapToContent(cryptoFilesystems, 'filesystem', { nameSuffix: '://', defaultCategory: 'Filesystems' }),
+  ...mapToContent(cryptoStorageExtensions, 'storage'),
+  ...mapToContent(cryptoLogTypes, 'logtype'),
+  ...mapToContent(cryptoLogStorageTypes, 'logstorage')
 ];
 
 // Group extension contents by category
 const contentCategories = extensionContents.reduce((acc, item) => {
-  if (!acc[item.category]) {
-    acc[item.category] = [];
-  }
-  acc[item.category].push(item);
+  (acc[item.category] ??= []).push(item);
   return acc;
 }, {} as Record<string, ExtensionContent[]>);
 
-// Sort content categories (functions first, then macros, then Configuration, then Secrets, then Filesystems, then Storage, then Logging)
-const sortedContentCategories = [
-  ...categoryOrder,
-  'Data Privacy', 'Security', 'Data Integrity', 'Encryption',
-  'Configuration',
-  'Cloud Storage', 'Database Connections',
-  'Local Storage', 'Secret Management',
-  'Encrypted Database Storage', 'Secret Management Storage',
-  'Security Logging', 'Data Quality Logging',
-  'External Log Storage', 'Cloud Log Storage', 'Database Log Storage'
-].filter(cat => contentCategories[cat]);
+// Automatically discover and sort all categories alphabetically
+const sortedContentCategories = Object.keys(contentCategories).sort();
 
 // Related extensions - just list the IDs
 const relatedExtensionIds = ['hashfunctions'];
