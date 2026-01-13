@@ -67,7 +67,7 @@ export default defineConfig({
     plugins: [tailwindcss()],
     server: {
        allowedHosts: [
-        '8f859ce3a5dc.ngrok-free.app', // your ngrok host
+        '340ce136a669.ngrok-free.app', // your ngrok host
       ],
 }
   }
