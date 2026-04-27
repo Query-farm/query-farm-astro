@@ -173,7 +173,6 @@ import { myFunctions } from '../data/my-extension-functions';
 | `returnsTable` | ReturnColumn[] | No | Return table columns (for table functions) |
 | `description` | string | Yes | Function description |
 | `examples` | string | Yes | SQL code examples |
-| `parametersTitle` | string | No | Custom title for parameters section (default: "Parameters") |
 
 ### Parameter Object
 
@@ -184,6 +183,7 @@ import { myFunctions } from '../data/my-extension-functions';
   paramType: 'positional' | 'named';  // Parameter type
   default?: string;       // Default value (for named parameters)
   description: string;    // Parameter description
+  varargs?: boolean;      // If true, this parameter can repeat any number of times
 }
 ```
 

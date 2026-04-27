@@ -305,23 +305,23 @@ export const extensions: Extension[] = [
     ]
   },
 
-  // Additional Featured Extensions
+  // Example Extension (testbed for all features)
   {
-    id: 'crypto',
-    name: 'Crypto Functions',
-    description: 'Comprehensive cryptographic functions for secure data handling including hashing, encryption, and digital signatures.',
+    id: 'example',
+    name: 'Example Extension',
+    description: 'Example extension demonstrating all available extension features and documentation patterns.',
     category: 'devtools',
     status: 'stable',
-    icon: '🔐',
-    githubUrl: 'https://github.com/queryfarm/duckdb-crypto',
-    docsUrl: 'https://docs.query.farm/extensions/crypto',
+    icon: '📦',
+    githubUrl: 'https://github.com/queryfarm/duckdb-example',
+    docsUrl: 'https://docs.query.farm/extensions/example',
     features: [
-      'SHA-256, SHA-512, MD5 hashing',
-      'AES-256 encryption/decryption',
-      'HMAC signatures',
-      'Base64 encoding/decoding',
-      'Password hashing (bcrypt, argon2)',
-      'UUID v4 generation'
+      'Functions documentation',
+      'Macros documentation',
+      'Pragmas/Settings',
+      'Secrets management',
+      'Filesystems',
+      'Cookbook examples'
     ]
   },
   {

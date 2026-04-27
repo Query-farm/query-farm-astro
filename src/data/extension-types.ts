@@ -7,6 +7,7 @@ export interface FunctionParameter {
   paramType: 'positional' | 'named';
   default?: string;
   description: string;
+  varargs?: boolean; // If true, this parameter can repeat any number of times
 }
 
 export interface ReturnColumn {
@@ -29,16 +30,15 @@ export interface FunctionDocData {
   id: string;
   name: string;
   type: 'scalar' | 'table' | 'aggregate' | 'copy';
-  category: string;
+  categories: string[];
   returnType?: string;
   parameters: FunctionParameter[];
   returns?: string;
   returnsTable?: ReturnColumn[];
   description: string;
   examples: FunctionExample[];
-  parametersTitle?: string;
   relatedFunctions?: string[];
-  tags?: string[];
+  tags?: Record<string, string>;
   options?: FunctionParameter[];
 }
 
@@ -178,7 +178,7 @@ export interface ExtensionMetadata {
   };
   // Optional extension info
   license?: string;
-  pricing?: 'free' | 'paid' | 'freemium';
+  pricing?: 'free' | 'paid';
   firstRelease?: string; // ISO date string (e.g., '2024-03-01')
   lastRelease?: string; // ISO date string (e.g., '2025-01-15')
   binarySize?: string; // Human-readable size (e.g., '2.4 MB')
@@ -192,7 +192,6 @@ export interface ExtensionMetadata {
   githubStars?: number;
   platforms?: PlatformInfo[];
   duckdbVersions?: string[]; // Supported versions (e.g., ['1.1.0', '1.1.1', '1.1.2'])
-  unsupportedVersions?: string[]; // Older unsupported versions (e.g., ['1.0.0', '0.10.0'])
   // Related extensions (referenced by extension ID from extensions.ts)
   relatedExtensions?: string[];
   // Detailed image for extension page and social sharing (1200x630px recommended)

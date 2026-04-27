@@ -6,10 +6,10 @@ import { getExtensionById } from './extensions';
  * Add new extensions here as they get detailed data files.
  */
 const extensionDataRegistry: Record<string, () => Promise<{ default: ExtensionData }>> = {
-  crypto: () => import('./extensions/crypto'),
+  example: () => import('./extensions/example/extension'),
   // Future extensions:
-  // 'postgres-connector': () => import('./extensions/postgres-connector'),
-  // 'mysql-connector': () => import('./extensions/mysql-connector'),
+  // 'postgres-connector': () => import('./extensions/postgres-connector/extension'),
+  // 'mysql-connector': () => import('./extensions/mysql-connector/extension'),
 };
 
 /**
@@ -17,9 +17,9 @@ const extensionDataRegistry: Record<string, () => Promise<{ default: ExtensionDa
  * Add new extensions here when they have technical details MDX files.
  */
 const extensionMdxRegistry: Record<string, () => Promise<{ default: any; Content: any }>> = {
-  crypto: () => import('./extensions/crypto.mdx'),
+  example: () => import('./extensions/example/technical-details.mdx'),
   // Future extensions:
-  // 'hashfunctions': () => import('./extensions/hashfunctions.mdx'),
+  // 'hashfunctions': () => import('./extensions/hashfunctions/technical-details.mdx'),
 };
 
 /**
@@ -27,9 +27,9 @@ const extensionMdxRegistry: Record<string, () => Promise<{ default: any; Content
  * Add new extensions here when they have cookbook MDX files.
  */
 const cookbookMdxRegistry: Record<string, () => Promise<{ default: any; Content: any }>> = {
-  crypto: () => import('./extensions/crypto-cookbook.mdx'),
+  example: () => import('./extensions/example/cookbook.mdx'),
   // Future extensions:
-  // 'hashfunctions': () => import('./extensions/hashfunctions-cookbook.mdx'),
+  // 'hashfunctions': () => import('./extensions/hashfunctions/cookbook.mdx'),
 };
 
 /**
