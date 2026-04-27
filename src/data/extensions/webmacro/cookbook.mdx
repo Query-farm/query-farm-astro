@@ -1,0 +1,61 @@
+## Load a remote macro
+
+```sql
+INSTALL webmacro FROM community;
+LOAD webmacro;
+
+SELECT load_macro_from_url('https://gist.githubusercontent.com/lmangani/518215a68e674ac662537d518799b893/raw/...') AS res;
+-- 'Successfully loaded macro: search_posts'
+```
+
+The fetched URL must contain a `CREATE MACRO` (or `CREATE TABLE MACRO`) statement. WebMacro fetches it, parses it, and registers it in the current DuckDB session.
+
+## Use it
+
+Once loaded, the macro behaves like any other DuckDB macro:
+
+```sql
+SELECT * FROM search_posts('qxip.bsky.social', text := 'quack');
+```
+
+Scalar macros are called inline; table macros appear as `FROM`-able sources.
+
+## Where to host macros
+
+Anywhere reachable over HTTPS:
+
+- **GitHub Gists** — the canonical "raw" URL of a public gist works directly.
+- **Pastebin / Hastebin / dpaste** — same idea; use the raw-content URL.
+- **Your own static-hosted directory** — `https://macros.example.com/<name>.sql`.
+- **A short-link service** — `https://quacks.cc/r/<name>` style redirectors are great for memorable URLs.
+
+## Patterns
+
+**Team library** — host a directory of macros at a known URL prefix:
+
+```sql
+SELECT load_macro_from_url('https://macros.example.com/users_with_unread.sql');
+SELECT load_macro_from_url('https://macros.example.com/sla_summary.sql');
+
+SELECT * FROM users_with_unread();
+SELECT * FROM sla_summary('2026-04-01');
+```
+
+**Versioned macros** — pin a specific gist revision:
+
+```sql
+SELECT load_macro_from_url('https://gist.githubusercontent.com/me/abc123/raw/v2/macro.sql');
+```
+
+**Dynamic loading** — pick a macro from a config table:
+
+```sql
+SELECT load_macro_from_url(macro_url)
+FROM enabled_macros;
+```
+
+## Caveats
+
+- **Trust the source.** WebMacro will run whatever SQL the URL returns. Treat it like `eval()`. Pinned, signed, or self-hosted URLs only.
+- **Macros aren't persisted across sessions.** Re-load on each connection (or include in your session-startup script).
+- **Network round-trip per load.** Cache locally if you depend on offline use.

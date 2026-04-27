@@ -1,0 +1,54 @@
+## What is a probabilistic filter?
+
+A probabilistic set-membership filter answers **"Is X in this set?"** with two carefully chosen guarantees:
+
+- **No false negatives.** If the filter says NO, the element is definitely not in the set.
+- **Bounded false positives.** If the filter says YES, the element is *probably* in the set — with a measurable probability of being wrong.
+
+That's a powerful tradeoff. You give up exactness in one direction in exchange for:
+
+- **Memory** — typically 1–2 *bytes* per element instead of storing the whole element.
+- **Speed** — O(1) probe, often a single cache line read.
+
+Use cases include join pre-filtering, data skipping, dedupe pre-checks, cache hit/miss prediction, and routing requests to the right shard.
+
+## Filter family comparison
+
+| Family | Memory (≈, per element) | False positive rate | Mutation | Best for |
+|---|---|---|---|---|
+| **Quotient** | tunable (q, r) | ~2^(−r) | **Add, delete, resize** | Dynamic sets |
+| **XOR-8** | ~9 bits | ~0.39% | Static | General-purpose |
+| **XOR-16** | ~18 bits | ~0.0015% | Static | Very low FPR needed |
+| **Binary Fuse-8** | &lt;9 bits | ~0.39% | Static | Smallest static filter |
+| **Binary Fuse-16** | ~18 bits | ~0.0015% | Static | Smallest very-low-FPR filter |
+| **DuckDB Bloom** | tunable | tunable | Static | DuckDB-native compat |
+
+For most read-heavy workloads, **Binary Fuse 8** is the right default. Switch to **Quotient** when the underlying set changes; switch to a 16-bit variant when even 0.4% false positives are too many.
+
+## Hashing the input
+
+Every filter takes `UBIGINT` hashes as input — the algorithm-quality of the hash matters because filters distribute keys based on the hash bits. Three options, in increasing fanciness:
+
+1. **`hash(value)`** — DuckDB's built-in. Good distribution, very fast, no extension needed.
+2. **`xxh3_64(value)`** from [`hashfuncs`](/products/extensions/hashfuncs) — slightly faster, well-distributed, cross-language compatible.
+3. **`crypto_hash('sha2-256', value)`** from [`crypto`](/products/extensions/crypto) cast to UBIGINT — only when adversarial inputs matter (cryptographic resistance to filter-poisoning).
+
+For 99% of cases use option 1 or 2. Option 3 is correct but ~10× slower.
+
+## Filters as columns
+
+Every filter constructor is an *aggregate* function and produces a single BLOB. That makes filters first-class values you can:
+
+- Store in a regular column (`CREATE TABLE filters (bucket INT, filter BLOB)`).
+- Persist in Parquet for cross-process reuse.
+- Pass to other queries via CTE or table valued.
+- Combine via UNION (build per-partition filters separately, then probe each).
+
+There's no special filter type — just BLOB plus the matching `*_contains` function.
+
+## When *not* to use a filter
+
+- **You actually need the elements**, not membership. Filters can't enumerate; they're set-only.
+- **The set is tiny.** A 10K-element set in a HashMap is faster than a filter.
+- **You can't tolerate any false positives**, including in a probe-then-verify pattern. (Though probe-then-verify makes filters exact for correctness purposes — you just pay the verify cost on FPR-rate of inputs.)
+- **The set churns continuously.** Even Quotient filters have construction cost; if you rebuild on every query, the filter isn't earning its keep.

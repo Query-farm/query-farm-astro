@@ -1,0 +1,78 @@
+## Variable substitution
+
+```sql
+SELECT tera_render('{{ foo }}', '{"foo":"bar"}');           -- 'bar'
+SELECT tera_render('Hello, World!');                        -- 'Hello, World!'
+```
+
+## Nested context
+
+```sql
+SELECT tera_render(
+  'Hello {{ user.name }}, you have {{ user.messages }} new messages',
+  '{"user":{"name":"Alice","messages":5}}'
+);
+```
+
+## Loops
+
+```sql
+SELECT tera_render(
+  '{% for x in items %}{{ x.name }}{% if not loop.last %}, {% endif %}{% endfor %}',
+  '{"items":[{"name":"Apple"},{"name":"Banana"},{"name":"Cherry"}]}'
+);
+-- 'Apple, Banana, Cherry'
+```
+
+## Autoescape
+
+```sql
+-- Default: autoescape on, HTML special chars are escaped
+SELECT tera_render('{{ v }}', '{"v":"B&O"}');
+-- 'B&amp;O'
+
+-- Off when generating non-HTML
+SELECT tera_render('{{ v }}', '{"v":"B&O"}', autoescape := false);
+-- 'B&O'
+```
+
+## Render template files from disk
+
+Pass a glob with `template_path` and use template names instead of inline strings:
+
+```sql
+SELECT tera_render(
+  'index.html',
+  '{"v":"B&O"}',
+  autoescape := false,
+  template_path := './templates/*.html'
+);
+```
+
+This is the killer feature over inline-only engines — separate authoring of templates from queries that render them.
+
+## Per-row HTML email
+
+```sql
+SELECT email,
+       tera_render(
+         '<h1>Hi {{ name }}!</h1><p>{{ unread }} new messages.</p>',
+         json_object('name', name, 'unread', unread_count)
+       ) AS html
+FROM users
+WHERE unread_count > 0;
+```
+
+## Generate per-host config
+
+```sql
+SELECT tera_render(
+  'server { listen 80; server_name {{ host }}; proxy_pass http://{{ upstream }}; }',
+  json_object('host', hostname, 'upstream', upstream)
+) AS nginx_block
+FROM virtual_hosts;
+```
+
+## Tera vs MiniJinja
+
+[`minijinja`](/products/extensions/minijinja) is the other Jinja-style engine in this catalog. Both speak the same dialect for everyday use. Pick **Tera** when you want template-file inclusion (`template_path`); pick **MiniJinja** when you want maximum Python-Jinja compatibility on the filter set. For brand-new projects, either is a defensible choice.

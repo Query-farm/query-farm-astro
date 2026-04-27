@@ -1,0 +1,102 @@
+## Attach a Flight Database
+
+The most powerful way to use Airport: attach an Arrow Flight server as a DuckDB database and query it like any other catalog.
+
+```sql
+-- 1. Store credentials as a secret
+CREATE SECRET my_flight (
+  TYPE airport,
+  location 'grpc+tls://flight.example.com:8815',
+  auth_token 'your-bearer-token'
+);
+
+-- 2. Attach the database
+ATTACH 'my_flight' AS remote (TYPE airport);
+
+-- 3. Query as if it's local — joins, filters, aggregates all push down
+--    to the Flight server when supported.
+SELECT user_id, COUNT(*) AS events
+FROM remote.public.activity
+WHERE ts >= CURRENT_DATE - 7
+GROUP BY user_id
+ORDER BY events DESC
+LIMIT 50;
+```
+
+DuckDB's full SQL surface works against remote tables — joins across local and remote catalogs, CTEs, window functions, materialized CTAS into local tables.
+
+## Discover What a Server Offers
+
+Before attaching, list the databases and flights a server exposes:
+
+```sql
+-- Show databases the server hosts
+SELECT * FROM airport_databases('my_flight');
+
+-- Show all flights (schemas + metadata) under a server URL
+SELECT * FROM airport_flights('grpc+tls://flight.example.com:8815');
+
+-- Filter by descriptor pattern
+SELECT * FROM airport_flights(
+  'grpc+tls://flight.example.com:8815',
+  /* criteria = */ 'tenant=acme'
+);
+```
+
+The result is a table — pipe it into `WHERE` / `LIMIT` / joins to drill down without attaching.
+
+## Stream a Specific Flight Inline
+
+When you already have a flight descriptor and just want its rows once, skip ATTACH and call `airport_take_flight` directly:
+
+```sql
+SELECT *
+FROM airport_take_flight(
+  'grpc+tls://flight.example.com:8815',
+  /* descriptor = */ '{"path":["sales","2026-04"]}'
+)
+LIMIT 100;
+```
+
+Useful for read-once jobs, exports, or wiring Flight responses into a CTAS.
+
+## Invoke a Server Action
+
+Arrow Flight has a separate RPC channel called Actions for non-query operations — refreshing a materialized view, taking a snapshot, calling a stored procedure. Airport exposes them via `airport_action`:
+
+```sql
+-- Trigger a server-defined "refresh" action and capture the result body
+SELECT *
+FROM airport_action(
+  'grpc+tls://flight.example.com:8815',
+  /* action = */ 'refresh',
+  /* body = */ '{"tenant":"acme","since":"2026-04-01"}'
+);
+```
+
+The full set of available actions is server-defined — see your Flight server's documentation for the action vocabulary.
+
+## Mutate a Remote Table
+
+Airport supports INSERT / UPDATE / DELETE against attached Flight databases when the server implements the corresponding writer endpoints:
+
+```sql
+INSERT INTO remote.public.events
+SELECT user_id, event_type, ts
+FROM staging.new_events;
+
+UPDATE remote.public.profile
+SET country = 'CA'
+WHERE user_id = 12345;
+```
+
+Whether each operation is supported depends on the server — `airport_databases('my_flight')` typically reports per-database write capabilities.
+
+## Diagnostics
+
+```sql
+SELECT airport_version();        -- e.g. '0.4.2'
+SELECT airport_user_agent();     -- the User-Agent string Airport sends
+```
+
+Use these to confirm what's loaded and to match Flight server logs against a specific extension build when debugging.

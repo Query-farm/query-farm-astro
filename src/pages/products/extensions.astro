@@ -2,82 +2,178 @@
 import PageLayout from '../../layouts/PageLayout.astro';
 import Hero from '../../components/sections/Hero.astro';
 import SectionHeader from '../../components/ui/SectionHeader.astro';
-import ExtensionCategory from '../../components/products/ExtensionCategory.astro';
+import ExtensionCard from '../../components/products/ExtensionCard.astro';
 import Button from '../../components/ui/Button.astro';
 import Card from '../../components/ui/Card.astro';
-import { extensions, extensionsByCategory, categoryInfo } from '../../data/extensions';
+import { publicExtensions } from '../../data/extensions';
 
-// Group extensions by category
-const groupedExtensions = extensionsByCategory();
-const categories = Object.keys(groupedExtensions) as Array<keyof typeof categoryInfo>;
+interface SubBucket { title?: string; slugs: string[] }
+interface Bucket {
+  id: string;
+  title: string;
+  blurb: string;
+  icon: string;
+  /** Tailwind class fragments for the section's color theme. */
+  theme: { iconBg: string; iconText: string; titleText: string; sectionBg: string; sectionBorder: string };
+  subs: SubBucket[];
+}
+
+const TAXONOMY: Bucket[] = [
+  { id:'connect', icon:'🔌',
+    title:'Connect to external systems',
+    blurb:'Read from, write to, or stand alongside another system.',
+    theme:{ iconBg:'bg-sky-200',     iconText:'text-sky-800',     titleText:'text-sky-900',     sectionBg:'bg-sky-50',     sectionBorder:'border-sky-200' },
+    subs: [
+      { title:'Databases',           slugs:['adbc_scanner','airport','redis'] },
+      { title:'Messaging & streams', slugs:['tributary','radio'] },
+      { title:'HTTP & shell',        slugs:['http_client','httpserver','shellfs'] },
+    ]},
+  { id:'json', icon:'🧩',
+    title:'Work with JSON',
+    blurb:'Query, reshape, and validate JSON columns.',
+    theme:{ iconBg:'bg-cyan-200',    iconText:'text-cyan-800',    titleText:'text-cyan-900',    sectionBg:'bg-cyan-50',    sectionBorder:'border-cyan-200' },
+    subs: [{ slugs:['jsonata','json_schema'] }]},
+  { id:'text', icon:'🔤',
+    title:'Work with text & identifiers',
+    blurb:'Hash, match, transform strings, and mint stable IDs.',
+    theme:{ iconBg:'bg-violet-200',  iconText:'text-violet-800',  titleText:'text-violet-900',  sectionBg:'bg-violet-50',  sectionBorder:'border-violet-200' },
+    subs: [
+      { title:'Hashing',           slugs:['crypto','hashfuncs'] },
+      { title:'Matching & casing', slugs:['rapidfuzz','inflector'] },
+      { title:'Identifiers',       slugs:['tsid'] },
+    ]},
+  { id:'analytics', icon:'🧠',
+    title:'Make analytics approximate or fast',
+    blurb:'Sketches, probabilistic filters, distributions, and lookup indices.',
+    theme:{ iconBg:'bg-fuchsia-200', iconText:'text-fuchsia-800', titleText:'text-fuchsia-900', sectionBg:'bg-fuchsia-50', sectionBorder:'border-fuchsia-200' },
+    subs: [
+      { title:'Sketches',      slugs:['datasketches','bitfilters'] },
+      { title:'Distributions', slugs:['stochastic'] },
+      { title:'Indexing',      slugs:['marisa'] },
+    ]},
+  { id:'geo', icon:'🗺️',
+    title:'Index or compress geospatial data',
+    blurb:'Pentagonal cell indexes, compact geometry, space-filling curves.',
+    theme:{ iconBg:'bg-emerald-200', iconText:'text-emerald-800', titleText:'text-emerald-900', sectionBg:'bg-emerald-50', sectionBorder:'border-emerald-200' },
+    subs: [{ slugs:['a5','geosilo','lindel'] }]},
+  { id:'render', icon:'📝',
+    title:'Render or execute code from rows',
+    blurb:'Templates, scripting engines, URL-loaded macros.',
+    theme:{ iconBg:'bg-rose-200',    iconText:'text-rose-800',    titleText:'text-rose-900',    sectionBg:'bg-rose-50',    sectionBorder:'border-rose-200' },
+    subs: [
+      { title:'Templates',       slugs:['minijinja','tera'] },
+      { title:'Scripting',       slugs:['quickjs','evalexpr_rhai'] },
+      { title:'Macros from URL', slugs:['webmacro'] },
+    ]},
+  { id:'operate', icon:'⏰',
+    title:'Operate your DuckDB process',
+    blurb:'Schedule queries; capture and forward events.',
+    theme:{ iconBg:'bg-amber-200',   iconText:'text-amber-800',   titleText:'text-amber-900',   sectionBg:'bg-amber-50',   sectionBorder:'border-amber-200' },
+    subs: [{ slugs:['cronjob','events'] }]},
+  { id:'ergonomics', icon:'✨',
+    title:'SQL ergonomics',
+    blurb:'Make the CLI nicer, make output prettier.',
+    theme:{ iconBg:'bg-slate-200',   iconText:'text-slate-800',   titleText:'text-slate-900',   sectionBg:'bg-slate-50',   sectionBorder:'border-slate-200' },
+    subs: [{ slugs:['textplot','fuzzycomplete'] }]},
+];
+
+// Lookup helpers
+const bySlug = Object.fromEntries(publicExtensions.map(e => [e.id, e]));
+const totalExtensions = publicExtensions.length;
+const categoryCount = TAXONOMY.length;
+
+// Coverage check — fail loudly if a slug is misspelled or an extension was
+// added without being placed in the taxonomy.
+const placed = new Set(TAXONOMY.flatMap(b => b.subs.flatMap(s => s.slugs)));
+const missingFromTaxonomy = publicExtensions.map(e => e.id).filter(id => !placed.has(id));
+const slugsNotFound = [...placed].filter(s => !bySlug[s]);
+if (missingFromTaxonomy.length || slugsNotFound.length) {
+  throw new Error(
+    `Taxonomy/data mismatch:\n` +
+    (missingFromTaxonomy.length ? `  not placed: ${missingFromTaxonomy.join(', ')}\n` : '') +
+    (slugsNotFound.length ? `  unknown slug: ${slugsNotFound.join(', ')}\n` : '')
+  );
+}
 ---
 
 <PageLayout
   title="DuckDB Extensions"
-  description="Extend DuckDB with 20+ specialized extensions for data connectors, transformations, analytics, performance, and more."
+  description={`${totalExtensions} specialized DuckDB extensions, organized by what you're trying to do.`}
   showBreadcrumbs={true}
   breadcrumbs={[
     { name: 'Products', href: '/products' },
     { name: 'Extensions', href: '/products/extensions' }
   ]}
 >
-  <!-- Hero Section -->
+  <!-- Hero -->
   <Hero
     title="DuckDB Extensions"
-    subtitle="20+ specialized extensions to supercharge your DuckDB workflows. Connect to any data source, transform with powerful functions, and optimize performance."
-    primaryCTA={{ text: "View on GitHub", href: "https://github.com/queryfarm" }}
-    secondaryCTA={{ text: "Contact Sales", href: "/company/schedule" }}
+    subtitle={`${totalExtensions} specialized extensions, organized by what you're trying to do.`}
+    primaryCTA={{ text: "Browse by intent ↓", href: "#connect" }}
+    secondaryCTA={{ text: "View on GitHub", href: "https://github.com/queryfarm" }}
   />
 
-  <!-- Stats Section -->
+  <!-- Stats Section — only the two real numbers -->
   <section class="py-12 bg-white border-b border-soil-200">
     <div class="section-container">
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+      <div class="grid grid-cols-2 gap-8 text-center max-w-2xl mx-auto">
         <div>
-          <div class="text-4xl font-bold text-harvest-600 mb-2">{extensions.length}+</div>
-          <div class="text-sm text-soil-600">Extensions</div>
+          <div class="text-5xl font-bold text-harvest-600 mb-2">{totalExtensions}</div>
+          <div class="text-sm text-soil-600 uppercase tracking-wide">Extensions</div>
         </div>
         <div>
-          <div class="text-4xl font-bold text-harvest-600 mb-2">6</div>
-          <div class="text-sm text-soil-600">Categories</div>
-        </div>
-        <div>
-          <div class="text-4xl font-bold text-harvest-600 mb-2">100%</div>
-          <div class="text-sm text-soil-600">Open Source</div>
-        </div>
-        <div>
-          <div class="text-4xl font-bold text-harvest-600 mb-2">24/7</div>
-          <div class="text-sm text-soil-600">Support</div>
+          <div class="text-5xl font-bold text-harvest-600 mb-2">{categoryCount}</div>
+          <div class="text-sm text-soil-600 uppercase tracking-wide">Categories</div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Extensions by Category -->
+  <!-- Bucket sections -->
   <section class="py-16 lg:py-24 bg-soil-50">
     <div class="section-container">
       <SectionHeader
         align="center"
-        eyebrow="Browse Extensions"
-        title="Organized by Category"
-        description="Find the perfect extension for your use case. All extensions are production-ready and actively maintained."
+        eyebrow="Browse by intent"
+        title="What are you trying to do?"
+        description="Pick an intent below. Each section groups the extensions that solve that class of problem, with finer-grained sub-buckets where useful."
         class="mb-16"
       />
 
       <div class="space-y-20">
-        {categories.map(categoryKey => {
-          const category = categoryInfo[categoryKey];
-          const categoryExtensions = groupedExtensions[categoryKey];
+        {TAXONOMY.map((bucket) => (
+          <section id={bucket.id} class="scroll-mt-24">
+            <div class={`flex items-start gap-4 mb-10 p-6 rounded-2xl border ${bucket.theme.sectionBg} ${bucket.theme.sectionBorder}`}>
+              <div class={`w-12 h-12 rounded-xl ${bucket.theme.iconBg} ${bucket.theme.iconText} flex items-center justify-center text-2xl shrink-0`}>
+                {bucket.icon}
+              </div>
+              <div class="flex-1">
+                <h2 class={`text-2xl md:text-3xl font-bold leading-tight ${bucket.theme.titleText}`}>
+                  {bucket.title}
+                </h2>
+                <p class="text-soil-600 mt-1">{bucket.blurb}</p>
+              </div>
+            </div>
 
-          return (
-            <ExtensionCategory
-              title={category.title}
-              description={category.description}
-              icon={category.icon}
-              extensions={categoryExtensions}
-            />
-          );
-        })}
+            <div class="space-y-14">
+              {bucket.subs.map((sub) => (
+                <div>
+                  {sub.title && (
+                    <h3 class="text-xl md:text-2xl font-bold text-soil-900 mt-6 mb-6">
+                      {sub.title}
+                    </h3>
+                  )}
+                  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {sub.slugs.map((slug) => {
+                      const e = bySlug[slug];
+                      return e && <ExtensionCard {...e} />;
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
       </div>
     </div>
   </section>
@@ -94,100 +190,19 @@ const categories = Object.keys(groupedExtensions) as Array<keyof typeof category
           class="mb-12"
         />
 
-        <Card padding="lg" class="bg-soil-900 text-soil-50 border-soil-800">
-          <h3 class="text-lg font-semibold mb-4 text-white">Install from Query.Farm Repository</h3>
-          <pre class="bg-soil-950 p-4 rounded-lg overflow-x-auto mb-4"><code class="text-sm text-harvest-400">-- Install an extension
-INSTALL extension_name FROM 'query.farm';
+        <Card padding="lg" class="!bg-soil-900 text-soil-50 !border-soil-800">
+          <h3 class="text-lg font-semibold mb-4 text-white">Install from the DuckDB Community repository</h3>
+          <pre class="bg-black/40 p-5 rounded-lg overflow-x-auto mb-4 text-sm leading-relaxed font-mono ring-1 ring-soil-700/50"><code><span class="text-soil-500">-- Install an extension</span>
+<span class="text-sky-400">INSTALL</span> <span class="text-harvest-300">extension_name</span> <span class="text-sky-400">FROM</span> <span class="text-harvest-300">community</span><span class="text-soil-400">;</span>
 
--- Load the extension
-LOAD extension_name;
+<span class="text-soil-500">-- Load the extension</span>
+<span class="text-sky-400">LOAD</span> <span class="text-harvest-300">extension_name</span><span class="text-soil-400">;</span>
 
--- Start using it!
-SELECT * FROM your_function();</code></pre>
+<span class="text-soil-500">-- Start using it!</span>
+<span class="text-sky-400">SELECT</span> <span class="text-soil-300">*</span> <span class="text-sky-400">FROM</span> <span class="text-harvest-300">your_function</span><span class="text-soil-400">();</span></code></pre>
 
           <p class="text-sm text-soil-300">
-            All extensions are signed and verified. View full documentation and examples on our GitHub repository.
-          </p>
-        </Card>
-
-        <div class="mt-8 text-center">
-          <Button href="https://docs.query.farm/extensions" variant="secondary" size="lg" external>
-            View Documentation
-          </Button>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Features Section -->
-  <section class="py-16 lg:py-24 bg-soil-50">
-    <div class="section-container">
-      <SectionHeader
-        align="center"
-        eyebrow="Why Query.Farm Extensions"
-        title="Built for Production"
-        description="Enterprise-grade extensions with professional support and active development."
-        class="mb-12"
-      />
-
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-        <Card padding="lg" class="text-center">
-          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-harvest-100 flex items-center justify-center text-4xl">
-            🚀
-          </div>
-          <h3 class="text-xl font-bold text-soil-900 mb-3">High Performance</h3>
-          <p class="text-soil-700 leading-relaxed">
-            Optimized for speed with vectorized execution and minimal overhead. Built using DuckDB's native APIs.
-          </p>
-        </Card>
-
-        <Card padding="lg" class="text-center">
-          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-grain-100 flex items-center justify-center text-4xl">
-            🔒
-          </div>
-          <h3 class="text-xl font-bold text-soil-900 mb-3">Secure & Tested</h3>
-          <p class="text-soil-700 leading-relaxed">
-            Comprehensive test coverage, security audits, and regular updates. Safe for production workloads.
-          </p>
-        </Card>
-
-        <Card padding="lg" class="text-center">
-          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-duck-100 flex items-center justify-center text-4xl">
-            📚
-          </div>
-          <h3 class="text-xl font-bold text-soil-900 mb-3">Well Documented</h3>
-          <p class="text-soil-700 leading-relaxed">
-            Clear documentation, examples, and tutorials. Get started quickly with our comprehensive guides.
-          </p>
-        </Card>
-
-        <Card padding="lg" class="text-center">
-          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-earth-100 flex items-center justify-center text-4xl">
-            🤝
-          </div>
-          <h3 class="text-xl font-bold text-soil-900 mb-3">Expert Support</h3>
-          <p class="text-soil-700 leading-relaxed">
-            Direct access to extension authors. Priority support available for enterprise customers.
-          </p>
-        </Card>
-
-        <Card padding="lg" class="text-center">
-          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-harvest-100 flex items-center justify-center text-4xl">
-            🔄
-          </div>
-          <h3 class="text-xl font-bold text-soil-900 mb-3">Active Development</h3>
-          <p class="text-soil-700 leading-relaxed">
-            Regular updates, new features, and compatibility with latest DuckDB versions. Always improving.
-          </p>
-        </Card>
-
-        <Card padding="lg" class="text-center">
-          <div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-grain-100 flex items-center justify-center text-4xl">
-            💼
-          </div>
-          <h3 class="text-xl font-bold text-soil-900 mb-3">Enterprise Ready</h3>
-          <p class="text-soil-700 leading-relaxed">
-            Commercial licensing available. Custom development and dedicated support for your organization.
+            All extensions are signed and verified. View full documentation and examples on each extension's page.
           </p>
         </Card>
       </div>

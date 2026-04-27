@@ -1,0 +1,79 @@
+## What is JSONata?
+
+[JSONata](https://jsonata.org) is a query and transformation language for JSON data, modelled on XPath. Where DuckDB's native `json_extract_*` family does field-by-field path lookups, JSONata adds:
+
+- **Concise concatenation**: `FirstName & " " & Surname`.
+- **Predicate filters on arrays**: `Phone[type="mobile"].number`.
+- **Object reshaping**: build a new object literal in one expression.
+- **Functions and aggregations**: `$sum`, `$count`, `$map`, `$filter`, `$reduce`, etc.
+
+For deeply-nested JSON or schema reshaping work, JSONata is much more concise than chains of `json_extract`.
+
+## Extract a value
+
+```sql
+-- Simple path
+SELECT jsonata('Account', '{"Account": 5}');
+-- 5
+
+-- Nested path
+SELECT jsonata('Account.Name',
+  '{"Account":{"Name":"Acme","Tier":"gold"}}');
+-- "Acme"
+```
+
+## Concatenate / compute
+
+```sql
+SELECT jsonata('FirstName & " " & Surname',
+  '{"FirstName":"Fred","Surname":"Smith"}');
+-- "Fred Smith"
+
+SELECT jsonata('Quantity * UnitPrice',
+  '{"Quantity":3,"UnitPrice":12.50}');
+-- 37.5
+```
+
+## Filter an array
+
+```sql
+SELECT jsonata('Phone[type="mobile"].number',
+  '{"Phone":[
+    {"type":"home","number":"0203 544 1234"},
+    {"type":"mobile","number":"077 7700 1234"}
+  ]}');
+-- "077 7700 1234"
+```
+
+## Reshape into a new object
+
+```sql
+SELECT jsonata('{
+  "name":   FirstName & " " & Surname,
+  "mobile": Phone[type="mobile"].number,
+  "tier":   Account.Tier
+}', payload) AS extracted
+FROM contacts;
+```
+
+The result is a fresh JSON object with exactly the fields you want. Useful for building API response shapes from internal records.
+
+## Aggregations across rows
+
+JSONata expressions can return arrays — combine that with DuckDB's `unnest`:
+
+```sql
+SELECT phone_number
+FROM (
+  SELECT unnest(jsonata('Phone.number', payload)::JSON[]) AS phone_number
+  FROM contacts
+);
+```
+
+## When to use JSONata vs `json_*`
+
+- **Native `json_extract_*`** — simplest cases (one field, one path).
+- **JSONata** — multi-step transforms, conditional filters, array reshaping. One expression vs three nested SQL functions.
+- **[`quickjs`](/products/extensions/quickjs)** — when even JSONata isn't expressive enough; full JS for arbitrary computation.
+
+For most JSON-munging beyond a single `->>` pull, JSONata is the sweet spot.

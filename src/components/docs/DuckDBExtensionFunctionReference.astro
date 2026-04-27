@@ -6,22 +6,75 @@ import type { FunctionDocData } from '../../data/extension-types';
 
 interface Props {
   functions: FunctionDocData[];
+  /** Extension slug — used to fetch lazy data from /products/extensions/<slug>/functions.json */
+  slug?: string;
   eyebrow?: string;
   title?: string;
   description?: string;
+  /** Above this many functions, all but the first `eagerCount` render as
+   *  click-to-expand stubs. Page weight stays small for huge extensions
+   *  like stochastic / datasketches without breaking deep links. */
+  eagerCount?: number;
+  lazyThreshold?: number;
 }
 
 const {
   functions,
+  slug,
   eyebrow = "API Reference",
   title = "Function Documentation",
-  description = "Detailed documentation for each function including signatures, parameters, and examples."
+  description = "Detailed documentation for each function including signatures, parameters, and examples.",
+  eagerCount = 10,
+  lazyThreshold = 30,
 } = Astro.props;
 
-// Only render if there are functions
 if (!functions || functions.length === 0) {
   return null;
 }
+
+// First occurrence of each name → name-only anchor (e.g. `#dist_normal_pdf`).
+const seenNames = new Set<string>();
+const annotated = functions.map((fn) => {
+  const isFirstByName = !seenNames.has(fn.name);
+  seenNames.add(fn.name);
+  return { fn, isFirstByName };
+});
+
+type RelatedSummary = { id: string; name: string; description: string };
+const fnIndex = new Map<string, RelatedSummary>();
+for (const fn of functions) {
+  const summary: RelatedSummary = { id: fn.id, name: fn.name, description: fn.description };
+  if (!fnIndex.has(fn.name)) fnIndex.set(fn.name, summary);
+  fnIndex.set(fn.id, summary);
+}
+function resolveRelated(refs: string[] | undefined): RelatedSummary[] {
+  if (!refs) return [];
+  const seen = new Set<string>();
+  const out: RelatedSummary[] = [];
+  for (const ref of refs) {
+    const hit = fnIndex.get(ref);
+    if (!hit || seen.has(hit.name)) continue;
+    seen.add(hit.name);
+    out.push(hit);
+  }
+  return out;
+}
+
+// Hydration plan: full server-render up to `eagerCount`; the rest become
+// stubs that fetch full data from /products/extensions/<slug>/functions.json
+// on first interaction. Keeps the inline HTML small for huge extensions
+// (stochastic at 444 fns went from 2.3 MB inline to ~200 KB + a 750 KB
+// fetch only when the user actually expands a card).
+const useLazy = annotated.length > lazyThreshold && !!slug;
+const eager = useLazy ? annotated.slice(0, eagerCount) : annotated;
+const lazy  = useLazy ? annotated.slice(eagerCount) : [];
+const lazyDataUrl = slug ? `/products/extensions/${slug}/functions.json` : '';
+
+const stubFirstSentence = (s: string) => {
+  if (!s) return '';
+  const m = s.match(/^[^.!?]+[.!?]?/);
+  return (m ? m[0] : s).slice(0, 200);
+};
 ---
 
 <ExtensionSection id="function-reference" background="white">
@@ -31,7 +84,185 @@ if (!functions || functions.length === 0) {
     description={description}
     class="mb-12"
   />
-  {functions.map((fn) => (
-    <DuckDBExtensionFunctionDoc {...fn} allFunctions={functions} />
+  {eager.map(({ fn, isFirstByName }) => (
+    <>
+      {isFirstByName && <span id={fn.name} class="block scroll-mt-32" aria-hidden="true"></span>}
+      <DuckDBExtensionFunctionDoc {...fn} resolvedRelated={resolveRelated(fn.relatedFunctions)} />
+    </>
   ))}
+
+  {useLazy && (
+    <>
+      <div id="fn-lazy-region" class="space-y-8">
+        {lazy.map(({ fn, isFirstByName }) => (
+          <>
+            {isFirstByName && <span id={fn.name} class="block scroll-mt-32" aria-hidden="true"></span>}
+            <div
+              class="fn-stub cv-auto rounded-xl border border-soil-200 bg-white p-6 shadow-sm"
+              data-fn-id={fn.id}
+              data-fn-name={fn.name}
+              id={fn.id}
+              style="min-height: 200px;"
+            >
+              <div class="flex items-baseline justify-between gap-3 flex-wrap mb-2">
+                <h4 class="text-xl font-bold text-soil-900 font-mono">{fn.name}</h4>
+                <div class="flex flex-wrap gap-1">
+                  {fn.categories.map((cat) => (
+                    <span class="text-xs font-semibold text-harvest-700 bg-harvest-50 border border-harvest-200 rounded-full px-2 py-0.5">
+                      {cat}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              {fn.description && (
+                <p class="text-sm text-soil-700 leading-snug">
+                  {stubFirstSentence(fn.description)}
+                </p>
+              )}
+            </div>
+          </>
+        ))}
+      </div>
+
+      <link rel="prefetch" href={lazyDataUrl} as="fetch" crossorigin="anonymous" />
+
+      <script is:inline define:vars={{ lazyDataUrl }}>
+        (() => {
+          // Loaded shape: { entries: { [id]: fn-record }, nameToId: { [name]: id } }
+          let store = null;
+          let loadingPromise = null;
+          async function ensureLoaded() {
+            if (store) return store;
+            if (!loadingPromise) {
+              loadingPromise = fetch(lazyDataUrl).then(r => r.json()).then(s => {
+                store = s;
+                return store;
+              });
+            }
+            return loadingPromise;
+          }
+          // Kick off the prefetch on idle so the data is ready when the user clicks.
+          ('requestIdleCallback' in window
+            ? requestIdleCallback(() => { ensureLoaded(); }, { timeout: 2000 })
+            : setTimeout(() => { ensureLoaded(); }, 1500));
+
+          function escape(s) {
+            return String(s ?? '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;');
+          }
+
+          function renderParameters(params) {
+            if (!params || !params.length) return '';
+            const rows = params.map((p, i) => {
+              const mode = p.paramType === 'named'
+                ? '<span class="inline-flex items-center px-2 py-0.5 text-xs rounded bg-purple-100 text-purple-700">Named</span>'
+                : '<span class="inline-flex items-center px-2 py-0.5 text-xs rounded bg-soil-200 text-soil-700">Positional</span>';
+              const typeUnion = p.typeUnion && p.typeUnion.length > 1
+                ? `<details class="mt-1"><summary class="text-[10px] uppercase tracking-wide text-soil-500 cursor-pointer">${p.typeUnion.length} concrete types</summary><div class="mt-1 flex flex-wrap gap-1">${p.typeUnion.map(t => `<code class="font-mono text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-200">${escape(t)}</code>`).join('')}</div></details>`
+                : '';
+              const extras = [];
+              if (p.varargs) extras.push('<span class="inline-block px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded mr-2 mb-1">Varargs</span>');
+              if (p.default) extras.push(`<span class="inline-block px-2 py-0.5 bg-soil-100 text-soil-600 text-xs rounded mr-2 mb-1">Default: ${escape(p.default)}</span>`);
+              return `<tr class="${i % 2 === 0 ? 'bg-white' : 'bg-soil-50'}"><td class="px-4 py-2 border-t border-soil-200"><code class="font-mono text-xs font-medium ${p.paramType === 'named' ? 'text-purple-600' : 'text-duck-700'}">${escape(p.name)}</code></td><td class="px-4 py-2 border-t border-soil-200"><code class="font-mono text-xs text-blue-600">${escape(p.type)}</code>${typeUnion}</td><td class="px-4 py-2 border-t border-soil-200">${mode}</td><td class="px-4 py-2 text-soil-700 border-t border-soil-200">${extras.join('')}<span>${escape(p.description || '')}</span></td></tr>`;
+            }).join('');
+            return `<div class="mb-4"><h5 class="text-sm font-semibold text-soil-700 mb-2">Parameters</h5><div class="bg-white rounded-lg border border-soil-200 overflow-x-auto"><table class="w-full text-sm"><thead><tr class="bg-soil-50 border-b border-soil-200"><th class="px-4 py-2 text-left font-semibold text-soil-900 w-1/5">Parameter</th><th class="px-4 py-2 text-left font-semibold text-soil-900 w-1/6">Type</th><th class="px-4 py-2 text-left font-semibold text-soil-900 w-20">Mode</th><th class="px-4 py-2 text-left font-semibold text-soil-900">Description</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+          }
+
+          function renderOutputTable(ot) {
+            if (!ot) return '';
+            const cols = (ot.columns || []).map(c => typeof c === 'string' ? { name: c } : c);
+            const head = cols.map(c => `<th class="px-3 py-2 text-left font-semibold text-soil-900 font-mono">${escape(c.name)}</th>`).join('');
+            const body = (ot.rows || []).map((row, i) => `<tr class="${i % 2 === 0 ? 'bg-white' : 'bg-soil-50'}">${row.map(cell => {
+              const text = cell == null ? '' : String(cell);
+              const ml = text.includes('\n');
+              const td = ml ? `<pre class="whitespace-pre leading-tight">${escape(text)}</pre>` : escape(text);
+              return `<td class="px-3 py-2 text-soil-800 font-mono border-t border-soil-200">${td}</td>`;
+            }).join('')}</tr>`).join('');
+            return `<div class="not-prose my-4"><div class="flex items-center gap-2 mb-2"><p class="text-xs font-semibold text-soil-600 uppercase tracking-wide">Output</p></div><div class="bg-white rounded border border-soil-200 overflow-x-auto"><table class="w-full text-xs"><thead><tr class="bg-soil-50 border-b border-soil-200">${head}</tr></thead><tbody>${body}</tbody></table></div></div>`;
+          }
+
+          function renderExamples(examples) {
+            if (!examples || !examples.length) return '';
+            return examples.map((ex, i) => `<div class="bg-soil-50 rounded-lg p-4 border border-soil-200"><div class="flex items-center gap-2 mb-3"><span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-harvest-600 text-white text-xs font-bold">${i + 1}</span>${ex.description ? `<p class="text-sm text-soil-700 font-medium">${escape(ex.description)}</p>` : ''}</div><pre class="bg-[#0d2818] text-[#e8f5e9] rounded p-4 overflow-x-auto text-sm"><code>${escape(ex.code)}</code></pre>${ex.outputTable ? renderOutputTable(ex.outputTable) : (ex.output ? `<div class="mt-3"><div class="flex items-center gap-2 mb-2"><p class="text-xs font-semibold text-soil-600 uppercase tracking-wide">Output</p></div><div class="bg-white rounded px-3 py-2 font-mono text-xs text-soil-800 border border-soil-200"><pre class="whitespace-pre">${escape(ex.output)}</pre></div></div>` : '')}</div>`).join('<div class="my-4"></div>');
+          }
+
+          function renderRelated(relatedNames) {
+            if (!relatedNames || !relatedNames.length || !store) return '';
+            const items = [];
+            const seen = new Set();
+            for (const ref of relatedNames) {
+              const id = store.nameToId[ref] || ref;
+              const r = store.entries[id];
+              const key = r ? r.name : ref;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              const desc = r && r.description ? r.description.split('.')[0] : '';
+              items.push(`<li><a href="#${encodeURIComponent(key)}" class="text-sm hover:bg-grain-100 p-2 rounded inline-flex gap-2"><span class="font-mono text-harvest-700 font-medium">${escape(key)}()</span>${desc ? `<span class="text-soil-600">— ${escape(desc)}</span>` : ''}</a></li>`);
+            }
+            return `<div class="mt-6 mb-6 p-4 bg-grain-50 border border-grain-200 rounded-lg"><h5 class="text-sm font-semibold text-grain-900 mb-3">Related Functions</h5><ul class="space-y-2">${items.join('')}</ul></div>`;
+          }
+
+          function renderCard(fn) {
+            const cats = (fn.categories || []).map(c => `<span class="text-xs font-semibold text-harvest-700 bg-harvest-50 border border-harvest-200 rounded-full px-2 py-0.5">${escape(c)}</span>`).join(' ');
+            const sigArgs = (fn.parameters || []).map(p => `${escape(p.name)}: ${escape(p.type)}`).join(', ');
+            const ret = fn.returnType ? ` → ${escape(fn.returnType)}` : '';
+            const retUnion = (fn.returnTypeUnion && fn.returnTypeUnion.length > 1)
+              ? `<div class="mt-2"><details><summary class="text-xs font-medium text-soil-500 cursor-pointer">Return type varies — ${fn.returnTypeUnion.length} concrete types</summary><div class="mt-2 flex flex-wrap gap-1">${fn.returnTypeUnion.map(t => `<code class="font-mono text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-200">${escape(t)}</code>`).join('')}</div></details></div>` : '';
+            return `<div class="rounded-xl border border-soil-200 bg-white p-6 shadow-sm cv-auto"><div class="flex items-baseline justify-between gap-3 flex-wrap mb-4"><h4 class="text-xl font-bold text-soil-900 font-mono">${escape(fn.name)}</h4><div class="flex flex-wrap gap-1">${cats}</div></div><div class="font-mono text-sm text-soil-700 mb-4">${escape(fn.name)}(${sigArgs})${ret}</div>${renderParameters(fn.parameters)}${fn.returns ? `<div class="mb-4"><h5 class="text-sm font-semibold text-soil-700 mb-2">Returns</h5><p class="text-sm text-soil-700">${escape(fn.returns)}</p></div>` : ''}${retUnion}<div class="mb-4"><h5 class="text-sm font-semibold text-soil-700 mb-2">Description</h5><p class="text-sm text-soil-700">${escape(fn.description || '')}</p></div>${renderExamples(fn.examples)}${renderRelated(fn.relatedNames)}</div>`;
+          }
+
+          async function expandStub(stub) {
+            const id = stub.dataset.fnId;
+            const s = await ensureLoaded();
+            const fn = s.entries[id];
+            if (!fn) return;
+            // Use a wrapper template to swap the stub for the rendered card
+            // without losing the surrounding flow (no scroll-position jump
+            // because cv-auto already reserved height via min-height).
+            const tpl = document.createElement('template');
+            tpl.innerHTML = renderCard(fn).trim();
+            stub.replaceWith(tpl.content.firstElementChild);
+          }
+
+          // Auto-hydrate stubs as they approach the viewport. rootMargin gives
+          // us ~1.5 viewports of headroom so the swap happens before the user
+          // sees the stub, not after.
+          const io = ('IntersectionObserver' in window) ? new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+              if (entry.isIntersecting) {
+                io.unobserve(entry.target);
+                expandStub(entry.target);
+              }
+            }
+          }, { rootMargin: '1500px 0px' }) : null;
+          if (io) {
+            document.querySelectorAll('.fn-stub').forEach(s => io.observe(s));
+          } else {
+            // No IO support — fall back to immediate hydration.
+            document.querySelectorAll('.fn-stub').forEach(expandStub);
+          }
+
+          // Auto-expand on direct anchor link (e.g. /…#dist_normal_pdf)
+          async function expandFromHash() {
+            const hash = decodeURIComponent(location.hash.slice(1));
+            if (!hash) return;
+            const stub = document.querySelector(`.fn-stub[id="${CSS.escape(hash)}"]`)
+              || document.querySelector(`.fn-stub[data-fn-name="${CSS.escape(hash)}"]`);
+            if (stub) {
+              await expandStub(stub);
+              setTimeout(() => {
+                const target = document.getElementById(hash);
+                if (target) target.scrollIntoView({ block: 'start' });
+              }, 0);
+            }
+          }
+          if (location.hash) expandFromHash();
+          window.addEventListener('hashchange', expandFromHash);
+        })();
+      </script>
+    </>
+  )}
 </ExtensionSection>

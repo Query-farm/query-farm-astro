@@ -1,0 +1,127 @@
+import GeoJsonMap from '../../../components/docs/GeoJsonMap.astro';
+import QueryResult from '../../../components/docs/QueryResult.astro';
+
+## Spatial Data Aggregation
+
+Group point data spatially to understand distributions:
+
+```sql
+-- Analyze restaurant density by A5 cells
+SELECT a5_lonlat_to_cell(longitude, latitude, 15) AS cell_id,
+       COUNT(*) AS restaurant_count
+FROM restaurants
+GROUP BY cell_id
+ORDER BY restaurant_count DESC;
+```
+
+## Basic Cell Operations
+
+Get the A5 cell for a specific location (longitude, latitude, resolution):
+
+```sql
+SELECT a5_lonlat_to_cell(-74.0060, 40.7128, 15) AS nyc_cell;
+```
+
+<QueryResult columns={["nyc_cell"]} rows={[["2742821848331845632"]]} />
+
+Find the area of that cell in square meters:
+
+```sql
+SELECT a5_cell_area(15) AS cell_area_m2;
+```
+
+<QueryResult columns={[{ name: "cell_area_m2", align: "right" }]} rows={[[31669.04205949599]]} />
+
+Get the center coordinates of a cell:
+
+```sql
+SELECT a5_cell_to_lonlat(a5_lonlat_to_cell(-74.0060, 40.7128, 15)) AS center_coords;
+```
+
+<QueryResult columns={["center_coords"]} rows={[["[-74.00764805615836, 40.71280225138428]"]]} />
+
+## Hierarchy
+
+Find the parent cell at a coarser resolution:
+
+```sql
+SELECT a5_cell_to_parent(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 10) AS parent_cell;
+```
+
+<QueryResult columns={["parent_cell"]} rows={[["2742821365684895744"]]} />
+
+Get all child cells at a finer resolution:
+
+```sql
+SELECT a5_cell_to_children(a5_lonlat_to_cell(-74.0060, 40.7128, 10), 11) AS child_cells;
+```
+
+<QueryResult columns={["child_cells"]} rows={[["[2742820953368035328, 2742821228245942272, 2742821503123849216, 2742821778001756160]"]]} />
+
+## Visualizing a Cell as GeoJSON
+
+Combine [`a5_cell_to_boundary`](#a5_cell_to_boundary) with the spatial extension to produce a GeoJSON polygon for any cell:
+
+```sql
+SELECT
+    ST_AsGeoJSON(
+        ST_MakePolygon(
+            ST_MakeLine(
+                list_transform(
+                    a5_cell_to_boundary(
+                        a5_lonlat_to_cell(-3.7037, 40.41677, 10)
+                    ),
+                    x -> ST_Point(x[1], x[2])
+                )
+            )
+        )
+    ) AS geojson;
+```
+
+The cell at resolution 10 covering Madrid (-3.7037, 40.41677):
+
+<GeoJsonMap
+  geojson={{
+    type: 'Polygon',
+    coordinates: [[
+      [-3.639321611065313, 40.44502900567739],
+      [-3.6973300524360155, 40.44427170464865],
+      [-3.7459288918337563, 40.424159040292615],
+      [-3.70791029038422, 40.394201800420205],
+      [-3.654438659632305, 40.4080830654645],
+      [-3.639321611065313, 40.44502900567739],
+    ]],
+  }}
+  caption="A5 cell at resolution 10 (Madrid). The five-sided shape reflects A5's pentagonal partitioning of the globe."
+/>
+
+## Neighborhood Queries
+
+All cells within `k` edge-steps (edge adjacency):
+
+```sql
+SELECT a5_grid_disk(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 1) AS neighbors;
+```
+
+All cells within a radius (in meters) of a center cell:
+
+```sql
+SELECT a5_spherical_cap(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 5000.0) AS nearby_cells;
+```
+
+## Compaction
+
+[`a5_compact`](#a5_compact) replaces complete groups of sibling cells with their parent cell:
+
+```sql
+SELECT a5_compact([
+    324259173170675712,
+    396316767208603648,
+    468374361246531584,
+    540431955284459520
+]::ubigint[]) AS result;
+```
+
+<QueryResult columns={["result"]} rows={[["[360287970189639680]"]]} />
+
+[`a5_uncompact`](#a5_uncompact) is the inverse — expanding a set of cells to a target resolution.

@@ -1,0 +1,602 @@
+[
+  {
+    "name": "crypto_sha256",
+    "categories": [
+      "Hashing"
+    ],
+    "description": "Computes the SHA-256 cryptographic hash of the input string. SHA-256 is part of the SHA-2 family and produces a 256-bit (32-byte) hash value. Commonly used for data integrity verification and anonymization.",
+    "examples": [
+      {
+        "description": "Basic usage",
+        "code": "SELECT crypto_sha256('Hello, World!') AS hash;",
+        "output": "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e"
+      },
+      {
+        "description": "Anonymize email addresses for analytics",
+        "code": "SELECT\n  crypto_sha256(email) AS user_id,\n  COUNT(*) AS purchases\nFROM orders\nGROUP BY crypto_sha256(email)\nORDER BY purchases DESC\nLIMIT 10;"
+      }
+    ],
+    "returns": "64-character hexadecimal string representing the SHA-256 hash",
+    "relatedFunctions": [
+      "crypto_sha512",
+      "crypto_hash_agg",
+      "crypto_hmac_sha256"
+    ],
+    "tags": {
+      "category": "hashing",
+      "algorithm": "sha-256",
+      "type": "cryptographic",
+      "use_case": "integrity, anonymization",
+      "deterministic": "true"
+    }
+  },
+  {
+    "name": "crypto_sha512",
+    "categories": [
+      "Hashing"
+    ],
+    "description": "Computes the SHA-512 cryptographic hash of the input. More secure than SHA-256 with a 512-bit output. Recommended for high-security applications.",
+    "examples": [
+      {
+        "description": "Hash sensitive data with SHA-512",
+        "code": "SELECT crypto_sha512('sensitive data') AS hash;",
+        "output": "128-character hex string"
+      }
+    ],
+    "returns": "128-character hexadecimal string representing the SHA-512 hash",
+    "relatedFunctions": [
+      "crypto_sha256",
+      "crypto_hash_agg"
+    ],
+    "tags": {
+      "category": "hashing",
+      "algorithm": "sha-512",
+      "type": "cryptographic",
+      "use_case": "integrity, high-security",
+      "deterministic": "true"
+    }
+  },
+  {
+    "name": "crypto_hash_combine",
+    "categories": [
+      "Hashing"
+    ],
+    "description": "Combines multiple values into a single cryptographic hash. Accepts any number of arguments, concatenates them in order, and produces a SHA-256 hash. Useful for creating composite keys, fingerprinting multiple columns, or generating deterministic IDs from multiple fields.",
+    "examples": [
+      {
+        "description": "Combine multiple fields into a single hash",
+        "code": "SELECT crypto_hash_combine(first_name, last_name, email) AS user_fingerprint\nFROM users;",
+        "output": "a3f2b8c1d4e7f0a5b3c7d4e8f1a2b5c9d0e7f3a6b8c1d4e7f0a3b6c9d2e5f8a1"
+      },
+      {
+        "description": "Create a composite key from order details",
+        "code": "SELECT crypto_hash_combine(\n  customer_id::VARCHAR,\n  order_date::VARCHAR,\n  product_id::VARCHAR,\n  quantity::VARCHAR\n) AS order_key\nFROM orders;"
+      },
+      {
+        "description": "Hash a single value (equivalent to crypto_sha256)",
+        "code": "SELECT crypto_hash_combine('single value') AS hash;"
+      },
+      {
+        "description": "Combine many fields for deduplication",
+        "code": "SELECT DISTINCT ON (crypto_hash_combine(col1, col2, col3, col4, col5))\n  *\nFROM source_data;"
+      }
+    ],
+    "returns": "64-character hexadecimal SHA-256 hash of all combined values",
+    "relatedFunctions": [
+      "crypto_sha256",
+      "crypto_hash_agg",
+      "crypto_merkle_root"
+    ],
+    "tags": {
+      "category": "hashing",
+      "type": "composite-key, fingerprint",
+      "varargs": "true",
+      "use_case": "multi-value",
+      "deterministic": "true"
+    }
+  },
+  {
+    "name": "crypto_hmac_sha256",
+    "categories": [
+      "HMAC"
+    ],
+    "description": "Creates an HMAC (Hash-based Message Authentication Code) signature using SHA-256. Used for API authentication, webhook verification, and message integrity.",
+    "examples": [
+      {
+        "description": "Sign API requests with HMAC",
+        "code": "SELECT\n  request_id,\n  payload,\n  crypto_hmac_sha256(payload, 'my_secret_key') AS signature\nFROM api_requests;"
+      }
+    ],
+    "returns": "64-character hexadecimal HMAC signature",
+    "tags": {
+      "category": "hmac",
+      "type": "signing, authentication",
+      "use_case": "api-security, webhook, message-integrity"
+    }
+  },
+  {
+    "name": "crypto_bcrypt",
+    "categories": [
+      "Password"
+    ],
+    "description": "Hashes a password using the bcrypt algorithm with automatic salt generation. Recommended for password storage. The cost parameter controls computational cost (2^cost iterations).",
+    "examples": [
+      {
+        "description": "Hash password with default cost (10)",
+        "code": "INSERT INTO users (username, password_hash)\nVALUES ('alice', crypto_bcrypt('secret_password'));"
+      },
+      {
+        "description": "Hash with custom cost for higher security",
+        "code": "INSERT INTO admin_users (username, password_hash)\nVALUES ('admin', crypto_bcrypt('admin_password', cost := 12));"
+      },
+      {
+        "description": "Explicit named parameter syntax",
+        "code": "SELECT crypto_bcrypt('my_password', cost := 14) AS secure_hash;"
+      }
+    ],
+    "returns": "Bcrypt hash string containing salt and hash (60 characters)",
+    "relatedFunctions": [
+      "crypto_bcrypt_verify"
+    ],
+    "tags": {
+      "category": "password",
+      "algorithm": "bcrypt",
+      "type": "hashing, authentication",
+      "properties": "slow-hash, salted",
+      "use_case": "secure-storage"
+    }
+  },
+  {
+    "name": "crypto_bcrypt_verify",
+    "categories": [
+      "Password"
+    ],
+    "description": "Verifies a plaintext password against a bcrypt hash. Timing-safe comparison to prevent timing attacks.",
+    "examples": [
+      {
+        "description": "Verify user login credentials",
+        "code": "SELECT\n  user_id,\n  username,\n  crypto_bcrypt_verify('user_input', password_hash) AS is_valid\nFROM users\nWHERE username = 'alice';"
+      }
+    ],
+    "returns": "TRUE if password matches hash, FALSE otherwise",
+    "tags": {
+      "category": "password",
+      "algorithm": "bcrypt",
+      "type": "verification, authentication",
+      "properties": "timing-safe",
+      "use_case": "login"
+    }
+  },
+  {
+    "name": "crypto_generate_keys",
+    "categories": [
+      "Key Generation"
+    ],
+    "description": "Generates RSA public/private key pairs in bulk. Useful for provisioning multiple users or services with cryptographic keys. Returns a table where each row contains one complete key pair.",
+    "examples": [
+      {
+        "description": "Generate 10 RSA key pairs with default 2048-bit keys",
+        "code": "SELECT * FROM crypto_generate_keys(10) LIMIT 3;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "key_id",
+              "align": "right"
+            },
+            {
+              "name": "public_key",
+              "align": "left"
+            },
+            {
+              "name": "private_key",
+              "align": "left"
+            },
+            {
+              "name": "created_at",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              1,
+              "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEF...",
+              "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0B...",
+              "2025-12-03 15:30:45.123"
+            ],
+            [
+              2,
+              "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEF...",
+              "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0B...",
+              "2025-12-03 15:30:45.234"
+            ],
+            [
+              3,
+              "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEF...",
+              "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0B...",
+              "2025-12-03 15:30:45.345"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Generate 5 high-security 4096-bit key pairs",
+        "code": "SELECT * FROM crypto_generate_keys(5, key_size := 4096);"
+      },
+      {
+        "description": "Store generated keys in a table",
+        "code": "CREATE TABLE user_keys AS\nSELECT\n  key_id,\n  public_key,\n  private_key,\n  created_at\nFROM crypto_generate_keys(100);"
+      },
+      {
+        "description": "Generate keys and immediately assign to users",
+        "code": "INSERT INTO user_keypairs (user_id, public_key, private_key)\nSELECT\n  u.user_id,\n  k.public_key,\n  k.private_key\nFROM users u\nCROSS JOIN LATERAL crypto_generate_keys(1) k\nWHERE u.needs_keypair = true;"
+      }
+    ],
+    "returnsTable": [
+      {
+        "name": "key_id",
+        "type": "INTEGER",
+        "description": "Unique identifier for the key pair"
+      },
+      {
+        "name": "public_key",
+        "type": "VARCHAR",
+        "description": "PEM-encoded public key"
+      },
+      {
+        "name": "private_key",
+        "type": "VARCHAR",
+        "description": "PEM-encoded private key"
+      },
+      {
+        "name": "created_at",
+        "type": "TIMESTAMP",
+        "description": "Generation timestamp"
+      }
+    ],
+    "tags": {
+      "category": "key-generation",
+      "algorithm": "rsa",
+      "type": "asymmetric, cryptography",
+      "properties": "public-key, private-key",
+      "use_case": "bulk-operation"
+    }
+  },
+  {
+    "name": "crypto_audit_trail",
+    "categories": [
+      "Auditing"
+    ],
+    "description": "Creates a cryptographic audit trail for database operations using blockchain-style hash chaining. Each record contains a hash of its data plus the previous record's hash, making tampering detectable.",
+    "examples": [
+      {
+        "description": "Generate audit trail for financial transactions",
+        "code": "SELECT * FROM crypto_audit_trail('financial_transactions', 'INSERT') LIMIT 5;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "record_hash",
+              "align": "left"
+            },
+            {
+              "name": "previous_hash",
+              "align": "left"
+            },
+            {
+              "name": "sequence_num",
+              "align": "right"
+            },
+            {
+              "name": "chain_valid",
+              "align": "center"
+            }
+          ],
+          "rows": [
+            [
+              "a7f3b2c8d1e9f0a5b3c7d4e8f1a2b5c9d0e7f3a6b8c1d4e7f0a3b6c9d2e5",
+              "0000000000000000000000000000000000000000000000000000000000000000",
+              1,
+              true
+            ],
+            [
+              "b8c1d4e7f0a3b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5",
+              "a7f3b2c8d1e9f0a5b3c7d4e8f1a2b5c9d0e7f3a6b8c1d4e7f0a3b6c9d2e5",
+              2,
+              true
+            ],
+            [
+              "c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e7f0a3b6",
+              "b8c1d4e7f0a3b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5",
+              3,
+              true
+            ],
+            [
+              "d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e7f0a3b6c9d2e5f8a1b4c7",
+              "c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e7f0a3b6",
+              4,
+              true
+            ],
+            [
+              "e1f4a7b0c3d6e9f2a5b8c1d4e7f0a3b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8",
+              "d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e7f0a3b6c9d2e5f8a1b4c7",
+              5,
+              true
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Verify audit chain integrity and detect tampering",
+        "code": "WITH audit AS (\n  SELECT * FROM crypto_audit_trail('sensitive_data', 'UPDATE')\n)\nSELECT\n  sequence_num,\n  record_hash,\n  chain_valid,\n  CASE\n    WHEN NOT chain_valid THEN 'TAMPERING DETECTED!'\n    ELSE 'Valid'\n  END AS status\nFROM audit\nWHERE NOT chain_valid;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "sequence_num",
+              "align": "right"
+            },
+            {
+              "name": "record_hash",
+              "align": "left"
+            },
+            {
+              "name": "chain_valid",
+              "align": "center"
+            },
+            {
+              "name": "status",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              42,
+              "f2a5b8c1d4e7f0a3b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6",
+              false,
+              "TAMPERING DETECTED!"
+            ],
+            [
+              103,
+              "a3b6c9d2e5f8a1b4c7d0e3f6a9b2c5d8e1f4a7b0c3d6e9f2a5b8c1d4e7",
+              false,
+              "TAMPERING DETECTED!"
+            ]
+          ]
+        }
+      }
+    ],
+    "returnsTable": [
+      {
+        "name": "record_hash",
+        "type": "VARCHAR",
+        "description": "SHA-256 hash of the current record"
+      },
+      {
+        "name": "previous_hash",
+        "type": "VARCHAR",
+        "description": "Hash of previous record (chain linkage)"
+      },
+      {
+        "name": "sequence_num",
+        "type": "INTEGER",
+        "description": "Sequence number in audit chain"
+      },
+      {
+        "name": "chain_valid",
+        "type": "BOOLEAN",
+        "description": "Whether the audit chain is valid"
+      }
+    ],
+    "tags": {
+      "category": "auditing",
+      "type": "blockchain, hash-chain",
+      "properties": "immutable",
+      "use_case": "tamper-detection, compliance, forensics"
+    }
+  },
+  {
+    "name": "crypto_hash_agg",
+    "categories": [
+      "Aggregation"
+    ],
+    "description": "Aggregates multiple values into a single cryptographic hash. Order-independent - produces the same hash regardless of row order. Useful for creating fingerprints of entire datasets or groups.",
+    "examples": [
+      {
+        "description": "Generate fingerprint for all users",
+        "code": "SELECT crypto_hash_agg(email) AS users_fingerprint\nFROM users;"
+      },
+      {
+        "description": "Hash all transaction IDs for a daily batch",
+        "code": "SELECT\n  DATE(created_at) AS batch_date,\n  crypto_hash_agg(transaction_id) AS batch_hash\nFROM transactions\nGROUP BY DATE(created_at);"
+      },
+      {
+        "description": "Use SHA-512 for higher security",
+        "code": "SELECT crypto_hash_agg(sensitive_field, algorithm := 'sha512') AS secure_hash\nFROM sensitive_table;"
+      },
+      {
+        "description": "Detect data changes by comparing hashes",
+        "code": "WITH current_hash AS (\n  SELECT crypto_hash_agg(data_column) AS hash FROM production_table\n),\nbackup_hash AS (\n  SELECT crypto_hash_agg(data_column) AS hash FROM backup_table\n)\nSELECT\n  CASE\n    WHEN c.hash = b.hash THEN 'Data matches'\n    ELSE 'Data has changed!'\n  END AS status\nFROM current_hash c, backup_hash b;"
+      }
+    ],
+    "returns": "Aggregated hash combining all input values",
+    "tags": {
+      "category": "aggregation",
+      "type": "fingerprint, dataset-hash",
+      "properties": "order-independent",
+      "use_case": "integrity, data-verification"
+    }
+  },
+  {
+    "name": "crypto_merkle_root",
+    "categories": [
+      "Aggregation"
+    ],
+    "description": "Computes a Merkle tree root hash for a set of values. Like blockchain transaction verification - any change to input data produces a different root. More efficient than concatenating all values for large datasets.",
+    "examples": [
+      {
+        "description": "Calculate Merkle root for a block of transactions",
+        "code": "SELECT\n  block_id,\n  crypto_merkle_root(transaction_hash) AS merkle_root\nFROM blockchain_transactions\nGROUP BY block_id;"
+      },
+      {
+        "description": "Verify data integrity using Merkle root",
+        "code": "WITH daily_blocks AS (\n  SELECT\n    DATE(timestamp) AS date,\n    crypto_merkle_root(record_id::VARCHAR) AS merkle_root\n  FROM audit_log\n  GROUP BY DATE(timestamp)\n)\nSELECT\n  date,\n  merkle_root,\n  LAG(merkle_root) OVER (ORDER BY date) AS previous_root\nFROM daily_blocks;"
+      },
+      {
+        "description": "Create tamper-evident file manifest",
+        "code": "SELECT crypto_merkle_root(file_hash) AS manifest_hash\nFROM uploaded_files\nWHERE upload_batch_id = 'batch_123';"
+      }
+    ],
+    "returns": "Merkle root hash (64-character hex string)",
+    "tags": {
+      "category": "aggregation",
+      "algorithm": "merkle-tree",
+      "type": "blockchain, cryptographic",
+      "properties": "tamper-proof",
+      "use_case": "efficient-verification"
+    }
+  },
+  {
+    "name": "COPY_ENCRYPTED_PARQUET",
+    "categories": [
+      "Data Export"
+    ],
+    "description": "Exports query results to an encrypted Parquet file with client-side encryption. The entire file is encrypted at rest using AES-256, ensuring data confidentiality during storage and transit. Compatible with standard Parquet readers when decryption keys are provided.",
+    "examples": [
+      {
+        "description": "Export encrypted user data to Parquet",
+        "code": "COPY (\n  SELECT user_id, email, created_at, subscription_tier\n  FROM users\n  WHERE created_at > '2024-01-01'\n)\nTO 'encrypted_users.parquet'\nWITH (\n  ENCRYPTION_KEY 'YourBase64EncodedKey==',\n  COMPRESSION 'ZSTD'\n);"
+      },
+      {
+        "description": "Export with custom row group size for large datasets",
+        "code": "COPY (\n  SELECT transaction_id, amount, timestamp, customer_id\n  FROM transactions\n  WHERE amount > 1000\n)\nTO 's3://my-bucket/encrypted-transactions.parquet'\nWITH (\n  ENCRYPTION_KEY 'YourBase64EncodedKey==',\n  ROW_GROUP_SIZE 500000,\n  COMPRESSION 'SNAPPY'\n);"
+      }
+    ],
+    "tags": {
+      "category": "export",
+      "format": "parquet",
+      "type": "encryption, data-export",
+      "properties": "client-side-encryption, compression"
+    },
+    "options": [
+      {
+        "name": "ENCRYPTION_KEY",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "Base64-encoded AES-256 encryption key for client-side encryption"
+      },
+      {
+        "name": "ENCRYPTION_ALGORITHM",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "default": "'AES-256'",
+        "description": "Encryption algorithm to use: 'AES-256' or 'AES-128'"
+      },
+      {
+        "name": "COMPRESSION",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "default": "'SNAPPY'",
+        "description": "Compression codec: 'SNAPPY', 'GZIP', 'ZSTD', or 'NONE'"
+      },
+      {
+        "name": "ROW_GROUP_SIZE",
+        "type": "INTEGER",
+        "paramType": "named",
+        "default": "100000",
+        "description": "Number of rows per Parquet row group"
+      }
+    ]
+  },
+  {
+    "name": "COPY_ENCRYPTED_CSV",
+    "categories": [
+      "Data Export"
+    ],
+    "description": "Exports query results to an encrypted CSV file. The CSV file is encrypted before being written to disk, protecting sensitive data in a portable text format. Useful for secure data exchange with systems that require CSV input.",
+    "examples": [
+      {
+        "description": "Export encrypted customer data to CSV",
+        "code": "COPY (\n  SELECT customer_id, name, email, phone\n  FROM customers\n  WHERE region = 'US'\n)\nTO 'encrypted_customers.csv'\nWITH (\n  ENCRYPTION_KEY 'YourSecureKey123',\n  HEADER true,\n  DELIMITER ','\n);"
+      }
+    ],
+    "tags": {
+      "category": "export",
+      "format": "csv",
+      "type": "encryption, data-export",
+      "properties": "text-format, portable"
+    },
+    "options": [
+      {
+        "name": "ENCRYPTION_KEY",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "Encryption key for securing the CSV file contents"
+      },
+      {
+        "name": "DELIMITER",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "default": "','",
+        "description": "Field delimiter character"
+      },
+      {
+        "name": "HEADER",
+        "type": "BOOLEAN",
+        "paramType": "named",
+        "default": "true",
+        "description": "Include column headers in the output"
+      },
+      {
+        "name": "QUOTE",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "default": "\"",
+        "description": "Quote character for string fields"
+      }
+    ]
+  },
+  {
+    "name": "COPY_SIGNED_JSON",
+    "categories": [
+      "Data Export"
+    ],
+    "description": "Exports query results to a cryptographically signed JSON file. Each record is signed with HMAC-SHA256, enabling tamper detection and data integrity verification. The signature is included in the output, allowing consumers to verify authenticity.",
+    "examples": [
+      {
+        "description": "Export signed API response data",
+        "code": "COPY (\n  SELECT api_key, rate_limit, created_at, permissions\n  FROM api_keys\n  WHERE status = 'active'\n)\nTO 'signed_api_keys.json'\nWITH (\n  SIGNING_KEY 'your-hmac-secret-key',\n  FORMAT 'ARRAY',\n  PRETTY true\n);"
+      },
+      {
+        "description": "Export newline-delimited signed events",
+        "code": "COPY (\n  SELECT event_id, event_type, user_id, timestamp, payload\n  FROM audit_events\n  WHERE timestamp > CURRENT_DATE - INTERVAL 7 DAYS\n)\nTO 'signed_events.jsonl'\nWITH (\n  SIGNING_KEY 'audit-signing-key',\n  FORMAT 'NEWLINE_DELIMITED'\n);"
+      }
+    ],
+    "tags": {
+      "category": "export",
+      "format": "json",
+      "type": "signing, data-export",
+      "algorithm": "hmac",
+      "use_case": "integrity, tamper-detection"
+    },
+    "options": [
+      {
+        "name": "SIGNING_KEY",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "HMAC signing key for generating digital signatures"
+      },
+      {
+        "name": "FORMAT",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "default": "'ARRAY'",
+        "description": "JSON format: 'ARRAY' (array of objects) or 'NEWLINE_DELIMITED' (JSONL)"
+      },
+      {
+        "name": "PRETTY",
+        "type": "BOOLEAN",
+        "paramType": "named",
+        "default": "false",
+        "description": "Pretty-print the JSON output with indentation"
+      }
+    ]
+  }
+]

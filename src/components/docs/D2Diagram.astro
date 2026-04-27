@@ -1,5 +1,8 @@
 ---
 import pako from 'pako';
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 interface Props {
   title?: string;
@@ -9,37 +12,54 @@ interface Props {
 
 const { title, theme = 'neutral', code } = Astro.props;
 
-// Clean up the code
 const cleanCode = code.trim();
 
-// Encode for Kroki using deflate + base64url (their preferred method)
 function encodeForKroki(source: string): string {
   const data = new TextEncoder().encode(source);
   const compressed = pako.deflate(data, { level: 9 });
-  // Convert to base64url
   const base64 = Buffer.from(compressed).toString('base64');
   return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
-const encoded = encodeForKroki(cleanCode);
+// Content-addressed local cache so we hit Kroki at most once per unique
+// diagram. Each renders adds ~30–60s otherwise (network + render queue).
+const cacheDir = join(process.cwd(), '.cache', 'd2-diagrams');
+const cacheKey = createHash('sha256')
+  .update(theme)
+  .update('|')
+  .update(cleanCode)
+  .digest('hex')
+  .slice(0, 16);
+const cachePath = join(cacheDir, `${cacheKey}.svg`);
 
-// Kroki endpoint for D2
-const krokiUrl = `https://kroki.io/d2/svg/${encoded}`;
-
-// Fetch the SVG at build time
 let svgContent = '';
 let error = '';
 
-try {
-  const response = await fetch(krokiUrl);
-  if (response.ok) {
-    svgContent = await response.text();
-  } else {
-    const errorText = await response.text();
-    error = `Failed to render diagram: ${response.status} - ${errorText}`;
+if (existsSync(cachePath)) {
+  svgContent = readFileSync(cachePath, 'utf8');
+} else {
+  const krokiUrl = `https://kroki.io/d2/svg/${encodeForKroki(cleanCode)}`;
+  // Hard timeout — Kroki sometimes returns 504 after 60s, which blocks builds.
+  // Better to fail fast and render a placeholder than hang on every build.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8_000);
+  try {
+    const response = await fetch(krokiUrl, { signal: controller.signal });
+    if (response.ok) {
+      svgContent = await response.text();
+      mkdirSync(cacheDir, { recursive: true });
+      writeFileSync(cachePath, svgContent);
+    } else {
+      const errorText = await response.text();
+      error = `Failed to render diagram: ${response.status} - ${errorText}`;
+    }
+  } catch (e: any) {
+    error = e?.name === 'AbortError'
+      ? 'D2 diagram render timed out (Kroki took >8s). Check the cache or render the SVG manually.'
+      : `Failed to fetch diagram: ${e}`;
+  } finally {
+    clearTimeout(timer);
   }
-} catch (e) {
-  error = `Failed to fetch diagram: ${e}`;
 }
 ---
 

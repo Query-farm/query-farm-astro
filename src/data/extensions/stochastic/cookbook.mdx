@@ -1,0 +1,139 @@
+import QueryResult from '../../../components/docs/QueryResult.astro';
+
+Every distribution provides the same set of operations — sample, pdf/log_pdf, cdf/log_cdf, cdf_complement, quantile, mean, variance, etc. — so once you've used one, you've used them all. The recipes below show common shapes.
+
+## Normal Distribution Basics
+
+```sql
+-- Find the 95th percentile of a standard Normal
+SELECT dist_normal_quantile(0.0, 1.0, 0.95) AS p95;
+
+-- Density at x = 0.5 for N(0, 1)
+SELECT dist_normal_pdf(0.0, 1.0, 0.5) AS density;
+
+-- P(X ≤ 1.96) for N(0, 1)
+SELECT dist_normal_cdf(0.0, 1.0, 1.96) AS prob;
+
+-- Distribution properties
+SELECT
+  dist_normal_mean(100.0, 15.0)     AS mean,
+  dist_normal_stddev(100.0, 15.0)   AS stddev,
+  dist_normal_variance(100.0, 15.0) AS variance,
+  dist_normal_skewness(100.0, 15.0) AS skewness;
+```
+
+## Z-scores via Distribution Properties
+
+Since every property is a function (not a hard-coded constant), you can use them inline anywhere a value goes:
+
+```sql
+SELECT
+  height_cm,
+  (height_cm - dist_normal_mean(100, 15))
+   / dist_normal_stddev(100, 15) AS height_zscore
+FROM observations;
+```
+
+## Discrete: Binomial
+
+Probability mass and cumulative probability:
+
+```sql
+-- P(X = 7) for Binomial(n=10, p=0.3)
+SELECT dist_binomial_pdf(10, 0.3, 7) AS prob_exactly_7;
+
+-- P(X ≤ 5) — cumulative
+SELECT dist_binomial_cdf(10, 0.3, 5) AS prob_at_most_5;
+
+-- A single random draw
+SELECT dist_binomial_sample(10, 0.3) AS k;
+```
+
+## Generating Synthetic Data
+
+Sampling functions return one draw per call, so combine them with `range()` or any source table:
+
+```sql
+CREATE TABLE synthetic AS
+SELECT
+  i,
+  dist_normal_sample(100, 15)   AS height_cm,
+  dist_normal_sample(70, 10)    AS weight_kg,
+  dist_binomial_sample(1, 0.5)  AS gender_bit
+FROM range(1000) t(i);
+```
+
+## Survival Function (1 − CDF)
+
+For tail probabilities — far cleaner and more accurate than `1 - cdf` when the result is small:
+
+```sql
+-- P(X > 99) for N(50, 10) — tail probability
+SELECT dist_normal_cdf_complement(50.0, 10.0, 99.0) AS prob_tail;
+```
+
+## Log Density / Log CDF
+
+Log-scale variants exist for every distribution. Useful inside likelihood computations and to avoid underflow:
+
+```sql
+-- Log-likelihood of a single observation under N(0,1)
+SELECT dist_normal_log_pdf(0.0, 1.0, 4.5) AS log_density;
+
+-- Log-survival for very small tail probabilities
+SELECT dist_normal_log_cdf_complement(0.0, 1.0, 6.0) AS log_tail;
+```
+
+## Hypothesis Testing
+
+```sql
+-- Two-sided p-value from a Z-statistic
+WITH z AS (SELECT 2.31 AS stat)
+SELECT 2 * dist_normal_cdf_complement(0.0, 1.0, ABS(stat)) AS p_value
+FROM z;
+
+-- One-sided p-value from a chi-squared statistic with df=4
+WITH chi AS (SELECT 9.488 AS stat)
+SELECT dist_chi_squared_cdf_complement(4, stat) AS p_value
+FROM chi;
+
+-- t-distribution two-sided p-value with df=29
+WITH t AS (SELECT 2.045 AS stat, 29 AS df)
+SELECT 2 * dist_students_t_cdf_complement(df, ABS(stat)) AS p_value
+FROM t;
+```
+
+## Monte Carlo: Estimate π
+
+Classic example — sample uniform points in [-1,1]² and count those inside the unit circle:
+
+```sql
+WITH samples AS (
+  SELECT dist_uniform_real_sample(-1.0, 1.0) AS x,
+         dist_uniform_real_sample(-1.0, 1.0) AS y
+  FROM range(1000000)
+)
+SELECT 4.0 * COUNT(*) FILTER (WHERE x*x + y*y <= 1) / COUNT(*) AS pi_estimate
+FROM samples;
+```
+
+## Value at Risk
+
+```sql
+-- 1-day 99% VaR assuming Normal returns
+WITH params AS (SELECT 0.0001 AS mu, 0.02 AS sigma, 1000000 AS portfolio)
+SELECT portfolio * (-dist_normal_quantile(mu, sigma, 0.01)) AS var_99
+FROM params;
+```
+
+## Bayesian Posterior with a Beta-Binomial Conjugate
+
+After observing 17 successes in 25 trials with a Beta(2, 2) prior, the posterior is Beta(19, 10):
+
+```sql
+-- Posterior mean and 95% credible interval
+SELECT
+  dist_beta_mean(19, 10)              AS posterior_mean,
+  dist_beta_quantile(19, 10, 0.025)   AS ci_lo,
+  dist_beta_quantile(19, 10, 0.975)   AS ci_hi;
+```

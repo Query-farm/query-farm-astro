@@ -1,0 +1,62 @@
+## What this is for
+
+When a query filters on **multiple columns at once** — `lat AND lon`, `time AND symbol_id`, `(altitude, lat, lon, time)` — sorting Parquet by any single column doesn't help much. Sorting by *both* needs a 1D ordering that keeps multi-dimensional neighbors together. That's a **space-filling curve** like Hilbert or Morton.
+
+Use Lindel as the `ORDER BY` when writing Parquet. The result: row groups have tight bounding boxes in every input dimension, so DuckDB / Athena / Trino / Spark / Snowflake can skip whole row groups whose stats don't match the predicate.
+
+This is the same optimization Databricks calls "Z-Order" (Morton) and now defaults to "Liquid Clustering" (Hilbert).
+
+## Hilbert-order at write time
+
+```sql
+COPY (
+  SELECT * FROM source
+  ORDER BY hilbert_encode([lat, lon]::DOUBLE[2])
+) TO 'spatial.parquet' (FORMAT PARQUET);
+```
+
+Rows close in `(lat, lon)` end up close in the file — bounding-box queries (`WHERE lat BETWEEN ... AND lon BETWEEN ...`) skip irrelevant row groups.
+
+For 4D — say flight history `(lat, lon, alt, time)`:
+
+```sql
+COPY (
+  SELECT * FROM flights
+  ORDER BY hilbert_encode([lat, lon, alt, time]::INTEGER[4])
+) TO 'flights.parquet' (FORMAT PARQUET);
+```
+
+## Morton (Z-order) — faster, slightly weaker
+
+Same recipe, swap the function:
+
+```sql
+COPY (
+  SELECT * FROM source
+  ORDER BY morton_encode([time, symbol_id]::INTEGER[2])
+) TO 'trades.parquet' (FORMAT PARQUET);
+```
+
+When in doubt: Hilbert. Pick Morton only when encoding throughput is the bottleneck and you can tolerate slightly larger row-group bounding boxes.
+
+## Decode for sanity-checking
+
+```sql
+SELECT hilbert_decode(hilbert_encode([10, 20]::INTEGER[2])) AS roundtrip;
+-- [10, 20]
+```
+
+## Type coverage
+
+Both encoders accept:
+
+- Any signed or unsigned integer (TINYINT through HUGEINT).
+- FLOAT or DOUBLE.
+
+Output type is the smallest unsigned integer that fits the bit width × number of dimensions. For `[INTEGER, INTEGER]` (32×2 = 64 bits) you get `UBIGINT`; for `[DOUBLE, DOUBLE]` (64×2 = 128 bits) you get `UHUGEINT`.
+
+## Why this works
+
+Parquet stores per-row-group min/max statistics. A predicate like `WHERE lat BETWEEN 40 AND 41` lets the reader skip any row group whose `lat` range doesn't overlap. With single-column sorting that works for one column at a time. With Hilbert/Morton sorting, **every** input column gets tight per-row-group bounds, so multi-column predicates each contribute to skipping.
+
+Performance gains depend on the data and query pattern. The Delta Lake / Databricks blog posts linked in the README report 5–100× speedups for multi-column range queries; in DuckDB you'll see similar with the right data.

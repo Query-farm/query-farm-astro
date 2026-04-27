@@ -1,0 +1,81 @@
+## When to use QuickJS
+
+JavaScript inside SQL isn't a goal — it's an escape hatch. Reach for QuickJS when:
+
+- **JSON-munging is awkward** in SQL alone (deeply nested fields, conditional shapes, computed keys).
+- **A regex doesn't quite cut it** and you want imperative control flow.
+- **You have an existing JS library snippet** (validation, parsing, formatting) and don't want to rewrite it.
+
+Don't reach for it for:
+
+- **Anything DuckDB has a native function for.** Native primitives are 10–100× faster.
+- **Long-running computation.** QuickJS is fast for an embedded interpreter; it's still slower than vectorized SQL.
+- **Untrusted input** in a multi-tenant context. Even sandboxed JS engines have a history of escapes.
+
+## Scalar form
+
+```sql
+SELECT quickjs('2 + 2');                                 -- '4'
+SELECT quickjs('let m = "Hello, World!"; m');            -- 'Hello, World!'
+SELECT quickjs_eval('(a, b) => a + b', 5, 3);            -- 8 (JSON)
+```
+
+For string literals with nested quotes, prefer assigning to a JS variable first to avoid SQL parser confusion.
+
+## Table form (array → rows)
+
+```sql
+SELECT * FROM quickjs('[1, 2, 3, 4, 5]');
+-- 5 rows
+```
+
+Pass parameters and have JS return a transformed array:
+
+```sql
+-- arg0 = raw param, parsed_arg0 = JSON.parse(arg0) when arg0 is a string
+SELECT *
+FROM quickjs('parsed_arg0.map(x => x * arg1)',
+             '[1, 2, 3, 4, 5]', 3);
+-- → 3, 6, 9, 12, 15
+```
+
+## Custom JSON parsing
+
+When you need conditional shapes the standard `json_*` functions can't express, QuickJS-as-a-JSON-parser shines:
+
+```sql
+SELECT id,
+       event_type,
+       quickjs_eval(
+         '(event_type, payload) => {
+            const d = JSON.parse(payload);
+            if (event_type === "login") {
+              return { user: d.user, device: d.meta.device, os: d.meta.os };
+            } else if (event_type === "purchase") {
+              return { user: d.user, item: d.meta.item, amount: d.amount };
+            } else {
+              return null;
+            }
+          }',
+         event_type, payload
+       ) AS extracted
+FROM events;
+```
+
+The result column holds JSON; chain it through `json_extract_*` or pull fields directly:
+
+```sql
+SELECT extracted->>'$.user' AS user,
+       extracted->>'$.os'   AS os
+FROM transformed_events;
+```
+
+## Performance
+
+QuickJS-NG is one of the smallest and fastest embedded JS engines available — but you're still paying interpretation cost per row. Roughly 1–10 μs per call depending on the snippet. At 100K rows that's 0.1–1 second, which is fine for most ETL but bad for hot OLAP paths.
+
+Where possible, prefer:
+
+1. Native DuckDB scalar functions.
+2. The `json_*` family for JSON.
+3. QuickJS only when 1 and 2 don't fit.

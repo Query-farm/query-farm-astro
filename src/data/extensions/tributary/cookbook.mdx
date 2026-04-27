@@ -1,0 +1,48 @@
+## Read a Kafka topic
+
+The simplest pattern — point a query at a topic and treat it as a table:
+
+```sql
+SELECT *
+FROM tributary_scan_topic('orders',
+                          "bootstrap.servers" := 'kafka:9092');
+```
+
+Each row corresponds to one Kafka message. The result set includes the message metadata (partition, offset, timestamp) plus the payload.
+
+## Filter while consuming
+
+Push predicates down — DuckDB will only materialize rows matching the WHERE clause:
+
+```sql
+SELECT *
+FROM tributary_scan_topic('orders',
+                          "bootstrap.servers" := 'kafka:9092')
+WHERE timestamp > now() - INTERVAL 1 HOUR
+  AND partition = 0;
+```
+
+## Snapshot a topic into a local table
+
+```sql
+CREATE TABLE orders_snapshot AS
+SELECT *
+FROM tributary_scan_topic('orders',
+                          "bootstrap.servers" := 'kafka:9092');
+```
+
+Useful for ad-hoc analytics over a finite slice of the stream.
+
+## Join Kafka with local data
+
+```sql
+SELECT k.message_id, k.payload, u.name
+FROM tributary_scan_topic('events',
+                          "bootstrap.servers" := 'kafka:9092') k
+JOIN users u USING (user_id)
+WHERE k.timestamp > now() - INTERVAL 10 MINUTE;
+```
+
+## Pointing tools at the docs
+
+Full configuration options (consumer groups, SASL/TLS, offset modes, batch sizing, write paths) live at the [Tributary docs](https://query.farm/duckdb_extension_tributary.html). The README in the upstream repo is intentionally minimal because the configuration surface is large.

@@ -1,0 +1,72 @@
+## Subscribe to a feed
+
+```sql
+-- Open a subscription to a WebSocket
+CALL radio_subscribe('ws://stream.example.com/events', 'feed1');
+
+-- Inspect what's subscribed
+SELECT * FROM radio_subscriptions();
+```
+
+Each subscription has a logical name (`'feed1'`) — use it to filter the inbox/outbox.
+
+## Drain received messages
+
+```sql
+-- Recent messages across all subscriptions
+SELECT subscription, received_at, payload
+FROM radio_received_messages()
+ORDER BY received_at DESC
+LIMIT 100;
+
+-- One feed only
+SELECT received_at, payload
+FROM radio_subscription_received_messages('feed1')
+ORDER BY received_at DESC;
+```
+
+These are normal DuckDB table functions — JOIN, filter, aggregate, push to Parquet, anything you'd do with a regular table.
+
+## Send a message
+
+```sql
+CALL radio_transmit_message('feed1', '{"type":"hello","at":"2026-04-27T12:00:00Z"}');
+
+-- Inspect transmit queue + delivery state
+SELECT message_id, status, transmitted_at, payload
+FROM radio_subscription_transmit_messages('feed1')
+ORDER BY queued_at DESC;
+```
+
+Pending messages get a `status` column you can poll until it flips to `delivered`.
+
+## Tear down
+
+```sql
+-- Garbage-collect already-delivered transmit messages
+CALL radio_subscription_transmit_messages_delete_finished('feed1');
+
+-- Drop a single pending outgoing message
+CALL radio_subscription_transmit_message_delete('feed1', :message_id);
+
+-- Close the subscription
+CALL radio_unsubscribe('feed1');
+```
+
+## Test without a real server
+
+Inject messages into the inbox to drive a downstream query as if they came from the wire:
+
+```sql
+CALL radio_subscription_received_message_add('feed1', '{"type":"test","value":42}');
+
+SELECT * FROM radio_subscription_received_messages('feed1');
+```
+
+Useful for unit-testing pipelines that consume `radio_*` tables.
+
+## Caveats
+
+- **Process-scoped.** When the DuckDB process exits, all subscriptions are torn down and unread messages are lost. Use external durable buffering (Redis, Kafka) when you need at-least-once semantics across restarts.
+- **Single-connection** — multiple connections in one process don't share subscription state.
+- **Delivery is best-effort by default.** Poll `radio_subscription_transmit_messages` for delivery status and retry as needed.

@@ -1,0 +1,125 @@
+[
+  {
+    "name": "hash_pii",
+    "category": "Data Privacy",
+    "description": "Convenience macro for hashing personally identifiable information (PII) fields using SHA-256. Simplifies anonymization workflows by providing a shorthand for common hashing operations.",
+    "examples": [
+      {
+        "description": "Anonymize PII fields in a query",
+        "code": "SELECT\n  hash_pii(email) AS user_hash,\n  hash_pii(phone) AS phone_hash,\n  order_total,\n  created_at\nFROM orders\nLIMIT 10;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "user_hash",
+              "align": "left"
+            },
+            {
+              "name": "phone_hash",
+              "align": "left"
+            },
+            {
+              "name": "order_total",
+              "align": "right"
+            },
+            {
+              "name": "created_at",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "a591a6d40bf42040...",
+              "f7c3bc1d808e04732...",
+              125.5,
+              "2024-01-15"
+            ],
+            [
+              "3c59dc048e88461f...",
+              "1679091c5a880faf6...",
+              89.99,
+              "2024-01-16"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Create anonymized export",
+        "code": "COPY (\n  SELECT\n    hash_pii(customer_email) AS customer_id,\n    hash_pii(customer_phone) AS phone_id,\n    product_category,\n    purchase_amount\n  FROM sales\n  WHERE created_at >= '2024-01-01'\n) TO 'anonymized_sales.parquet' (FORMAT PARQUET);"
+      }
+    ]
+  },
+  {
+    "name": "secure_compare",
+    "category": "Security",
+    "description": "Timing-safe string comparison macro that prevents timing attacks. Uses constant-time comparison to ensure the comparison duration does not leak information about the strings being compared.",
+    "examples": [
+      {
+        "description": "Safely compare sensitive tokens",
+        "code": "SELECT\n  token_id,\n  secure_compare(stored_token, input_token) AS is_valid\nFROM api_tokens\nWHERE user_id = 12345;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "token_id",
+              "align": "left"
+            },
+            {
+              "name": "is_valid",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "tok_abc123",
+              true
+            ],
+            [
+              "tok_def456",
+              false
+            ]
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "fingerprint_row",
+    "category": "Data Integrity",
+    "description": "Generates a cryptographic fingerprint for an entire row by concatenating all column values and hashing them. Useful for change detection, deduplication, and data integrity verification.",
+    "examples": [
+      {
+        "description": "Detect changed records",
+        "code": "SELECT\n  id,\n  fingerprint_row(STRUCT_PACK(*)) AS row_hash,\n  name,\n  email,\n  updated_at\nFROM users\nWHERE updated_at > CURRENT_DATE - INTERVAL 7 DAYS;"
+      },
+      {
+        "description": "Deduplicate records based on content",
+        "code": "WITH fingerprinted AS (\n  SELECT\n    *,\n    fingerprint_row(STRUCT_PACK(name, email, phone)) AS content_hash\n  FROM contacts\n)\nSELECT DISTINCT ON (content_hash)\n  name,\n  email,\n  phone\nFROM fingerprinted\nORDER BY content_hash, created_at DESC;"
+      }
+    ]
+  },
+  {
+    "name": "encrypt_field",
+    "category": "Encryption",
+    "description": "Simplified field encryption macro using AES-256. Wraps complex encryption operations into an easy-to-use function for encrypting sensitive data at rest.",
+    "examples": [
+      {
+        "description": "Encrypt sensitive fields before storage",
+        "code": "INSERT INTO secure_storage (id, encrypted_ssn, encrypted_credit_card)\nSELECT\n  id,\n  encrypt_field(ssn, 'your-encryption-key') AS encrypted_ssn,\n  encrypt_field(credit_card, 'your-encryption-key') AS encrypted_credit_card\nFROM sensitive_data;"
+      }
+    ]
+  },
+  {
+    "name": "audit_hash_chain",
+    "category": "Auditing",
+    "description": "Creates a hash chain for audit trail records by combining the current record hash with the previous hash. Ensures tamper-evident logging where any modification breaks the chain.",
+    "examples": [
+      {
+        "description": "Build tamper-evident audit log",
+        "code": "WITH audit_chain AS (\n  SELECT\n    id,\n    action,\n    user_id,\n    created_at,\n    LAG(hash) OVER (ORDER BY created_at) AS prev_hash,\n    audit_hash_chain(\n      STRUCT_PACK(id, action, user_id, created_at),\n      LAG(hash) OVER (ORDER BY created_at)\n    ) AS hash\n  FROM audit_log\n)\nSELECT * FROM audit_chain\nORDER BY created_at;"
+      },
+      {
+        "description": "Verify audit trail integrity",
+        "code": "WITH audit_chain AS (\n  SELECT\n    *,\n    LAG(hash) OVER (ORDER BY created_at) AS prev_hash,\n    audit_hash_chain(\n      STRUCT_PACK(id, action, user_id, created_at),\n      LAG(hash) OVER (ORDER BY created_at)\n    ) AS computed_hash\n  FROM audit_log\n)\nSELECT\n  id,\n  action,\n  CASE\n    WHEN hash = computed_hash THEN 'Valid'\n    ELSE 'Tampered'\n  END AS integrity_status\nFROM audit_chain;"
+      }
+    ]
+  }
+]

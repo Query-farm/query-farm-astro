@@ -1,0 +1,28 @@
+## Architecture
+
+Shellfs registers a DuckDB FileSystem subclass that recognizes two patterns:
+
+- **Path ending in `|`** — DuckDB calls `popen(cmd, "r")` and reads bytes from the resulting pipe.
+- **Path beginning with `|`** — DuckDB calls `popen(cmd, "w")` and writes bytes to the pipe's stdin.
+
+Everything else goes to the next filesystem in the chain (local disk, httpfs, s3, etc. as usual). The integration is one sentence of glue: any DuckDB function that takes a filename — `read_csv`, `read_json`, `read_parquet`, `COPY ... TO`, `COPY ... FROM` — accepts pipe paths transparently.
+
+## Why this exists
+
+DuckDB ships with a strong built-in toolbox — HTTP, S3, parquet, JSON, etc. But the long tail is endless: a private API with custom auth, a tool that emits a proprietary text format, a one-off script that walks a directory tree. Rather than building a DuckDB extension for each, shellfs lets the existing Unix toolchain be the adapter.
+
+## Performance
+
+Pipes are streaming — DuckDB starts processing rows as soon as the first chunk arrives, not after the upstream command finishes. For a `seq 1 1_000_000_000 |` you can `LIMIT 100` and the upstream `seq` is killed via SIGPIPE without producing the rest.
+
+`popen` overhead per pipeline is small (one fork+exec). The bottleneck is whatever your shell pipeline is doing, not the bridge.
+
+## Compared to alternatives
+
+- **`copy ... from program 'cmd'`** in PostgreSQL — same idea, more cumbersome syntax. Shellfs slips into any DuckDB filename context.
+- **Python `subprocess` + DataFrames** — much heavier setup; you give up DuckDB's vectorized execution against the streamed data.
+- **DuckDB built-ins** — use those first. Reach for shellfs only when the data lives behind a tool DuckDB can't speak natively.
+
+## Security
+
+Pipe paths execute arbitrary shell commands. The same rule that applies to `os.system(user_input)` in Python applies here: **never** build pipe paths from untrusted strings. In a multi-tenant or hosted DuckDB environment, consider not loading shellfs at all, or restricting which roles can use it.

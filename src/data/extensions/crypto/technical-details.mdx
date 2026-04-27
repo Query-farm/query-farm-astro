@@ -1,0 +1,48 @@
+## What this extension adds
+
+DuckDB ships with `hash()` (non-cryptographic), `md5()`, and `sha256()`. The Crypto extension adds the rest of what production cryptographic workloads need:
+
+- **More algorithms** — BLAKE3, BLAKE2b, the full SHA-2 family (224/256/384/512), the SHA-3 family (224/256/384/512), and Keccak variants.
+- **More input types** — every numeric type, VARCHAR, BLOB, BOOLEAN, DATE, TIME, TIMESTAMP, UUID, and lists of those — not just strings. Different DuckDB types hash to different digests by design.
+- **HMAC** with the same algorithm vocabulary — for keyed message authentication.
+- **`crypto_hash_agg`** — an order-deterministic aggregate hash for dataset checksums and change detection.
+- **`crypto_random_bytes`** — cryptographically secure random bytes from OpenSSL's CSPRNG.
+
+## Cryptographic vs non-cryptographic hashing
+
+Use **Crypto** when you need:
+
+- **Tamper resistance** — adversaries can't construct collisions cheaply (BLAKE3, SHA-2, SHA-3).
+- **Authentication** — HMAC for verifying message integrity with a shared secret.
+- **Stable cross-system fingerprints** — agreed-upon algorithm output that other systems can compute identically (e.g. ETags, content-addressed storage).
+- **Secure random** — keys, salts, nonces.
+
+Use [**Hashfuncs**](/products/extensions/hashfuncs) instead when you need:
+
+- **Speed** — xxHash and RapidHash run at near-RAM bandwidth with no cryptographic guarantees.
+- **Hash partitioning, sharding, cache keys** — collision risk on adversarial inputs is acceptable.
+- **Bloom-filter / cuckoo-filter inputs** — paired with [`bitfilters`](/products/extensions/bitfilters).
+
+Both extensions can coexist; pick per use case.
+
+## Determinism and types
+
+`crypto_hash` is deterministic for a given (algorithm, value, type) triple but is **type-sensitive** — `42::INTEGER` and `42::BIGINT` produce different hashes. This is the right behaviour for cryptographic use: it keeps the hash from collapsing across logically distinct domains.
+
+Lists of `VARCHAR` or `BLOB` values include each element's length (as a 64-bit integer) before its content, defending against length-extension-style ambiguity attacks.
+
+NULLs hash to NULL — `crypto_hash('sha2-256', NULL::VARCHAR) IS NULL` returns true.
+
+## Aggregate hash semantics
+
+`crypto_hash_agg('algo', col ORDER BY ord)` produces the same digest as `crypto_hash('algo', LIST(col ORDER BY ord))`. The `ORDER BY` is **required** — DuckDB's query planner doesn't guarantee row order, so an unordered aggregate would be non-deterministic.
+
+This equivalence is useful when comparing datasets across systems: anything that can produce the equivalent ordered list (Python, Go, Rust) can compute the same digest and verify a DuckDB result.
+
+## Random byte generation
+
+`crypto_random_bytes(n)` returns `n` bytes from OpenSSL's `RAND_bytes()`. That's the same CSPRNG used by TLS implementations, key generation libraries, and `openssl rand`.
+
+- Minimum length: 1 byte
+- Maximum length: 4,294,967,295 bytes (4 GB − 1, DuckDB's BLOB cap)
+- Length 0 or negative raises `InvalidInputException`

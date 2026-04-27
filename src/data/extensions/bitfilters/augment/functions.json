@@ -1,0 +1,206 @@
+[
+  {
+    "name": "quotient_filter",
+    "categories": [
+      "Quotient Filter"
+    ],
+    "description": "Aggregate that builds a Quotient filter from hashed keys. `q` controls slot count (2^q slots), `r` controls remainder bits per slot. Quotient filters support deletion and resize \u2014 use them when the underlying set evolves over time.",
+    "examples": [
+      {
+        "description": "Build a Quotient filter per partition",
+        "code": "CREATE TABLE filters AS\nSELECT id % 2 AS remainder,\n       quotient_filter(16, 4, hash(id)) AS filter\nFROM series_data\nGROUP BY id % 2;"
+      }
+    ],
+    "relatedFunctions": [
+      "quotient_filter_contains",
+      "xor8_filter",
+      "binary_fuse8_filter"
+    ]
+  },
+  {
+    "name": "quotient_filter_contains",
+    "categories": [
+      "Quotient Filter"
+    ],
+    "description": "Test whether a hash value is a member of a Quotient filter. Returns BOOLEAN \u2014 false means definitely-not-present; true means probably-present (within the filter's configured false-positive rate).",
+    "examples": [
+      {
+        "description": "Membership test against a stored filter",
+        "code": "SELECT quotient_filter_contains(filter, hash(12345)) AS might_exist\nFROM filters WHERE remainder = 1;"
+      }
+    ],
+    "relatedFunctions": [
+      "quotient_filter"
+    ]
+  },
+  {
+    "name": "xor8_filter",
+    "categories": [
+      "XOR Filters"
+    ],
+    "description": "Aggregate that builds an 8-bit XOR filter from hashed keys. ~9 bits per key, ~0.39% false positive rate. Static \u2014 built once, queried many times. ~20% smaller than Bloom for the same FPR.",
+    "examples": [
+      {
+        "description": "Build an xor8 filter from a column of hashed IDs",
+        "code": "SELECT xor8_filter(hash(id)) AS filter FROM ids;"
+      }
+    ],
+    "relatedFunctions": [
+      "xor8_filter_contains",
+      "xor16_filter",
+      "binary_fuse8_filter",
+      "quotient_filter"
+    ]
+  },
+  {
+    "name": "xor16_filter",
+    "categories": [
+      "XOR Filters"
+    ],
+    "description": "Aggregate that builds a 16-bit XOR filter from hashed keys. ~18 bits per key, ~0.0015% false positive rate. Use when you need a much lower FPR than xor8 and can afford 2\u00d7 the memory.",
+    "examples": [
+      {
+        "description": "Build an xor16 filter for low FPR",
+        "code": "SELECT xor16_filter(hash(id)) AS filter FROM ids;"
+      }
+    ],
+    "relatedFunctions": [
+      "xor16_filter_contains",
+      "xor8_filter"
+    ]
+  },
+  {
+    "name": "xor8_filter_contains",
+    "categories": [
+      "XOR Filters"
+    ],
+    "description": "Test whether a hash value is a member of an 8-bit XOR filter.",
+    "examples": [
+      {
+        "description": "Membership test",
+        "code": "SELECT xor8_filter_contains(filter, hash(:candidate)) FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "xor8_filter",
+      "xor16_filter_contains"
+    ]
+  },
+  {
+    "name": "xor16_filter_contains",
+    "categories": [
+      "XOR Filters"
+    ],
+    "description": "Test whether a hash value is a member of a 16-bit XOR filter.",
+    "examples": [
+      {
+        "description": "Membership test",
+        "code": "SELECT xor16_filter_contains(filter, hash(:candidate)) FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "xor16_filter",
+      "xor8_filter_contains"
+    ]
+  },
+  {
+    "name": "binary_fuse8_filter",
+    "categories": [
+      "Binary Fuse Filters"
+    ],
+    "description": "Aggregate that builds an 8-bit Binary Fuse filter from hashed keys. The most space-efficient filter family \u2014 typically <9 bits per key \u2014 with very fast construction and lookups. Static structure.",
+    "examples": [
+      {
+        "description": "Build a Binary Fuse 8 filter",
+        "code": "SELECT binary_fuse8_filter(hash(id)) AS filter FROM ids;"
+      }
+    ],
+    "relatedFunctions": [
+      "binary_fuse8_filter_contains",
+      "binary_fuse16_filter",
+      "xor8_filter"
+    ]
+  },
+  {
+    "name": "binary_fuse16_filter",
+    "categories": [
+      "Binary Fuse Filters"
+    ],
+    "description": "Aggregate that builds a 16-bit Binary Fuse filter \u2014 same family as binary_fuse8 but with much lower false-positive rate at the cost of ~2\u00d7 the memory.",
+    "examples": [
+      {
+        "description": "Build a Binary Fuse 16 filter",
+        "code": "SELECT binary_fuse16_filter(hash(id)) AS filter FROM ids;"
+      }
+    ],
+    "relatedFunctions": [
+      "binary_fuse16_filter_contains",
+      "binary_fuse8_filter"
+    ]
+  },
+  {
+    "name": "binary_fuse8_filter_contains",
+    "categories": [
+      "Binary Fuse Filters"
+    ],
+    "description": "Test whether a hash value is a member of an 8-bit Binary Fuse filter.",
+    "examples": [
+      {
+        "description": "Membership test",
+        "code": "SELECT binary_fuse8_filter_contains(filter, hash(:candidate)) FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "binary_fuse8_filter"
+    ]
+  },
+  {
+    "name": "binary_fuse16_filter_contains",
+    "categories": [
+      "Binary Fuse Filters"
+    ],
+    "description": "Test whether a hash value is a member of a 16-bit Binary Fuse filter.",
+    "examples": [
+      {
+        "description": "Membership test",
+        "code": "SELECT binary_fuse16_filter_contains(filter, hash(:candidate)) FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "binary_fuse16_filter"
+    ]
+  },
+  {
+    "name": "bitfilters_duckdb_bloom_filter_create",
+    "categories": [
+      "DuckDB Bloom Filters"
+    ],
+    "description": "Build a Bloom filter compatible with DuckDB's internal join filter format. Produced filters can be used in custom join optimization paths and in zone-map-style data skipping.",
+    "relatedFunctions": [
+      "bitfilters_duckdb_bloom_filter_probe",
+      "bitfilters_duckdb_hash"
+    ]
+  },
+  {
+    "name": "bitfilters_duckdb_bloom_filter_probe",
+    "categories": [
+      "DuckDB Bloom Filters"
+    ],
+    "description": "Test whether a hash value might be a member of a DuckDB-compatible Bloom filter built by `bitfilters_duckdb_bloom_filter_create`.",
+    "relatedFunctions": [
+      "bitfilters_duckdb_bloom_filter_create",
+      "bitfilters_duckdb_hash"
+    ]
+  },
+  {
+    "name": "bitfilters_duckdb_hash",
+    "categories": [
+      "DuckDB Bloom Filters"
+    ],
+    "description": "Hash function compatible with DuckDB's internal Bloom filter probe layout. Use this rather than a generic hash when feeding values into the DuckDB-style Bloom filter functions.",
+    "relatedFunctions": [
+      "bitfilters_duckdb_bloom_filter_create",
+      "bitfilters_duckdb_bloom_filter_probe"
+    ]
+  }
+]

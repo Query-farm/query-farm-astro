@@ -1,0 +1,70 @@
+## Validate documents against a schema
+
+```sql
+SELECT json_schema_validate('{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id":   {"type": "integer"},
+    "name": {"type": "string"}
+  },
+  "required": ["id"]
+}', {'id': 5}) AS valid;
+-- TRUE
+```
+
+For a real workload — point it at a column of JSON and aggregate:
+
+```sql
+SELECT
+  COUNT(*)                                                   AS total,
+  COUNT(*) FILTER (WHERE json_schema_validate(:schema, payload)) AS valid,
+  COUNT(*) FILTER (WHERE NOT json_schema_validate(:schema, payload)) AS invalid
+FROM events;
+```
+
+## Lint the schema itself
+
+Before deploying a schema to production, verify it's well-formed:
+
+```sql
+SELECT json_schema_validate_schema('{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": { "id": { "type": "integer" } }
+}') AS schema_ok;
+-- TRUE
+```
+
+This catches typos in the schema before they cause every validation to fail.
+
+## Apply defaults via JSON-Patch
+
+The killer feature for enrichment — given a schema with `default` values declared, compute the patch that fills them in for an incomplete document:
+
+```sql
+-- Schema declares default `id: 5` for missing field
+SELECT json_schema_patch('{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "id":   {"type": "integer", "default": 5},
+    "name": {"type": "string"}
+  }
+}', {'name': 'George'}) AS patch;
+-- [{"op":"add","path":"/id","value":5}]
+```
+
+Apply the patch with DuckDB's JSON merge / replace functions to produce the enriched document. In an ETL pipeline this is how you go from "incoming partial JSON" to "fully populated record" without case-by-case enrichment code.
+
+## Quality-gate filter
+
+Reject inputs that don't pass the contract right at the ingest layer:
+
+```sql
+INSERT INTO events_clean
+SELECT * FROM events_raw
+WHERE json_schema_validate(:event_schema, payload);
+```
+
+The non-conforming rows can be tee'd into a quarantine table for manual review.

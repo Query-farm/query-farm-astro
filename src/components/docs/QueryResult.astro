@@ -1,0 +1,79 @@
+---
+// Single canonical renderer for "result of a SQL query" — used by function
+// example outputs, cookbook MDX, and anywhere else a result is shown.
+type Cell = string | number | boolean | null | undefined;
+type Column = string | { name: string; align?: 'left' | 'right' | 'center' };
+
+interface Props {
+  /** Tabular result. */
+  columns?: Column[];
+  rows?: Cell[][];
+  /** Plain text result (fallback when no tabular data). */
+  text?: string;
+}
+
+const { columns, rows, text } = Astro.props;
+const cols = (columns ?? []).map((c) =>
+  typeof c === 'string' ? { name: c, align: 'left' as const } : { align: 'left' as const, ...c },
+);
+
+const formatCell = (cell: Cell): string => {
+  if (cell === null || cell === undefined) return '';
+  if (typeof cell === 'boolean') return cell ? 'true' : 'false';
+  return String(cell);
+};
+---
+
+<div class="not-prose my-4">
+  <div class="flex items-center gap-2 mb-2">
+    <svg class="w-4 h-4 text-soil-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+        d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+    </svg>
+    <p class="text-xs font-semibold text-soil-600 uppercase tracking-wide">Output</p>
+  </div>
+  {cols.length > 0 && rows ? (
+    <div class="bg-white rounded border border-soil-200 overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead>
+          <tr class="bg-soil-50 border-b border-soil-200">
+            {cols.map((col) => {
+              const alignClass = col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left';
+              return (
+                <th class={`px-3 py-2 ${alignClass} font-semibold text-soil-900 font-mono`}>
+                  {col.name}
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr class={rowIndex % 2 === 0 ? 'bg-white' : 'bg-soil-50'}>
+              {row.map((cell, cellIndex) => {
+                const col = cols[cellIndex];
+                const alignClass = col?.align === 'right' ? 'text-right' : col?.align === 'center' ? 'text-center' : 'text-left';
+                const text = formatCell(cell);
+                // Multi-line VARCHAR results (e.g. tp_qr's QR code grid) need
+                // newline preservation. Render as a <pre> so newlines and
+                // alignment-sensitive Unicode block characters render right.
+                const isMultiline = text.includes('\n');
+                return (
+                  <td class={`px-3 py-2 ${alignClass} text-soil-800 font-mono border-t border-soil-200`}>
+                    {isMultiline
+                      ? <pre class="whitespace-pre leading-tight">{text}</pre>
+                      : text}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : text !== undefined ? (
+    <div class="bg-white rounded px-3 py-2 font-mono text-xs text-soil-800 border border-soil-200 overflow-x-auto">
+      <pre class="whitespace-pre">{text}</pre>
+    </div>
+  ) : null}
+</div>

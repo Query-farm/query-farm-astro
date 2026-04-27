@@ -1,0 +1,59 @@
+## Six-field cron expressions
+
+```
+┌────────── second  (0–59)
+│ ┌──────── minute  (0–59)
+│ │ ┌────── hour    (0–23)
+│ │ │ ┌──── day of month (1–31)
+│ │ │ │ ┌── month   (1–12)
+│ │ │ │ │ ┌ day of week (0–6, Sun..Sat, or MON-SUN)
+* * * * * *
+```
+
+Special characters: `*` (any), `?` (no specific value, used for day-of-month/day-of-week), `,` (list), `-` (range), `/` (step).
+
+## Common patterns
+
+```
+0 0 * * * *       Top of every hour
+0 */15 * * * *    Every 15 minutes
+0 0 0 * * *       Once per day at midnight
+0 0 12 ? * MON-FRI  Weekdays at noon
+0 0 0 1 * ?       First day of every month
+```
+
+## Schedule a job
+
+```sql
+-- Refresh a materialized view every 5 minutes
+SELECT cron('REFRESH ALL', '0 */5 * * * *');
+
+-- Hourly cleanup of stale rows
+SELECT cron('DELETE FROM events WHERE ts < now() - INTERVAL 7 DAY',
+            '0 0 * * * *');
+
+-- Every weekday at 7:00 AM
+SELECT cron('CALL daily_metrics_export()', '0 0 7 ? * MON-FRI');
+```
+
+`cron(...)` returns a `job_id` like `task_0` you can use to manage the job later.
+
+## Inspect
+
+```sql
+SELECT * FROM cron_jobs();
+```
+
+Columns: `job_id`, `query`, `schedule`, `next_run`, `status`, `last_run`, `last_result`.
+
+## Cancel
+
+```sql
+SELECT cron_delete('task_0');
+```
+
+## Important caveats
+
+- **Jobs run only while the DuckDB process is alive.** When the process exits, schedules are forgotten. For restart-safe scheduling, drive cron from an external orchestrator (systemd timers, cron itself, k8s CronJob) and have *that* invoke DuckDB.
+- **Single-process scope.** Two DuckDB processes don't coordinate; both will run their own jobs.
+- **The query body is just SQL.** It runs in the same DB connection as the scheduler — same access rights, same database.

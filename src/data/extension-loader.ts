@@ -1,67 +1,117 @@
 import type { ExtensionData, ExtensionMetadata } from './extension-types';
+import { ExtensionDataSchema } from './schemas';
+import { mergeExtensionTree, type ExtensionTree } from './extension-merge';
 import { getExtensionById } from './extensions';
 
-/**
- * Extension registry mapping extension IDs to their data modules.
- * Add new extensions here as they get detailed data files.
- */
-const extensionDataRegistry: Record<string, () => Promise<{ default: ExtensionData }>> = {
-  example: () => import('./extensions/example/extension'),
-  // Future extensions:
-  // 'postgres-connector': () => import('./extensions/postgres-connector/extension'),
-  // 'mysql-connector': () => import('./extensions/mysql-connector/extension'),
-};
+// Eagerly load every JSON file under src/data/extensions/<slug>/{generated,augment}/.
+// File presence drives availability — no per-extension boilerplate.
+const generatedFiles = import.meta.glob<unknown>(
+  './extensions/*/generated/*.json',
+  { eager: true, import: 'default' },
+);
+const augmentFiles = import.meta.glob<unknown>(
+  './extensions/*/augment/*.json',
+  { eager: true, import: 'default' },
+);
+const technicalDetailsModules = import.meta.glob<{ Content: any }>(
+  './extensions/*/technical-details.mdx',
+);
+const cookbookModules = import.meta.glob<{ Content: any }>(
+  './extensions/*/cookbook.mdx',
+);
 
-/**
- * Extension MDX registry mapping extension IDs to their MDX content modules.
- * Add new extensions here when they have technical details MDX files.
- */
-const extensionMdxRegistry: Record<string, () => Promise<{ default: any; Content: any }>> = {
-  example: () => import('./extensions/example/technical-details.mdx'),
-  // Future extensions:
-  // 'hashfunctions': () => import('./extensions/hashfunctions/technical-details.mdx'),
-};
+interface ParsedPath { slug: string; tree: 'generated' | 'augment'; key: string }
 
-/**
- * Cookbook MDX registry mapping extension IDs to their cookbook content modules.
- * Add new extensions here when they have cookbook MDX files.
- */
-const cookbookMdxRegistry: Record<string, () => Promise<{ default: any; Content: any }>> = {
-  example: () => import('./extensions/example/cookbook.mdx'),
-  // Future extensions:
-  // 'hashfunctions': () => import('./extensions/hashfunctions/cookbook.mdx'),
-};
-
-/**
- * Loads detailed extension data for a given extension ID.
- * Returns null if no detailed data exists (only basic metadata available).
- */
-export async function loadExtensionData(extensionId: string): Promise<ExtensionData | null> {
-  const loader = extensionDataRegistry[extensionId];
-
-  if (!loader) {
-    return null;
-  }
-
-  try {
-    const module = await loader();
-    return module.default;
-  } catch (error) {
-    console.error(`Failed to load extension data for "${extensionId}":`, error);
-    return null;
-  }
+function parsePath(path: string): ParsedPath | null {
+  const m = path.match(/\.\/extensions\/([^/]+)\/(generated|augment)\/([^/]+)\.json$/);
+  if (!m) return null;
+  return { slug: m[1], tree: m[2] as 'generated' | 'augment', key: m[3] };
 }
 
-/**
- * Creates a minimal ExtensionData object from basic extension metadata.
- * Used as fallback when detailed data doesn't exist.
- */
+// JSON files are named with kebab-case; ExtensionTree fields are camelCase.
+const FILE_KEY_TO_FIELD: Record<string, string> = {
+  'metadata': 'metadata',
+  'functions': 'functions',
+  'pragmas': 'pragmas',
+  'secrets': 'secrets',
+  'macros': 'macros',
+  'filesystems': 'filesystems',
+  'storage-extensions': 'storageExtensions',
+  'log-types': 'logTypes',
+  'log-storage-types': 'logStorageTypes',
+  'technical-overview': 'technicalOverview',
+  'pricing': 'pricing',
+  'types': 'types',
+  'views': 'views',
+  'categories': 'categoryDescriptions',
+  'compatibility': 'compatibility',
+  'usage': 'usage',
+};
+
+function buildExtensionTrees(): Record<string, ExtensionTree> {
+  const trees: Record<string, ExtensionTree> = {};
+  const ensure = (slug: string): ExtensionTree => {
+    if (!trees[slug]) {
+      trees[slug] = { generated: {}, augment: { metadata: undefined as unknown as ExtensionMetadata } };
+    }
+    return trees[slug];
+  };
+
+  for (const [path, data] of Object.entries({ ...generatedFiles, ...augmentFiles })) {
+    const parsed = parsePath(path);
+    if (!parsed) continue;
+    const field = FILE_KEY_TO_FIELD[parsed.key];
+    if (!field) continue;
+    const tree = ensure(parsed.slug);
+    (tree[parsed.tree] as Record<string, unknown>)[field] = data;
+  }
+  return trees;
+}
+
+const extensionTrees = buildExtensionTrees();
+
+function slugFromPath(path: string): string {
+  const m = path.match(/\.\/extensions\/([^/]+)\//);
+  if (!m) throw new Error(`Cannot derive slug from path: ${path}`);
+  return m[1];
+}
+
+function buildSlugMap<T>(modules: Record<string, () => Promise<T>>): Record<string, () => Promise<T>> {
+  const out: Record<string, () => Promise<T>> = {};
+  for (const [path, loader] of Object.entries(modules)) {
+    out[slugFromPath(path)] = loader;
+  }
+  return out;
+}
+
+const extensionMdxRegistry = buildSlugMap(technicalDetailsModules);
+const cookbookMdxRegistry = buildSlugMap(cookbookModules);
+
+export async function loadExtensionData(extensionId: string): Promise<ExtensionData | null> {
+  const tree = extensionTrees[extensionId];
+  if (!tree || !tree.augment.metadata) return null;
+
+  const merged = mergeExtensionTree(tree);
+  const result = ExtensionDataSchema.safeParse(merged);
+  if (!result.success) {
+    // Hard-fail. A schema mismatch silently dropping content (entire function
+    // lists vanishing because one secret had a missing field) is much worse
+    // than a build error pointing at the offending field.
+    const issues = result.error.issues
+      .map((i) => `  - [${i.path.join('.') || '<root>'}]: ${i.message}`)
+      .join('\n');
+    throw new Error(
+      `Invalid ExtensionData for "${extensionId}":\n${issues}\n` +
+      `Fix the schema, the augment files, or the diff-tool output. ` +
+      `Don't silently render partial data.`
+    );
+  }
+  return result.data;
+}
+
 export function createMinimalExtensionData(extensionId: string): ExtensionData | null {
   const extension = getExtensionById(extensionId);
-
-  if (!extension) {
-    return null;
-  }
+  if (!extension) return null;
 
   const metadata: ExtensionMetadata = {
     name: extension.id,
@@ -71,54 +121,29 @@ export function createMinimalExtensionData(extensionId: string): ExtensionData |
     githubUrl: extension.githubUrl || '',
     cta: {
       title: `Start Using ${extension.name}`,
-      description: `Install the ${extension.name} extension and explore its capabilities.`
-    }
+      description: `Install the ${extension.name} extension and explore its capabilities.`,
+    },
   };
-
   return { metadata };
 }
 
-/**
- * Gets extension data with automatic fallback to minimal data.
- * Returns null only if extension ID doesn't exist in extensions.ts.
- */
 export async function getExtensionData(extensionId: string): Promise<ExtensionData | null> {
-  // Try to load detailed data first
   const detailedData = await loadExtensionData(extensionId);
-
-  if (detailedData) {
-    return detailedData;
-  }
-
-  // Fallback to minimal data from extensions.ts
+  if (detailedData) return detailedData;
   return createMinimalExtensionData(extensionId);
 }
 
-/**
- * Checks if an extension has detailed data available.
- */
 export function hasDetailedData(extensionId: string): boolean {
-  return extensionId in extensionDataRegistry;
+  return extensionId in extensionTrees;
 }
 
-/**
- * Gets list of all extension IDs that have detailed data.
- */
 export function getExtensionIdsWithDetailedData(): string[] {
-  return Object.keys(extensionDataRegistry);
+  return Object.keys(extensionTrees);
 }
 
-/**
- * Loads MDX content component for a given extension ID.
- * Returns null if no MDX content exists for the extension.
- */
 export async function loadExtensionMdx(extensionId: string): Promise<{ Content: any } | null> {
   const loader = extensionMdxRegistry[extensionId];
-
-  if (!loader) {
-    return null;
-  }
-
+  if (!loader) return null;
   try {
     const module = await loader();
     return { Content: module.Content };
@@ -128,24 +153,13 @@ export async function loadExtensionMdx(extensionId: string): Promise<{ Content: 
   }
 }
 
-/**
- * Checks if an extension has MDX content available.
- */
 export function hasExtensionMdx(extensionId: string): boolean {
   return extensionId in extensionMdxRegistry;
 }
 
-/**
- * Loads Cookbook MDX content component for a given extension ID.
- * Returns null if no cookbook content exists for the extension.
- */
 export async function loadCookbookMdx(extensionId: string): Promise<{ Content: any } | null> {
   const loader = cookbookMdxRegistry[extensionId];
-
-  if (!loader) {
-    return null;
-  }
-
+  if (!loader) return null;
   try {
     const module = await loader();
     return { Content: module.Content };
@@ -155,9 +169,6 @@ export async function loadCookbookMdx(extensionId: string): Promise<{ Content: a
   }
 }
 
-/**
- * Checks if an extension has cookbook content available.
- */
 export function hasCookbookMdx(extensionId: string): boolean {
   return extensionId in cookbookMdxRegistry;
 }

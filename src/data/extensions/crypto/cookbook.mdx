@@ -1,0 +1,105 @@
+## Hash a Column
+
+`crypto_hash` returns a `BLOB`. For human-readable output, hex-encode it:
+
+```sql
+SELECT id, lower(to_hex(crypto_hash('sha2-256', email))) AS email_hash
+FROM users;
+```
+
+Different DuckDB types of the same numeric value hash differently — `42::INTEGER`, `42::BIGINT`, and `'42'::VARCHAR` all produce distinct digests. That's intentional; it keeps the hash from collapsing across logically distinct values.
+
+## Sign a Message
+
+HMAC combines a secret key with a message under a hash algorithm:
+
+```sql
+SELECT lower(to_hex(crypto_hmac('sha2-256', :secret, request_body))) AS signature
+FROM api_requests;
+```
+
+Compare signatures byte-for-byte (or in DuckDB, `=`) to verify authenticity. The verification side performs the same HMAC and rejects on mismatch.
+
+## Generate a Salt
+
+```sql
+-- 16-byte random salt for password hashing
+SELECT crypto_random_bytes(16) AS salt;
+```
+
+The bytes come from OpenSSL's CSPRNG — suitable for cryptographic use. Length is unbounded up to 4 GB − 1.
+
+## Dataset Checksum
+
+`crypto_hash_agg` is the aggregate counterpart of `crypto_hash`. Hashing all values in a column **in a specified order** produces a single deterministic digest you can use for change detection or to verify a partition matches a known-good baseline:
+
+```sql
+-- Whole-table checksum
+SELECT lower(to_hex(crypto_hash_agg('sha2-256', email ORDER BY email)))
+FROM users;
+```
+
+```sql
+-- Per-partition checksum — matches across systems if rows are identical
+SELECT day,
+       lower(to_hex(crypto_hash_agg('sha2-256', payload ORDER BY id))) AS day_hash
+FROM events
+GROUP BY day
+ORDER BY day;
+```
+
+The `ORDER BY` is required — without it, hashes would be non-deterministic across query plans.
+
+## Tamper-Evident Audit Log
+
+Build a hash chain by hashing each row's content together with the previous row's hash:
+
+```sql
+WITH chained AS (
+  SELECT
+    id,
+    action,
+    user_id,
+    created_at,
+    LAG(hash) OVER (ORDER BY created_at) AS prev_hash,
+    crypto_hash('sha2-256',
+      [CAST(id AS VARCHAR), action, CAST(user_id AS VARCHAR), CAST(created_at AS VARCHAR),
+       COALESCE(LAG(hash) OVER (ORDER BY created_at)::VARCHAR, '')]
+    ) AS hash
+  FROM audit_log
+)
+SELECT * FROM chained ORDER BY created_at;
+```
+
+Verify the chain later by recomputing each hash and comparing — any tampering breaks the chain at the first altered row.
+
+## Stable IDs from Multiple Columns
+
+Generate a deterministic ID from any combination of columns:
+
+```sql
+SELECT
+  customer_email,
+  product_sku,
+  purchase_date,
+  -- stable surrogate key, idempotent across re-runs
+  lower(to_hex(crypto_hash('sha2-256',
+    [customer_email, product_sku, CAST(purchase_date AS VARCHAR)]
+  ))) AS purchase_id
+FROM raw_purchases;
+```
+
+Pair with [`hashfuncs`](/products/extensions/hashfuncs) when you want the same property but cheaper (non-cryptographic) for partitioning, sharding, or cache keys.
+
+## Algorithm Reference
+
+| Algorithm     | Output | Notes                                        |
+|---------------|--------|----------------------------------------------|
+| `blake3`      | 32 B   | Modern, fast — recommended default           |
+| `blake2b-512` | 64 B   | Strong all-rounder, no BLAKE3 hardware needed|
+| `sha2-256`    | 32 B   | Industry standard SHA-2                      |
+| `sha2-512`    | 64 B   | Larger SHA-2 output                          |
+| `sha3-256`    | 32 B   | Keccak-based, post-SHA-2 standard            |
+| `keccak256`   | 32 B   | Original Keccak (mapped to SHA3-256 here)    |
+| `md5`         | 16 B   | Legacy — fast but **not** cryptographically secure |
+| `sha1`        | 20 B   | Legacy — **not** cryptographically secure    |

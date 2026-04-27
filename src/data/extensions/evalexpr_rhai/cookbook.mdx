@@ -1,0 +1,82 @@
+## Why Rhai?
+
+[Rhai](https://rhai.rs) is a small, fast scripting language designed to embed inside Rust programs. It feels like a cross between Rust and JavaScript with dynamic typing. Compared to other scripting options:
+
+- Smaller and faster startup than [`quickjs`](/products/extensions/quickjs).
+- Stricter syntax than [`minijinja`](/products/extensions/minijinja) — Rhai is a real programming language, not a template engine.
+- Strong sandboxing — no host filesystem / process / network access from inside scripts.
+
+Use it when SQL alone is too constrained but a full UDF would be overkill: dynamic rules pulled from a config table, conditional branching that doesn't fit in CASE, custom math that doesn't deserve its own DuckDB function.
+
+## Result shape
+
+Every call returns a JSON struct: `{ok: ..., err: ...}`. On success, read `.ok`; on failure, read `.err` and the row keeps moving.
+
+```sql
+SELECT evalexpr_rhai('5 + 6').ok;        -- 11
+SELECT evalexpr_rhai('1 / 0').err;       -- 'Runtime error: ...'
+```
+
+This shape means scripting failures don't crash a query — they just produce a NULL `ok`.
+
+## Per-row evaluation with context
+
+The second argument is a JSON object that becomes available inside the script as `context.<field>`. Everything DuckDB can serialize to JSON works:
+
+```sql
+-- Boolean rule per row
+SELECT name,
+       evalexpr_rhai('context.salary > 100000', { 'salary': salary }).ok AS high_earner
+FROM employees;
+
+-- Arithmetic on row data
+SELECT id,
+       evalexpr_rhai('context.qty * context.price * 1.0875', { 'qty': qty, 'price': price }).ok::DECIMAL AS taxed_total
+FROM orders;
+```
+
+## Rules from a column (the big one)
+
+Membership rules, scoring rules, dynamic predicates — store them as text and evaluate at query time. Admins can edit the rules without redeploying:
+
+```sql
+CREATE TABLE group_membership(group_name TEXT, logic TEXT);
+INSERT INTO group_membership VALUES
+  ('managers',    'context.name == "George" || context.name == "Rusty"'),
+  ('shift_leads', 'context.name == "John"'),
+  ('employees',   'context.name == "Alex"');
+
+SELECT DISTINCT group_name
+FROM group_membership
+WHERE evalexpr_rhai(logic, { 'name': 'John' }).ok = TRUE;
+-- 'shift_leads'
+```
+
+## Full scripts and functions
+
+For anything beyond a one-liner, you can pass a multi-line script with function definitions. Classic Collatz example:
+
+```sql
+CREATE MACRO collatz_length(n) AS
+evalexpr_rhai('
+  fn collatz(n) {
+    let count = 0;
+    while n > 1 {
+      count += 1;
+      n = if n % 2 == 0 { n / 2 } else { n * 3 + 1 };
+    }
+    count
+  }
+  collatz(context.n)
+', { 'n': n });
+
+SELECT range AS n,
+       collatz_length(range).ok::INTEGER AS length
+FROM range(1000, 1005);
+```
+
+## Performance
+
+Constant expressions get compiled and cached the first time DuckDB sees them, so a script in a `WHERE` clause doesn't re-parse per row. Expect ~1–10 μs per call after cache warmup — fast for an embedded interpreter.
+
+For hot OLAP paths over millions of rows, prefer native SQL. Rhai is for moderate volumes where flexibility wins over peak throughput.

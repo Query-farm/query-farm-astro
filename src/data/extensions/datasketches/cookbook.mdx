@@ -1,0 +1,125 @@
+import QueryResult from '../../../components/docs/QueryResult.astro';
+
+## Approximate Quantiles with TDigest
+
+TDigest is the right pick for tail-heavy distributions where p99 / p99.9 accuracy matters more than median accuracy.
+
+```sql
+CREATE TABLE readings(temp INTEGER);
+INSERT INTO readings(temp) SELECT unnest(generate_series(1, 10));
+
+-- Get the rank of value 5 within the aggregated sketch
+SELECT datasketch_tdigest_rank(datasketch_tdigest(10, temp), 5) AS rank_of_5
+FROM readings;
+```
+
+<QueryResult columns={["rank_of_5"]} rows={[[0.45]]} />
+
+After skewing the distribution by adding more high values, the rank of 5 drops:
+
+```sql
+INSERT INTO readings(temp) VALUES (10), (10), (10), (10);
+
+SELECT datasketch_tdigest_rank(datasketch_tdigest(10, temp), 5) AS rank_of_5
+FROM readings;
+```
+
+<QueryResult columns={["rank_of_5"]} rows={[["0.32142857142857145"]]} />
+
+Compute a CDF over multiple split points in one call:
+
+```sql
+SELECT datasketch_tdigest_cdf(datasketch_tdigest(10, temp), [1, 5, 9]) AS cdf
+FROM readings;
+```
+
+<QueryResult columns={["cdf"]} rows={[["[0.0357, 0.3214, 0.6071, 1.0]"]]} />
+
+## p50 / p95 / p99 with KLL
+
+KLL is the recommended general-purpose quantile sketch: best balance of accuracy, speed, and size.
+
+```sql
+WITH agg AS (
+  SELECT datasketch_kll(200, latency_ms) AS sketch FROM requests
+)
+SELECT
+  datasketch_kll_quantile(sketch, 0.50) AS p50,
+  datasketch_kll_quantile(sketch, 0.95) AS p95,
+  datasketch_kll_quantile(sketch, 0.99) AS p99
+FROM agg;
+```
+
+The `200` is the *K* parameter — higher K means better accuracy at the cost of memory.
+
+## Distinct Counts with HLL
+
+HyperLogLog estimates cardinality with very small memory. The `lg_k = 12` argument (4096 buckets) is a common production setting.
+
+```sql
+CREATE TABLE items(id INTEGER);
+INSERT INTO items(id) SELECT unnest(generate_series(1, 100000));
+INSERT INTO items(id) SELECT unnest(generate_series(1, 100000));  -- duplicates
+
+SELECT datasketch_hll_estimate(datasketch_hll(8, id)) AS estimated_unique
+FROM items;
+```
+
+<QueryResult columns={["estimated_unique"]} rows={[["99156.23"]]} />
+
+The actual number is 100,000 — within ~1% on a tiny `lg_k = 8` sketch.
+
+## Persist and Merge Sketches
+
+Sketches serialize to BLOBs that can be stored, shipped between processes, and merged later without rescanning the source data:
+
+```sql
+-- Build per-day sketches
+CREATE TABLE daily_uniques (
+  day DATE,
+  hll_blob sketch_hll
+);
+
+INSERT INTO daily_uniques
+SELECT DATE_TRUNC('day', ts) AS day,
+       datasketch_hll(12, user_id) AS hll_blob
+FROM events
+GROUP BY 1;
+
+-- Merge any subset of days into a rolling estimate, no re-scan needed
+SELECT datasketch_hll_estimate(
+         datasketch_hll_union(12, hll_blob)
+       ) AS uniques_last_7d
+FROM daily_uniques
+WHERE day >= CURRENT_DATE - 7;
+```
+
+The same pattern works for [`datasketch_cpc`](#datasketch_cpc) (more compact, slower) and [`datasketch_theta`](#datasketch_theta) (supports set intersection / difference).
+
+## Set Operations with Theta Sketches
+
+Theta is the only distinct-count sketch family that supports intersection and difference:
+
+```sql
+WITH a AS (SELECT datasketch_theta(12, user_id) AS s FROM events_jan),
+     b AS (SELECT datasketch_theta(12, user_id) AS s FROM events_feb)
+SELECT
+  datasketch_theta_estimate(datasketch_theta_union(12, a.s, b.s))      AS jan_or_feb,
+  datasketch_theta_estimate(datasketch_theta_intersect(12, a.s, b.s))  AS jan_and_feb,
+  datasketch_theta_estimate(datasketch_theta_a_not_b(a.s, b.s))        AS jan_only
+FROM a, b;
+```
+
+## Heavy Hitters with Frequent Items
+
+Find the top items in a high-cardinality stream, with confidence bounds on each estimate:
+
+```sql
+SELECT datasketch_frequent_items_get_frequent(
+         datasketch_frequent_items(1024, country_code),
+         /* error_type = */ 'NO_FALSE_POSITIVES'
+       ) AS heavy_hitters
+FROM page_views;
+```
+
+The result is a list of structs containing the item, lower bound, upper bound, and estimate.

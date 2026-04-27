@@ -1,0 +1,107 @@
+## How it works
+
+The extension intercepts DuckDB's internal events — queries, transactions, connections — and writes one JSON object per event to the **stdin of an external program**. The program lives outside DuckDB and can do whatever it wants with the stream: write to a file, ship to Kafka, post to an HTTP collector, hand to a SIEM.
+
+There's no SQL to call. Configuration is via PRAGMAs.
+
+## Setup
+
+```sql
+LOAD events;
+
+-- Where to send events
+SET events_destination = '/usr/local/bin/event-handler.py';
+
+-- Which events to capture (defaults to ['query_begin', 'query_end'])
+SET events_types = ['query_begin', 'query_end'];
+
+-- Optional: tag every event with a session name
+SET events_session_name = 'analytics-replica';
+
+-- Optional: fire-and-forget delivery (don't block queries)
+SET events_async = TRUE;
+```
+
+## Audit logging
+
+Track everything that runs against the database:
+
+```sql
+SET events_destination = '/usr/local/bin/log-to-file.sh';
+SET events_types = ['query_begin', 'query_end'];
+
+-- All queries now appear in the log handler's stdin
+SELECT * FROM sensitive_data;
+```
+
+A simple handler:
+
+```bash
+#!/usr/bin/env bash
+# log-to-file.sh — append every event line to a daily log
+exec >> "/var/log/duckdb/events-$(date +%F).jsonl"
+cat
+```
+
+## Error monitoring
+
+`query_end` includes error fields when a query fails. Pipe into your alerting system:
+
+```sql
+SET events_destination = '/usr/local/bin/error-alerter.py';
+SET events_types = ['query_end'];
+
+-- Failed queries produce events with has_error=true
+SELECT * FROM nonexistent_table;
+```
+
+```python
+# error-alerter.py — page on query errors
+import json, sys, urllib.request
+for line in sys.stdin:
+    e = json.loads(line)
+    if e.get('event') == 'query_end' and e.get('has_error'):
+        urllib.request.urlopen('https://alerts.example.com/page', data=line.encode())
+```
+
+## Transaction lifecycle
+
+```sql
+SET events_destination = '/usr/local/bin/txn-tracker.py';
+SET events_types = ['transaction_begin','transaction_commit','transaction_rollback'];
+
+BEGIN;
+INSERT INTO orders VALUES (1, 'widget', 99.99);
+COMMIT;
+-- Two events: one begin, one commit, both with the same transaction_id
+```
+
+## Async vs sync
+
+- **Sync (default)** — DuckDB writes the event, waits for the handler to acknowledge by reading the line, then returns from the originating query. Reliable but each event adds latency.
+- **`SET events_async = TRUE`** — fire and forget. DuckDB won't block on the handler. If the handler is slow or dies, events are dropped silently. Use for production high-throughput workloads where dropped audit events are tolerable.
+
+## Event schema
+
+Every event has these common fields:
+
+```json
+{
+  "event": "query_end",
+  "timestamp": "2026-01-12T15:30:45.123Z",
+  "database_path": "/data/analytics.duckdb",
+  "session_name": "my-session",
+  "connection_id": 1,
+  "process_id": 12345,
+  "query_id": 42,
+  "has_error": false
+}
+```
+
+Type-specific fields (query text, error message, transaction id, etc.) are added per event type. See the [EVENTS.md schema reference](https://github.com/Query-farm/events/blob/main/EVENTS.md) in the upstream repo.
+
+## Caveats
+
+- **No persistent state** — restart DuckDB and the configuration is gone. Set the PRAGMAs again at session start (or wrap them in a profile).
+- **One handler per session.** Use a fan-out program (e.g. `tee | jq | ...`) if you want multiple consumers.
+- **Sync mode blocks queries.** If your handler hangs, queries hang. Use timeouts in the handler or switch to async.

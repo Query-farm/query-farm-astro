@@ -1,429 +1,126 @@
+// The list of extensions is auto-discovered from
+// src/data/extensions/<slug>/augment/metadata.json. To add a new extension,
+// create that file (or run extension-diff.py --init from the extension repo).
+import type { ExtensionMetadata } from './extension-types';
+
+export type ExtensionCategory =
+  | 'connectors' | 'transformation' | 'analytics' | 'performance' | 'devtools' | 'quality';
+export type ExtensionStatus = 'stable' | 'beta' | 'experimental';
+
 export interface Extension {
   id: string;
   name: string;
   description: string;
-  category: 'connectors' | 'transformation' | 'analytics' | 'performance' | 'devtools' | 'quality';
-  status: 'stable' | 'beta' | 'experimental';
+  category: ExtensionCategory;
+  status: ExtensionStatus;
   icon?: string;
   githubUrl?: string;
   docsUrl?: string;
   features?: string[];
+  /** Usage count from generated/usage.json (Cloudflare AE snapshot, last 30d). */
+  usageCount?: number;
 }
 
-export const extensions: Extension[] = [
-  // Data Connectors (5)
-  {
-    id: 'postgres-connector',
-    name: 'PostgreSQL Connect',
-    description: 'Seamless bidirectional integration with PostgreSQL databases. Read and write data with optimized connection pooling and schema inference.',
-    category: 'connectors',
-    status: 'stable',
-    icon: '🐘',
-    githubUrl: 'https://github.com/queryfarm/duckdb-postgres',
-    docsUrl: 'https://docs.query.farm/extensions/postgres',
-    features: [
-      'Bidirectional data sync',
-      'Automatic schema inference',
-      'Connection pooling',
-      'Transaction support'
-    ]
-  },
-  {
-    id: 'mysql-connector',
-    name: 'MySQL Connect',
-    description: 'High-performance MySQL integration with support for complex queries and data migrations.',
-    category: 'connectors',
-    status: 'stable',
-    icon: '🐬',
-    githubUrl: 'https://github.com/queryfarm/duckdb-mysql',
-    features: [
-      'Fast bulk imports',
-      'Incremental sync',
-      'Custom type mappings'
-    ]
-  },
-  {
-    id: 's3-connector',
-    name: 'S3 Data Lake',
-    description: 'Direct querying of S3 data lakes with support for Parquet, CSV, and JSON formats.',
-    category: 'connectors',
-    status: 'stable',
-    icon: '☁️',
-    githubUrl: 'https://github.com/queryfarm/duckdb-s3',
-    features: [
-      'Zero-copy reads',
-      'Partition pruning',
-      'Multi-format support'
-    ]
-  },
-  {
-    id: 'kafka-connector',
-    name: 'Kafka Streams',
-    description: 'Real-time data ingestion from Apache Kafka topics with schema registry support.',
-    category: 'connectors',
-    status: 'beta',
-    icon: '📨',
-    githubUrl: 'https://github.com/queryfarm/duckdb-kafka',
-    features: [
-      'Real-time ingestion',
-      'Schema registry integration',
-      'Offset management'
-    ]
-  },
-  {
-    id: 'api-connector',
-    name: 'REST API Connect',
-    description: 'Query REST APIs directly as tables with automatic pagination and authentication.',
-    category: 'connectors',
-    status: 'beta',
-    icon: '🌐',
-    githubUrl: 'https://github.com/queryfarm/duckdb-api',
-    features: [
-      'Auto pagination',
-      'OAuth support',
-      'Rate limiting'
-    ]
-  },
+const metadataModules = import.meta.glob<ExtensionMetadata>(
+  './extensions/*/augment/metadata.json',
+  { eager: true, import: 'default' },
+);
 
-  // Data Transformation (4)
-  {
-    id: 'json-transformer',
-    name: 'JSON Transform Pro',
-    description: 'Advanced JSON processing with path queries, flattening, and nested array handling.',
-    category: 'transformation',
-    status: 'stable',
-    icon: '📋',
-    githubUrl: 'https://github.com/queryfarm/duckdb-json',
-    features: [
-      'JSONPath queries',
-      'Auto-flattening',
-      'Schema validation'
-    ]
-  },
-  {
-    id: 'geo-transformer',
-    name: 'GeoSpatial Tools',
-    description: 'Comprehensive geospatial functions for location data analysis and transformation.',
-    category: 'transformation',
-    status: 'stable',
-    icon: '🗺️',
-    githubUrl: 'https://github.com/queryfarm/duckdb-geo',
-    features: [
-      'Distance calculations',
-      'Polygon operations',
-      'Coordinate transformations'
-    ]
-  },
-  {
-    id: 'time-series',
-    name: 'Time Series Toolkit',
-    description: 'Specialized functions for time series analysis, windowing, and forecasting.',
-    category: 'transformation',
-    status: 'stable',
-    icon: '📈',
-    githubUrl: 'https://github.com/queryfarm/duckdb-timeseries',
-    features: [
-      'Rolling windows',
-      'Resampling',
-      'Trend detection'
-    ]
-  },
-  {
-    id: 'text-processor',
-    name: 'Text Analytics',
-    description: 'Natural language processing functions including tokenization, stemming, and sentiment analysis.',
-    category: 'transformation',
-    status: 'beta',
-    icon: '📝',
-    githubUrl: 'https://github.com/queryfarm/duckdb-text',
-    features: [
-      'NLP tokenization',
-      'Sentiment scoring',
-      'Entity extraction'
-    ]
-  },
+const usageModules = import.meta.glob<{ count: number; period: string; asOf?: string }>(
+  './extensions/*/generated/usage.json',
+  { eager: true, import: 'default' },
+);
+const usageBySlug: Record<string, { count: number; period: string }> = {};
+for (const [path, data] of Object.entries(usageModules)) {
+  const m = path.match(/\.\/extensions\/([^/]+)\//);
+  if (m) usageBySlug[m[1]] = { count: data.count, period: data.period };
+}
 
-  // Analytics & ML (4)
-  {
-    id: 'ml-models',
-    name: 'ML Model Runner',
-    description: 'Execute machine learning models directly in SQL with support for scikit-learn and TensorFlow.',
-    category: 'analytics',
-    status: 'beta',
-    icon: '🤖',
-    githubUrl: 'https://github.com/queryfarm/duckdb-ml',
-    features: [
-      'In-database predictions',
-      'Model versioning',
-      'Batch inference'
-    ]
-  },
-  {
-    id: 'stats-advanced',
-    name: 'Advanced Statistics',
-    description: 'Statistical functions beyond standard SQL including hypothesis testing and distributions.',
-    category: 'analytics',
-    status: 'stable',
-    icon: '📊',
-    githubUrl: 'https://github.com/queryfarm/duckdb-stats',
-    features: [
-      'Hypothesis testing',
-      'Distribution fitting',
-      'Correlation analysis'
-    ]
-  },
-  {
-    id: 'graph-analytics',
-    name: 'Graph Analytics',
-    description: 'Graph algorithms and relationship analysis for connected data.',
-    category: 'analytics',
-    status: 'experimental',
-    icon: '🕸️',
-    githubUrl: 'https://github.com/queryfarm/duckdb-graph',
-    features: [
-      'Shortest path',
-      'Community detection',
-      'Centrality metrics'
-    ]
-  },
-  {
-    id: 'forecasting',
-    name: 'Forecasting Engine',
-    description: 'Time series forecasting with multiple algorithms including ARIMA and Prophet.',
-    category: 'analytics',
-    status: 'beta',
-    icon: '🔮',
-    githubUrl: 'https://github.com/queryfarm/duckdb-forecast',
-    features: [
-      'Multiple algorithms',
-      'Confidence intervals',
-      'Seasonality detection'
-    ]
-  },
+function slugFromPath(path: string): string {
+  const m = path.match(/\.\/extensions\/([^/]+)\//);
+  if (!m) throw new Error(`Cannot derive slug from ${path}`);
+  return m[1];
+}
 
-  // Performance & Optimization (3)
-  {
-    id: 'query-cache',
-    name: 'Smart Query Cache',
-    description: 'Intelligent query result caching with automatic invalidation and memory management.',
-    category: 'performance',
-    status: 'stable',
-    icon: '⚡',
-    githubUrl: 'https://github.com/queryfarm/duckdb-cache',
-    features: [
-      'Auto-invalidation',
-      'Memory limits',
-      'Hit rate tracking'
-    ]
-  },
-  {
-    id: 'parallel-processor',
-    name: 'Parallel Processing',
-    description: 'Enhanced parallel query execution with custom thread pool management.',
-    category: 'performance',
-    status: 'stable',
-    icon: '🚀',
-    githubUrl: 'https://github.com/queryfarm/duckdb-parallel',
-    features: [
-      'Thread pool control',
-      'Work stealing',
-      'NUMA awareness'
-    ]
-  },
-  {
-    id: 'compression-plus',
-    name: 'Compression Plus',
-    description: 'Advanced compression algorithms for reduced storage and faster I/O.',
-    category: 'performance',
-    status: 'beta',
-    icon: '🗜️',
-    githubUrl: 'https://github.com/queryfarm/duckdb-compression',
-    features: [
-      'Multiple algorithms',
-      'Auto-selection',
-      'Streaming compression'
-    ]
-  },
+function toListingEntry(slug: string, m: ExtensionMetadata): Extension {
+  if (!m.category) throw new Error(`metadata.json for "${slug}" missing required field: category`);
+  if (!m.status) throw new Error(`metadata.json for "${slug}" missing required field: status`);
+  return {
+    id: slug,
+    name: m.displayName,
+    description: m.description,
+    category: m.category as ExtensionCategory,
+    status: m.status as ExtensionStatus,
+    icon: m.icon,
+    githubUrl: m.githubUrl || undefined,
+    docsUrl: m.docsUrl,
+    features: m.features,
+    usageCount: m.usageStats?.count ?? usageBySlug[slug]?.count,
+  };
+}
 
-  // Developer Tools (2)
-  {
-    id: 'query-debugger',
-    name: 'Query Debugger',
-    description: 'Interactive query debugging with execution plan visualization and profiling.',
-    category: 'devtools',
-    status: 'stable',
-    icon: '🔍',
-    githubUrl: 'https://github.com/queryfarm/duckdb-debugger',
-    features: [
-      'Plan visualization',
-      'Step-by-step execution',
-      'Performance profiling'
-    ]
-  },
-  {
-    id: 'data-validator',
-    name: 'Schema Validator',
-    description: 'Comprehensive data validation and schema enforcement with custom rules.',
-    category: 'devtools',
-    status: 'stable',
-    icon: '✅',
-    githubUrl: 'https://github.com/queryfarm/duckdb-validator',
-    features: [
-      'Custom validation rules',
-      'Type checking',
-      'Constraint enforcement'
-    ]
-  },
+export const extensions: Extension[] = Object.entries(metadataModules)
+  .map(([path, m]) => toListingEntry(slugFromPath(path), m))
+  .sort((a, b) => a.name.localeCompare(b.name));
 
-  // Data Quality (2)
-  {
-    id: 'data-profiler',
-    name: 'Data Profiler',
-    description: 'Automated data profiling with statistics, patterns, and quality metrics.',
-    category: 'quality',
-    status: 'stable',
-    icon: '📏',
-    githubUrl: 'https://github.com/queryfarm/duckdb-profiler',
-    features: [
-      'Auto-profiling',
-      'Quality scoring',
-      'Anomaly detection'
-    ]
-  },
-  {
-    id: 'dedup-engine',
-    name: 'Deduplication Engine',
-    description: 'Intelligent duplicate detection and resolution with fuzzy matching.',
-    category: 'quality',
-    status: 'beta',
-    icon: '🔗',
-    githubUrl: 'https://github.com/queryfarm/duckdb-dedup',
-    features: [
-      'Fuzzy matching',
-      'Similarity scoring',
-      'Merge strategies'
-    ]
-  },
+// Public-catalog filter:
+//   - 'example' is a docs reference template, not a real installable extension.
+//   - Anything still carrying a "TODO: ..." description is a scaffold that hasn't
+//     been authored yet — don't advertise it.
+// Detail pages and internal lookups still see the full `extensions` set; the
+// listing page imports `publicExtensions` for what to show.
+const HIDDEN_FROM_LISTING = new Set(['example']);
+export const publicExtensions: Extension[] = extensions.filter(
+  (e) => !HIDDEN_FROM_LISTING.has(e.id) && !/^\s*TODO\b/i.test(e.description),
+);
 
-  // Example Extension (testbed for all features)
-  {
-    id: 'example',
-    name: 'Example Extension',
-    description: 'Example extension demonstrating all available extension features and documentation patterns.',
-    category: 'devtools',
-    status: 'stable',
-    icon: '📦',
-    githubUrl: 'https://github.com/queryfarm/duckdb-example',
-    docsUrl: 'https://docs.query.farm/extensions/example',
-    features: [
-      'Functions documentation',
-      'Macros documentation',
-      'Pragmas/Settings',
-      'Secrets management',
-      'Filesystems',
-      'Cookbook examples'
-    ]
-  },
-  {
-    id: 'bitfilters',
-    name: 'Bit Filters & Bloom',
-    description: 'High-performance probabilistic data structures including Bloom filters, HyperLogLog, and Count-Min Sketch for approximate computations.',
-    category: 'performance',
-    status: 'stable',
-    icon: '🎯',
-    githubUrl: 'https://github.com/queryfarm/duckdb-bitfilters',
-    docsUrl: 'https://docs.query.farm/extensions/bitfilters',
-    features: [
-      'Bloom filters for membership testing',
-      'HyperLogLog for cardinality estimation',
-      'Count-Min Sketch for frequency estimation',
-      'Bit arrays and operations',
-      'Space-efficient with tunable accuracy'
-    ]
-  },
-  {
-    id: 'minijinja',
-    name: 'MiniJinja Templates',
-    description: 'Powerful Jinja2-style templating engine for DuckDB. Generate dynamic SQL, format output, and transform data with expressive templates.',
-    category: 'transformation',
-    status: 'beta',
-    icon: '📝',
-    githubUrl: 'https://github.com/queryfarm/duckdb-minijinja',
-    docsUrl: 'https://docs.query.farm/extensions/minijinja',
-    features: [
-      'Jinja2-compatible syntax',
-      'Control flow (if/for/while)',
-      'Filters and functions',
-      'Template inheritance',
-      'Macro support',
-      'Auto-escaping for security'
-    ]
-  },
-  {
-    id: 'hashfunctions',
-    name: 'Hash Functions',
-    description: 'High-performance hashing functions including MurmurHash, CityHash, and xxHash for fast non-cryptographic hashing operations.',
-    category: 'performance',
-    status: 'stable',
-    icon: '#️⃣',
-    githubUrl: 'https://github.com/queryfarm/duckdb-hashfunctions',
-    docsUrl: 'https://docs.query.farm/extensions/hashfunctions',
-    features: [
-      'MurmurHash3 (32-bit and 128-bit)',
-      'CityHash family (64-bit and 128-bit)',
-      'xxHash (32-bit and 64-bit)',
-      'Optimized for hash table operations',
-      'Non-cryptographic but very fast',
-      'Collision-resistant hashing'
-    ]
-  }
-];
-
-export const getExtensionById = (id: string): Extension | undefined => {
-  return extensions.find(ext => ext.id === id);
-};
-
-export const getExtensionsByIds = (ids: string[]): Extension[] => {
-  return ids.map(id => getExtensionById(id)).filter(Boolean) as Extension[];
-};
-
-export const extensionsByCategory = () => {
-  return extensions.reduce((acc, ext) => {
-    if (!acc[ext.category]) acc[ext.category] = [];
-    acc[ext.category].push(ext);
+export const publicExtensionsByCategory = () =>
+  publicExtensions.reduce((acc, ext) => {
+    (acc[ext.category] ??= []).push(ext);
     return acc;
-  }, {} as Record<string, Extension[]>);
-};
+  }, {} as Record<ExtensionCategory, Extension[]>);
 
-export const categoryInfo = {
+export const getExtensionById = (id: string): Extension | undefined =>
+  extensions.find((e) => e.id === id);
+
+export const getExtensionsByIds = (ids: string[]): Extension[] =>
+  ids.map(getExtensionById).filter(Boolean) as Extension[];
+
+export const extensionsByCategory = () =>
+  extensions.reduce((acc, ext) => {
+    (acc[ext.category] ??= []).push(ext);
+    return acc;
+  }, {} as Record<ExtensionCategory, Extension[]>);
+
+export const categoryInfo: Record<ExtensionCategory, { title: string; description: string; icon: string }> = {
   connectors: {
     title: 'Data Connectors',
     description: 'Connect DuckDB to various data sources and destinations',
-    icon: '🔌'
+    icon: '🔌',
   },
   transformation: {
     title: 'Data Transformation',
     description: 'Transform and process data with specialized functions',
-    icon: '🔄'
+    icon: '🔄',
   },
   analytics: {
     title: 'Analytics & ML',
     description: 'Advanced analytics and machine learning capabilities',
-    icon: '🧠'
+    icon: '🧠',
   },
   performance: {
     title: 'Performance & Optimization',
     description: 'Enhance query performance and resource utilization',
-    icon: '⚡'
+    icon: '⚡',
   },
   devtools: {
     title: 'Developer Tools',
     description: 'Tools for debugging, validation, and development',
-    icon: '🛠️'
+    icon: '🛠️',
   },
   quality: {
     title: 'Data Quality',
     description: 'Ensure data quality and consistency',
-    icon: '✨'
-  }
+    icon: '✨',
+  },
 };

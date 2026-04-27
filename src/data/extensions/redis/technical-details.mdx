@@ -1,0 +1,42 @@
+## What this extension is for
+
+Redis is the most common in-memory cache and quick-lookup store. This extension lets you read and write a Redis server directly from DuckDB SQL — no Python or app-layer glue between SQL and the cache.
+
+Typical use cases:
+
+- **Hot-cold data joins** — keep recent or frequently-accessed records in Redis, the bulk in DuckDB; join across the boundary.
+- **Bulk migration** — dump entire Redis keyspaces into DuckDB tables for offline processing or one-off analysis.
+- **Cache priming** — push computed values from DuckDB into Redis for downstream applications.
+- **Operational queries** — count hashes, sample fields, or audit keyspaces without writing a Redis-aware tool.
+
+## Authentication
+
+All `redis_*` functions take a trailing `secret` argument naming a DuckDB secret of `TYPE redis`. That keeps credentials out of query text and lets multiple environments (dev/staging/prod) live as separate secrets.
+
+```sql
+CREATE SECRET prod_redis (TYPE redis, PROVIDER config, host '...', port '...', password '...');
+SELECT redis_get('counter', 'prod_redis');
+```
+
+## SCAN vs KEYS
+
+`redis_keys` is the convenience function — it returns all matching keys as a table. It's fine for development and small keyspaces but **issues a `KEYS` command, which blocks the Redis server**. On a large production instance this can stall traffic.
+
+`redis_scan` is the production primitive — cursor-paginated, non-blocking, server-side filtered. Iterate by re-passing the returned cursor:
+
+```sql
+SELECT redis_scan(0, 'user:*', 100, 'redis');
+-- "1024:user:1,user:2,...,user:50"
+-- Cursor "0" returned means iteration is complete.
+```
+
+`redis_hscan_over_scan` chains both into one streaming pipeline — for every key matching `scan_pattern`, run `HSCAN hscan_pattern` and emit `(key, field, value)` rows. The fastest way to drain a Redis hash dataset into DuckDB.
+
+## Limitations
+
+- **Strings, hashes, and lists only** today. No SET / ZSET / STREAM / PUBSUB / TRANSACTIONS / SCRIPTING.
+- **Single-node** connections — no Redis Cluster support.
+- **Plaintext** auth via the `password` field; TLS is not yet wired up.
+- **Experimental** — the surface may change as more Redis primitives are added.
+
+For application-grade Redis access, keep a real client; this extension is for the SQL-side workflows where data integration matters more than every Redis feature.

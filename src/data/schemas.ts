@@ -1,41 +1,46 @@
 import { z } from 'zod';
 
-// Function Documentation Schemas
+// ---------- Function docs ----------
+
 export const FunctionParameterSchema = z.object({
   name: z.string(),
   type: z.string(),
   paramType: z.enum(['positional', 'named']),
   default: z.string().optional(),
   description: z.string(),
-  varargs: z.boolean().optional()
+  varargs: z.boolean().optional(),
+  // Set when overloads collapsed into one card differ in this slot's type.
+  // Lists every concrete type accepted in this slot. `type` becomes a
+  // human-friendly label (family name or pipe-joined union) for display.
+  typeUnion: z.array(z.string()).optional(),
 });
 
 export const ReturnColumnSchema = z.object({
   name: z.string(),
   type: z.string(),
-  description: z.string()
+  description: z.string(),
 });
 
 export const OutputTableSchema = z.object({
   columns: z.array(z.object({
     name: z.string(),
-    align: z.enum(['left', 'right', 'center']).optional()
+    align: z.enum(['left', 'right', 'center']).optional(),
   })),
-  rows: z.array(z.array(z.union([z.string(), z.number(), z.boolean()])))
+  rows: z.array(z.array(z.union([z.string(), z.number(), z.boolean()]))),
 });
 
 export const FunctionExampleSchema = z.object({
   description: z.string(),
   code: z.string(),
   output: z.string().optional(),
-  outputTable: OutputTableSchema.optional()
+  outputTable: OutputTableSchema.optional(),
 });
 
 export const FunctionDocDataSchema = z.object({
   id: z.string(),
   name: z.string(),
   type: z.enum(['scalar', 'table', 'aggregate', 'copy']),
-  categories: z.array(z.string()).min(1),
+  categories: z.array(z.string()).min(1).default(['Uncategorized']),
   returnType: z.string().optional(),
   parameters: z.array(FunctionParameterSchema),
   returns: z.string().optional(),
@@ -44,13 +49,233 @@ export const FunctionDocDataSchema = z.object({
   examples: z.array(FunctionExampleSchema),
   relatedFunctions: z.array(z.string()).optional(),
   tags: z.record(z.string(), z.string()).optional(),
-  options: z.array(FunctionParameterSchema).optional()
+  options: z.array(FunctionParameterSchema).optional(),
+  // Set when collapsed overloads return different types. `returnType` becomes
+  // the union label; this lists every concrete return type observed.
+  returnTypeUnion: z.array(z.string()).optional(),
 });
 
-export const FunctionsArraySchema = z.array(FunctionDocDataSchema);
+// ---------- Pragmas / Settings ----------
 
-// Type exports inferred from schemas
-export type FunctionParameterZ = z.infer<typeof FunctionParameterSchema>;
-export type ReturnColumnZ = z.infer<typeof ReturnColumnSchema>;
-export type FunctionExampleZ = z.infer<typeof FunctionExampleSchema>;
-export type FunctionDocDataZ = z.infer<typeof FunctionDocDataSchema>;
+export const PragmaSchema = z.object({
+  name: z.string(),
+  default: z.union([z.string(), z.number(), z.boolean()]).nullable(),
+  description: z.string(),
+  type: z.enum(['string', 'number', 'boolean']).optional(),
+  validValues: z.array(z.string()).optional(),
+  example: z.string().optional(),
+});
+
+// ---------- Secrets ----------
+
+export const SecretParameterSchema = z.object({
+  name: z.string(),
+  type: z.string(),
+  required: z.boolean(),
+  description: z.string(),
+});
+
+export const SecretSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  type: z.string(),
+  category: z.string().default('Connection'),
+  description: z.string(),
+  parameters: z.array(SecretParameterSchema),
+  examples: z.array(FunctionExampleSchema),
+});
+
+// ---------- Macros ----------
+
+export const MacroSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  category: z.string(),
+  description: z.string(),
+  definition: z.string(),
+  examples: z.array(FunctionExampleSchema),
+});
+
+// ---------- Filesystems ----------
+
+export const FilesystemSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  category: z.string().optional(),
+});
+
+// ---------- Storage extensions ----------
+
+export const StorageParameterSchema = z.object({
+  name: z.string(),
+  type: z.string(),
+  required: z.boolean(),
+  description: z.string(),
+  default: z.string().optional(),
+});
+
+export const StorageExtensionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  category: z.string(),
+  description: z.string(),
+  parameters: z.array(StorageParameterSchema),
+  examples: z.array(FunctionExampleSchema),
+});
+
+// ---------- Log types ----------
+
+export const LogTypeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  category: z.string(),
+  description: z.string(),
+  examples: z.array(FunctionExampleSchema),
+});
+
+export const LogStorageParameterSchema = z.object({
+  name: z.string(),
+  type: z.string(),
+  required: z.boolean(),
+  description: z.string(),
+  default: z.string().optional(),
+});
+
+export const LogStorageTypeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  category: z.string(),
+  description: z.string(),
+  parameters: z.array(LogStorageParameterSchema),
+  examples: z.array(FunctionExampleSchema),
+});
+
+// ---------- Technical overview ----------
+
+export const BulletPointSchema = z.object({
+  label: z.string(),
+  description: z.string(),
+});
+
+export const UseCaseSchema = z.object({
+  title: z.string(),
+  description: z.string(),
+});
+
+export const TechnicalOverviewSectionSchema = z.object({
+  icon: z.string(),
+  title: z.string(),
+  description: z.string(),
+  bulletPoints: z.array(BulletPointSchema).optional(),
+  useCases: z.array(UseCaseSchema).optional(),
+});
+
+export const TechnicalOverviewSchema = z.object({
+  eyebrow: z.string().optional(),
+  title: z.string(),
+  description: z.string().optional(),
+  sections: z.array(TechnicalOverviewSectionSchema),
+});
+
+// ---------- Metadata ----------
+
+export const PlatformInfoSchema = z.object({
+  platform: z.string(),
+  architectures: z.array(z.string()),
+});
+
+export const ExtensionCategorySchema = z.enum([
+  'connectors', 'transformation', 'analytics', 'performance', 'devtools', 'quality',
+]);
+
+export const ExtensionStatusSchema = z.enum(['stable', 'beta', 'experimental']);
+
+export const ExtensionMetadataSchema = z.object({
+  name: z.string(),
+  displayName: z.string(),
+  icon: z.string(),
+  description: z.string(),
+  githubUrl: z.string(),
+  cta: z.object({
+    title: z.string(),
+    description: z.string(),
+  }),
+  category: ExtensionCategorySchema.optional(),
+  status: ExtensionStatusSchema.optional(),
+  docsUrl: z.string().optional(),
+  features: z.array(z.string()).optional(),
+  // 'community' (DuckDB Community Extensions) or 'query.farm' or a literal
+  // INSTALL clause like "FROM 'github://owner/repo'". Defaults to 'community'.
+  installSource: z.string().default('community'),
+  // Optional SQL snippet shown after INSTALL/LOAD on the extension page.
+  quickStart: z.string().optional(),
+  license: z.string().optional(),
+  pricing: z.enum(['free', 'paid']).optional(),
+  firstRelease: z.string().optional(),
+  lastRelease: z.string().optional(),
+  binarySize: z.string().optional(),
+  writtenIn: z.string().optional(),
+  sourceAvailable: z.union([z.boolean(), z.string()]).optional(),
+  dependencies: z.array(z.string()).optional(),
+  usageStats: z.object({
+    count: z.number(),
+    period: z.string(),
+  }).optional(),
+  githubStars: z.number().optional(),
+  platforms: z.array(PlatformInfoSchema).optional(),
+  duckdbVersions: z.array(z.string()).optional(),
+  // Per (platform, architecture) compiled artifact size in bytes. Discovered
+  // by extension-diff.py from Content-Length on community-extensions.duckdb.org.
+  binarySizes: z.array(z.object({
+    platform: z.string(),
+    architecture: z.string(),
+    bytes: z.number().int().nonnegative(),
+  })).optional(),
+  relatedExtensions: z.array(z.string()).optional(),
+  image: z.string().optional(),
+});
+
+// ---------- Pricing ----------
+
+export const PricingTierSchema = z.object({
+  name: z.string(),
+  price: z.string(),
+  period: z.enum(['monthly', 'yearly', 'one-time']),
+  description: z.string().optional(),
+  features: z.array(z.string()).optional(),
+  highlighted: z.boolean().optional(),
+});
+
+export const PricingInfoSchema = z.object({
+  eyebrow: z.string().optional(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  tiers: z.array(PricingTierSchema),
+  trialDays: z.number().optional(),
+  registrationRequired: z.boolean().optional(),
+  registrationUrl: z.string().optional(),
+  termsMarkdown: z.string().optional(),
+});
+
+// ---------- Top-level ----------
+
+export const ExtensionDataSchema = z.object({
+  metadata: ExtensionMetadataSchema,
+  technicalOverview: TechnicalOverviewSchema.optional(),
+  functions: z.array(FunctionDocDataSchema).optional(),
+  pragmas: z.array(PragmaSchema).optional(),
+  secrets: z.array(SecretSchema).optional(),
+  macros: z.array(MacroSchema).optional(),
+  filesystems: z.array(FilesystemSchema).optional(),
+  storageExtensions: z.array(StorageExtensionSchema).optional(),
+  logTypes: z.array(LogTypeSchema).optional(),
+  logStorageTypes: z.array(LogStorageTypeSchema).optional(),
+  pricing: PricingInfoSchema.optional(),
+  // Optional map of category name -> short prose explaining what the category
+  // covers. Rendered below each category header in the contents table.
+  categoryDescriptions: z.record(z.string(), z.string()).optional(),
+});
+
+// Convenience exported array forms
+export const FunctionsArraySchema = z.array(FunctionDocDataSchema);

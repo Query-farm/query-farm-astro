@@ -1,0 +1,43 @@
+## What is MARISA?
+
+MARISA — *Matching Algorithm with Recursively Implemented StorAge* — is a static, succinct trie data structure. "Static" means the trie is built once and queried many times (no incremental insert). "Succinct" means it stores a string set in roughly the information-theoretic minimum number of bits.
+
+The reference implementation is [github.com/s-yata/marisa-trie](https://github.com/s-yata/marisa-trie), maintained for over a decade in C++.
+
+## Why a trie?
+
+A trie is the right data structure when:
+
+- The strings have **shared prefixes** — URLs, paths, names, dictionary words. Prefix-rich data compresses dramatically.
+- You need **prefix queries** — autocomplete, longest-prefix match, IP routing — that hash-based sets can't answer at all.
+- You want **bounded lookup time** — O(|key|), independent of the dictionary size.
+
+For random unrelated strings without prefix structure, a hash set or Bloom filter ([`bitfilters`](/products/extensions/bitfilters)) is usually better.
+
+## Storage
+
+Each `marisa_trie(...)` aggregate produces one BLOB. The BLOB is self-contained and portable — write it to a column, persist in Parquet, ship to another DuckDB instance. Loading the trie is mmap-style fast: deserialization is essentially a pointer-walk, no parsing.
+
+A typical English-word trie of ~470K entries weighs in around 800 KB — about a fifth the size of the same words as a flat sorted list.
+
+## Lookup operations
+
+| Operation | Function | Returns |
+|---|---|---|
+| Exact membership | `marisa_lookup` | BOOLEAN |
+| Predictive (autocomplete) | `marisa_predictive` | LIST(VARCHAR) |
+| Longest-prefix-match | `marisa_common_prefix` | LIST(VARCHAR) |
+
+All three run against the BLOB directly — no decode step, no warm-up. The first query is as fast as the millionth.
+
+## Pairings
+
+- **Build at ingest, query at runtime.** A common pattern is to materialize one trie per user / partition / day at write time, then query at read time. The static nature is a feature here — the trie won't change underneath you.
+- **Combine with [`fuzzycomplete`](/products/extensions/fuzzycomplete) or [`rapidfuzz`](/products/extensions/rapidfuzz)** for fuzzy + prefix lookup pipelines (exact prefix via marisa, fuzzy via the others).
+- **Use as the dictionary side of a join** — much smaller wire size than transferring the underlying string list.
+
+## Limitations
+
+- **Static** — no incremental insert. Rebuild the trie from the updated source set. For a 470K-entry dictionary that's milliseconds; for billions, plan accordingly.
+- **String-only.** No numeric or composite keys.
+- **No order beyond lexicographic.** If you need different orderings, build separate tries.

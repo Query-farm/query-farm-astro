@@ -6,6 +6,7 @@ import ShareLinkButton from '../ui/ShareLinkButton.astro';
 import FunctionSignatureRenderer from './FunctionSignatureRenderer.astro';
 import DuckDBExtensionFunctionParameters from './DuckDBExtensionFunctionParameters.astro';
 import DuckDBExtensionFunctionReturns from './DuckDBExtensionFunctionReturns.astro';
+import QueryResult from './QueryResult.astro';
 import type { FunctionExample } from '../../data/extension-types';
 
 interface Parameter {
@@ -39,10 +40,13 @@ interface Props {
   returnsTable?: ReturnColumn[];
   description: string;
   examples: FunctionExample[];
-  relatedFunctions?: string[]; // Array of function IDs
+  relatedFunctions?: string[]; // Array of function IDs (raw augment input)
   options?: Parameter[]; // For copy functions
-  allFunctions?: FunctionData[]; // All functions for related function lookup
+  allFunctions?: FunctionData[]; // Legacy: full list for in-card lookup
+  /** Pre-resolved related-function summaries (preferred — avoids per-card scan). */
+  resolvedRelated?: FunctionData[];
   tags?: Record<string, string>;
+  returnTypeUnion?: string[];
 }
 
 const {
@@ -59,18 +63,26 @@ const {
   relatedFunctions,
   options,
   allFunctions = [],
-  tags
+  resolvedRelated,
+  tags,
+  returnTypeUnion
 } = Astro.props;
 
 // Helper to create category ID for linking
 const getCategoryId = (cat: string) => cat.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
-// Look up related functions from the allFunctions array
-const relatedFunctionsData = relatedFunctions
-  ? relatedFunctions
-      .map(relatedId => allFunctions.find(fn => fn.id === relatedId))
-      .filter((fn): fn is FunctionData => fn !== undefined)
-  : [];
+// Prefer precomputed list from the parent reference component. Fall back to
+// the old in-card scan only when callers still pass `allFunctions` (rare).
+const relatedFunctionsData = resolvedRelated ?? (
+  relatedFunctions
+    ? Array.from(new Map(
+        relatedFunctions
+          .map(ref => allFunctions.find(fn => fn.name === ref || fn.id === ref))
+          .filter((fn): fn is FunctionData => fn !== undefined)
+          .map(fn => [fn.name, fn])
+      ).values())
+    : []
+);
 
 const typeBadges = {
   scalar: { variant: 'info' as const, text: 'Scalar Function' },
@@ -82,7 +94,7 @@ const typeBadges = {
 const badgeConfig = typeBadges[type];
 ---
 
-<Card padding="lg" id={id} class="mb-8 scroll-mt-32">
+<Card padding="lg" id={id} class="mb-8 scroll-mt-32 cv-auto">
   <!-- Function Header -->
   <div class="flex items-start justify-between mb-4">
     <div class="flex-1">
@@ -98,12 +110,16 @@ const badgeConfig = typeBadges[type];
         {categories.map((cat) => (
           <a
             href={`#functions-index-${getCategoryId(cat)}`}
-            class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-soil-600 hover:text-harvest-700 hover:bg-soil-50 rounded transition-colors"
+            title={`Jump to ${cat} category`}
+            class="group inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-harvest-700 bg-harvest-50 border border-harvest-200 rounded-full hover:bg-harvest-100 hover:border-harvest-400 hover:shadow-sm transition-all duration-150"
           >
             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
             </svg>
-            {cat}
+            <span>{cat}</span>
+            <svg class="w-3 h-3 opacity-60 group-hover:opacity-100 group-hover:translate-x-0.5 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
           </a>
         ))}
       </div>
@@ -139,6 +155,24 @@ const badgeConfig = typeBadges[type];
   <!-- Returns -->
   <DuckDBExtensionFunctionReturns description={returns} table={returnsTable} />
 
+  {returnTypeUnion && returnTypeUnion.length > 1 && (
+    <div class="mb-4 -mt-2">
+      <details class="group">
+        <summary class="text-xs font-medium text-soil-500 cursor-pointer hover:text-soil-700 inline-flex items-center gap-1">
+          <svg class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+          Return type varies by input — {returnTypeUnion.length} concrete types
+        </summary>
+        <div class="mt-2 flex flex-wrap gap-1">
+          {returnTypeUnion.map((t) => (
+            <code class="font-mono text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-200">{t}</code>
+          ))}
+        </div>
+      </details>
+    </div>
+  )}
+
   <!-- Description -->
   <div class="mb-4">
     <h5 class="text-sm font-semibold text-soil-700 mb-2">Description</h5>
@@ -162,53 +196,11 @@ const badgeConfig = typeBadges[type];
             )}
           </div>
           <CodeBlock code={example.code} lang="sql" />
-          {(example.output || example.outputTable) && (
-            <div class="mt-3">
-              <div class="flex items-center gap-2 mb-2">
-                <svg class="w-4 h-4 text-grain-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <p class="text-xs font-semibold text-grain-800 uppercase tracking-wide">Output</p>
-              </div>
-              {example.outputTable ? (
-                <div class="bg-white rounded border border-grain-300 overflow-x-auto">
-                  <table class="w-full text-xs">
-                    <thead>
-                      <tr class="bg-soil-50 border-b border-soil-200">
-                        {example.outputTable.columns.map((col) => {
-                          const alignClass = col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left';
-                          return (
-                            <th class={`px-3 py-2 ${alignClass} font-semibold text-soil-900 font-mono`}>
-                              {col.name}
-                            </th>
-                          );
-                        })}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {example.outputTable.rows.map((row, rowIndex) => (
-                        <tr class={rowIndex % 2 === 0 ? 'bg-white' : 'bg-soil-50'}>
-                          {row.map((cell, cellIndex) => {
-                            const col = example.outputTable!.columns[cellIndex];
-                            const alignClass = col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left';
-                            return (
-                              <td class={`px-3 py-2 ${alignClass} text-soil-800 font-mono border-t border-soil-200`}>
-                                {typeof cell === 'boolean' ? (cell ? 'true' : 'false') : cell}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div class="bg-white rounded px-3 py-2 font-mono text-xs text-soil-800 border border-grain-300 overflow-x-auto">
-                  <pre class="whitespace-pre">{example.output}</pre>
-                </div>
-              )}
-            </div>
-          )}
+          {example.outputTable ? (
+            <QueryResult columns={example.outputTable.columns} rows={example.outputTable.rows} />
+          ) : example.output ? (
+            <QueryResult text={example.output} />
+          ) : null}
         </div>
       ))}
     </div>
@@ -227,7 +219,7 @@ const badgeConfig = typeBadges[type];
         {relatedFunctionsData.map((related) => (
           <li>
             <a
-              href={`#${related.id}`}
+              href={`#${related.name}`}
               class="group flex items-start gap-2 text-sm hover:bg-grain-100 p-2 rounded transition-colors"
             >
               <span class="font-mono text-harvest-700 group-hover:text-harvest-800 font-medium">

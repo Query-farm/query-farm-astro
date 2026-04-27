@@ -1,0 +1,66 @@
+## Build a trie
+
+`marisa_trie` is an aggregate — feed it a column of strings, get one BLOB back.
+
+```sql
+CREATE TABLE employees(name TEXT);
+INSERT INTO employees VALUES
+  ('Alice'),('Bob'),('Charlie'),('David'),('Eve'),('Frank'),
+  ('Mallory'),('Megan'),('Oscar'),('Melissa');
+
+-- Build once, store
+CREATE TABLE employees_trie AS
+  SELECT marisa_trie(name) AS trie FROM employees;
+
+-- The trie is a compact BLOB
+SELECT octet_length(trie) FROM employees_trie;
+```
+
+For 10 names this is ~4 KB; the size scales with shared-prefix density rather than raw input bytes.
+
+## Membership lookup
+
+`marisa_lookup` returns BOOLEAN — does this exact string exist in the trie?
+
+```sql
+SELECT marisa_lookup(trie, 'Alice')   FROM employees_trie;  -- TRUE
+SELECT marisa_lookup(trie, 'Unknown') FROM employees_trie;  -- FALSE
+```
+
+Use this for spell-check ("is this word in our dictionary?") or any place a hash-set would otherwise live.
+
+## Autocomplete
+
+`marisa_predictive(trie, prefix, max_results)` returns every entry whose prefix matches:
+
+```sql
+-- Names starting with 'Me'
+SELECT marisa_predictive(trie, 'Me', 10) FROM employees_trie;
+-- ['Megan', 'Melissa']
+```
+
+Drop this into a type-ahead UI's backend — one row, one BLOB, microsecond lookups.
+
+## Longest-prefix match (routing)
+
+`marisa_common_prefix` is the inverse — every string in the trie that is a *prefix* of the search input:
+
+```sql
+CREATE TABLE countries(name TEXT);
+INSERT INTO countries VALUES ('U'), ('US'), ('USA');
+CREATE TABLE countries_trie AS
+  SELECT marisa_trie(name) AS trie FROM countries;
+
+SELECT marisa_common_prefix(trie, 'USA', 10) FROM countries_trie;
+-- ['U', 'US', 'USA']
+```
+
+Useful for routing tables, IP-prefix matching, and any "find all rules that match" lookup.
+
+## When to use a trie vs a HashSet vs `IN (...)`
+
+- **Trie** — wins when the dataset has lots of shared prefixes (URLs, names, dictionary words). Memory: ~30–60% of the equivalent flat string list. Lookup: O(|key|) regardless of dictionary size.
+- **HashSet** (DuckDB's built-in `IN`, or `bitfilters`) — wins for unrelated random strings without prefix structure.
+- **Tries also support prefix and predictive queries**, which hashes can't do at all.
+
+If you're doing autocomplete or you have prefix-rich data, a trie is the right structure. For pure membership tests on random strings, hashes win on simplicity.

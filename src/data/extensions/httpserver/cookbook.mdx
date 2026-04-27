@@ -1,0 +1,88 @@
+## Start the server
+
+```sql
+INSTALL httpserver FROM community;
+LOAD httpserver;
+
+SELECT httpserve_start('localhost', 9999, 'user:pass');
+-- 'HTTP server started on 0.0.0.0:9999'
+```
+
+The auth string controls how clients authenticate:
+
+| Auth value | Mode |
+|---|---|
+| `''` (empty) | No auth — only for development. |
+| `'user:pass'` | HTTP Basic auth. |
+| anything else | Treated as a single API key, sent in `X-API-Key`. |
+
+## Query from the command line
+
+### Basic auth
+
+```bash
+curl -X POST -d "SELECT version()" \
+  "http://user:pass@localhost:9999/"
+```
+
+### X-API-Key
+
+```bash
+curl -X POST --header "X-API-Key: supersecretkey" \
+  -d "SELECT 'hello', version()" \
+  "http://localhost:9999/"
+```
+
+The body is the SQL; the response is the result set as JSON.
+
+## Query from another DuckDB
+
+Connect from a second DuckDB by configuring an `extra_http_headers` secret and using `duck_flock` (from the [chsql](https://community-extensions.duckdb.org/extensions/chsql.html) extension):
+
+```sql
+CREATE SECRET extra_http_headers (
+  TYPE HTTP,
+  EXTRA_HTTP_HEADERS MAP { 'X-API-Key': 'supersecretkey' }
+);
+
+SELECT * FROM duck_flock(
+  'SELECT version()',
+  ['http://localhost:9999']
+);
+```
+
+## The Play UI
+
+Open `http://localhost:9999/` in a browser. You'll get the embedded **quackplay** SQL interface — paste queries, see results, browse the schema. Useful for ad-hoc exploration without needing a separate client.
+
+## Read-only safety
+
+Run DuckDB with `-readonly` so the API can't mutate the database. This is the standard configuration for serving the database publicly:
+
+```bash
+duckdb -readonly mydata.duckdb -c "INSTALL httpserver FROM community; LOAD httpserver; SELECT httpserve_start('0.0.0.0', 9999, 'mykey'); CALL pg_sleep(3600);"
+```
+
+## Logging and foreground mode
+
+Useful environment variables:
+
+```bash
+DUCKDB_HTTPSERVER_FOREGROUND=1   # Run server in main thread (blocks the SQL caller)
+DUCKDB_HTTPSERVER_DEBUG=1        # Verbose request logging to stdout
+DUCKDB_HTTPSERVER_SYSLOG=1       # Route logs to syslog
+```
+
+## Stopping
+
+```sql
+SELECT httpserve_stop();
+```
+
+Or just exit the DuckDB process; the server thread shuts down with it.
+
+## Caveats
+
+- **Trust the network**. The server has no rate-limiting, no per-key permissions, and (without TLS termination upfront) no encryption. Run behind a reverse proxy in production.
+- **Authentication is binary**. There's one key (or one user/pass). For multi-tenant or per-user access control, terminate auth at a gateway and run the server unauthenticated behind it.
+- **Single-process**. Querying load and concurrency are bounded by what one DuckDB process can do.

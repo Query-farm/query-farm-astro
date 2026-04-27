@@ -1,0 +1,114 @@
+## What is ADBC?
+
+[Arrow Database Connectivity](https://arrow.apache.org/adbc/) is a standard API for talking to databases using Apache Arrow's columnar wire format end-to-end. Where ODBC/JDBC convert rows on each side, ADBC moves columnar batches with no transpose, no row-format intermediate. Drivers exist for SQLite, PostgreSQL, MySQL, Snowflake, BigQuery, DuckDB, Flight SQL, and more — anywhere data already lives in or near Arrow.
+
+This extension lets DuckDB act as an ADBC client.
+
+## Connect
+
+```sql
+-- By driver name (driver manifest must be installed)
+SET VARIABLE conn = (SELECT adbc_connect({
+  'driver': 'sqlite',
+  'uri':    ':memory:'
+}));
+
+-- Or by explicit driver path
+SET VARIABLE conn = (SELECT adbc_connect({
+  'driver': '/path/to/libadbc_driver_sqlite.dylib',
+  'uri':    '/data/app.db'
+}));
+
+-- PostgreSQL with credentials
+SET VARIABLE conn = (SELECT adbc_connect({
+  'driver':   'postgresql',
+  'uri':      'postgresql://localhost:5432/analytics',
+  'username': 'reader',
+  'password': :pg_password
+}));
+```
+
+Stash the connection handle in a SQL variable and reuse it across statements.
+
+## Query
+
+```sql
+-- Run any SELECT
+SELECT * FROM adbc_scan(getvariable('conn')::BIGINT,
+                        'SELECT * FROM orders WHERE created_at > now() - INTERVAL 1 DAY');
+
+-- Or stream a whole table by name
+SELECT * FROM adbc_scan_table(getvariable('conn')::BIGINT, 'orders');
+```
+
+Result is a normal DuckDB table — JOIN against local tables, persist with CTAS, re-export.
+
+## Mutation
+
+```sql
+-- DDL
+SELECT adbc_execute(getvariable('conn')::BIGINT,
+                    'CREATE TABLE users(id INT, name TEXT)');
+
+-- DML
+SELECT adbc_execute(getvariable('conn')::BIGINT,
+                    'INSERT INTO users VALUES (1, ''Alice'')');
+
+-- Bulk insert from a DuckDB query — Arrow-native, no row-format conversion
+SELECT adbc_insert(
+  getvariable('conn')::BIGINT,
+  'users',
+  (SELECT id, name FROM staging_users)
+);
+```
+
+## Transactions
+
+```sql
+SELECT adbc_set_autocommit(getvariable('conn')::BIGINT, FALSE);
+
+SELECT adbc_execute(getvariable('conn')::BIGINT, 'INSERT INTO orders VALUES (...)');
+SELECT adbc_execute(getvariable('conn')::BIGINT, 'UPDATE inventory SET qty = qty - 1 WHERE sku = ''X''');
+
+SELECT adbc_commit(getvariable('conn')::BIGINT);
+-- or adbc_rollback on error
+```
+
+## Inspect the remote schema
+
+```sql
+-- All tables
+SELECT * FROM adbc_tables(getvariable('conn')::BIGINT);
+
+-- Columns of a specific table
+SELECT * FROM adbc_columns(getvariable('conn')::BIGINT, 'orders');
+
+-- Full Arrow schema of a query without running it
+SELECT adbc_schema(getvariable('conn')::BIGINT, 'SELECT * FROM orders');
+```
+
+Useful for building dynamic dashboards or schema-driven ETL pipelines.
+
+## Disconnect
+
+```sql
+SELECT adbc_disconnect(getvariable('conn')::BIGINT);
+```
+
+Connections are also cleaned up when the DuckDB process exits, but explicit disconnect is good hygiene.
+
+## Driver setup
+
+ADBC drivers ship as shared libraries plus an optional manifest (`.toml`) that tells DuckDB which symbol to load. Two ways to get them:
+
+1. **Install via pip / brew / system package** — many ADBC drivers publish standard manifest files into a known location, then `'driver': 'sqlite'` Just Works.
+2. **Direct path** — `'driver': '/path/to/libadbc_driver_xxx.dylib'` skips manifest resolution.
+
+`SET search_paths := '/opt/adbc/drivers'` (passed inside the connect options) adds custom manifest search locations.
+
+## ADBC Scanner vs Airport
+
+[`airport`](/products/extensions/airport) is the other connector in this catalog that streams Arrow over the wire — it speaks **Arrow Flight**, an RPC protocol. ADBC Scanner speaks **ADBC**, a client API standard. Pick:
+
+- **ADBC Scanner** when you have an existing database (SQLite, Postgres, Snowflake, BigQuery) with an ADBC driver.
+- **[`airport`](/products/extensions/airport)** when you have a server that speaks Flight directly — typically custom services or Flight-native systems like Dremio.

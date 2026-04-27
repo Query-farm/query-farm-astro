@@ -1,0 +1,93 @@
+## Response shape
+
+Every function returns a struct with four fields:
+
+| Field | Type | What |
+|---|---|---|
+| `status` | INT (in JSON) | HTTP response code |
+| `reason` | VARCHAR | Status reason phrase ("OK", "Not Found", ...) |
+| `body` | VARCHAR | Raw response body |
+| `headers` | VARCHAR | Response headers (JSON object) |
+
+Use `->>` and JSON casts to pull what you need.
+
+## GET
+
+```sql
+WITH r AS (
+  SELECT http_get('https://api.example.com/users/42') AS res
+)
+SELECT (res->>'status')::INT  AS status,
+       (res->>'reason')       AS reason,
+       (res->>'body')::JSON->>'$.name' AS name
+FROM r;
+```
+
+## POST with JSON body
+
+`params` becomes the JSON body. `headers` are sent verbatim.
+
+```sql
+SELECT http_post(
+  'https://api.example.com/users',
+  headers => MAP {
+    'accept':       'application/json',
+    'content-type': 'application/json',
+    'authorization': 'Bearer ' || :token
+  },
+  params  => MAP {
+    'name':  'Alice',
+    'email': 'alice@example.com'
+  }
+);
+```
+
+## POST as form-encoded
+
+For APIs that expect `application/x-www-form-urlencoded`:
+
+```sql
+SELECT http_post_form(
+  'https://oauth.example.com/token',
+  headers => MAP {},
+  params  => MAP {
+    'grant_type':    'client_credentials',
+    'client_id':     :client_id,
+    'client_secret': :client_secret
+  }
+);
+```
+
+## Per-row API enrichment
+
+Join a database column against a remote API:
+
+```sql
+SELECT u.id,
+       u.email,
+       ((http_get('https://api.example.com/score/' || u.id)->>'body')::JSON)->>'$.score' AS score
+FROM users u
+WHERE u.last_seen > now() - INTERVAL 1 HOUR;
+```
+
+⚠ One HTTP call per row. For 10K rows that's 10K calls — slow and probably rate-limited. Cache responses or pre-aggregate keys before the call.
+
+## When to reach for shellfs instead
+
+[`shellfs`](/products/extensions/shellfs) lets you pipe `curl` output through `read_csv` / `read_json`. Use shellfs when:
+
+- You need streaming reads of large responses (HTTP Client buffers the whole body).
+- The endpoint requires curl-only features (cookies, complex auth, custom TLS).
+- You want pipeline composition with awk/sed/jq.
+
+Use HTTP Client when:
+
+- The response is small and you want it as a struct directly in SQL.
+- You're calling many endpoints inside a single query and want it to be portable.
+
+## Caveats
+
+- **Sync** — DuckDB blocks until the response arrives. Slow endpoints stall queries.
+- **No retries / backoff** — handle in SQL or wrap calls in your application layer.
+- **No streaming** — full response is buffered into the body field.
+- **Limited TLS configurability** — for custom CA trust or client certs, prefer shellfs + curl.

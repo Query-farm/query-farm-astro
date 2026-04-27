@@ -1,0 +1,51 @@
+## Non-cryptographic vs cryptographic hashes
+
+Hashfuncs provides **non-cryptographic** hashes. They're optimized for:
+
+- **Speed** — typically 5–40 GB/s on a single core; an order of magnitude faster than cryptographic hashes.
+- **Distribution** — uniform output across the hash space, with very few collisions on real-world inputs.
+- **Determinism** — same input + same seed always produces the same output.
+
+What they explicitly **don't** provide:
+
+- **Collision resistance against an adversary**. An attacker who controls the input *can* craft collisions. Don't use these for digital signatures, message authentication, or anywhere a collision could matter for security. Use [`crypto`](/products/extensions/crypto) for those.
+
+For partitioning, sharding, cache keys, and feeding probabilistic filters, the speed wins by a wide margin and the adversarial concern doesn't apply.
+
+## When to pick which family
+
+**`xxh3_64`** — start here. Modern xxHash3, written for vectorized CPUs (SSE2/AVX2). Excellent speed and distribution; broad cross-language support.
+
+**`xxh3_128`** / **`xxh3_128_hex`** — use when 64 bits isn't enough hash space (e.g. billions of cache keys), or when you need a stable hex digest that interops with Python / Rust / C xxhash bindings.
+
+**`xxh64`** — older 64-bit xxHash. Slower than xxh3_64 on modern hardware but identical on the wire to xxhash 0.6.x callers; pick this only when you need to match an existing xxh64-based system.
+
+**`xxh32`** — only when 32 bits is sufficient AND you specifically need the older xxh32 format (e.g. legacy hashtables).
+
+**`rapidhash`** — chase maximum throughput. Generally the fastest 64-bit option on modern x86_64 with quality comparable to xxh3_64.
+
+**`murmurhash3_*`** — strict cross-system compatibility. Many distributed systems (Cassandra, Redis cluster, Spark) use MurmurHash3 in their hash-routing logic. If you're producing hashes that need to match those systems, use the matching variant.
+
+## Seeds
+
+Every function accepts an optional seed (overload selection — second argument). Seeds give you independent hash spaces from the same input — useful when you want, for example, two different shardings of the same column without correlation between them.
+
+The seed types match the platform:
+- 32-bit functions take `UINTEGER` seeds.
+- 64-bit / 128-bit xxHash functions take `UBIGINT` seeds.
+- 128-bit MurmurHash3 takes `UINTEGER` seed.
+
+## Pairing with `bitfilters`
+
+[`bitfilters`](/products/extensions/bitfilters) (probabilistic set-membership filters: Bloom, XOR, Quotient, Binary Fuse) takes `UBIGINT` hash values as filter input. Hashfuncs is the natural producer:
+
+```sql
+-- Build an xor8 filter
+SELECT xor8_filter(xxh3_64(key)) AS filter FROM allowed;
+
+-- Test membership in queries
+SELECT * FROM events e, filter_table f
+WHERE xor8_filter_contains(f.filter, xxh3_64(e.key));
+```
+
+The combination gives you sub-microsecond probabilistic filtering at SQL speed.

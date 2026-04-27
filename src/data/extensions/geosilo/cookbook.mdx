@@ -1,0 +1,134 @@
+## Why GeoSilo?
+
+DuckDB's `spatial` extension stores geometries as **WKB** — IEEE-754 float64 coordinate pairs. Adjacent vertices in a polygon share nearly all their bits but the format spends 16 bytes per pair anyway. GeoSilo exploits that locality:
+
+1. Scale coordinates to integers (`-75.509491 × 1e7 = -755094910`).
+2. Store the first vertex per ring as 4-byte int32.
+3. Store every subsequent vertex as a **2-byte int16 delta** from the previous.
+4. ~90% of deltas fit in 2 bytes; the rest fall back to a 6-byte escape.
+5. Polygon rings omit the closing duplicate vertex (reconstructed on decode).
+
+Result: **~70% smaller raw blobs**, and ZSTD compresses them ~3–4× better because tiny integer deltas have very repetitive byte patterns.
+
+On the [TIGER/Line 2025](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html) US Census dataset:
+
+| Format | Size | vs GEOMETRY |
+|---|---|---|
+| GEOMETRY (WKB + ALP) | 183 MB | 1.00× |
+| GEOSILO (no ZSTD) | 230 MB | 1.26× |
+| **GEOSILO + ZSTD** | **144 MB** | **0.79×** |
+
+GeoSilo without ZSTD is bigger than DuckDB's columnar GEOMETRY storage. **GeoSilo + ZSTD wins by 21%** because the delta-encoded integers compress so well.
+
+## Setup
+
+GeoSilo overlays the `spatial` extension's ST_* surface — load both:
+
+```sql
+INSTALL spatial; LOAD spatial;
+INSTALL geosilo FROM community; LOAD geosilo;
+```
+
+## GEOSILO column type
+
+Create a table with a GEOSILO column. CRS is optional; with one, the scale is auto-detected:
+
+```sql
+-- With CRS (scale auto-detected: degrees → 1e7, meters → 100)
+CREATE TABLE parcels (
+  id   INTEGER,
+  geom GEOSILO('EPSG:4326') USING COMPRESSION zstd
+);
+
+-- Without CRS (default scale 1e7)
+CREATE TABLE t (geom GEOSILO USING COMPRESSION zstd);
+```
+
+`USING COMPRESSION zstd` is the recommended setting — it's where most of the storage savings come from.
+
+## Insert from any GEOMETRY source
+
+The implicit GEOMETRY → GEOSILO cast auto-encodes:
+
+```sql
+INSERT INTO parcels SELECT id, geom FROM raw_data;
+```
+
+Sources can be CSV, Parquet, another DuckDB table, or any expression returning GEOMETRY.
+
+## Query with ST_*
+
+Standard spatial functions work directly on GEOSILO columns. Many have **native GEOSILO overloads** that skip the WKB decode and run 2–3× faster:
+
+| Function | Native? |
+|---|---|
+| `ST_GeometryType(GEOSILO)` | ✅ (1 byte read) |
+| `ST_IsEmpty(GEOSILO)` | ✅ |
+| `ST_NPoints(GEOSILO)` | ✅ |
+| `ST_X` / `ST_Y(GEOSILO)` | ✅ |
+| `ST_XMin / XMax / YMin / YMax(GEOSILO)` | ✅ (delta walk) |
+| `ST_Area(GEOSILO)` | ✅ (shoelace on int64) |
+| `ST_Length / ST_Perimeter(GEOSILO)` | ✅ |
+| `ST_Buffer / ST_Union / ST_AsText(...)` | ❌ (auto-decodes via cast) |
+
+So bounding-box filters, area calculations, and basic introspection stay fast; the heavy spatial operations transparently round-trip through GEOMETRY.
+
+```sql
+-- Native (no decode)
+SELECT id, ST_Area(geom) FROM parcels;
+SELECT id, ST_X(geom), ST_Y(geom) FROM parcels;
+
+-- Auto-decodes
+SELECT id, ST_Buffer(geom, 0.01) FROM parcels;
+
+-- Bounding-box prefilter — entirely native
+SELECT * FROM parcels
+WHERE ST_XMin(geom) > -78
+  AND ST_XMax(geom) < -76;
+```
+
+## Manual encode / decode
+
+For BLOB workflows where you control the pipeline:
+
+```sql
+SELECT geosilo_encode(geom) FROM source_table;
+
+SELECT ST_Area(geosilo_decode(silo_blob)) FROM compact_table;
+```
+
+## Inspect headers without decoding
+
+`geosilo_metadata` reads the blob header directly:
+
+```sql
+SELECT geosilo_metadata(silo_blob) AS meta
+FROM compact_table
+LIMIT 5;
+-- {'geometry_type':'POLYGON','vertex_type':'XY','scale':10000000}
+```
+
+Useful for filtering by geometry type before any heavy spatial work.
+
+## Arrow IPC transport
+
+GeoSilo registers an Arrow extension type `queryfarm.geosilo`. When a producer sends an Arrow column with that metadata, DuckDB (with GeoSilo loaded) auto-decodes silo blobs to GEOMETRY on read and re-encodes GEOMETRY to silo blobs on write. CRS rides through the metadata so scale stays consistent.
+
+```python
+# Python producer
+geom_field = pa.field("geom", pa.binary(), metadata={
+  b"ARROW:extension:name":     b"queryfarm.geosilo",
+  b"ARROW:extension:metadata": b'{"crs":"EPSG:4326"}',
+})
+```
+
+The DuckDB consumer sees a `GEOMETRY(EPSG:4326)` column.
+
+## Scale picking
+
+| CRS | Units | Scale | Precision |
+|---|---|---|---|
+| WGS84 / NAD83 (default) | degrees | 10,000,000 | ~1 cm |
+| UTM / Web Mercator | meters | 100 | 1 cm |
+
+Auto-detected when you declare `GEOSILO('EPSG:...')`. Override with `geosilo_encode(geom, <scale>)` when needed.

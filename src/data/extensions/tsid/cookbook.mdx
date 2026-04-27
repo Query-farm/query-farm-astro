@@ -1,0 +1,65 @@
+## Generate IDs
+
+```sql
+-- Single TSID
+SELECT tsid();
+-- '675716e86985495e9cf575f0b9c4a8db'
+
+-- Bulk: 100 unique, time-sorted IDs
+SELECT tsid(random()::VARCHAR) AS id FROM range(100);
+```
+
+## Use as a primary key
+
+TSIDs sort chronologically by ordinary string comparison, so `ORDER BY id` gives you insert order for free:
+
+```sql
+CREATE TABLE events (
+  id      VARCHAR DEFAULT tsid() PRIMARY KEY,
+  payload JSON
+);
+
+INSERT INTO events(payload) VALUES ('{"type":"login"}');
+INSERT INTO events(payload) VALUES ('{"type":"click"}');
+
+-- Listed in insertion order without a separate timestamp column
+SELECT id, payload FROM events ORDER BY id;
+```
+
+## Recover the timestamp
+
+You don't need a separate `created_at` — the timestamp is embedded:
+
+```sql
+SELECT id,
+       tsid_to_timestamp(id) AS created_at
+FROM events
+ORDER BY id;
+```
+
+## Time-range pagination
+
+Because TSIDs are sortable strings, you can paginate by ID without a separate timestamp index:
+
+```sql
+-- Page 1: 100 most recent
+SELECT * FROM events ORDER BY id DESC LIMIT 100;
+
+-- Page 2: next 100, using the last id from page 1 as a cursor
+SELECT * FROM events
+WHERE id < :last_id_from_page_1
+ORDER BY id DESC LIMIT 100;
+```
+
+This is the same trick Twitter snowflake-style IDs enable — you avoid the offset cost on large tables.
+
+## TSID vs UUID
+
+| | TSID | UUIDv4 | UUIDv7 |
+|---|---|---|---|
+| Time-sortable | ✅ | ❌ | ✅ |
+| Width on disk | 16 bytes hex (32 chars) | 16 bytes hex (32 chars) | 16 bytes hex (32 chars) |
+| Embeds creation time | ✅ | ❌ | ✅ |
+| Cross-system uniqueness | ✅ | ✅ | ✅ |
+
+UUIDv7 (also time-sortable) is the closest standard alternative. Pick TSID when you want the integration with DuckDB's hash type and bulk-generation throughput.

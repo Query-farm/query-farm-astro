@@ -1,0 +1,47 @@
+<img
+  src="/images/extensions/datasketches/hero.jpg"
+  alt="Apache DataSketches for DuckDB"
+  width="800"
+  loading="lazy"
+/>
+
+## Why this extension?
+
+DuckDB already has built-in HyperLogLog (`approx_count_distinct`) and TDigest (`approx_quantile`), but those primitives don't expose the underlying sketch state and don't let you tune the sketch parameters. This extension exposes the [Apache DataSketches](https://datasketches.apache.org/) library directly: every sketch serializes to a `BLOB` that can be stored in a column, shipped between processes, and merged later — without re-scanning the source data.
+
+That makes it the right pick for distributed pipelines: build per-partition sketches once, persist them, and roll them up at query time.
+
+## Which sketch should I use?
+
+### Quantile estimation
+
+| Sketch       | Best for                       | K range  | Notes                                                           |
+|--------------|--------------------------------|----------|-----------------------------------------------------------------|
+| **KLL**      | General purpose                | 1–32768  | Best balance of accuracy, speed, and size. Start here.          |
+| **TDigest**  | Extreme quantiles (p99, p999)  | 10–1000  | Most accurate at distribution tails. FLOAT/DOUBLE only.         |
+| **REQ**      | Relative error guarantees      | 4–1024   | Error scales with rank, not fixed. Good for skewed data.        |
+| **Quantiles**| Compatibility / classic        | 1–32768  | Original mergeable algorithm. Use KLL for new projects.         |
+
+**Default**: pick **KLL** unless you specifically need TDigest's tail accuracy or REQ's relative-error guarantees.
+
+### Distinct counting
+
+| Sketch    | Best for          | lg_k range | Notes                                                    |
+|-----------|-------------------|------------|----------------------------------------------------------|
+| **HLL**   | Speed / interop   | 4–21       | Industry standard. Faster serialize/deserialize.         |
+| **CPC**   | Storage           | 4–26       | ~40% smaller than HLL at same accuracy. Slower to write. |
+| **Theta** | Set operations    | —          | Only family that supports union, intersection, A-not-B.  |
+
+**Default**: pick **HLL** for speed and interop, **CPC** if you store many sketches at rest, **Theta** if you need set operations beyond merge.
+
+### Frequent items
+
+For top-N analysis on high-cardinality streams, the **Frequent Items** sketch returns each heavy hitter with lower-bound, upper-bound, and estimated frequency.
+
+## Persistence and portability
+
+Every sketch round-trips through a typed BLOB column (`sketch_kll_double`, `sketch_hll`, etc.) that's a strict superset of `BLOB`. That means:
+
+- Sketches can be persisted in a Parquet file and read back into any DuckDB instance with this extension loaded.
+- The same BLOB encoding is used by other Apache DataSketches integrations (Druid, Pinot, BigQuery, the Java reference impl), so a sketch built in DuckDB can be merged in another system and vice-versa.
+- Aggregate functions (`datasketch_*`) accept either raw values *or* an existing sketch column, so building incremental rollups is just `SELECT datasketch_kll(200, sketch_blob) FROM ...`.

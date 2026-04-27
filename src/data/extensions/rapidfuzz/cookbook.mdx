@@ -1,0 +1,95 @@
+## Quick reference
+
+| Need | Pick |
+|---|---|
+| One score, 0–100, sane default | `rapidfuzz_ratio` |
+| Match a fragment inside a longer string | `rapidfuzz_partial_ratio` |
+| Words in different orders | `rapidfuzz_token_sort_ratio` |
+| Tolerate duplicated words | `rapidfuzz_token_set_ratio` |
+| Names / typos | `rapidfuzz_jaro_winkler_normalized_similarity` |
+| Spelling distance with transpositions | `rapidfuzz_osa_distance` |
+| Strings of identical length | `rapidfuzz_hamming_distance` |
+
+## Record linkage
+
+Find the best match for each row in `left` against `right`, scored by Jaro-Winkler:
+
+```sql
+SELECT a.id   AS left_id,
+       b.id   AS right_id,
+       rapidfuzz_jaro_winkler_normalized_similarity(a.name, b.name) AS sim
+FROM left_records  a,
+     right_records b
+WHERE rapidfuzz_jaro_winkler_normalized_similarity(a.name, b.name) > 0.92
+ORDER BY a.id, sim DESC;
+```
+
+For the *single best match per left row*, wrap with `QUALIFY`:
+
+```sql
+SELECT *
+FROM (
+  SELECT a.id AS left_id, b.id AS right_id,
+         rapidfuzz_jaro_winkler_normalized_similarity(a.name, b.name) AS sim,
+         ROW_NUMBER() OVER (PARTITION BY a.id ORDER BY rapidfuzz_jaro_winkler_normalized_similarity(a.name, b.name) DESC) AS rn
+  FROM left_records a, right_records b
+)
+WHERE rn = 1 AND sim > 0.92;
+```
+
+## Dedupe
+
+Cluster rows by similarity threshold:
+
+```sql
+WITH pairs AS (
+  SELECT a.id AS l, b.id AS r,
+         rapidfuzz_token_set_ratio(a.title, b.title) AS sim
+  FROM titles a, titles b
+  WHERE a.id < b.id
+    AND rapidfuzz_token_set_ratio(a.title, b.title) > 90
+)
+SELECT * FROM pairs ORDER BY sim DESC;
+```
+
+Use the pair list to assign cluster IDs (graph-walk in Python or with a recursive CTE).
+
+## Spell check / typo tolerance
+
+For a known-good dictionary, score a candidate against every entry and pick the closest:
+
+```sql
+SELECT word
+FROM dictionary
+WHERE rapidfuzz_osa_distance(word, :input) <= 2
+ORDER BY rapidfuzz_osa_distance(word, :input)
+LIMIT 5;
+```
+
+OSA (Optimal String Alignment) handles single-character typos and adjacent transpositions naturally.
+
+## Ratio choice — visual guide
+
+```
+input1: 'New York City'
+input2: 'new york new york city'
+
+rapidfuzz_ratio                    → 56  (different overall)
+rapidfuzz_partial_ratio            → 100 (one is a substring)
+rapidfuzz_token_sort_ratio         → 78  (sorted tokens differ in count)
+rapidfuzz_token_set_ratio          → 100 (token sets identical)
+rapidfuzz_partial_token_set_ratio  → 100 (sets identical, partial fallback)
+```
+
+The differences matter — pick the one that matches your data semantics. For *names with reordered words*, `token_sort_ratio` is usually right. For *names with stray duplicates*, `token_set_ratio`. For *substring matching*, `partial_ratio`.
+
+## Algorithm function naming
+
+Each of the 8 algorithms exposes 4 variants:
+
+- `rapidfuzz_<algo>_distance(a, b)` — raw edit count.
+- `rapidfuzz_<algo>_similarity(a, b)` — raw match count.
+- `rapidfuzz_<algo>_normalized_distance(a, b)` — `[0, 1]`, 0 = identical.
+- `rapidfuzz_<algo>_normalized_similarity(a, b)` — `[0, 1]`, 1 = identical.
+
+For comparisons across pairs of unequal length, the `normalized_*` variants are usually what you want — they don't punish longer strings.

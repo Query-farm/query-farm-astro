@@ -1,0 +1,124 @@
+## Pick the Right Filter
+
+| Need | Pick |
+|---|---|
+| Static set, smallest possible memory | **`binary_fuse8_filter`** |
+| Static set, very low FPR | **`binary_fuse16_filter`** or **`xor16_filter`** |
+| Dynamic set with deletion / resize | **`quotient_filter`** |
+| Maximum cross-system compatibility | **`xor8_filter`** |
+| Plug into DuckDB's join optimizer | **`bitfilters_duckdb_bloom_filter_*`** |
+
+All filter constructors take `UBIGINT` hash values as input. Use DuckDB's built-in `hash()` for general purpose, or pair with [`hashfuncs`](/products/extensions/hashfuncs) when you want a specific algorithm (xxh3_64, rapidhash, MurmurHash3).
+
+## Build a Filter
+
+Filter constructors are **aggregate functions** — pass the hashes of every member of the set and the result is a single BLOB you can store anywhere DuckDB stores BLOBs:
+
+```sql
+-- Materialize a filter per partition
+CREATE TABLE allowed_filters AS
+SELECT bucket,
+       binary_fuse8_filter(hash(id)) AS filter
+FROM allowed_ids
+GROUP BY bucket;
+```
+
+The filter is dense and self-contained — no separate hash function metadata needed at probe time, just call the matching `*_contains` function with the same hash.
+
+## Pre-Filter an Expensive Join
+
+The classic use case — avoid an expensive lookup or cross-partition join when you can probabilistically rule rows out:
+
+```sql
+-- 1. Build a filter from "interesting" keys, once
+CREATE TABLE interesting_filter AS
+SELECT xor8_filter(hash(key)) AS filter FROM interesting_keys;
+
+-- 2. Probe the filter to skip the expensive operation entirely for non-members
+SELECT e.*
+FROM events e, interesting_filter f
+WHERE xor8_filter_contains(f.filter, hash(e.key))   -- fast: maybe-member
+  AND e.key IN (SELECT key FROM interesting_keys);   -- slow: confirm if maybe
+```
+
+Because filters never produce false negatives, the probe-then-verify pattern is exact — you only pay the expensive `IN` for rows that pass the cheap filter.
+
+## Per-Partition Data Skipping
+
+Materialize one filter per logical partition; use it to skip whole partitions at query time:
+
+```sql
+-- Build filters at write time
+CREATE TABLE partition_filters AS
+SELECT day,
+       binary_fuse8_filter(hash(user_id)) AS users_in_partition
+FROM events
+GROUP BY day;
+
+-- At query time, only scan partitions that might contain the user
+SELECT day, COUNT(*) AS hits
+FROM events
+WHERE day IN (
+  SELECT day FROM partition_filters
+  WHERE binary_fuse8_filter_contains(users_in_partition, hash(:target_user))
+)
+  AND user_id = :target_user
+GROUP BY day;
+```
+
+For large fact tables this can skip 99%+ of partitions when looking for a specific user/key.
+
+## Verify the False-Positive Rate
+
+If you want to confirm the FPR on your data, count probes that the filter says yes to but the source set doesn't actually contain:
+
+```sql
+-- Real members
+SELECT COUNT(*) AS true_positives
+FROM source_set s, the_filter f
+WHERE xor8_filter_contains(f.filter, hash(s.id));
+
+-- Non-members that the filter incorrectly accepts
+SELECT COUNT(*) AS false_positives
+FROM unrelated_set u, the_filter f
+WHERE xor8_filter_contains(f.filter, hash(u.id));
+```
+
+For xor8, expect ~0.39% false positives across enough probes; binary_fuse8 lower; binary_fuse16 / xor16 nearly zero.
+
+## Quotient Filter — Dynamic Sets
+
+Quotient filters are the only family here that supports deletion and resize. The `q` and `r` parameters tune the size/FPR tradeoff:
+
+- `q` — number of slot index bits. Filter holds up to ~2^q keys.
+- `r` — remainder bits per slot. Higher `r` → lower FPR, more memory.
+
+Approximate FPR ≈ 2^(−r). At `r = 4`, expect ~6% FPR; at `r = 8`, ~0.4%.
+
+```sql
+SELECT bucket,
+       quotient_filter(20, 8, hash(id)) AS filter   -- ~1M slots, ~0.4% FPR
+FROM ids
+GROUP BY bucket;
+```
+
+## DuckDB-Compatible Bloom Filters
+
+The `bitfilters_duckdb_*` family produces filters in DuckDB's *internal* Bloom filter format — the same one the optimizer materializes during certain joins. Use these when you want to:
+
+- Persist a filter and re-use it later in a join hint.
+- Build per-zone Bloom filters for custom data-skipping logic.
+
+```sql
+SELECT bucket,
+       bitfilters_duckdb_bloom_filter_create(bitfilters_duckdb_hash(key)) AS bf
+FROM keys
+GROUP BY bucket;
+
+SELECT *
+FROM events e, zone_filters z
+WHERE z.bucket = e.bucket
+  AND bitfilters_duckdb_bloom_filter_probe(z.bf, bitfilters_duckdb_hash(e.key));
+```
+
+The `bitfilters_duckdb_hash` is required input — it produces hashes that match DuckDB's internal Bloom filter probe layout.

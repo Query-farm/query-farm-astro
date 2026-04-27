@@ -1,0 +1,115 @@
+## What MiniJinja can do
+
+MiniJinja is a Rust port of Jinja2 — same syntax, same semantics, fast embedded engine. Templates are strings; context is JSON. Anywhere SQL gives you a string column, this extension can render it.
+
+## Variable substitution
+
+```sql
+-- Flat
+SELECT minijinja_render('{{ name }}', '{"name":"Alice"}');
+-- 'Alice'
+
+-- Nested
+SELECT minijinja_render(
+  'Hello {{ user.name }}, {{ user.messages }} new messages',
+  '{"user":{"name":"Alice","messages":5}}'
+);
+```
+
+## Loops
+
+```sql
+SELECT minijinja_render(
+  'Items: {% for x in items %}{{ x.name }}{% if not loop.last %}, {% endif %}{% endfor %}',
+  '{"items":[{"name":"Apple"},{"name":"Banana"},{"name":"Cherry"}]}'
+);
+-- 'Items: Apple, Banana, Cherry'
+```
+
+`loop.last`, `loop.first`, `loop.index`, `loop.index0` are available inside `for`.
+
+## Conditionals
+
+```sql
+SELECT minijinja_render(
+  '{% if user.admin %}Admin{% else %}User{% endif %}: {{ user.name }}',
+  '{"user":{"name":"Alice","admin":true}}'
+);
+-- 'Admin: Alice'
+```
+
+## Filters
+
+```sql
+-- upper, lower, title, length, default, etc.
+SELECT minijinja_render('{{ name | upper }}', '{"name":"alice"}');  -- 'ALICE'
+
+SELECT minijinja_render(
+  'Total: {{ items | length }}',
+  '{"items":[1,2,3,4,5]}'
+);
+-- 'Total: 5'
+```
+
+## HTML rendering with autoescape
+
+By default, special HTML characters in context values are escaped:
+
+```sql
+SELECT minijinja_render('{{ v }}', '{"v":"B&O"}');
+-- 'B&amp;O'
+
+-- Disable when generating non-HTML content (configs, scripts, etc.)
+SELECT minijinja_render('{{ v }}', '{"v":"B&O"}', autoescape := false);
+-- 'B&O'
+```
+
+## Generate HTML email per row
+
+A common pattern — render one template per database row using the row's columns as context:
+
+```sql
+SELECT email,
+       minijinja_render(
+         '<h1>Hi {{ name }}!</h1><p>You have {{ unread }} new messages.</p>',
+         json_object('name', name, 'unread', unread_count)
+       ) AS html_body
+FROM users
+WHERE unread_count > 0;
+```
+
+The `json_object(...)` builds the context inline from columns.
+
+## Generate dynamic SQL
+
+```sql
+WITH plan AS (
+  SELECT minijinja_render(
+    'SELECT {{ cols | join(", ") }} FROM {{ table }} WHERE created_at > {{ since }}',
+    '{"cols":["id","name"],"table":"users","since":"2026-01-01"}'
+  ) AS sql
+)
+SELECT sql FROM plan;
+```
+
+(Templated SQL is for **trusted** templates only — Jinja interpolation is not parameter-safe against injection. For untrusted input, use prepared-statement parameters.)
+
+## Generate config files / IaC
+
+```sql
+SELECT minijinja_render(
+  'server {
+    listen 80;
+    server_name {{ host }};
+    location / {
+      proxy_pass http://{{ upstream }};
+    }
+  }',
+  json_object('host', hostname, 'upstream', upstream)
+) AS nginx_block
+FROM virtual_hosts;
+```
+
+## When to pick MiniJinja vs Tera
+
+[`tera`](/products/extensions/tera) is the other Jinja-style engine in this catalog. They're nearly equivalent — both support the standard Jinja syntax. Pick MiniJinja if you specifically want MiniJinja's Rust crate compatibility (its filter set matches Python's Jinja most closely), Tera if you already have a Tera template library elsewhere.

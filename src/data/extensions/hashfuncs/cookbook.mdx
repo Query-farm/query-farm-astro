@@ -1,0 +1,89 @@
+## Pick the Right Function
+
+| You want… | Pick |
+|---|---|
+| A modern fast 64-bit default | `xxh3_64` |
+| Maximum throughput on 64-bit ints | `rapidhash` |
+| Cross-system compatibility with existing tools | `murmurhash3_32` or `murmurhash3_x64_128` |
+| Stable hex digest matching Python / Rust xxhash | `xxh3_128_hex` |
+| 128-bit space for billions of keys | `xxh3_128` or `murmurhash3_x64_128` |
+
+For **cryptographic** uses (digests, signatures, anti-tamper), reach for [`crypto`](/products/extensions/crypto) instead — none of the functions in this extension are designed to resist adversarial collisions.
+
+## Hash for Partitioning
+
+Pick a partition by taking the hash modulo the partition count. xxh3_64 is plenty here:
+
+```sql
+SELECT user_id,
+       xxh3_64(user_id) % 16 AS partition
+FROM users;
+```
+
+A seed gives you a separate hash space — useful when you want different partitionings derived from the same column without correlating between them:
+
+```sql
+SELECT user_id,
+       xxh3_64(user_id, 1) % 16 AS shard_a,
+       xxh3_64(user_id, 2) % 16 AS shard_b
+FROM users;
+```
+
+## Cache Keys
+
+```sql
+-- Stable cache key for a (user, query) tuple
+SELECT user_id,
+       query_text,
+       xxh3_128_hex([CAST(user_id AS VARCHAR), query_text]) AS cache_key
+FROM query_log;
+```
+
+Use the hex variant when the key needs to be a string — e.g. as a Redis key or filename.
+
+## Bloom-Filter / XOR-Filter Inputs
+
+Pair with [`bitfilters`](/products/extensions/bitfilters) — most filter constructors take `UBIGINT` hash values as input:
+
+```sql
+-- Build an xor8 filter from a column of strings
+SELECT xor8_filter(xxh3_64(email)) AS filter
+FROM allowed_users;
+
+-- Test membership
+SELECT xor8_filter_contains(filter, xxh3_64(:candidate_email)) AS might_be_allowed
+FROM filter_table;
+```
+
+## Reproducible Hash Across Languages
+
+`xxh3_128_hex` matches the canonical 32-character lowercase hex digest used by Python's `xxhash.xxh3_128().hexdigest()` and Rust's `xxhash_rust` (formatted as hex). That makes it useful as a cross-language fingerprint:
+
+```sql
+-- This produces 7a83e2c999242f00c44b2b6fbdd3e5eb
+SELECT xxh3_128_hex('hello');
+```
+
+In Python:
+
+```python
+import xxhash
+xxhash.xxh3_128('hello').hexdigest()
+# '7a83e2c999242f00c44b2b6fbdd3e5eb'
+```
+
+## Speed Comparison (rough)
+
+On modern x86_64, throughput on a single core (cached input):
+
+| Function | Throughput |
+|---|---|
+| `rapidhash` | ~30–40 GB/s |
+| `xxh3_64` | ~25–35 GB/s |
+| `xxh64` | ~12–14 GB/s |
+| `xxh32` | ~6–8 GB/s |
+| `murmurhash3_x64_128` | ~5–7 GB/s |
+| `murmurhash3_32` | ~3–4 GB/s |
+| (cryptographic) `crypto_hash('sha2-256', …)` | ~0.5–2 GB/s |
+
+Numbers vary with input size, alignment, and CPU. The point: non-crypto hashes are typically an order of magnitude faster than cryptographic ones — pick this extension when speed matters and adversarial collisions don't.

@@ -1,0 +1,65 @@
+## What this extension is for
+
+Textplot generates **string-renderable charts** — every function returns a `VARCHAR` you can put in a `SELECT` list, dump to a terminal, log line, status email, README, dashboard cell, or alert payload. There's no client-side rendering, no asset pipeline, no chart library to ship — just SQL output.
+
+Four chart types cover the common cases:
+
+| Function | Shape | Use for |
+|---|---|---|
+| [`tp_bar`](#tp_bar) | Single bar | Progress, percentages, SLA indicators |
+| [`tp_sparkline`](#tp_sparkline) | One-line trend | Time series, KPIs in tables |
+| [`tp_density`](#tp_density) | Distribution histogram | Spotting outliers / shape of data |
+| [`tp_qr`](#tp_qr) | QR code | Scannable links in terminal/docs |
+
+## When to use Textplot vs a real chart library
+
+Use **Textplot** when:
+
+- The output goes to a **terminal**, **log file**, **email**, or **plain-text dashboard**.
+- You're using **DuckDB CLI** for ad-hoc analysis and want to *see* data without leaving SQL.
+- You need to **embed visuals in a status payload** (a Slack message, a webhook body, an alerting hook).
+- You're rendering a **table where each row needs its own chart** — sparklines as table cells are unbeatable.
+
+Use a **real chart library** when:
+
+- You're building an **interactive web dashboard** with hover/zoom/drilldown.
+- You need **precise pixel control** for publication-quality figures.
+- The audience is **non-technical** and expects polished graphics.
+
+## Styling vocabulary
+
+Each function has its own knobs but they share a philosophy: pick a style/theme, optionally override individual characters, optionally apply value-conditional coloring.
+
+- **Shapes / styles** — `square`, `circle`, `heart` for `tp_bar`; named character-set themes for sparklines and density.
+- **Colors** — bar and density support `on_color` / `off_color`. Threshold lists give value-dependent colors.
+- **Custom characters** — every function with `on` / `off` accepts arbitrary Unicode. Quote them as `"on"` / `"off"` because they're SQL reserved words.
+- **Width** — fixed character width keeps charts aligned in tables.
+
+## Embedding charts in row output
+
+The most powerful use case — one sparkline per row, in a table where each row is a different entity:
+
+```sql
+SELECT host,
+       tp_sparkline(cpu_history, theme := 'utf8_blocks', width := 24) AS cpu,
+       tp_bar(disk_pct, min := 0, max := 100, width := 12,
+              thresholds := [(90, 'red'), (75, 'yellow'), (0, 'green')]) AS disk
+FROM hosts_status
+ORDER BY disk_pct DESC;
+```
+
+Run that in any SQL client and you get an at-a-glance fleet view that fits in a terminal window.
+
+## QR rendering tips
+
+The default characters (`⬛` / `⬜`) render at native Unicode block width. In the DuckDB CLI, `.mode ascii` gives the cleanest output (no box-drawing wrapping the result). For terminals with narrow fonts, swap to non-emoji:
+
+```sql
+SELECT tp_qr('https://query.farm', "on" := '#', "off" := ' ');
+```
+
+Higher error-correction (`ecc := 'high'`) tolerates more visual damage at the cost of a larger code — useful when rendering through fonts that handle Unicode block characters imperfectly.
+
+## License
+
+MIT — same terms as DuckDB itself.
