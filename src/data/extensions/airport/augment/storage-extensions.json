@@ -3,39 +3,33 @@
     "id": "airport",
     "name": "airport",
     "category": "Arrow Flight Catalog",
-    "description": "Attach an Arrow Flight server as a DuckDB catalog. Once attached, schemas, tables, and SQL operations on the remote server become accessible like any local database — joins, filters, aggregates, and (when the server supports the corresponding Flight RPCs) INSERT / UPDATE / DELETE. Pass the connection target either inline as parameters or by reference to a previously-created `airport` secret.",
+    "description": "Attach an Arrow Flight server as a DuckDB catalog. Once attached, schemas, tables, and SQL operations on the remote server become accessible like any local database — joins, filters, aggregates, and (when the server supports the corresponding Flight RPCs) `INSERT` / `UPDATE` / `DELETE`. Pass the Flight URL as the database identifier; the matching `airport` secret (if any) is picked up automatically by URL scope. The optional `location` ATTACH parameter overrides the URL when you want a logical name as the database identifier.",
     "parameters": [
       {
         "name": "location",
         "type": "VARCHAR",
         "required": false,
-        "description": "Arrow Flight server URI, e.g. `grpc://host:8815` or `grpc+tls://host:8815`. Required when not attaching by secret name."
+        "description": "Optional Arrow Flight server URI override (e.g. `grpc://host:8815` or `grpc+tls://host:8815`). When omitted, the URL passed as the database identifier in `ATTACH '<url>' AS <alias>` is used."
       },
       {
         "name": "auth_token",
         "type": "VARCHAR",
         "required": false,
-        "description": "Bearer token sent in the gRPC Authorization header. Recommended via `CREATE SECRET` rather than inline so it's not stored in query text."
-      },
-      {
-        "name": "criteria",
-        "type": "VARCHAR",
-        "required": false,
-        "description": "Optional filter string passed to the server's `ListFlights` RPC during catalog discovery. Server-defined semantics."
+        "description": "Bearer token sent in the gRPC Authorization header. Recommended via [`CREATE SECRET`](#secrets) rather than inline so it's not stored in query text."
       }
     ],
     "examples": [
       {
-        "description": "Attach by secret name (recommended — keeps credentials out of query text)",
-        "code": "-- 1. Stash credentials once\nCREATE SECRET my_flight (\n  TYPE airport,\n  location 'grpc+tls://flight.example.com:8815',\n  auth_token :token\n);\n\n-- 2. Attach using the secret name as the database identifier\nATTACH 'my_flight' AS remote (TYPE airport);\n\n-- 3. Query as if it were local\nSELECT user_id, COUNT(*) AS events\nFROM remote.public.activity\nWHERE ts >= CURRENT_DATE - 7\nGROUP BY user_id;"
+        "description": "Attach by URL with credentials picked up from a matching secret (recommended)",
+        "code": "-- 1. Stash credentials once. `scope` is the URL prefix the secret applies to.\nCREATE SECRET my_flight (\n  TYPE airport,\n  scope 'grpc+tls://flight.example.com:8815',\n  auth_token :token\n);\n\n-- 2. Attach the URL — the Secrets Manager picks up `my_flight`\n--    automatically because the URL matches its scope.\nATTACH 'grpc+tls://flight.example.com:8815' AS remote (TYPE airport);\n\n-- 3. Query as if it were local\nSELECT user_id, COUNT(*) AS events\nFROM remote.public.activity\nWHERE ts >= CURRENT_DATE - 7\nGROUP BY user_id;"
       },
       {
         "description": "Attach inline without a secret (good for ad-hoc connections to unauthenticated servers)",
-        "code": "ATTACH 'my_flight' AS remote (\n  TYPE airport,\n  location 'grpc://localhost:8815'\n);\n\nSHOW TABLES FROM remote.public;"
+        "code": "ATTACH 'grpc://localhost:8815' AS remote (TYPE airport);\n\nSHOW TABLES FROM remote.public;"
       },
       {
         "description": "Mutate a remote table — works only when the Flight server implements `DoPut` for the operation",
-        "code": "ATTACH 'my_flight' AS remote (TYPE airport);\n\nINSERT INTO remote.public.events\nSELECT user_id, event_type, ts\nFROM staging.new_events;\n\nUPDATE remote.public.profile\n  SET country = 'CA'\n  WHERE user_id = 12345;"
+        "code": "ATTACH 'grpc+tls://flight.example.com:8815' AS remote (TYPE airport);\n\nINSERT INTO remote.public.events\nSELECT user_id, event_type, ts\nFROM staging.new_events;\n\nUPDATE remote.public.profile\n  SET country = 'CA'\n  WHERE user_id = 12345;"
       }
     ]
   }

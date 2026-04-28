@@ -171,6 +171,9 @@ RUNTIME_SKIP_HINTS = [
     # Cron-task-ID fixtures.
     ("cron task", "cron task fixture missing"),
     ("invalid connection handle", "connection fixture missing"),
+    # Repeated ATTACH/CREATE TABLE/CREATE SECRET across separate snippets
+    # against the shared per-extension DB connection.
+    ("already exists", "snippet collides with previous snippet's state"),
     # `adbc_schema` / `adbc_insert` etc. are TABLE functions; if a
     # snippet uses them as scalar that's drift, but if a snippet is a
     # known-deliberate "describe the function shape" demo the test
@@ -525,9 +528,17 @@ def check_snippet(
         except duckdb.Error as e:
             return Result(snip, S_PARSE_FAIL, str(e), None, None)
 
-    # Phase 1: parse.
+    # Phase 1: parse. For multi-statement snippets, statements that can't
+    # be wrapped in EXPLAIN (ATTACH / USE / SET / CREATE SECRET / CALL …)
+    # need to *actually run* before we EXPLAIN-check the next statement —
+    # otherwise a subsequent `SELECT FROM <attached_catalog>.<schema>.<tbl>`
+    # has no way to bind. So in this phase we EXECUTE non-explainable
+    # statements (treating any failure as the parse verdict), and EXPLAIN
+    # everything else.
+    executed_in_phase1: set[int] = set()
+    statements = list(enumerate(split_statements(rewritten)))
     try:
-        for stmt in split_statements(rewritten):
+        for idx, stmt in statements:
             if not stmt.strip():
                 continue
             # Strip comments to detect comment-only fragments (`-- 11`).
@@ -535,14 +546,29 @@ def check_snippet(
             stripped = re.sub(r"/\*.*?\*/", "", stripped, flags=re.DOTALL)
             if not stripped.strip():
                 continue
-            # Statements like CALL / COPY / INSTALL / LOAD / SET /
-            # ATTACH / CREATE / etc. aren't valid inner queries of
-            # EXPLAIN. Skip EXPLAIN; execute phase will be the parse
-            # verdict. (We still want to know if `CREATE SECRET ...`
-            # has a typo in the parameter names — execute will surface
-            # that.)
             first_kw = stripped.strip().split(None, 1)[0].upper().rstrip(",;")
             if first_kw in NON_EXPLAINABLE_FIRST_KEYWORDS:
+                # Execute for real so subsequent statements see the
+                # right namespace / catalog / variable / secret state.
+                # An execution failure here IS the parse verdict — same
+                # rules as the old phase-2 fallthrough.
+                try:
+                    db.execute(stmt)
+                    executed_in_phase1.add(idx)
+                except duckdb.Error as e:
+                    msg = str(e)
+                    lower = msg.lower()
+                    is_real_drift = (
+                        "parser error" in lower
+                        or "no function matches the given name" in lower
+                        or ("function does not exist" in lower and extension_loaded)
+                    )
+                    if is_real_drift:
+                        return Result(snip, S_PARSE_FAIL, msg, None, None)
+                    reason = classify_parse_error(msg) or classify_runtime_error(msg)
+                    if reason:
+                        return Result(snip, S_PARSE_PASS, None, S_EXEC_SKIP, reason)
+                    return Result(snip, S_PARSE_PASS, None, S_EXEC_FAIL, msg)
                 continue
             try:
                 db.execute(f"EXPLAIN {stmt}")
@@ -581,10 +607,14 @@ def check_snippet(
     except Exception as e:
         return Result(snip, S_PARSE_FAIL, str(e), None, None)
 
-    # Phase 2: execute. Use the rewritten SQL with bind-var
-    # placeholders substituted, so `:foo` doesn't trip the parser.
+    # Phase 2: execute. Re-runs every statement — but skips the
+    # non-explainable ones we already executed in phase 1 (ATTACH / USE
+    # / SET / CREATE SECRET / etc.) since re-running those would fail
+    # with "already exists" errors that aren't drift.
     try:
-        for stmt in split_statements(rewritten):
+        for idx, stmt in statements:
+            if idx in executed_in_phase1:
+                continue
             if not stmt.strip():
                 continue
             stripped = re.sub(r"--[^\n]*", "", stmt)

@@ -1,17 +1,60 @@
+## Try it against the live demo server
+
+Query.Farm runs a public demo Flight server at `grpc+tls://hello-airport.query.farm` so you can exercise Airport without building anything. Attach it, switch to the `static` schema, and join across two of its tables:
+
+```sql
+-- Connect to a remote Arrow Flight server
+ATTACH 'hello' (TYPE AIRPORT, location 'grpc+tls://hello-airport.query.farm');
+
+-- Switch to the static schema
+USE hello.static;
+
+-- Query remote tables with standard SQL — notice the join across two remote tables
+SELECT greeting || ', ' || first_name || ' welcome to Airport.' AS greeting
+FROM greetings
+JOIN people ON people.language = greetings.language
+LIMIT 3;
+```
+
+The `chat` schema demonstrates writes against a Flight server too — auto-assigned identity, message inserts, and a recent-messages query in the same session:
+
+```sql
+-- Switch to the chat schema
+USE hello.chat;
+
+-- Get your auto-generated identity
+SELECT * FROM identity;
+
+-- Post a message to the 'airport' channel
+INSERT INTO messages (channel, message)
+VALUES ('airport', 'Hello from Airport!');
+
+-- See all recent messages
+SELECT sender, message, timestamp
+FROM messages
+WHERE channel = 'airport'
+ORDER BY timestamp DESC
+LIMIT 10;
+```
+
+See [airport.query.farm](https://airport.query.farm) for the demo's full schema reference and notes on the underlying Flight server implementation.
+
 ## Attach a Flight Database
 
 The most powerful way to use Airport: attach an [Arrow Flight](https://arrow.apache.org/docs/format/Flight.html) server as a DuckDB database via [`ATTACH`](https://duckdb.org/docs/sql/statements/attach) and query it like any other catalog.
 
 ```sql
--- 1. Store credentials with CREATE SECRET
-CREATE SECRET my_flight (
+-- 1. Store credentials with CREATE SECRET. `scope` is the Flight URL
+--    the secret applies to — DuckDB matches the secret by URL prefix.
+CREATE OR REPLACE SECRET my_flight (
   TYPE airport,
-  location 'grpc+tls://flight.example.com:8815',
+  scope 'grpc+tls://flight.example.com:8815',
   auth_token 'your-bearer-token'
 );
 
--- 2. Attach the database
-ATTACH 'my_flight' AS remote (TYPE airport);
+-- 2. ATTACH the URL directly. The Secrets Manager picks up `my_flight`
+--    automatically because the URL matches its scope.
+ATTACH 'grpc+tls://flight.example.com:8815' AS remote (TYPE airport);
 
 -- 3. Query as if it's local — joins, filters, aggregates all push down
 --    to the Flight server when supported.
@@ -23,15 +66,16 @@ ORDER BY events DESC
 LIMIT 50;
 ```
 
-DuckDB's full SQL surface works against remote tables — joins across local and remote catalogs, CTEs, window functions, materialized CTAS into local tables. Credentials live in the [DuckDB Secrets Manager](https://duckdb.org/docs/configuration/secrets_manager) (see [`CREATE SECRET`](https://duckdb.org/docs/sql/statements/create_secret)) so they're never inlined into queries.
+DuckDB's full SQL surface works against remote tables — joins across local and remote catalogs, CTEs, window functions, materialized CTAS into local tables. Credentials live in the [DuckDB Secrets Manager](https://duckdb.org/docs/configuration/secrets_manager) (see [`CREATE SECRET`](https://duckdb.org/docs/sql/statements/create_secret)) so they're never inlined into queries — the secret is matched against the `ATTACH` URL by its `scope` prefix.
 
 ## Discover What a Server Offers
 
 Before attaching, list the databases and flights a server exposes:
 
 ```sql
--- Show databases the server hosts
-SELECT * FROM airport_databases('my_flight');
+-- Show databases the server hosts. `airport_databases` takes the
+-- Flight URL — the same URL you'd pass to ATTACH.
+SELECT * FROM airport_databases('grpc+tls://flight.example.com:8815');
 
 -- Show all flights (schemas + metadata) under a server URL
 SELECT * FROM airport_flights('grpc+tls://flight.example.com:8815');
