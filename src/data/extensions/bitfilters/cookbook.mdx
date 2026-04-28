@@ -109,16 +109,26 @@ The `bitfilters_duckdb_*` family produces filters in DuckDB's *internal* Bloom f
 - Persist a filter and re-use it later in a join hint.
 - Build per-zone Bloom filters for custom data-skipping logic.
 
+All three functions take a constant version string (e.g. `'v1.5.1'`) as their first argument — bind-folded at parse time — so the produced hash and filter layout match the DuckDB build that will probe them later.
+
 ```sql
+-- Build one DuckDB-shaped Bloom filter per bucket. The aggregate's middle
+-- argument (16384 here) is the sector count — must be a power of two.
+CREATE TABLE zone_filters AS
 SELECT bucket,
-       bitfilters_duckdb_bloom_filter_create(bitfilters_duckdb_hash(key)) AS bf
+       bitfilters_duckdb_bloom_filter_create(
+         'v1.5.1',
+         16384,
+         bitfilters_duckdb_hash('v1.5.1', key)
+       ) AS bf
 FROM keys
 GROUP BY bucket;
 
+-- Probe the matching filter at scan time
 SELECT *
 FROM events e, zone_filters z
 WHERE z.bucket = e.bucket
-  AND bitfilters_duckdb_bloom_filter_probe(z.bf, bitfilters_duckdb_hash(e.key));
+  AND bitfilters_duckdb_bloom_filter_probe('v1.5.1', z.bf, e.key);
 ```
 
-The `bitfilters_duckdb_hash` is required input — it produces hashes that match DuckDB's internal Bloom filter probe layout.
+`bitfilters_duckdb_hash` and `bitfilters_duckdb_bloom_filter_create` produce hashes / sector layouts that match the DuckDB build named by the version string — pin it to your runtime's exact version.
