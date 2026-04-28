@@ -4,10 +4,24 @@ import Badge from '../ui/Badge.astro';
 import CodeBlock from '../ui/CodeBlock.astro';
 import ShareLinkButton from '../ui/ShareLinkButton.astro';
 import FunctionSignatureRenderer from './FunctionSignatureRenderer.astro';
+import FunctionFormChooser from './FunctionFormChooser.astro';
 import DuckDBExtensionFunctionParameters from './DuckDBExtensionFunctionParameters.astro';
 import DuckDBExtensionFunctionReturns from './DuckDBExtensionFunctionReturns.astro';
 import QueryResult from './QueryResult.astro';
-import type { FunctionExample } from '../../data/extension-types';
+import { marked, parseInline } from 'marked';
+import type { FunctionExample, FunctionForm } from '../../data/extension-types';
+
+// Author-supplied description supports full block-level markdown (multiple
+// paragraphs, lists, links, inline code). Example descriptions and parameter
+// descriptions are single-line; use parseInline for those.
+const md = (s: string) => marked(s ?? '', { async: false }) as string;
+const mdInline = (s: string) => parseInline(s ?? '', { async: false }) as string;
+// Same code/link prose styling we use in TechnicalOverview / TechnicalDetails:
+// neutral gray pill for plain code, harvest-tinted pill for linked code,
+// underlined harvest links for plain text-only links. Plus paragraph spacing
+// for block descriptions.
+const proseClass = '[&_p]:mb-2 last:[&_p]:mb-0 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:bg-soil-100 [&_code]:text-soil-900 [&_code]:font-mono [&_code]:text-[0.9em] [&_a]:text-harvest-700 [&_a]:underline [&_a]:underline-offset-2 [&_a]:decoration-harvest-300 hover:[&_a]:decoration-harvest-700 [&_a:has(>code)]:no-underline [&_a>code]:bg-harvest-50 [&_a>code]:text-harvest-800 [&_a:hover>code]:bg-harvest-100 [&_a:hover>code]:text-harvest-900 [&_a>code]:transition-colors';
+const proseInlineClass = '[&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:bg-soil-100 [&_code]:text-soil-900 [&_code]:font-mono [&_code]:text-[0.9em] [&_a]:text-harvest-700 [&_a]:underline [&_a]:underline-offset-2 [&_a]:decoration-harvest-300 hover:[&_a]:decoration-harvest-700 [&_a:has(>code)]:no-underline [&_a>code]:bg-harvest-50 [&_a>code]:text-harvest-800 [&_a:hover>code]:bg-harvest-100 [&_a:hover>code]:text-harvest-900 [&_a>code]:transition-colors';
 
 interface Parameter {
   name: string;
@@ -47,6 +61,7 @@ interface Props {
   resolvedRelated?: FunctionData[];
   tags?: Record<string, string>;
   returnTypeUnion?: string[];
+  forms?: FunctionForm[];
 }
 
 const {
@@ -65,8 +80,11 @@ const {
   allFunctions = [],
   resolvedRelated,
   tags,
-  returnTypeUnion
+  returnTypeUnion,
+  forms,
 } = Astro.props;
+
+const hasMultipleForms = !!forms && forms.length > 1;
 
 // Helper to create category ID for linking
 const getCategoryId = (cat: string) => cat.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
@@ -129,7 +147,7 @@ const badgeConfig = typeBadges[type];
   </div>
 
   <!-- Signature (not shown for copy functions) -->
-  {type !== 'copy' && (
+  {type !== 'copy' && !hasMultipleForms && (
     <FunctionSignatureRenderer
       functionName={name}
       parameters={parameters}
@@ -138,8 +156,12 @@ const badgeConfig = typeBadges[type];
     />
   )}
 
+  {hasMultipleForms && (
+    <FunctionFormChooser functionName={name} forms={forms!} />
+  )}
+
   <!-- Parameters -->
-  <DuckDBExtensionFunctionParameters parameters={parameters} />
+  {!hasMultipleForms && <DuckDBExtensionFunctionParameters parameters={parameters} />}
 
   <!-- Options (for copy functions) -->
   {options && options.length > 0 && (
@@ -176,9 +198,7 @@ const badgeConfig = typeBadges[type];
   <!-- Description -->
   <div class="mb-4">
     <h5 class="text-sm font-semibold text-soil-700 mb-2">Description</h5>
-    <p class="text-sm text-soil-700">
-      {description}
-    </p>
+    <div class:list={["text-sm text-soil-700", proseClass]} set:html={md(description)}></div>
   </div>
 
   <!-- Examples -->

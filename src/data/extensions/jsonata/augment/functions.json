@@ -1,13 +1,57 @@
 [
   {
+    "id": "jsonata",
     "name": "jsonata",
+    "type": "scalar",
     "categories": ["Query"],
-    "description": "Evaluate a JSONata expression against a JSON document. Two arities: 2-arg `jsonata(expr, json)` and 3-arg `jsonata(expr, json, bindings)` for passing extra named values into the expression scope.",
+    "returnType": "JSON",
+    "parameters": [
+      {
+        "name": "expression",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "A [JSONata expression](https://docs.jsonata.org/expressions). Typically a SQL literal — when it's constant the extension parses it once and reuses the compiled program across every row."
+      },
+      {
+        "name": "json_data",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "The JSON value the expression is evaluated against. Any DuckDB [`JSON`](https://duckdb.org/docs/data/json/json_functions.html) value — column, literal, or function result."
+      },
+      {
+        "name": "bindings",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "Optional. JSON object whose keys become `$variable` names accessible inside the expression. Use it to parameterize a static expression with per-query values (thresholds, ids, dates)."
+      }
+    ],
+    "returns": "Result of evaluating the expression — typed as [`JSON`](https://duckdb.org/docs/data/json/json_functions.html). Cast (`::VARCHAR`, `::DOUBLE`, `::JSON[]`) or `unnest` downstream depending on what the expression returns.",
+    "description": "Evaluates a [JSONata](https://jsonata.org/) expression against a JSON document and returns the result as `JSON`.\n\nJSONata is a [lightweight query and transformation language for JSON](https://docs.jsonata.org/overview), modelled on XPath. The expression can be a [path traversal](https://docs.jsonata.org/path-operators), an [array predicate filter](https://docs.jsonata.org/predicate), an [object-construction](https://docs.jsonata.org/construction) literal that reshapes the input, or any combination — all in one string.\n\nTwo arities:\n\n- `jsonata(expression, json_data)` — the common form.\n- `jsonata(expression, json_data, bindings)` — passes a `bindings` JSON object whose keys become `$variable` names inside the expression. Useful when the expression is a SQL constant but the parameters are per-query (e.g. a threshold lifted from a [SQL variable](https://duckdb.org/docs/sql/statements/set#variables)).\n\nWhen `expression` is a SQL constant — the typical case — it's parsed once and the compiled program is reused per row. Per-row cost is JSON walk + apply.\n\nThe full JSONata language reference, including [string functions](https://docs.jsonata.org/string-functions), [numeric functions](https://docs.jsonata.org/numeric-functions), [aggregation](https://docs.jsonata.org/aggregation-functions), [higher-order functions](https://docs.jsonata.org/higher-order-functions), [sorting and grouping](https://docs.jsonata.org/sorting-grouping), and [programming constructs](https://docs.jsonata.org/programming), applies. The interactive [JSONata exerciser](https://try.jsonata.org/) is the fastest way to iterate on an expression before pasting it into SQL.",
     "examples": [
-      { "description": "Extract a field", "code": "SELECT jsonata('Account', '{\"Account\": 5}');" },
-      { "description": "Concatenate fields", "code": "SELECT jsonata('FirstName & \" \" & Surname', '{\"FirstName\":\"Fred\",\"Surname\":\"Smith\"}');" },
-      { "description": "Conditional array filter", "code": "SELECT jsonata('Phone[type=\"mobile\"].number', payload) FROM contacts;" },
-      { "description": "Reshape into a new object", "code": "SELECT jsonata('{ \"name\": FirstName & \" \" & Surname, \"mobile\": Phone[type=\"mobile\"].number }', payload) FROM contacts;" }
+      {
+        "description": "Extract a nested field",
+        "code": "SELECT jsonata('Account.Name',\n               '{\"Account\":{\"Name\":\"Firefly\"}}');\n-- \"Firefly\""
+      },
+      {
+        "description": "Concatenate fields with the JSONata `&` operator",
+        "code": "SELECT jsonata('FirstName & \" \" & Surname',\n               '{\"FirstName\":\"Fred\",\"Surname\":\"Smith\"}');\n-- \"Fred Smith\""
+      },
+      {
+        "description": "Filter an array with a predicate, then project",
+        "code": "SELECT jsonata('Phone[type=\"mobile\"].number',\n  '{\"Phone\":[\n    {\"type\":\"home\",\"number\":\"0203 544 1234\"},\n    {\"type\":\"mobile\",\"number\":\"077 7700 1234\"}\n  ]}');\n-- \"077 7700 1234\""
+      },
+      {
+        "description": "Reshape JSON into a new object in one expression",
+        "code": "SELECT jsonata('{\n  \"name\":   FirstName & \" \" & Surname,\n  \"mobile\": Phone[type=\"mobile\"].number\n}', payload) AS reshaped\nFROM contacts;"
+      },
+      {
+        "description": "Aggregate inside a JSON document",
+        "code": "SELECT jsonata('$sum(Order.Product.Price)', orders);"
+      },
+      {
+        "description": "Parameterize with the 3-arg bindings form",
+        "code": "SELECT jsonata('items[price > $threshold].id',\n               payload,\n               '{\"threshold\": 100}')\nFROM line_items;"
+      }
     ],
     "relatedFunctions": []
   }

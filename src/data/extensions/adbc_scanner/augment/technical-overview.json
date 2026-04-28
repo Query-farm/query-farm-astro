@@ -1,0 +1,106 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use ADBC Scanner?",
+  "description": "Talk to any [ADBC](https://arrow.apache.org/adbc/)-capable database from DuckDB using [Apache Arrow](https://arrow.apache.org/)'s columnar wire format end-to-end — no row conversions, no driver-specific glue.",
+  "sections": [
+    {
+      "icon": "🏹",
+      "title": "What is ADBC?",
+      "description": "[Arrow Database Connectivity](https://arrow.apache.org/adbc/) is a database-client API standard from the [Apache Arrow](https://arrow.apache.org/) project that moves data as Arrow [columnar batches](https://arrow.apache.org/docs/format/Columnar.html) all the way from the database engine to your query. Where [ODBC](https://learn.microsoft.com/en-us/sql/odbc/reference/odbc-overview) and [JDBC](https://docs.oracle.com/javase/tutorial/jdbc/) convert rows on each side of the wire, ADBC keeps the columnar layout end-to-end.",
+      "bulletPoints": [
+        {
+          "label": "Standard API, many drivers",
+          "description": "[Drivers](https://arrow.apache.org/adbc/current/driver/) exist for [SQLite](https://arrow.apache.org/adbc/current/driver/sqlite.html), [PostgreSQL](https://arrow.apache.org/adbc/current/driver/postgresql.html), [Snowflake](https://arrow.apache.org/adbc/current/driver/snowflake.html), [BigQuery](https://arrow.apache.org/adbc/current/driver/bigquery.html), [Flight SQL](https://arrow.apache.org/adbc/current/driver/flight_sql.html), DuckDB itself, and a growing list of others — anywhere data already lives in or near Arrow."
+        },
+        {
+          "label": "No row-format intermediate",
+          "description": "Result batches arrive as Arrow [record batches](https://arrow.apache.org/docs/format/Columnar.html#format-record-batches) and feed straight into DuckDB's [vectorized executor](https://duckdb.org/2021/06/25/querying-parquet.html#vectorized-execution) without transposition or per-row allocation."
+        },
+        {
+          "label": "Pluggable driver model",
+          "description": "Drivers are loaded as shared libraries (or via lightweight [`manifest.toml`](https://arrow.apache.org/adbc/current/driver/installation.html#manifests) files) at runtime — no recompiling DuckDB to add support for a new database."
+        }
+      ]
+    },
+    {
+      "icon": "🔌",
+      "title": "Two ways to use it",
+      "description": "The extension exposes the same underlying ADBC machinery through two surfaces — pick by what you're trying to do. Both can be loaded simultaneously and target the same remote database.",
+      "bulletPoints": [
+        {
+          "label": "Catalog mode — `ATTACH ... (TYPE adbc, driver '…')`",
+          "description": "Mounts the remote database as a DuckDB [catalog](#storage-extensions). Schemas and tables show up under the alias you give `ATTACH`; projection and filter pushdown happen automatically; the driver streams Arrow batches into DuckDB's executor. Read-only — DDL and DML aren't supported through the catalog interface."
+        },
+        {
+          "label": "Function mode — [`adbc_connect`](#adbc_connect) + scan / execute / insert",
+          "description": "Returns a `BIGINT` connection handle you stash in a [SQL variable](https://duckdb.org/docs/sql/statements/set_variable). Pass it to [`adbc_scan`](#adbc_scan) / [`adbc_scan_table`](#adbc_scan_table) for arbitrary SELECTs, [`adbc_execute`](#adbc_execute) for DDL/DML, [`adbc_insert`](#adbc_insert) for Arrow-native bulk inserts, and [`adbc_commit`](#adbc_commit) / [`adbc_rollback`](#adbc_rollback) (after [`adbc_set_autocommit`](#adbc_set_autocommit)) for explicit transactions. Close with [`adbc_disconnect`](#adbc_disconnect)."
+        },
+        {
+          "label": "Schema introspection",
+          "description": "[`adbc_tables`](#adbc_tables), [`adbc_columns`](#adbc_columns), and [`adbc_schema`](#adbc_schema) expose the remote catalog without running data queries. Useful for dashboards and schema-driven ETL that need to adapt as the upstream changes — and works whether you're in catalog mode, function mode, or both."
+        }
+      ]
+    },
+    {
+      "icon": "📦",
+      "title": "Driver Setup",
+      "description": "ADBC drivers ship as shared libraries (`libadbc_driver_*.dylib` / `.so` / `.dll`) plus an optional [`manifest.toml`](https://arrow.apache.org/adbc/current/driver/installation.html#manifests) that names the symbol to load. The extension resolves them in two ways depending on how you reference them in [`adbc_connect`](#adbc_connect).",
+      "bulletPoints": [
+        {
+          "label": "By name (manifest-resolved)",
+          "description": "`'driver': 'sqlite'` looks up a `.toml` manifest in the [standard ADBC search paths](https://arrow.apache.org/adbc/current/driver/installation.html#search-paths). Most install methods — [`pip install adbc-driver-postgresql`](https://pypi.org/project/adbc-driver-postgresql/), Homebrew, system packages — drop manifests in the right place automatically."
+        },
+        {
+          "label": "By explicit path",
+          "description": "`'driver': '/path/to/libadbc_driver_xxx.dylib'` skips manifest resolution — useful for vendored drivers or unusual install locations."
+        },
+        {
+          "label": "Custom search paths",
+          "description": "Pass `'search_paths': '/opt/adbc/drivers'` inside the connect options to add manifest directories without changing OS-level config."
+        }
+      ]
+    },
+    {
+      "icon": "🆚",
+      "title": "ADBC Scanner vs Airport",
+      "description": "Both extensions stream Arrow over the wire, but they speak different protocols and target different worlds. Use this section to pick the right tool — or load both, since they coexist cleanly.",
+      "bulletPoints": [
+        {
+          "label": "Use ADBC Scanner",
+          "description": "When the system on the other end is a database with an [ADBC driver](https://arrow.apache.org/adbc/current/driver/) — SQLite, PostgreSQL, Snowflake, BigQuery, MySQL, etc. ADBC is a *client API* standard."
+        },
+        {
+          "label": "Use Airport",
+          "description": "When the system on the other end speaks [Arrow Flight](https://arrow.apache.org/docs/format/Flight.html) directly — typically custom services or Flight-native systems like [Dremio](https://www.dremio.com/). Flight is an *RPC protocol*, not a client API. See the [`airport`](/products/extensions/airport) extension."
+        },
+        {
+          "label": "Both can coexist",
+          "description": "Nothing stops you from loading both: ADBC Scanner for traditional databases, [`airport`](/products/extensions/airport) for Flight-native services, all queryable from the same DuckDB session."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Federate live OLTP databases",
+          "description": "Run cross-database analytics by pulling tables from PostgreSQL, MySQL, or SQLite into DuckDB on demand — no ETL machinery, no scheduled syncs. Use [`adbc_scan_table`](#adbc_scan_table) for whole tables or [`adbc_scan`](#adbc_scan) for filtered queries."
+        },
+        {
+          "title": "Bulk-load from cloud warehouses",
+          "description": "Scan [Snowflake](https://arrow.apache.org/adbc/current/driver/snowflake.html) or [BigQuery](https://arrow.apache.org/adbc/current/driver/bigquery.html) query results directly into DuckDB for local analysis, joining against Parquet, CSV, or other DuckDB-native sources."
+        },
+        {
+          "title": "Schema-driven dashboards and ETL",
+          "description": "Use [`adbc_tables`](#adbc_tables) / [`adbc_columns`](#adbc_columns) / [`adbc_schema`](#adbc_schema) to introspect remote catalogs and generate dashboards or pipelines that adapt to schema changes without code edits."
+        },
+        {
+          "title": "Arrow-native bulk export",
+          "description": "Push DuckDB query results into a remote ADBC database with [`adbc_insert`](#adbc_insert) — columnar end-to-end, no row-format detour."
+        }
+      ]
+    }
+  ]
+}

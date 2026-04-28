@@ -1,0 +1,72 @@
+import { Icon } from 'astro-icon/components';
+import Callout from '../../../components/docs/Callout.astro';
+
+<div class="flex items-center gap-4 mb-8 not-prose">
+  <Icon name="simple-icons:apachekafka" class="w-12 h-12 text-soil-900 flex-shrink-0" />
+  <div>
+    <p class="text-xs font-semibold uppercase tracking-wider text-soil-500">DuckDB ↔ Apache Kafka</p>
+    <p class="text-lg text-soil-700">SQL access to <a href="https://kafka.apache.org/" class="text-harvest-700 underline underline-offset-2 decoration-harvest-300 hover:decoration-harvest-700">Apache Kafka</a> topics — consumer-side, partition-parallel, librdkafka-configured.</p>
+  </div>
+</div>
+
+## What you can do with one query
+
+The shortest path from "Kafka topic" to "queryable DuckDB table":
+
+```sql
+CREATE TABLE orders_snapshot AS
+SELECT
+  partition,
+  offset,
+  json_extract_string(message::VARCHAR, '$.user_id') AS user_id,
+  json_extract_string(message::VARCHAR, '$.amount')  AS amount
+FROM tributary_scan_topic('orders',
+  "bootstrap.servers" := 'kafka:9092');
+```
+
+[`tributary_scan_topic`](#tributary_scan_topic) reads each partition in parallel, hands DuckDB the message bytes as a `BLOB`, and lets you decode them inline with whatever SQL fits your serialization. Any [librdkafka configuration option](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) — `security.protocol`, `sasl.username`, `auto.offset.reset`, `ssl.ca.location` — passes through as a named parameter.
+
+<Callout type="note" title="Best fit, scoped honestly">
+This extension is the consumer side of Kafka — read paths, snapshot paths, cluster introspection. It is **not a Kafka producer**: there is no documented write-back function in the current version. For publishing to topics, keep a real Kafka producer.
+
+Status is **experimental**; the function surface may change as more `librdkafka` paths get exposed. The configuration surface is large because Tributary forwards every parameter to `librdkafka` unchanged — that's the design, but it means typos surface as `librdkafka` errors at scan time rather than at SQL parse time.
+</Callout>
+
+## Architecture
+
+Tributary is a thin [DuckDB table-function](https://duckdb.org/docs/sql/statements/select) wrapper around [librdkafka](https://github.com/confluentinc/librdkafka), the standard C/C++ Kafka client. Every named parameter you pass to [`tributary_scan_topic`](#tributary_scan_topic) or [`tributary_metadata`](#tributary_metadata) is forwarded to librdkafka's configuration as-is — there's no Tributary-specific naming layer to learn. If a setting works in the [Kafka consumer config reference](https://kafka.apache.org/documentation/#consumerconfigs), it works here.
+
+A topic with `N` partitions is scanned by `N` parallel consumers, and DuckDB pipelines the resulting Arrow batches into the rest of the query plan. The output schema is fixed: `(topic VARCHAR, partition INTEGER, offset BIGINT, message BLOB)`. The message column is intentionally a `BLOB` — Tributary doesn't try to guess your wire format. Cast it (`message::VARCHAR`) and use [DuckDB's JSON functions](https://duckdb.org/docs/data/json/loading_json.html), or pair with the `avro` / `protobuf` community extensions, depending on what's on your topic.
+
+## Securing credentials
+
+Authentication parameters are plain SQL values, so anything passed inline appears in the cached query plan and `EXPLAIN` output. Source secrets from the environment via `getenv()` and bind them in:
+
+```sql
+SET VARIABLE k_user = getenv('KAFKA_USER');
+SET VARIABLE k_pass = getenv('KAFKA_PASSWORD');
+
+SELECT *
+FROM tributary_scan_topic('orders',
+  "bootstrap.servers"  := 'broker.example.com:9093',
+  "security.protocol"  := 'SASL_SSL',
+  "sasl.mechanism"     := 'SCRAM-SHA-512',
+  "sasl.username"      := :k_user,
+  "sasl.password"      := :k_pass);
+```
+
+`getenv` runs at parse time, so the literal credential never appears in any cached plan. See [Kafka security: SASL](https://kafka.apache.org/documentation/#security_sasl) and [SSL](https://kafka.apache.org/documentation/#security_ssl) for the upstream guidance on which mechanism fits your cluster.
+
+## Scoping the scan
+
+[`tributary_scan_topic`](#tributary_scan_topic) defaults to reading the topic's current contents — fine for a low-volume topic or a one-off snapshot, but expensive on a high-throughput production topic. Three ways to scope:
+
+- **Filter on `partition` / `offset`** in a `WHERE` clause. DuckDB pushes these down so partitions you don't need aren't consumed at all.
+- **Use `auto.offset.reset := 'latest'`** so a fresh consumer group starts at the tail of the topic instead of the head.
+- **Set `enable.auto.commit := 'false'`** for ad-hoc analytics so the read doesn't advance any production consumer-group offsets you might inadvertently share.
+
+## Compared to alternatives
+
+- **[Kafka Connect](https://kafka.apache.org/documentation/#connect)** — purpose-built for sustained, structured Kafka↔system pipelines. Reach for that when you need delivery guarantees, schema-registry integration, or recurring sync. Reach for Tributary when you want SQL on demand.
+- **[`kcat`](https://github.com/edenhill/kcat) + CSV → DuckDB** — what people often did before this extension. Tributary collapses the file-in-the-middle and lets you push DuckDB predicates back into the consume.
+- **Python `confluent-kafka` + DataFrames** — much heavier setup; you give up DuckDB's vectorized execution against the streamed data and re-introduce row-format conversion at the DataFrame boundary.

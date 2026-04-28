@@ -1,3 +1,10 @@
+import { Icon } from 'astro-icon/components';
+
+<div class="flex items-center gap-3 mb-6 not-prose text-soil-600">
+  <Icon name="simple-icons:apachekafka" class="w-6 h-6 text-soil-900" />
+  <p class="text-sm">Recipes for <a href="https://kafka.apache.org/" class="text-harvest-700 underline underline-offset-2 decoration-harvest-300 hover:decoration-harvest-700">Apache Kafka</a> read paths, JSON decoding, joins, and discovery.</p>
+</div>
+
 ## Read a Kafka topic
 
 The simplest pattern — point a query at a topic and treat it as a table:
@@ -8,19 +15,37 @@ FROM tributary_scan_topic('orders',
                           "bootstrap.servers" := 'kafka:9092');
 ```
 
-Each row corresponds to one Kafka message. The result set includes the message metadata (partition, offset, timestamp) plus the payload.
+Each row corresponds to one Kafka message, with metadata columns (`topic`, `partition`, `offset`) plus the raw payload as a `BLOB`. See [`tributary_scan_topic`](#tributary_scan_topic) for the full signature and parameter table.
+
+## Decode JSON messages on the way in
+
+Most topics carry JSON. Cast the `message` column to `VARCHAR` and use [DuckDB's JSON functions](https://duckdb.org/docs/data/json/loading_json.html):
+
+```sql
+SELECT
+  partition,
+  offset,
+  json_extract_string(message::VARCHAR, '$.user_id') AS user_id,
+  json_extract_string(message::VARCHAR, '$.event')   AS event
+FROM tributary_scan_topic('events',
+                          "bootstrap.servers" := 'kafka:9092');
+```
+
+For Avro / Protobuf payloads, pair with DuckDB's `avro` / `protobuf` community extensions and decode the `BLOB` column the same way.
 
 ## Filter while consuming
 
-Push predicates down — DuckDB will only materialize rows matching the WHERE clause:
+DuckDB pushes predicates down into the partition-parallel scan — partitions you don't need aren't consumed at all:
 
 ```sql
 SELECT *
 FROM tributary_scan_topic('orders',
                           "bootstrap.servers" := 'kafka:9092')
-WHERE timestamp > now() - INTERVAL 1 HOUR
-  AND partition = 0;
+WHERE partition = 0
+  AND offset >= 1000000;
 ```
+
+For time-bounded scans, decode the timestamp from the message body and filter there, or use `auto.offset.reset := 'latest'` so a fresh consumer group starts at the tail.
 
 ## Snapshot a topic into a local table
 
@@ -31,18 +56,67 @@ FROM tributary_scan_topic('orders',
                           "bootstrap.servers" := 'kafka:9092');
 ```
 
-Useful for ad-hoc analytics over a finite slice of the stream.
+Useful for ad-hoc analytics over a finite slice of the stream — once it's a DuckDB table, the rest of your query plan runs at full vectorized speed.
 
 ## Join Kafka with local data
 
 ```sql
-SELECT k.message_id, k.payload, u.name
+SELECT k.partition, k.offset, u.name, msg.event
 FROM tributary_scan_topic('events',
                           "bootstrap.servers" := 'kafka:9092') k
-JOIN users u USING (user_id)
-WHERE k.timestamp > now() - INTERVAL 10 MINUTE;
+CROSS JOIN LATERAL (
+  SELECT
+    json_extract_string(k.message::VARCHAR, '$.user_id') AS user_id,
+    json_extract_string(k.message::VARCHAR, '$.event')   AS event
+) msg
+JOIN users u ON u.user_id = msg.user_id::BIGINT;
 ```
 
-## Pointing tools at the docs
+The classic enrichment pattern — Kafka stream on one side, reference data on the other, joined in a single SQL statement.
 
-Full configuration options (consumer groups, SASL/TLS, offset modes, batch sizing, write paths) live at the [Tributary docs](https://query.farm/duckdb_extension_tributary.html). The README in the upstream repo is intentionally minimal because the configuration surface is large.
+## Authenticate against managed Kafka
+
+Source credentials from the environment so they don't appear in cached query plans:
+
+```sql
+SET VARIABLE k_user = getenv('KAFKA_USER');
+SET VARIABLE k_pass = getenv('KAFKA_PASSWORD');
+
+SELECT *
+FROM tributary_scan_topic('orders',
+  "bootstrap.servers"  := 'broker.example.com:9093',
+  "security.protocol"  := 'SASL_SSL',
+  "sasl.mechanism"     := 'SCRAM-SHA-512',
+  "sasl.username"      := :k_user,
+  "sasl.password"      := :k_pass);
+```
+
+Same pattern for SSL-only clusters: pass `security.protocol := 'SSL'` plus the relevant `ssl.ca.location` / `ssl.certificate.location` parameters. See [Kafka SASL](https://kafka.apache.org/documentation/#security_sasl) and [SSL](https://kafka.apache.org/documentation/#security_ssl) for the upstream config matrix.
+
+## Discover what's on a cluster
+
+```sql
+-- List every topic the cluster exposes
+SELECT unnest(topics).name AS topic_name
+FROM tributary_metadata("bootstrap.servers" := 'kafka:9092');
+
+-- Count partitions per topic
+SELECT
+  t.name                      AS topic,
+  array_length(t.partitions)  AS partitions
+FROM (
+  SELECT unnest(topics) AS t
+  FROM tributary_metadata("bootstrap.servers" := 'kafka:9092')
+)
+ORDER BY partitions DESC;
+```
+
+See [`tributary_metadata`](#tributary_metadata) for the full output shape.
+
+## Diagnostics
+
+```sql
+SELECT tributary_version();   -- e.g. '20250612.01'
+```
+
+Use [`tributary_version`](#tributary_version) when you need to confirm the loaded build against bug reports or release notes.

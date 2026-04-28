@@ -1,79 +1,118 @@
-## What is JSONata?
+## Extract a nested field
 
-[JSONata](https://jsonata.org) is a query and transformation language for JSON data, modelled on XPath. Where DuckDB's native `json_extract_*` family does field-by-field path lookups, JSONata adds:
-
-- **Concise concatenation**: `FirstName & " " & Surname`.
-- **Predicate filters on arrays**: `Phone[type="mobile"].number`.
-- **Object reshaping**: build a new object literal in one expression.
-- **Functions and aggregations**: `$sum`, `$count`, `$map`, `$filter`, `$reduce`, etc.
-
-For deeply-nested JSON or schema reshaping work, JSONata is much more concise than chains of `json_extract`.
-
-## Extract a value
+The simplest form — a dotted [path expression](https://docs.jsonata.org/path-operators) replaces a chain of [`json_extract`](https://duckdb.org/docs/data/json/json_functions.html) calls:
 
 ```sql
--- Simple path
-SELECT jsonata('Account', '{"Account": 5}');
--- 5
-
--- Nested path
 SELECT jsonata('Account.Name',
-  '{"Account":{"Name":"Acme","Tier":"gold"}}');
--- "Acme"
+               '{"Account":{"Name":"Firefly"}}');
+-- "Firefly"
+
+SELECT jsonata('Order.Product.Description.Colour', payload)
+FROM orders;
 ```
 
-## Concatenate / compute
+See [`jsonata`](#jsonata) for the function signature.
+
+## Concatenate or compute on the way out
+
+JSONata's [`&` operator](https://docs.jsonata.org/expressions) concatenates strings; arithmetic operators work on numbers:
 
 ```sql
 SELECT jsonata('FirstName & " " & Surname',
-  '{"FirstName":"Fred","Surname":"Smith"}');
+               '{"FirstName":"Fred","Surname":"Smith"}');
 -- "Fred Smith"
 
 SELECT jsonata('Quantity * UnitPrice',
-  '{"Quantity":3,"UnitPrice":12.50}');
+               '{"Quantity":3,"UnitPrice":12.50}');
 -- 37.5
 ```
 
-## Filter an array
+## Filter an array with a predicate
+
+The [predicate-filter syntax](https://docs.jsonata.org/predicate) is JSONata's headline feature — select matching array elements, then project, in one expression:
 
 ```sql
-SELECT jsonata('Phone[type="mobile"].number',
-  '{"Phone":[
-    {"type":"home","number":"0203 544 1234"},
-    {"type":"mobile","number":"077 7700 1234"}
-  ]}');
--- "077 7700 1234"
+SELECT jsonata('Phone[type="mobile"].number', payload) AS mobile
+FROM contacts;
+
+SELECT jsonata('items[status="open" and amount > 100].id', payload)
+FROM invoices;
 ```
 
+In native DuckDB JSON, the equivalent typically needs `unnest` plus a subquery.
+
 ## Reshape into a new object
+
+[Object construction](https://docs.jsonata.org/construction) builds a fresh JSON object literal — pick fields, rename them, compute new ones — inline:
 
 ```sql
 SELECT jsonata('{
   "name":   FirstName & " " & Surname,
   "mobile": Phone[type="mobile"].number,
   "tier":   Account.Tier
-}', payload) AS extracted
+}', payload) AS reshaped
 FROM contacts;
 ```
 
-The result is a fresh JSON object with exactly the fields you want. Useful for building API response shapes from internal records.
+The result is a JSON object with exactly the fields you wanted — useful for building API response shapes or normalizing third-party payloads before storage.
 
-## Aggregations across rows
+## Aggregate inside a JSON document
 
-JSONata expressions can return arrays — combine that with DuckDB's `unnest`:
+Use [JSONata aggregation functions](https://docs.jsonata.org/aggregation-functions) to roll up arrays-in-JSON without leaving the expression:
 
 ```sql
-SELECT phone_number
+SELECT
+  order_id,
+  jsonata('$sum(Order.Product.(Price * Quantity))', payload)::DOUBLE AS total,
+  jsonata('$count(Order.Product)', payload)::INTEGER                 AS line_items
+FROM orders;
+```
+
+## Map, filter, reduce arrays
+
+[Higher-order functions](https://docs.jsonata.org/higher-order-functions) let you transform arrays element-wise:
+
+```sql
+-- Square every price
+SELECT jsonata('$map(prices, function($v) { $v * $v })',
+               '{"prices":[1,2,3,4]}');
+
+-- Keep only the high-value rows
+SELECT jsonata('$filter(items, function($v) { $v.amount > 100 })', payload)
+FROM invoices;
+```
+
+## Parameterize an expression at query time
+
+The 3-arg [`jsonata(expr, json, bindings)`](#jsonata) form supplies external `$variables`:
+
+```sql
+SET VARIABLE threshold = 100;
+
+SELECT jsonata(
+  'items[price > $threshold].{ "id": id, "price": price }',
+  payload,
+  json_object('threshold', :threshold)
+) AS expensive_items
+FROM line_items;
+```
+
+The expression stays a static string (so it parses once); the per-query value rides in via `bindings`.
+
+## Unnest a JSONata array result into rows
+
+When a JSONata expression returns an array, combine it with DuckDB's `unnest`:
+
+```sql
+SELECT contact_id, phone
 FROM (
-  SELECT unnest(jsonata('Phone.number', payload)::JSON[]) AS phone_number
+  SELECT
+    contact_id,
+    unnest(jsonata('Phone.number', payload)::JSON[]) AS phone
   FROM contacts
 );
 ```
 
-## When to use JSONata vs `json_*`
+## Iterate before pasting
 
-- **Native `json_extract_*`** — simplest cases (one field, one path).
-- **JSONata** — multi-step transforms, conditional filters, array reshaping. One expression vs three nested SQL functions.
-- **[`quickjs`](/products/extensions/quickjs)** — when even JSONata isn't expressive enough; full JS for arbitrary computation.
-
-For most JSON-munging beyond a single `->>` pull, JSONata is the sweet spot.
+For anything more than a one-line path, prototype in the official [JSONata exerciser](https://try.jsonata.org/) — paste your sample document, iterate on the expression with live results, then bring it into SQL once it's right. Same evaluator semantics as the extension.

@@ -94,25 +94,34 @@ function familyLabel(types: string[]): string {
   return types.join(' | ');
 }
 
+// Two-pass collapse:
+//   1. Group by (name, arity, arg-name-tuple) — the "shape". Within a shape,
+//      type-only variation collapses into family labels (typeUnion preserves
+//      the concrete list).
+//   2. Group those shapes by name. If a name has only one shape, emit a flat
+//      FunctionDocData unchanged. If it has multiple shapes (e.g. 1-arg vs
+//      2-arg), emit a single FunctionDocData with `forms[]` listing every
+//      shape; the top-level parameters/returnType mirror the simplest form so
+//      non-form-aware code paths still render something sensible.
 function collapseOverloads<T extends FunctionDocData>(fns: T[]): T[] {
-  const groups = new Map<string, T[]>();
-  const order: string[] = [];
+  interface Shape { head: T; params: T['parameters']; returnType?: string; returnTypeUnion?: string[] }
+
+  const shapeGroups = new Map<string, T[]>();
+  const shapeOrder: string[] = [];
   for (const f of fns) {
-    const key = `${f.name}|${(f.parameters ?? []).length}`;
-    if (!groups.has(key)) {
-      groups.set(key, []);
-      order.push(key);
+    const params = f.parameters ?? [];
+    const argNames = params.map((p) => p.name).join('|');
+    const key = `${f.name}|${params.length}|${argNames}`;
+    if (!shapeGroups.has(key)) {
+      shapeGroups.set(key, []);
+      shapeOrder.push(key);
     }
-    groups.get(key)!.push(f);
+    shapeGroups.get(key)!.push(f);
   }
 
-  const out: T[] = [];
-  for (const key of order) {
-    const cluster = groups.get(key)!;
-    if (cluster.length === 1) {
-      out.push(cluster[0]);
-      continue;
-    }
+  const shapes: { name: string; shape: Shape }[] = [];
+  for (const key of shapeOrder) {
+    const cluster = shapeGroups.get(key)!;
     const head = cluster[0];
     const params = (head.parameters ?? []).map((p, i) => {
       const types = Array.from(new Set(
@@ -124,12 +133,60 @@ function collapseOverloads<T extends FunctionDocData>(fns: T[]): T[] {
     const returns = Array.from(new Set(
       cluster.map((c) => c.returnType).filter((t): t is string => !!t),
     ));
-    const merged: T = { ...head, parameters: params };
-    if (returns.length > 1) {
-      merged.returnType = familyLabel(returns);
-      merged.returnTypeUnion = returns.sort();
+    const shape: Shape = { head, params };
+    if (returns.length === 1) {
+      shape.returnType = returns[0];
+    } else if (returns.length > 1) {
+      shape.returnType = familyLabel(returns);
+      shape.returnTypeUnion = returns.sort();
+    } else {
+      shape.returnType = head.returnType;
     }
-    // Use the head's id for the anchor; name remains the same.
+    shapes.push({ name: head.name, shape });
+  }
+
+  const byName = new Map<string, Shape[]>();
+  const nameOrder: string[] = [];
+  for (const { name, shape } of shapes) {
+    if (!byName.has(name)) {
+      byName.set(name, []);
+      nameOrder.push(name);
+    }
+    byName.get(name)!.push(shape);
+  }
+
+  const out: T[] = [];
+  for (const name of nameOrder) {
+    const shapes = byName.get(name)!;
+    // Surface simplest form first (lowest arity wins, then alphabetical on
+    // arg-name signature for stability across runs).
+    shapes.sort((a, b) => {
+      const aLen = a.params.length, bLen = b.params.length;
+      if (aLen !== bLen) return aLen - bLen;
+      return a.params.map((p) => p.name).join('|').localeCompare(b.params.map((p) => p.name).join('|'));
+    });
+    const head = shapes[0].head;
+    if (shapes.length === 1) {
+      const s = shapes[0];
+      const merged: T = { ...head, parameters: s.params };
+      if (s.returnType !== undefined) merged.returnType = s.returnType;
+      if (s.returnTypeUnion) merged.returnTypeUnion = s.returnTypeUnion;
+      else delete merged.returnTypeUnion;
+      out.push(merged);
+      continue;
+    }
+    const merged: T = {
+      ...head,
+      parameters: shapes[0].params,
+      returnType: shapes[0].returnType,
+    };
+    if (shapes[0].returnTypeUnion) merged.returnTypeUnion = shapes[0].returnTypeUnion;
+    else delete merged.returnTypeUnion;
+    merged.forms = shapes.map((s) => ({
+      parameters: s.params,
+      returnType: s.returnType,
+      ...(s.returnTypeUnion ? { returnTypeUnion: s.returnTypeUnion } : {}),
+    }));
     out.push(merged);
   }
   return out;

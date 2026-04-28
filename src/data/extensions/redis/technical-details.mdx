@@ -1,42 +1,67 @@
-## What this extension is for
+## What you can do with one query
 
-Redis is the most common in-memory cache and quick-lookup store. This extension lets you read and write a Redis server directly from DuckDB SQL — no Python or app-layer glue between SQL and the cache.
+The single most useful pattern: drain an entire Redis keyspace into a DuckDB table without writing a script:
 
-Typical use cases:
+```sql
+CREATE TABLE redis_users_dump AS
+SELECT key, field, value
+FROM redis_hscan_over_scan(
+  /* scan_pattern  */ 'user:*',
+  /* hscan_pattern */ '*',
+  /* count         */ 100,
+  /* secret        */ 'redis'
+);
+```
 
-- **Hot-cold data joins** — keep recent or frequently-accessed records in Redis, the bulk in DuckDB; join across the boundary.
-- **Bulk migration** — dump entire Redis keyspaces into DuckDB tables for offline processing or one-off analysis.
-- **Cache priming** — push computed values from DuckDB into Redis for downstream applications.
-- **Operational queries** — count hashes, sample fields, or audit keyspaces without writing a Redis-aware tool.
+[`redis_hscan_over_scan`](#redis_hscan_over_scan) chains the upstream [`SCAN`](https://redis.io/docs/latest/commands/scan/) and [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) cursor commands into one streaming `(key, field, value)` row source. Server-friendly cursor pagination throughout — no `KEYS` blocking, no Python in the middle.
+
+import Callout from '../../../components/docs/Callout.astro';
+
+<Callout type="note" title="Best fit, scoped honestly">
+This extension is for SQL-side workflows where data integration matters more than every Redis feature. It supports **strings, hashes, and lists**; no SET / ZSET / STREAM / PUB-SUB / TRANSACTIONS / SCRIPTING. Connections are **single-node** (no [Redis Cluster](https://redis.io/docs/latest/operate/oss_and_stack/management/scaling/)). Auth is currently **plaintext** — TLS isn't wired up yet. The status is **experimental**; the function surface may change.
+
+For application-grade Redis access, keep a real client. For one-off migrations, hot-cold joins, and operational queries from SQL, this is the right tool.
+</Callout>
 
 ## Authentication
 
-All `redis_*` functions take a trailing `secret` argument naming a DuckDB secret of `TYPE redis`. That keeps credentials out of query text and lets multiple environments (dev/staging/prod) live as separate secrets.
+Every `redis_*` function takes a trailing `secret` argument naming a DuckDB secret of `TYPE redis`. This keeps credentials out of query text and lets multiple environments (dev/staging/prod) live as separate secrets — pick the right one per query:
 
 ```sql
-CREATE SECRET prod_redis (TYPE redis, PROVIDER config, host '...', port '...', password '...');
+CREATE SECRET prod_redis (
+  TYPE redis,
+  PROVIDER config,
+  host 'cache.prod.internal',
+  port '6379',
+  password :prod_password
+);
+
 SELECT redis_get('counter', 'prod_redis');
 ```
 
-## SCAN vs KEYS
+See [`CREATE SECRET`](https://duckdb.org/docs/sql/statements/create_secret) and the [DuckDB Secrets Manager](https://duckdb.org/docs/configuration/secrets_manager) for the secrets infrastructure, and the [Secrets](#secrets) section below for the parameter table the `redis` secret type accepts.
 
-`redis_keys` is the convenience function — it returns all matching keys as a table. It's fine for development and small keyspaces but **issues a `KEYS` command, which blocks the Redis server**. On a large production instance this can stall traffic.
+## SCAN vs KEYS — why it matters
 
-`redis_scan` is the production primitive — cursor-paginated, non-blocking, server-side filtered. Iterate by re-passing the returned cursor:
+[`redis_keys`](#redis_keys) is the convenience function — it returns all matching keys as a table. It's fine for development and small keyspaces, but it issues the [`KEYS`](https://redis.io/docs/latest/commands/keys/) command, which **blocks the Redis server for the duration of the scan**. On a large production instance this can stall traffic.
+
+[`redis_scan`](#redis_scan) is the production primitive — cursor-paginated, non-blocking, server-side filtered. The [`SCAN`](https://redis.io/docs/latest/commands/scan/) protocol returns a cursor with each batch of keys; you re-pass the cursor to fetch the next page. Cursor `0` means iteration is complete:
 
 ```sql
 SELECT redis_scan(0, 'user:*', 100, 'redis');
 -- "1024:user:1,user:2,...,user:50"
--- Cursor "0" returned means iteration is complete.
 ```
 
-`redis_hscan_over_scan` chains both into one streaming pipeline — for every key matching `scan_pattern`, run `HSCAN hscan_pattern` and emit `(key, field, value)` rows. The fastest way to drain a Redis hash dataset into DuckDB.
+[`redis_hscan_over_scan`](#redis_hscan_over_scan) (used in the lead snippet above) chains both into one streaming pipeline: for every key matching `scan_pattern`, run [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) `hscan_pattern` and emit `(key, field, value)` rows. The fastest way to drain a Redis hash dataset into DuckDB.
 
-## Limitations
+## What's in the box
 
-- **Strings, hashes, and lists only** today. No SET / ZSET / STREAM / PUBSUB / TRANSACTIONS / SCRIPTING.
-- **Single-node** connections — no Redis Cluster support.
-- **Plaintext** auth via the `password` field; TLS is not yet wired up.
-- **Experimental** — the surface may change as more Redis primitives are added.
+| Group | Functions | Redis commands |
+|---|---|---|
+| Strings | [`redis_get`](#redis_get), [`redis_set`](#redis_set), [`redis_mget`](#redis_mget) | [`GET`](https://redis.io/docs/latest/commands/get/), [`SET`](https://redis.io/docs/latest/commands/set/), [`MGET`](https://redis.io/docs/latest/commands/mget/) |
+| Hashes | [`redis_hget`](#redis_hget), [`redis_hset`](#redis_hset), [`redis_hgetall`](#redis_hgetall), [`redis_hscan`](#redis_hscan) | [`HGET`](https://redis.io/docs/latest/commands/hget/), [`HSET`](https://redis.io/docs/latest/commands/hset/), [`HGETALL`](https://redis.io/docs/latest/commands/hgetall/), [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) |
+| Lists | [`redis_lpush`](#redis_lpush), [`redis_lrange`](#redis_lrange), [`redis_lrange_table`](#redis_lrange_table) | [`LPUSH`](https://redis.io/docs/latest/commands/lpush/), [`LRANGE`](https://redis.io/docs/latest/commands/lrange/) |
+| Discovery | [`redis_keys`](#redis_keys), [`redis_scan`](#redis_scan), [`redis_hscan_over_scan`](#redis_hscan_over_scan) | [`KEYS`](https://redis.io/docs/latest/commands/keys/), [`SCAN`](https://redis.io/docs/latest/commands/scan/), [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) |
+| Key management | [`redis_type`](#redis_type), [`redis_exists`](#redis_exists), [`redis_del`](#redis_del) | [`TYPE`](https://redis.io/docs/latest/commands/type/), [`EXISTS`](https://redis.io/docs/latest/commands/exists/), [`DEL`](https://redis.io/docs/latest/commands/del/) |
 
-For application-grade Redis access, keep a real client; this extension is for the SQL-side workflows where data integration matters more than every Redis feature.
+The extension speaks the [Redis Serialization Protocol](https://redis.io/docs/latest/develop/reference/protocol-spec/) over plain TCP. Recipes for each group live in the [Cookbook](#cookbook).

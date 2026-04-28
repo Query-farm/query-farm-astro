@@ -1,0 +1,50 @@
+import Callout from '../../../components/docs/Callout.astro';
+
+## What you can do with one query
+
+Validate every row of a JSON column against a schema in a single `SELECT`:
+
+```sql
+SELECT
+  COUNT(*)                                                         AS total,
+  COUNT(*) FILTER (WHERE     json_schema_validate(:schema, payload)) AS valid,
+  COUNT(*) FILTER (WHERE NOT json_schema_validate(:schema, payload)) AS invalid
+FROM events;
+```
+
+[`json_schema_validate`](#json_schema_validate) returns a plain `BOOLEAN`, so it composes with `WHERE`, `CASE`, and aggregate `FILTER` clauses the way every other DuckDB predicate does — no UDF setup, no detour through Python, no extra round-trip.
+
+<Callout type="note" title="Best fit, scoped honestly">
+This extension is built on the [pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator) C++ library. Its **primary target is [JSON Schema draft-07](https://json-schema.org/draft-07/json-schema-release-notes)**; newer drafts ([2019-09](https://json-schema.org/specification-links#2019-09) / [2020-12](https://json-schema.org/draft/2020-12/schema)) work for the keywords the underlying validator supports — test the keywords you actually use.
+
+The validation result is a `BOOLEAN`. There is **no structured per-keyword failure report** today. There is also **no `$ref` resolver** for external files or HTTP — inline any `$ref` targets into the schema document you pass in.
+
+For application-grade validation with detailed error reports, keep [ajv](https://ajv.js.org/) / [Pydantic](https://docs.pydantic.dev/latest/concepts/json_schema/) / [jsonschema](https://python-jsonschema.readthedocs.io/) at the API layer. This extension is the right tool when you want the gate to live in SQL — at ingest, in CI, or as part of an audit.
+</Callout>
+
+## Architecture
+
+Internally this is a thin DuckDB scalar-function wrapper around two C++ libraries: [pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator) for the validation engine and [nlohmann/json](https://github.com/nlohmann/json) for parsing. Both schema and data are passed as DuckDB [`JSON`](https://duckdb.org/docs/data/json/overview) values (or struct literals, or strings cast with `::JSON`). There is no `ATTACH`, no secret type, no network call — the validator runs locally against the in-query schema.
+
+Four scalar functions cover the surface:
+
+| Group | Functions | Returns |
+|---|---|---|
+| Validate | [`json_schema_validate`](#json_schema_validate), [`json_schema_validate_schema`](#json_schema_validate_schema) | `BOOLEAN` |
+| Enrich | [`json_schema_patch`](#json_schema_patch), [`json_schema_update`](#json_schema_update) | `JSON` |
+
+Schema features in scope match what [draft-07](https://json-schema.org/draft-07/json-schema-release-notes) covers: type validation (`string`, `number`, `integer`, `boolean`, `array`, `object`, `null`), `required`, `properties`, numeric `minimum` / `maximum` / `multipleOf`, string `minLength` / `maxLength` / `pattern` / `format`, array `minItems` / `maxItems` / `uniqueItems`, and the `default` keyword used by [`json_schema_patch`](#json_schema_patch) and [`json_schema_update`](#json_schema_update).
+
+## Pairs with DuckDB's JSON support
+
+Schema-side validation is one piece; the rest of the JSON pipeline is plain DuckDB. Read JSON files with [`read_json_auto`](https://duckdb.org/docs/data/json/loading_json.html), pull out fields with [`json_extract_*`](https://duckdb.org/docs/data/json/loading_json.html), or cast strings with `::JSON` — and feed any of those into [`json_schema_validate`](#json_schema_validate). See [DuckDB JSON overview](https://duckdb.org/docs/data/json/overview) for the surrounding toolkit.
+
+## Compared to alternatives
+
+- **[DuckDB `CHECK` constraints](https://duckdb.org/docs/sql/constraints)** — if your data has a fixed shape, modeling it as proper columns plus `CHECK` is faster, clearer, and gives you better error messages. Reach for JSON Schema when the payload is genuinely contract-defined JSON and the storage stays opaque.
+- **Application-layer validators ([ajv](https://ajv.js.org/) / [Pydantic](https://docs.pydantic.dev/latest/concepts/json_schema/) / [jsonschema](https://python-jsonschema.readthedocs.io/))** — these give detailed per-keyword failure reports and richer draft coverage. Pair them at the API boundary; use this extension as the SQL-side gate inside DuckDB so the database doesn't depend on a Python service to enforce its contracts.
+- **Manual SQL predicates** — handcrafted `WHERE`s over `json_extract_*` get unwieldy fast for non-trivial schemas. Pointing [`json_schema_validate`](#json_schema_validate) at a versioned schema file keeps the contract in one place.
+
+## Default-value enrichment
+
+The non-obvious capability: turn the schema's declared `default` values into actual data. [`json_schema_patch`](#json_schema_patch) returns a [JSON Patch (RFC 6902)](https://datatracker.ietf.org/doc/html/rfc6902) array of `add` operations; [`json_schema_update`](#json_schema_update) applies them inline. Together they let you go from "incoming partial payload" to "fully populated record" in one SQL expression — no per-field `COALESCE` cascade, no application-layer enrichment code.

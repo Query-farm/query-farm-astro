@@ -1,0 +1,113 @@
+## What you can do with one query
+
+Turn a [DuckDB](https://duckdb.org) process into an HTTP query API in one statement:
+
+```sql
+INSTALL httpserver FROM community;
+LOAD httpserver;
+
+SELECT httpserve_start('localhost', 9999, 'user:pass');
+-- 'HTTP server started on localhost:9999'
+```
+
+Now any HTTP client can `POST` SQL and read [JSON](https://en.wikipedia.org/wiki/JSON) back:
+
+```bash
+curl -X POST -d "SELECT version()" \
+  "http://user:pass@localhost:9999/?default_format=JSONCompact"
+```
+
+[`httpserve_start`](#httpserve_start) spawns an in-process listener thread; [`httpserve_stop`](#httpserve_stop) tears it down. There are no other functions — the entire extension is two SQL calls and a small set of HTTP endpoints.
+
+import Callout from '../../../components/docs/Callout.astro';
+
+<Callout type="danger" title="This is a thin SQL bridge, not a hardened API gateway">
+Exposing a DuckDB connection over HTTP is genuinely risky. Treat this extension as a building block, not a finished product. Before binding to anything beyond `localhost`:
+
+- **Run DuckDB with `-readonly`.** Without it, any authenticated client can `INSERT`, `ATTACH`, `COPY TO`, install extensions, or call file-system functions ([`SQL injection`](https://owasp.org/www-community/attacks/SQL_Injection) is the entire API here — there is no safe parameterization path). The upstream README's first security note is exactly this.
+- **Front it with TLS.** The server speaks plain HTTP. [HTTP Basic](https://en.wikipedia.org/wiki/Basic_access_authentication) over plaintext is effectively no auth. Use [nginx](https://nginx.org/en/docs/http/ngx_http_ssl_module.html), [Caddy](https://caddyserver.com/docs/automatic-https), or [HAProxy](https://www.haproxy.org/) as a TLS terminator.
+- **One credential, no per-user scope.** Auth is binary — the client either presents the configured key or it doesn't. No users, no roles, no per-query allowlists, no rate limiting.
+- **Lock down the DuckDB process itself.** Follow [DuckDB's hardening guidance](https://duckdb.org/docs/operations_manual/securing_duckdb/overview) and consider disabling [community-extension installation](https://duckdb.org/docs/operations_manual/securing_duckdb/securing_extensions) on the served process.
+
+For internal APIs on a private network, behind a TLS proxy, against a read-only database — this extension is a great fit. For anything multi-tenant or internet-exposed, a dedicated SQL gateway is the right tool.
+</Callout>
+
+## Architecture
+
+[`httpserve_start`](#httpserve_start) starts an HTTP listener thread inside the DuckDB process. Requests are dispatched to the same DuckDB connection that called the function — so any extension you've `LOAD`ed, any database you've `ATTACH`ed, and any secret you've `CREATE`d is visible to HTTP clients. There is one global server per DuckDB process.
+
+The endpoint surface is intentionally small:
+
+| Endpoint | Methods   | Purpose                                                          |
+|----------|-----------|------------------------------------------------------------------|
+| `/`      | GET, POST | Execute a SQL query, or serve the embedded *quackplay* UI to a browser. |
+| `/ping`  | GET       | Liveness check.                                                  |
+
+There is no `/metrics`, no `/health` JSON, and no [OpenAPI](https://www.openapis.org/) document — anything beyond *send SQL, read JSON* lives outside this extension.
+
+The response format vocabulary mirrors the [ClickHouse HTTP interface](https://clickhouse.com/docs/en/interfaces/formats):
+
+- `?default_format=JSONEachRow` — newline-delimited rows ([JSONEachRow](https://clickhouse.com/docs/en/interfaces/formats#jsoneachrow)).
+- `?default_format=JSONCompact` — single document with `meta`, `data`, `rows`, and `statistics` keys ([JSONCompact](https://clickhouse.com/docs/en/interfaces/formats#jsoncompact)).
+
+Three environment variables tune the runtime: `DUCKDB_HTTPSERVER_FOREGROUND=1` runs the server on the main thread (so the SQL caller blocks), `DUCKDB_HTTPSERVER_DEBUG=1` enables stdout request logging, and `DUCKDB_HTTPSERVER_SYSLOG=1` routes logs to syslog.
+
+## Authentication
+
+The third argument to [`httpserve_start`](#httpserve_start) selects the auth mode:
+
+| `auth` argument           | Mode                                                                                    |
+|---------------------------|-----------------------------------------------------------------------------------------|
+| `''` (empty)              | No auth. Bind to `localhost` only and run on a trusted network.                          |
+| `'user:pass'` (one colon) | [HTTP Basic auth](https://datatracker.ietf.org/doc/html/rfc7617).                        |
+| any other value           | Shared key sent by clients in the `X-API-Key` header.                                    |
+
+Both auth modes are **single-credential** — there is one user/pass or one key per server. Multi-tenant or per-user access control belongs at a reverse proxy. The credential is checked in constant time but travels in plaintext over HTTP, so TLS in front is non-negotiable for anything beyond a loopback bind.
+
+To rotate a credential without restarting DuckDB, call [`httpserve_stop`](#httpserve_stop) and then [`httpserve_start`](#httpserve_start) again with the new value.
+
+## Scoping the served database
+
+The HTTP endpoint inherits the DuckDB connection's surface in full. The most reliable way to make that surface safe is at the DuckDB level, not the HTTP level:
+
+```bash
+# Read-only — INSERT / UPDATE / COPY TO / ATTACH all fail at SQL parse time.
+duckdb -readonly mydata.duckdb -c "
+  INSTALL httpserver FROM community;
+  LOAD httpserver;
+  SELECT httpserve_start('0.0.0.0', 9999, 'shared-api-key');
+  CALL pg_sleep(86400);
+"
+```
+
+See the [DuckDB CLI docs](https://duckdb.org/docs/api/cli) and the [securing DuckDB](https://duckdb.org/docs/operations_manual/securing_duckdb/overview) page for the full lockdown vocabulary — read-only mode, [restricting extension installation](https://duckdb.org/docs/operations_manual/securing_duckdb/securing_extensions), and disabling filesystem functions.
+
+## Calling the server from another DuckDB
+
+Any DuckDB can hit the endpoint as an HTTP source. Configure an [`extra_http_headers`](https://duckdb.org/docs/extensions/httpfs/overview) secret for the API key, then use [`read_json_auto`](https://duckdb.org/docs/data/json/loading_json.html), or pair with the [`chsql`](https://community-extensions.duckdb.org/extensions/chsql.html) community extension's `duck_flock` macro to fan a single SQL statement out across multiple DuckDB endpoints:
+
+```sql
+CREATE SECRET extra_http_headers (
+  TYPE HTTP,
+  EXTRA_HTTP_HEADERS MAP { 'X-API-Key': 'supersecretkey' }
+);
+
+-- Fan-out across three DuckDB nodes; results are unioned.
+SELECT * FROM duck_flock(
+  'SELECT version()',
+  ['http://node-a:9999', 'http://node-b:9999', 'http://node-c:9999']
+);
+```
+
+This is the closest pattern to "distributed DuckDB" that exists today — small, no consensus layer, no shared catalog, but adequate for read-side federation across curated slices.
+
+## Compared to alternatives
+
+- **The [DuckDB CLI](https://duckdb.org/docs/api/cli) over SSH** — works for one operator and trivial to set up, but doesn't help when several services need to query the same DuckDB. The HTTP server replaces "SSH and run a query" with "POST a query."
+- **Hand-rolled FastAPI / Express service** — more flexible (per-user auth, request validation, custom response shapes) but adds another runtime to deploy. This extension is the right fit when *the SQL is the API*.
+- **[Airport](/products/extensions/airport) over Arrow Flight** — the right tool when both ends are inside a data system and you want columnar Arrow on the wire. Use httpserver when the client is a generic HTTP consumer (a browser, a Lambda, a curl in a cron job).
+- **[ADBC Scanner](/products/extensions/adbc_scanner) or [Airport](/products/extensions/airport) outbound** — for *querying* something else from DuckDB. httpserver is the inverse direction: making *this* DuckDB queryable.
+
+## Cookbook
+
+Recipes — start the server, query it from curl, query it from another DuckDB, run *quackplay* — live in the [Cookbook](#cookbook) section below.

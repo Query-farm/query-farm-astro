@@ -1,29 +1,136 @@
 [
   {
+    "id": "json_schema_validate(JSON,JSON)",
     "name": "json_schema_validate",
+    "type": "scalar",
     "categories": ["Validate"],
-    "description": "Validate a JSON value against a JSON Schema. Returns BOOLEAN — true if the value conforms. Implements the JSON Schema 2020-12 specification.",
-    "examples": [
-      { "description": "Validate a row of JSON against a schema", "code": "SELECT json_schema_validate(:schema, payload) AS ok FROM events;" }
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "schema",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "The [JSON Schema](https://json-schema.org/) document to validate against. The validator's primary target is [draft-07](https://json-schema.org/draft-07/json-schema-release-notes); newer drafts work for the keywords the underlying [pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator) supports."
+      },
+      {
+        "name": "json_data",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "The JSON value to validate. Pass a column of type `JSON`, a struct literal, or a string cast with `::JSON`."
+      }
     ],
-    "relatedFunctions": ["json_schema_validate_schema", "json_schema_patch"]
+    "returns": "BOOLEAN — `TRUE` if the value conforms, `FALSE` otherwise.",
+    "description": "Validate a JSON value against a JSON Schema. Returns a plain `BOOLEAN`, so it composes naturally with `WHERE`, `CASE`, and `COUNT(*) FILTER (...)`.\n\nThis function does **not** return structured error detail — it answers conformance only. For a full per-keyword failure report, validate at the application layer with [ajv](https://ajv.js.org/) / [Pydantic](https://docs.pydantic.dev/latest/concepts/json_schema/) / [jsonschema](https://python-jsonschema.readthedocs.io/) and use this function as the coarse SQL gate.",
+    "examples": [
+      {
+        "description": "Validate a single document",
+        "code": "SELECT json_schema_validate('{\n  \"$schema\": \"https://json-schema.org/draft-07/schema\",\n  \"type\": \"object\",\n  \"properties\": {\n    \"id\":   {\"type\": \"integer\"},\n    \"name\": {\"type\": \"string\"}\n  },\n  \"required\": [\"id\"]\n}', {'id': 5, 'name': 'George'}) AS ok;\n-- TRUE"
+      },
+      {
+        "description": "Filter a column on schema conformance",
+        "code": "INSERT INTO events_clean\nSELECT * FROM events_raw\nWHERE json_schema_validate(:schema, payload);"
+      },
+      {
+        "description": "Aggregate valid / invalid counts",
+        "code": "SELECT\n  COUNT(*)                                                         AS total,\n  COUNT(*) FILTER (WHERE     json_schema_validate(:schema, payload)) AS valid,\n  COUNT(*) FILTER (WHERE NOT json_schema_validate(:schema, payload)) AS invalid\nFROM events;"
+      }
+    ],
+    "relatedFunctions": ["json_schema_validate_schema", "json_schema_patch", "json_schema_update"]
   },
   {
+    "id": "json_schema_validate_schema(JSON)",
     "name": "json_schema_validate_schema",
+    "type": "scalar",
     "categories": ["Validate"],
-    "description": "Validate that a JSON Schema is itself well-formed and conforms to the JSON Schema meta-schema. Use to lint your contracts before applying them.",
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "schema",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "The candidate [JSON Schema](https://json-schema.org/) document. Will be checked against the validator's meta-schema."
+      }
+    ],
+    "returns": "BOOLEAN — `TRUE` if the schema is well-formed, `FALSE` otherwise.",
+    "description": "Lint a JSON Schema before applying it. Catches typos and structural mistakes that would otherwise cause every [`json_schema_validate`](#json_schema_validate) call to fail at runtime.\n\nA reasonable habit: gate schema deployments through this function in CI, the same way you'd run a YAML or SQL linter.",
     "examples": [
-      { "description": "Lint the schema before deploying", "code": "SELECT json_schema_validate_schema(:schema) AS schema_ok;" }
+      {
+        "description": "Lint a schema before deploying",
+        "code": "SELECT json_schema_validate_schema('{\n  \"$schema\": \"https://json-schema.org/draft-07/schema\",\n  \"type\": \"object\",\n  \"properties\": {\n    \"id\": {\"type\": \"integer\"}\n  }\n}') AS schema_ok;\n-- TRUE"
+      },
+      {
+        "description": "Find any malformed schemas in a registry table",
+        "code": "SELECT name, version\nFROM schema_registry\nWHERE NOT json_schema_validate_schema(definition);"
+      }
     ],
     "relatedFunctions": ["json_schema_validate"]
   },
   {
+    "id": "json_schema_patch(JSON,JSON)",
     "name": "json_schema_patch",
+    "type": "scalar",
     "categories": ["Enrich"],
-    "description": "Compute the JSON-Patch (RFC 6902) operations that would bring the input JSON into conformance with the schema's `default` values. Apply with DuckDB's JSON functions to fill in missing fields.",
-    "examples": [
-      { "description": "Generate the patch for a partial document", "code": "SELECT json_schema_patch(:schema, payload) AS patch FROM events;" }
+    "returnType": "JSON",
+    "parameters": [
+      {
+        "name": "schema",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "[JSON Schema](https://json-schema.org/) document. Properties whose `default` keyword is set are the ones that contribute to the patch."
+      },
+      {
+        "name": "json_data",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "The (possibly incomplete) JSON value. Missing properties for which the schema declares a `default` will appear in the resulting patch."
+      }
     ],
-    "relatedFunctions": ["json_schema_validate"]
+    "returns": "JSON — a [JSON Patch (RFC 6902)](https://datatracker.ietf.org/doc/html/rfc6902) array of `add` operations that, when applied, fill in the missing defaults.",
+    "description": "Compute the [JSON Patch (RFC 6902)](https://datatracker.ietf.org/doc/html/rfc6902) diff that would bring `json_data` into conformance with the `default` values declared by the schema. Returns the patch — does **not** apply it (use [`json_schema_update`](#json_schema_update) for the in-place variant).\n\nUse the patch when you want to log or audit which fields were synthesized, or when you need to apply the same diff to multiple downstream representations of the document.",
+    "examples": [
+      {
+        "description": "Generate a patch for a partial document",
+        "code": "SELECT json_schema_patch('{\n  \"$schema\": \"https://json-schema.org/draft-07/schema\",\n  \"type\": \"object\",\n  \"properties\": {\n    \"id\":   {\"type\": \"integer\", \"default\": 5},\n    \"name\": {\"type\": \"string\"}\n  }\n}', {'name': 'George'}) AS patch;\n-- [{\"op\":\"add\",\"path\":\"/id\",\"value\":5}]"
+      },
+      {
+        "description": "Materialize patches alongside the original payload for auditing",
+        "code": "SELECT\n  payload,\n  json_schema_patch(:schema, payload) AS defaults_patch\nFROM events_raw;"
+      }
+    ],
+    "relatedFunctions": ["json_schema_update", "json_schema_validate"]
+  },
+  {
+    "id": "json_schema_update(JSON,JSON)",
+    "name": "json_schema_update",
+    "type": "scalar",
+    "categories": ["Enrich"],
+    "returnType": "JSON",
+    "parameters": [
+      {
+        "name": "schema",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "[JSON Schema](https://json-schema.org/) document. Properties with `default` declared are filled in where the input is missing them."
+      },
+      {
+        "name": "json_data",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "The JSON value to enrich. Existing fields are preserved; only missing properties with declared `default` values are added."
+      }
+    ],
+    "returns": "JSON — the input value with missing defaults filled in.",
+    "description": "Apply the schema's `default` values inline. Equivalent to running [`json_schema_patch`](#json_schema_patch) and applying the resulting patch — but in a single function call you can use directly in a `SELECT` projection.\n\nThis is the function to reach for when you want enriched JSON, not a diff.",
+    "examples": [
+      {
+        "description": "Fill in a missing default",
+        "code": "SELECT json_schema_update('{\n  \"$schema\": \"https://json-schema.org/draft-07/schema\",\n  \"type\": \"object\",\n  \"properties\": {\n    \"id\":   {\"type\": \"integer\", \"default\": 5},\n    \"name\": {\"type\": \"string\"}\n  }\n}', {'name': 'George'}) AS updated;\n-- {\"id\":5,\"name\":\"George\"}"
+      },
+      {
+        "description": "Build a clean table with defaults applied",
+        "code": "CREATE TABLE events_enriched AS\nSELECT json_schema_update(:schema, payload) AS payload\nFROM events_raw\nWHERE json_schema_validate(:schema, payload);"
+      }
+    ],
+    "relatedFunctions": ["json_schema_patch", "json_schema_validate"]
   }
 ]

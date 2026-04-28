@@ -1,19 +1,71 @@
 [
   {
+    "id": "httpserve_start",
     "name": "httpserve_start",
+    "type": "scalar",
     "categories": ["Server"],
-    "description": "Start the HTTP server. Three arguments: host (e.g. `'localhost'` or `'0.0.0.0'`), port, and auth string. Auth empty disables auth; `'user:pass'` enables Basic-auth; any other value is treated as an X-API-Key. Returns a startup confirmation string.",
+    "returnType": "VARCHAR",
+    "parameters": [
+      {
+        "name": "host",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Interface to bind on. Use `'localhost'` (or `'127.0.0.1'`) to keep the server reachable only from the same machine. Use `'0.0.0.0'` to listen on all interfaces — only do this behind a firewall or reverse proxy."
+      },
+      {
+        "name": "port",
+        "type": "INTEGER",
+        "paramType": "positional",
+        "description": "TCP port to listen on. Any unused port; `9999` is conventional in the upstream examples."
+      },
+      {
+        "name": "auth",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Authentication selector. **Empty string** disables auth (development only). A value containing `':'` is parsed as `user:password` and enables [HTTP Basic auth](https://datatracker.ietf.org/doc/html/rfc7617). Any other value is treated as a single shared key the client must send in the `X-API-Key` header. There is one credential per server — no per-user accounts."
+      }
+    ],
+    "returns": "Confirmation string of the form `'HTTP server started on <host>:<port>'`.",
+    "description": "Start the embedded HTTP query server. The listener runs in a background thread inside the DuckDB process and dispatches requests to the calling connection — extensions you've `LOAD`ed and databases you've `ATTACH`ed are visible to HTTP clients.\n\nThere is one global server per DuckDB process: calling [`httpserve_start`](#httpserve_start) again replaces the running listener. Set `DUCKDB_HTTPSERVER_FOREGROUND=1` before starting DuckDB to run the server on the main thread (the SQL caller will block); set `DUCKDB_HTTPSERVER_DEBUG=1` for stdout request logging or `DUCKDB_HTTPSERVER_SYSLOG=1` to route logs to syslog.\n\nThe served endpoints are:\n\n- `/` — `GET` and `POST` for SQL queries. Pass SQL in the request body, or as `?query=` / `?q=`. Add `?default_format=JSONEachRow` or `?default_format=JSONCompact` to choose the response shape (see [ClickHouse formats](https://clickhouse.com/docs/en/interfaces/formats) — the names are borrowed from there).\n- `/ping` — `GET` health check.\n- The browser UI (*quackplay*) is served from `/` when accessed with a browser-style request.",
     "examples": [
-      { "description": "Basic-auth on port 9999", "code": "SELECT httpserve_start('localhost', 9999, 'user:pass');" },
-      { "description": "X-API-Key auth", "code": "SELECT httpserve_start('localhost', 9999, 'supersecretkey');" },
-      { "description": "No auth (development only)", "code": "SELECT httpserve_start('localhost', 9999, '');" }
+      {
+        "description": "HTTP Basic auth on localhost",
+        "code": "SELECT httpserve_start('localhost', 9999, 'user:pass');\n-- 'HTTP server started on localhost:9999'\n\n-- From the shell:\n--   curl -X POST -d \"SELECT version()\" http://user:pass@localhost:9999/"
+      },
+      {
+        "description": "Single shared key (X-API-Key header)",
+        "code": "SELECT httpserve_start('localhost', 9999, 'supersecretkey');\n\n-- From the shell:\n--   curl -X POST --header 'X-API-Key: supersecretkey' \\\n--        -d 'SELECT 42' http://localhost:9999/?default_format=JSONCompact"
+      },
+      {
+        "description": "No auth — only behind a private network",
+        "code": "SELECT httpserve_start('127.0.0.1', 9999, '');"
+      },
+      {
+        "description": "Bind on all interfaces — read-only DuckDB, behind a TLS-terminating proxy",
+        "code": "-- Launched as: duckdb -readonly mydata.duckdb\nSELECT httpserve_start('0.0.0.0', 9999, 'shared-api-key');"
+      }
     ],
     "relatedFunctions": ["httpserve_stop"]
   },
   {
+    "id": "httpserve_stop",
     "name": "httpserve_stop",
+    "type": "scalar",
     "categories": ["Server"],
-    "description": "Stop the HTTP server thread. Pair with `httpserve_start` for graceful shutdown.",
+    "returnType": "VARCHAR",
+    "parameters": [],
+    "returns": "Confirmation string indicating the listener has been stopped.",
+    "description": "Stop the running HTTP server thread cleanly. Pair with [`httpserve_start`](#httpserve_start) when you want to rebind on a different port or rotate the auth credential without restarting DuckDB.\n\nIf the DuckDB process exits, the server thread is torn down with it — calling [`httpserve_stop`](#httpserve_stop) is not strictly required for shutdown, only for in-process restarts.",
+    "examples": [
+      {
+        "description": "Graceful stop",
+        "code": "SELECT httpserve_stop();"
+      },
+      {
+        "description": "Rotate credential without restarting DuckDB",
+        "code": "SELECT httpserve_stop();\nSELECT httpserve_start('localhost', 9999, 'rotated-key');"
+      }
+    ],
     "relatedFunctions": ["httpserve_start"]
   }
 ]

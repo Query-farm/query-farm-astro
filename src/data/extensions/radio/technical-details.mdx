@@ -1,0 +1,48 @@
+## What you can do with three statements
+
+```sql
+-- 1. Open a WebSocket subscription
+CALL radio_subscribe('wss://stream.example.com/events', 'feed1');
+
+-- 2. (later, or in another query) drain the inbox
+SELECT received_at, payload
+FROM radio_subscription_received_messages('feed1')
+ORDER BY received_at DESC
+LIMIT 100;
+
+-- 3. Reply or broadcast back
+CALL radio_transmit_message('feed1', '{"type":"ack","at":"2026-04-28T12:00:00Z"}');
+```
+
+[`radio_subscribe`](#radio_subscribe) opens the connection and starts buffering. [`radio_subscription_received_messages`](#radio_subscription_received_messages) exposes that buffer as an ordinary table — `JOIN`, `WHERE`, `GROUP BY`, `CREATE TABLE AS`. [`radio_transmit_message`](#radio_transmit_message) queues an outbound message; poll [`radio_subscription_transmit_messages`](#radio_subscription_transmit_messages) for `status`.
+
+import Callout from '../../../components/docs/Callout.astro';
+
+<Callout type="warning" title="In-process, in-memory, best-effort">
+Subscriptions, the received-message buffer, and the transmit queue all live in DuckDB process memory. Three things follow:
+
+- **Process exit drops everything.** When DuckDB shuts down, subscriptions are torn down and unread messages are lost. For at-least-once delivery across restarts, persist drained messages to a durable store before processing.
+- **The received buffer is size-limited.** Older messages are evicted as new ones arrive — drain with [`radio_received_messages`](#radio_received_messages) at a cadence that keeps up with your inbound rate.
+- **Outbound delivery is asynchronous and best-effort.** [`radio_transmit_message`](#radio_transmit_message) returns once the message is queued; check [`radio_subscription_transmit_messages`](#radio_subscription_transmit_messages) for `delivered` / `pending` / `failed` status.
+
+Status is **experimental**. The function surface may change as more transports get added.
+</Callout>
+
+## Architecture
+
+Radio runs an asynchronous I/O thread per subscription. For [WebSocket](https://datatracker.ietf.org/doc/html/rfc6455) endpoints it speaks the standard frame protocol; for [Redis Pub/Sub](https://redis.io/docs/latest/develop/interact/pubsub/) endpoints it opens a Redis connection and `SUBSCRIBE`s to the channel(s). Inbound messages land in a per-subscription FIFO buffer; outbound messages live in a transmit queue with a `status` field that the I/O thread updates as delivery completes.
+
+DuckDB SQL never blocks on the wire — [`radio_received_messages`](#radio_received_messages) and friends are pure table scans over the in-process buffer. If you want to wait for fresh messages before reading, [`radio_listen`](#radio_listen) blocks the connection until something arrives or a timeout elapses, and [`radio_sleep`](#radio_sleep) is a convenience for polling loops.
+
+## Supported transports today
+
+- **WebSocket** — `ws://` for plaintext, `wss://` for TLS. Subscribe with the URL in [`radio_subscribe`](#radio_subscribe). Standard [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455) framing; the extension handles ping/pong and reconnect internally.
+- **Redis Pub/Sub** — point a subscription at a Redis URL plus channel name. Same `radio_subscribe` / `radio_received_messages` / `radio_transmit_message` surface; Radio handles the Redis-specific [`SUBSCRIBE`](https://redis.io/docs/latest/commands/subscribe/) and [`PUBLISH`](https://redis.io/docs/latest/commands/publish/) under the hood.
+
+The [extension's documentation page](https://query.farm/duckdb_extension_radio.html) lists planned transports — Google Pub/Sub, Azure Service Bus, MQTT, subprocess pipes — but only WebSocket and Redis Pub/Sub are wired up today.
+
+## Compared to alternatives
+
+- **A standalone consumer service** — the typical pattern (Node.js / Python listening to WebSocket → write to a database → DuckDB queries the database). Radio collapses that into one process and keeps the data in DuckDB's vectorized executor without a serialization hop. The trade is durability: a real consumer service can crash-restart from the bus.
+- **The [`shellfs`](/products/extensions/shellfs) extension piping `wscat`/`websocat` output** — works for read-only WebSocket streams, but each pipe is a one-shot command without bidirectional support, status tracking, or reconnect.
+- **Kafka via [`tributary`](/products/extensions/tributary)** — different kind of bus. Tributary is for snapshotting / scanning Kafka topics; Radio is for live channel subscribe-and-send semantics on WebSocket / Redis Pub/Sub.

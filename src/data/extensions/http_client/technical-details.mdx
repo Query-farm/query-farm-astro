@@ -1,0 +1,76 @@
+import Callout from '../../../components/docs/Callout.astro';
+
+## What you can do with one query
+
+The shortest path from "REST API" to "DuckDB row":
+
+```sql
+SELECT ((http_get('https://api.github.com/repos/duckdb/duckdb')->>'body')::JSON)->>'$.stargazers_count' AS stars;
+```
+
+[`http_get`](#http_get) issues a synchronous [HTTP `GET`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods/GET), returns the response as a JSON object with `status` / `reason` / `body`, and lets you cast and chain [`->>`](https://duckdb.org/docs/data/json/json_functions) right where you need the field. No Python wrapper, no `curl` in the middle, no temp file.
+
+<Callout type="note" title="Best fit, scoped honestly">
+This extension is for **ad-hoc API calls and low-volume per-row enrichment** from inside SQL. It supports [`GET`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods/GET) and [`POST`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods/POST) (JSON or [form-encoded](https://datatracker.ietf.org/doc/html/rfc1866)) — no `PUT` / `PATCH` / `DELETE` in the documented surface.
+
+Calls are **synchronous**: DuckDB blocks until the response arrives. There is **no retry, no backoff, no streaming, no per-row timeout knob** — the entire response body is buffered into memory. One HTTP request per input row, sequentially. For high-throughput integrations or streaming responses, keep a real HTTP client. For curl-only features (cookies, custom TLS, complex auth), use [shellfs](/products/extensions/shellfs) instead.
+
+Status is **experimental** — pin a known-good extension version in any pipeline that depends on it.
+</Callout>
+
+## Architecture
+
+The extension is a thin SQL surface over a synchronous HTTP request. There is no `ATTACH`, no secrets type, no connection pool, no background fetcher — just three scalar functions:
+
+- [`http_get(url)`](#http_get) — `GET` request, no headers parameter in the documented signature.
+- [`http_post(url, headers, params)`](#http_post) — `POST` with the `params` [`MAP`](https://duckdb.org/docs/sql/data_types/map) JSON-encoded into the body.
+- [`http_post_form(url, headers, params)`](#http_post_form) — `POST` with `params` URL-encoded as [`application/x-www-form-urlencoded`](https://datatracker.ietf.org/doc/html/rfc1866).
+
+Each call returns a JSON object — `{status, reason, body}` — that you extract with DuckDB's [JSON operators](https://duckdb.org/docs/data/json/json_functions). The `body` is always a string; cast it with `(body)::JSON` if the response is JSON and you want to drill in.
+
+Because the function shape is stable and synchronous, the result of an `http_*` call composes cleanly into CTEs, lateral joins, and `CREATE TABLE AS` — anywhere a scalar JSON value is acceptable. The cost is the obvious one: one HTTP call per evaluation, in the order DuckDB chooses to evaluate the scalar.
+
+## Securing credentials
+
+Any value passed inline to `headers` or `params` ends up in the cached query plan and `EXPLAIN` output. For Bearer tokens, OAuth client secrets, and other credentials, source them from the environment with [`getenv`](https://duckdb.org/docs/sql/functions/utility#getenv) and bind them via [`SET VARIABLE`](https://duckdb.org/docs/sql/statements/set):
+
+```sql
+SET VARIABLE api_token = getenv('API_TOKEN');
+
+SELECT http_post(
+  'https://api.example.com/users',
+  headers => MAP{
+    'authorization': 'Bearer ' || :api_token,
+    'content-type':  'application/json'
+  },
+  params  => MAP{'email': 'alice@example.com'}
+);
+```
+
+`getenv` resolves at parse time, so the literal credential never appears in any cached query plan or session log. The same pattern works for OAuth client credentials passed to [`http_post_form`](#http_post_form) — see the [Cookbook](#cookbook) for that recipe.
+
+## Scoping per-row calls
+
+Per-row enrichment is the most common reason to reach for this extension, and the most common reason to regret it. A query like
+
+```sql
+SELECT u.id, http_get('https://api.example.com/score/' || u.id::VARCHAR) AS r
+FROM users u;
+```
+
+issues one HTTP call per row, sequentially, with no connection reuse exposed at the SQL layer. For ten rows it's instant; for ten thousand rows it's slow and very likely rate-limited by the upstream server.
+
+Practical guardrails:
+
+- **Pre-aggregate** to a small set of distinct keys before joining against the API. If `users` has 100k rows but only 200 unique scores, fetch the 200 unique scores into a CTE first.
+- **`LIMIT` aggressively** during development to avoid accidentally hammering an endpoint while you iterate.
+- **Cache results** into a DuckDB table with [`CREATE TABLE AS`](https://duckdb.org/docs/sql/statements/create_table) — repeat queries hit the cache, not the API.
+- **Sleep is not exposed.** If you need rate limiting between calls, run the query in batches from your application layer rather than in one large SQL statement.
+
+For genuinely large fetches, prefer one bulk call that returns many rows over many small per-row calls — most REST APIs offer a list endpoint for that reason.
+
+## Compared to alternatives
+
+- **[shellfs](/products/extensions/shellfs) + `curl`** — pipe `curl` output through [`read_csv`](https://duckdb.org/docs/data/csv/overview) / [`read_json`](https://duckdb.org/docs/data/json/loading_json.html). Use shellfs when you need streaming reads of large responses (HTTP Client buffers the whole body), curl-only features (cookies, complex TLS, client certs), or shell-pipeline composition with `awk` / `jq`. Use HTTP Client when the response is small and you want the result as a JSON value directly inside a `SELECT`.
+- **[httpserver](https://github.com/Query-farm/httpserver)** — the inverse direction: serve DuckDB query results as an HTTP API rather than consume one. Pair them when you want one DuckDB instance to fetch from upstream APIs and another to expose results to downstream consumers.
+- **Application-layer Python / Node + DuckDB** — appropriate when you need retries, parallelism, connection reuse, or any HTTP feature this extension doesn't expose. The tradeoff is the boilerplate and the round-trip back into SQL.

@@ -1,10 +1,35 @@
-## What is ADBC?
+There are two ways to use the extension. Pick by what you're doing:
 
-[Arrow Database Connectivity](https://arrow.apache.org/adbc/) is a standard API for talking to databases using Apache Arrow's columnar wire format end-to-end. Where ODBC/JDBC convert rows on each side, ADBC moves columnar batches with no transpose, no row-format intermediate. Drivers exist for SQLite, PostgreSQL, MySQL, Snowflake, BigQuery, DuckDB, Flight SQL, and more — anywhere data already lives in or near Arrow.
+- **Catalog mode (`ATTACH ... TYPE adbc`)** — read-only, but the remote database appears as a normal DuckDB catalog with automatic projection and filter pushdown. Best for plain SELECT-style analytics.
+- **Function mode (`adbc_connect` + `adbc_scan` / `adbc_execute` / `adbc_insert`)** — full read/write access including DDL, DML, and bulk Arrow-native inserts. Best when you need to mutate the remote, run server-side SQL, or hold a long-lived connection.
 
-This extension lets DuckDB act as an ADBC client.
+Both can coexist in the same session.
 
-## Connect
+## Attach a remote database (catalog mode)
+
+```sql
+-- PostgreSQL via the postgresql ADBC driver
+ATTACH 'postgresql://localhost/analytics' AS pg (
+  TYPE adbc,
+  driver 'postgresql',
+  username 'reader',
+  password :pg_password
+);
+
+-- Query as if it were a local DuckDB catalog
+SELECT user_id, COUNT(*) AS events
+FROM pg.public.activity
+WHERE ts >= CURRENT_DATE - 7
+GROUP BY user_id;
+
+-- SQLite file via the sqlite driver
+ATTACH '/data/app.db' AS local_app (TYPE adbc, driver 'sqlite');
+SHOW TABLES FROM local_app.main;
+```
+
+Catalog mode is read-only — see [Catalogs](#storage-extensions) for the full parameter list. Reach for function mode below when you need to write.
+
+## Open a connection (function mode)
 
 ```sql
 -- By driver name (driver manifest must be installed)
@@ -96,19 +121,3 @@ SELECT adbc_disconnect(getvariable('conn')::BIGINT);
 ```
 
 Connections are also cleaned up when the DuckDB process exits, but explicit disconnect is good hygiene.
-
-## Driver setup
-
-ADBC drivers ship as shared libraries plus an optional manifest (`.toml`) that tells DuckDB which symbol to load. Two ways to get them:
-
-1. **Install via pip / brew / system package** — many ADBC drivers publish standard manifest files into a known location, then `'driver': 'sqlite'` Just Works.
-2. **Direct path** — `'driver': '/path/to/libadbc_driver_xxx.dylib'` skips manifest resolution.
-
-`SET search_paths := '/opt/adbc/drivers'` (passed inside the connect options) adds custom manifest search locations.
-
-## ADBC Scanner vs Airport
-
-[`airport`](/products/extensions/airport) is the other connector in this catalog that streams Arrow over the wire — it speaks **Arrow Flight**, an RPC protocol. ADBC Scanner speaks **ADBC**, a client API standard. Pick:
-
-- **ADBC Scanner** when you have an existing database (SQLite, Postgres, Snowflake, BigQuery) with an ADBC driver.
-- **[`airport`](/products/extensions/airport)** when you have a server that speaks Flight directly — typically custom services or Flight-native systems like Dremio.

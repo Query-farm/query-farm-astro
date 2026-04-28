@@ -1,0 +1,135 @@
+[
+  {
+    "id": "tributary_scan_topic",
+    "name": "tributary_scan_topic",
+    "type": "table",
+    "categories": ["Reading"],
+    "returnType": "TABLE",
+    "returnsTable": [
+      { "name": "topic",     "type": "VARCHAR", "description": "Topic the message was read from." },
+      { "name": "partition", "type": "INTEGER", "description": "Kafka partition id the message lives in." },
+      { "name": "offset",    "type": "BIGINT",  "description": "Per-partition offset of the message." },
+      { "name": "message",   "type": "BLOB",    "description": "Raw message payload as a BLOB. Cast or parse it with DuckDB's JSON / Avro / decode utilities depending on your topic's serialization." }
+    ],
+    "parameters": [
+      {
+        "name": "topic_name",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Kafka topic to read."
+      },
+      {
+        "name": "bootstrap.servers",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "Comma-separated `host:port` list of brokers to bootstrap from. Required."
+      },
+      {
+        "name": "group.id",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "Consumer group id. See [Kafka consumer configs](https://kafka.apache.org/documentation/#consumerconfigs)."
+      },
+      {
+        "name": "security.protocol",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "`PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL`. See [Kafka security](https://kafka.apache.org/documentation/#security_ssl)."
+      },
+      {
+        "name": "sasl.mechanism",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "SASL mechanism — `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, etc. See [Kafka SASL](https://kafka.apache.org/documentation/#security_sasl)."
+      },
+      {
+        "name": "sasl.username",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "SASL username (PLAIN / SCRAM)."
+      },
+      {
+        "name": "sasl.password",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "SASL password (PLAIN / SCRAM). Pass via `getenv()` and a SQL variable rather than inlining."
+      },
+      {
+        "name": "...",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "Any other [`librdkafka` configuration](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) name — `auto.offset.reset`, `enable.auto.commit`, `ssl.ca.location`, etc. — passes through unchanged. Tributary doesn't validate keys; misspellings surface as `librdkafka` errors at scan time.",
+        "varargs": true
+      }
+    ],
+    "description": "Read messages from a Kafka topic as DuckDB rows. Multi-partition topics are scanned in parallel by partition. Each row is `(topic, partition, offset, message)`; the message is a `BLOB` you decode in SQL based on your serialization (JSON, Avro, Protobuf, etc.).\n\nFor a long-running topic this scans the entire current contents — pair with a `WHERE` clause on `timestamp` / `partition` / `offset` for finite slices, or with [`tributary_metadata`](#tributary_metadata) first to plan the scan.",
+    "examples": [
+      {
+        "description": "Snapshot a topic into a local table",
+        "code": "CREATE TABLE orders_snapshot AS\nSELECT *\nFROM tributary_scan_topic('orders',\n                          \"bootstrap.servers\" := 'kafka:9092');"
+      },
+      {
+        "description": "Decode JSON messages on the way in",
+        "code": "SELECT\n  partition,\n  offset,\n  json_extract_string(message::VARCHAR, '$.user_id') AS user_id,\n  json_extract_string(message::VARCHAR, '$.event')   AS event\nFROM tributary_scan_topic('events',\n                          \"bootstrap.servers\" := 'kafka:9092');"
+      },
+      {
+        "description": "SASL-authenticated consume against a managed Kafka",
+        "code": "SET VARIABLE k_user = getenv('KAFKA_USER');\nSET VARIABLE k_pass = getenv('KAFKA_PASSWORD');\n\nSELECT *\nFROM tributary_scan_topic('orders',\n  \"bootstrap.servers\"  := 'broker.example.com:9093',\n  \"security.protocol\"  := 'SASL_SSL',\n  \"sasl.mechanism\"     := 'SCRAM-SHA-512',\n  \"sasl.username\"      := :k_user,\n  \"sasl.password\"      := :k_pass);"
+      }
+    ],
+    "relatedFunctions": ["tributary_metadata", "tributary_version"]
+  },
+  {
+    "id": "tributary_metadata",
+    "name": "tributary_metadata",
+    "type": "table",
+    "categories": ["Inspection"],
+    "returnType": "TABLE",
+    "returnsTable": [
+      { "name": "brokers", "type": "STRUCT[]", "description": "Array of broker descriptors — id, host, port." },
+      { "name": "topics",  "type": "STRUCT[]", "description": "Array of topic descriptors — name, error, partitions[]. Each partition includes its leader, replicas, and ISR set." }
+    ],
+    "parameters": [
+      {
+        "name": "bootstrap.servers",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "Comma-separated `host:port` list of brokers to bootstrap from."
+      },
+      {
+        "name": "...",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "Any other [`librdkafka` configuration](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) name — same surface as [`tributary_scan_topic`](#tributary_scan_topic).",
+        "varargs": true
+      }
+    ],
+    "description": "Inspect a Kafka cluster without consuming from a specific topic. Returns one row containing two arrays: `brokers` and `topics`. Useful for discovering what a cluster exposes, sizing partition-parallel scans, or scripting topic-list audits.",
+    "examples": [
+      {
+        "description": "List every topic on a cluster",
+        "code": "SELECT unnest(topics).name AS topic_name\nFROM tributary_metadata(\"bootstrap.servers\" := 'kafka:9092');"
+      },
+      {
+        "description": "Count partitions per topic",
+        "code": "SELECT\n  t.name                            AS topic,\n  array_length(t.partitions)         AS partitions\nFROM (\n  SELECT unnest(topics) AS t\n  FROM tributary_metadata(\"bootstrap.servers\" := 'kafka:9092')\n)\nORDER BY partitions DESC;"
+      }
+    ],
+    "relatedFunctions": ["tributary_scan_topic"]
+  },
+  {
+    "id": "tributary_version",
+    "name": "tributary_version",
+    "type": "scalar",
+    "categories": ["Inspection"],
+    "returnType": "VARCHAR",
+    "parameters": [],
+    "description": "Returns the loaded Tributary extension version as a date-stamped build string (e.g. `'20250612.01'`). Use to confirm what's loaded when matching against bug reports or release notes.",
+    "examples": [
+      {
+        "description": "Print the loaded version",
+        "code": "SELECT tributary_version();"
+      }
+    ]
+  }
+]

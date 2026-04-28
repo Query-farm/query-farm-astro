@@ -1,0 +1,103 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Run DuckDB Behind HTTP?",
+  "description": "Wrap a single [DuckDB](https://duckdb.org) process in an HTTP endpoint so other services can `POST` SQL and read JSON back — no client driver, no separate query gateway. Best fit: a read-only DuckDB serving small internal APIs, BI dashboards, or [DuckDB-Wasm](https://duckdb.org/docs/api/wasm/overview) in a browser. **Not** a substitute for a hardened multi-tenant SQL gateway.",
+  "sections": [
+    {
+      "icon": "🌐",
+      "title": "What this extension is for",
+      "description": "Two SQL functions — [`httpserve_start`](#httpserve_start) and [`httpserve_stop`](#httpserve_stop) — turn a running DuckDB into a tiny HTTP query service. The endpoint accepts SQL via `POST` body or `?query=` parameter, returns [JSON](https://en.wikipedia.org/wiki/JSON), and ships an embedded browser UI called *quackplay*.",
+      "bulletPoints": [
+        {
+          "label": "Internal SQL APIs",
+          "description": "Stand up a JSON query endpoint over a curated DuckDB database file so other services can pull aggregates without a client library. Pair with `duckdb -readonly` for safe shared access."
+        },
+        {
+          "label": "Ad-hoc browser exploration",
+          "description": "The built-in *quackplay* UI lets a teammate paste a query into a browser tab and see results — useful when shipping a DuckDB file is easier than shipping a BI tool."
+        },
+        {
+          "label": "Cross-DuckDB query federation",
+          "description": "Each DuckDB process is reachable over HTTP from any other DuckDB. Combined with the [`chsql`](https://community-extensions.duckdb.org/extensions/chsql.html) extension's `duck_flock` macro, you can fan a single SQL statement out across multiple DuckDBs and merge the results."
+        },
+        {
+          "label": "Glue for [DuckDB-Wasm](https://duckdb.org/docs/api/wasm/overview)",
+          "description": "A browser-side DuckDB can `POST` to a server-side DuckDB through this extension to pull canonical data without bundling it into the page."
+        }
+      ]
+    },
+    {
+      "icon": "🔌",
+      "title": "How it works",
+      "description": "[`httpserve_start`](#httpserve_start) spawns an HTTP listener thread inside the DuckDB process, owned by the calling connection. Requests are dispatched to the same DuckDB connection, so any state the connection has (`LOAD`ed extensions, attached databases, secrets) is visible to HTTP clients. There is one global server per process — calling [`httpserve_start`](#httpserve_start) twice replaces the listener.",
+      "bulletPoints": [
+        {
+          "label": "Endpoints",
+          "description": "`/` accepts `GET` and `POST` for query execution. `/ping` is a `GET` health check. There is no `/metrics`, no `/health`, no OpenAPI document — the API surface is intentionally small."
+        },
+        {
+          "label": "Query input",
+          "description": "`POST` the SQL as the request body, or send it as `?query=` / `?q=`. `POST` is recommended once the SQL exceeds typical URL length limits."
+        },
+        {
+          "label": "Response formats",
+          "description": "Pass `?default_format=JSONEachRow` for newline-delimited JSON ([JSONEachRow](https://clickhouse.com/docs/en/interfaces/formats#jsoneachrow)) or `JSONCompact` for a single document with `meta` / `data` / `rows` / `statistics` keys ([JSONCompact](https://clickhouse.com/docs/en/interfaces/formats#jsoncompact)). The format vocabulary intentionally mirrors the ClickHouse HTTP interface so existing tooling works."
+        },
+        {
+          "label": "Authentication",
+          "description": "The third argument to [`httpserve_start`](#httpserve_start) is one of: empty string (no auth), `'user:pass'` ([HTTP Basic](https://datatracker.ietf.org/doc/html/rfc7617)), or any other value (treated as a single shared key sent in the `X-API-Key` header). There is one credential per server."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "Production caveats",
+      "description": "Exposing a SQL engine over HTTP is genuinely risky if you skip the boring parts. Read these before binding to a public interface.",
+      "bulletPoints": [
+        {
+          "label": "Run DuckDB read-only",
+          "description": "The endpoint executes whatever SQL it receives against the connection's full surface. Without `-readonly` (see the [DuckDB CLI docs](https://duckdb.org/docs/api/cli)), an authenticated client can `ATTACH`, `INSERT`, `COPY TO`, install extensions, or call file-system functions. The upstream README's first security note is exactly this."
+        },
+        {
+          "label": "No built-in TLS",
+          "description": "The server speaks plain HTTP. Credentials and query results travel in the clear unless you front it with a TLS terminator like [nginx](https://nginx.org/en/docs/http/ngx_http_ssl_module.html), [Caddy](https://caddyserver.com/docs/automatic-https), or [HAProxy](https://www.haproxy.org/). [HTTP Basic](https://en.wikipedia.org/wiki/Basic_access_authentication) without TLS is effectively no auth at all."
+        },
+        {
+          "label": "One credential, no per-user scope",
+          "description": "Auth is binary: a request either presents the configured credential or it doesn't. There is no notion of users, roles, query allowlists, or rate limiting. For multi-tenant access, terminate auth at a gateway and run the server unauthenticated behind it on a private network."
+        },
+        {
+          "label": "Lock down the DuckDB itself",
+          "description": "Even with `-readonly`, follow [DuckDB's hardening guidance](https://duckdb.org/docs/operations_manual/securing_duckdb/overview) — disable [community extension installation](https://duckdb.org/docs/operations_manual/securing_duckdb/securing_extensions), restrict filesystem access, and consider running the process inside a sandbox or container."
+        },
+        {
+          "label": "Single process, no rate limiting",
+          "description": "Concurrency and throughput are bounded by what one DuckDB process can do. There is no built-in request queue, no per-client throttling, and no slow-query cutoff. Put a reverse proxy in front for any of those."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Read-only API in front of a curated DuckDB",
+          "description": "Build a Parquet / CSV pipeline into a DuckDB file, attach it `-readonly`, [`httpserve_start`](#httpserve_start) on a private port, and let internal services `POST` aggregates. Front with TLS at the proxy."
+        },
+        {
+          "title": "Quick exploratory UI for a teammate",
+          "description": "Open *quackplay* in a browser tab, paste queries, hand someone a URL. Cheaper than provisioning a BI seat for one-off questions."
+        },
+        {
+          "title": "Cross-DuckDB federation with `duck_flock`",
+          "description": "Run [`httpserve_start`](#httpserve_start) on N DuckDB nodes, each exposing a slice of data, then use the [`chsql`](https://community-extensions.duckdb.org/extensions/chsql.html) extension's `duck_flock` from a coordinator DuckDB to fan queries out and merge results."
+        },
+        {
+          "title": "Backend for [DuckDB-Wasm](https://duckdb.org/docs/api/wasm/overview)",
+          "description": "Let a browser DuckDB call `read_json_auto('http://server:9999/?q=...')` to pull authoritative data on demand instead of bundling it into the bundle."
+        }
+      ]
+    }
+  ]
+}

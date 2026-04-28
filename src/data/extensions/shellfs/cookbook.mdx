@@ -1,9 +1,3 @@
-## How it works
-
-Shellfs registers a virtual filesystem backed by `popen()`. When DuckDB sees a path that ends with `|`, it runs the path as a shell command and reads from its stdout. When DuckDB sees a path that begins with `|`, it runs the path and writes to its stdin.
-
-That tiny convention means **every shell tool becomes a DuckDB data source**.
-
 ## Read a pipeline
 
 ```sql
@@ -20,16 +14,18 @@ SELECT * FROM read_csv('seq 1 35 | awk "\$1 % 7 == 0" | head -n 2 |');
 
 ## Curl an HTTP API
 
-DuckDB has built-in HTTP, but if you need custom headers, query params, retries, or pre-processing — pipe through `curl`:
+For custom headers, query params, retries, or pre-processing — pipe through [`curl`](https://curl.se/):
 
 ```sql
 SELECT abbreviation, unixtime
 FROM read_json('curl -s http://worldtimeapi.org/api/timezone/Etc/UTC |');
 ```
 
+For programmatic HTTP from SQL without shelling out, see the [`http_client`](/products/extensions/http_client) extension.
+
 ## Drive a custom script
 
-Any program that prints CSV (or JSON, or Parquet, etc.) to stdout becomes a queryable source. Useful when you need bespoke parsing, schema-shaping, or to wrap an API DuckDB doesn't speak natively:
+Any program that prints CSV (or JSON, or Parquet, etc.) to stdout becomes a queryable source — useful when you need bespoke parsing, schema-shaping, or to wrap an API DuckDB doesn't speak natively:
 
 ```python
 # test-csv.py
@@ -44,7 +40,7 @@ SELECT COUNT(DISTINCT counter1) FROM read_csv('./test-csv.py |');
 
 ## Pipe out of DuckDB
 
-The `|` prefix turns COPY into a streaming export:
+The `|` prefix turns `COPY` into a streaming export:
 
 ```sql
 -- Stream a query result through gzip
@@ -53,14 +49,3 @@ COPY (SELECT * FROM big_table) TO '| gzip > out.csv.gz';
 -- Stream into a downstream program
 COPY (SELECT * FROM events) TO '| ./load_into_kafka.sh';
 ```
-
-## When to reach for shellfs
-
-- **Quick adapters** — wrapping an internal CLI tool that outputs CSV.
-- **HTTP fetches with custom headers** — curl piping into `read_json`.
-- **Test data generators** — Python or shell scripts producing rows on the fly.
-- **Streaming exports** — COPY to a `| <pipeline>` for compression, encryption, or shipping.
-
-## Caution
-
-`shellfs` runs whatever command appears in the filename. **Never construct paths from untrusted input** — that's classic command injection. Treat shellfs like SQL string interpolation: only literal pipelines or values you control should appear in the path.

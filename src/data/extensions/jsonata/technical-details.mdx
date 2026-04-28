@@ -1,0 +1,70 @@
+import Callout from '../../../components/docs/Callout.astro';
+
+## What you can do with one query
+
+The headline pattern — reshape a nested JSON column into a clean output object in a single SQL projection:
+
+```sql
+SELECT jsonata('{
+  "name":     FirstName & " " & Surname,
+  "mobile":   Phone[type="mobile"].number,
+  "lifetime": $sum(Orders.(Quantity * UnitPrice))
+}', payload) AS profile
+FROM contacts;
+```
+
+One [`jsonata`](#jsonata) call replaces a stack of [`json_extract_string`](https://duckdb.org/docs/data/json/json_functions.html) projections plus an `unnest` subquery for the order roll-up. The expression — array filter, [object construction](https://docs.jsonata.org/construction), and an [aggregation function](https://docs.jsonata.org/aggregation-functions) — stays in one string.
+
+<Callout type="note" title="Best fit, scoped honestly">
+This extension exposes [JSONata](https://jsonata.org/) as a single scalar SQL function — [`jsonata`](#jsonata), in two arities. There is **no `ATTACH` interface, no secrets, no I/O**. The function operates on `JSON` values DuckDB already has in memory.
+
+It is the right tool when DuckDB's [native JSON functions](https://duckdb.org/docs/data/json/json_functions.html) get verbose — array predicate filters, object reshaping, multi-step transforms. It is **not** a JSON loader (use DuckDB's [`read_json`](https://duckdb.org/docs/data/json/loading_json.html) for that) and it does not register custom DuckDB UDFs as callables inside the JSONata expression.
+</Callout>
+
+## Architecture
+
+The extension is a Rust-implemented scalar UDF. Each call to [`jsonata`](#jsonata) takes a JSONata expression string and a `JSON` value, parses the expression into an AST, evaluates it against the document, and returns a `JSON` result. There is no network, no extension state between rows, and no DuckDB type beyond the standard [`JSON`](https://duckdb.org/docs/data/json/json_functions.html) type.
+
+When the `expression` argument is a SQL constant — by far the common case — the parser runs once and the compiled program is reused for every row. Per-row cost is dominated by the JSON walk plus operator application; deeply-nested documents and large arrays scale linearly with the data they touch.
+
+The 3-arg form, [`jsonata(expr, json, bindings)`](#jsonata), takes a JSON object whose keys become `$variable` names inside the expression. This is how you pass per-query values — thresholds, ids, dates — into an otherwise static expression so the parse cache still applies.
+
+## When to reach for JSONata vs DuckDB native JSON
+
+DuckDB ships a [rich JSON function library](https://duckdb.org/docs/data/json/json_functions.html) — [`json_extract`](https://duckdb.org/docs/data/json/json_functions.html), [`json_extract_string`](https://duckdb.org/docs/data/json/json_functions.html), the [`->`/`->>` operators](https://duckdb.org/docs/data/json/json_functions.html), [`json_structure`](https://duckdb.org/docs/data/json/json_functions.html), and a [JSON data type](https://duckdb.org/docs/data/json/json_functions.html). For one-field-one-path access these are the right call — vectorized, idiomatic SQL, no extra extension.
+
+JSONata is the better fit when the path includes any of:
+
+- **Predicate filters on arrays.** `Phone[type="mobile"].number` selects matching elements *and* projects in one step. The native equivalent is `unnest` plus a subquery with a `WHERE` clause.
+- **Object reshaping.** [Construction expressions](https://docs.jsonata.org/construction) build a fresh JSON object literal — pull, rename, and compute fields together. The native equivalent is one `json_extract_string` per output field.
+- **Embedded aggregation.** [`$sum`, `$count`, `$max`](https://docs.jsonata.org/aggregation-functions) operate on arrays *inside* the JSON document. The native equivalent leaves the JSON value, unnests, aggregates, and returns.
+- **Higher-order array operations.** [`$map`, `$filter`, `$reduce`](https://docs.jsonata.org/higher-order-functions) keep transforms inline. The native equivalent is a lateral subquery.
+
+Concrete contrast — selecting the mobile number from a contact's `Phone` array:
+
+```sql
+-- DuckDB native: extract the array, unnest, filter, project
+SELECT (
+  SELECT json_extract_string(p, '$.number')
+  FROM   unnest(json_extract(payload, '$.Phone')::JSON[]) AS t(p)
+  WHERE  json_extract_string(p, '$.type') = 'mobile'
+  LIMIT  1
+) AS mobile
+FROM contacts;
+
+-- JSONata: one expression
+SELECT jsonata('Phone[type="mobile"].number', payload) AS mobile
+FROM contacts;
+```
+
+For a single field at a fixed path, native is simpler. The break-even is roughly "any predicate, any reshape, or more than two output fields."
+
+## Compared to alternatives
+
+- **DuckDB native JSON ([`->>`](https://duckdb.org/docs/data/json/json_functions.html), [`json_extract`](https://duckdb.org/docs/data/json/json_functions.html))** — the right choice for simple field-by-field access. Stays simpler and avoids the extension entirely. Use JSONata when the expression starts to fan out across array predicates or object construction.
+- **[`jq`](https://github.com/jqlang/jq) outside DuckDB** — same general role for JSON, different language. `jq` is a separate process — file in, file out. JSONata-in-DuckDB keeps the transform inside the SQL plan, vectorized, joinable, and `EXPLAIN`-able alongside the rest of the query.
+- **Application-side JSONata libraries** ([JS](https://github.com/jsonata-js/jsonata), [Python](https://github.com/qlyoung/python-jsonata-poc), etc.) — the right call when the surrounding logic already lives in the app. Bringing JSONata into DuckDB matters when the JSON sits in a column and the rest of the pipeline is SQL — no row-format conversion, no result shuttling.
+
+## Iterating on expressions
+
+JSONata expressions live inside SQL string literals, which makes them awkward to edit in place. The official [JSONata exerciser](https://try.jsonata.org/) takes a sample document and gives live results — the fastest loop for any non-trivial expression. The evaluator there matches what the extension runs, so once an expression is right in the exerciser it transfers unchanged into the SQL string.

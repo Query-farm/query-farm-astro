@@ -5,84 +5,135 @@ INSTALL httpserver FROM community;
 LOAD httpserver;
 
 SELECT httpserve_start('localhost', 9999, 'user:pass');
--- 'HTTP server started on 0.0.0.0:9999'
+-- 'HTTP server started on localhost:9999'
 ```
 
-The auth string controls how clients authenticate:
+The third argument to [`httpserve_start`](#httpserve_start) selects the auth mode — empty disables auth, `user:pass` enables [HTTP Basic](https://datatracker.ietf.org/doc/html/rfc7617), anything else is treated as a shared key in `X-API-Key`.
 
-| Auth value | Mode |
-|---|---|
-| `''` (empty) | No auth — only for development. |
-| `'user:pass'` | HTTP Basic auth. |
-| anything else | Treated as a single API key, sent in `X-API-Key`. |
-
-## Query from the command line
-
-### Basic auth
+## Query from curl with HTTP Basic auth
 
 ```bash
 curl -X POST -d "SELECT version()" \
-  "http://user:pass@localhost:9999/"
+  "http://user:pass@localhost:9999/?default_format=JSONCompact"
 ```
 
-### X-API-Key
+Body is the SQL; response is [JSONCompact](https://clickhouse.com/docs/en/interfaces/formats#jsoncompact) — `meta`, `data`, `rows`, `statistics`.
+
+## Query from curl with a shared API key
+
+```sql
+SELECT httpserve_start('localhost', 9999, 'supersecretkey');
+```
 
 ```bash
 curl -X POST --header "X-API-Key: supersecretkey" \
-  -d "SELECT 'hello', version()" \
-  "http://localhost:9999/"
+     -d "SELECT 'hello', version()" \
+     "http://localhost:9999/?default_format=JSONEachRow"
 ```
 
-The body is the SQL; the response is the result set as JSON.
+`JSONEachRow` returns newline-delimited objects — see the [ClickHouse format reference](https://clickhouse.com/docs/en/interfaces/formats#jsoneachrow) for the exact shape.
 
-## Query from another DuckDB
+## Pass SQL as a query parameter
 
-Connect from a second DuckDB by configuring an `extra_http_headers` secret and using `duck_flock` (from the [chsql](https://community-extensions.duckdb.org/extensions/chsql.html) extension):
+`GET` / `?query=` works for short queries (mind URL length limits):
+
+```bash
+curl --header "X-API-Key: supersecretkey" \
+     "http://localhost:9999/?q=SELECT%2042&default_format=JSONCompact"
+```
+
+## Pull JSON results into another DuckDB
+
+A second DuckDB can read the endpoint with [`read_json_auto`](https://duckdb.org/docs/data/json/loading_json.html), passing the API key via an [`extra_http_headers`](https://duckdb.org/docs/extensions/httpfs/overview) secret:
 
 ```sql
+LOAD httpfs;
+LOAD json;
+
 CREATE SECRET extra_http_headers (
   TYPE HTTP,
   EXTRA_HTTP_HEADERS MAP { 'X-API-Key': 'supersecretkey' }
 );
 
-SELECT * FROM duck_flock(
-  'SELECT version()',
-  ['http://localhost:9999']
+SELECT * FROM read_json_auto(
+  'http://localhost:9999/?q=SELECT version()&default_format=JSONEachRow'
 );
 ```
 
-## The Play UI
+## Fan a query across multiple DuckDB nodes
 
-Open `http://localhost:9999/` in a browser. You'll get the embedded **quackplay** SQL interface — paste queries, see results, browse the schema. Useful for ad-hoc exploration without needing a separate client.
+The [`chsql`](https://community-extensions.duckdb.org/extensions/chsql.html) community extension provides a `duck_flock` macro that broadcasts one SQL statement to several HTTP endpoints and unions the results:
 
-## Read-only safety
+```sql
+INSTALL chsql FROM community;
+LOAD chsql;
 
-Run DuckDB with `-readonly` so the API can't mutate the database. This is the standard configuration for serving the database publicly:
+CREATE SECRET extra_http_headers (
+  TYPE HTTP,
+  EXTRA_HTTP_HEADERS MAP { 'X-API-Key': 'supersecretkey' }
+);
 
-```bash
-duckdb -readonly mydata.duckdb -c "INSTALL httpserver FROM community; LOAD httpserver; SELECT httpserve_start('0.0.0.0', 9999, 'mykey'); CALL pg_sleep(3600);"
+SELECT *
+FROM duck_flock(
+  'SELECT now() AS server_time, version()',
+  ['http://node-a:9999', 'http://node-b:9999', 'http://node-c:9999']
+);
 ```
 
-## Logging and foreground mode
+## Run *quackplay* in the browser
 
-Useful environment variables:
-
-```bash
-DUCKDB_HTTPSERVER_FOREGROUND=1   # Run server in main thread (blocks the SQL caller)
-DUCKDB_HTTPSERVER_DEBUG=1        # Verbose request logging to stdout
-DUCKDB_HTTPSERVER_SYSLOG=1       # Route logs to syslog
+```sql
+SELECT httpserve_start('localhost', 9999, 'user:pass');
 ```
 
-## Stopping
+Open `http://localhost:9999/` in a browser. Authenticate, then paste queries into the embedded *quackplay* SQL UI. Useful for ad-hoc exploration without a separate client. (The UI is marked experimental upstream.)
+
+## Serve a read-only DuckDB to a private network
+
+```bash
+duckdb -readonly mydata.duckdb -c "
+  INSTALL httpserver FROM community;
+  LOAD httpserver;
+  SELECT httpserve_start('0.0.0.0', 9999, 'shared-api-key');
+  CALL pg_sleep(86400);
+"
+```
+
+`-readonly` is the simplest hard guarantee against mutation through the HTTP endpoint — see the [DuckDB CLI docs](https://duckdb.org/docs/api/cli).
+
+## Foreground mode and logging
+
+Set these in the environment **before** launching DuckDB:
+
+```bash
+DUCKDB_HTTPSERVER_FOREGROUND=1   # Run the listener on the main thread (the SQL caller blocks).
+DUCKDB_HTTPSERVER_DEBUG=1        # Verbose request logging to stdout.
+DUCKDB_HTTPSERVER_SYSLOG=1       # Route logs to syslog.
+```
+
+`FOREGROUND=1` is the simplest way to keep the process alive when launching from a one-shot `duckdb -c '...'` invocation in a container.
+
+## Health check
+
+```bash
+curl -i http://localhost:9999/ping
+```
+
+`/ping` is unauthenticated and returns a small `200 OK` — wire it to a load balancer or `docker healthcheck`.
+
+## Rotate the credential
+
+```sql
+SELECT httpserve_stop();
+SELECT httpserve_start('localhost', 9999, 'rotated-key');
+```
+
+[`httpserve_stop`](#httpserve_stop) tears down the listener; the next [`httpserve_start`](#httpserve_start) can rebind on a different port or with a different credential without restarting DuckDB.
+
+## Stop the server
 
 ```sql
 SELECT httpserve_stop();
 ```
 
-Or just exit the DuckDB process; the server thread shuts down with it.
-
-## Caveats
-
-- **Trust the network**. The server has no rate-limiting, no per-key permissions, and (without TLS termination upfront) no encryption. Run behind a reverse proxy in production.
-- **Authentication is binary**. There's one key (or one user/pass). For multi-tenant or per-user access control, terminate auth at a gateway and run the server unauthenticated behind it.
-- **Single-process**. Querying load and concurrency are bounded by what one DuckDB process can do.
+Or just exit the DuckDB process — the server thread shuts down with it.

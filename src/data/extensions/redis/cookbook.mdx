@@ -1,6 +1,6 @@
 ## Connect
 
-Redis credentials live in a DuckDB secret. Every `redis_*` function takes a final `secret` argument naming this secret:
+[Redis](https://redis.io/docs/latest/) credentials live in a DuckDB secret. Every `redis_*` function takes a final `secret` argument naming this secret:
 
 ```sql
 CREATE SECRET IF NOT EXISTS redis (
@@ -12,13 +12,29 @@ CREATE SECRET IF NOT EXISTS redis (
 );
 ```
 
+For production, parameterize the password from the environment so it doesn't appear in cached query plans:
+
+```sql
+SET VARIABLE redis_password = getenv('REDIS_PASSWORD');
+
+CREATE SECRET prod_redis (
+  TYPE redis,
+  PROVIDER config,
+  host 'cache.prod.internal',
+  port '6379',
+  password :redis_password
+);
+```
+
+See [`CREATE SECRET`](https://duckdb.org/docs/sql/statements/create_secret) for the full secrets DSL and the [Secrets](#secrets) section on this page for the `redis` parameter table.
+
 ## String operations
 
 ```sql
--- Set a value
+-- Set a value (Redis SET)
 SELECT redis_set('user:1', 'John Doe', 'redis') AS ok;
 
--- Get a value
+-- Get a value (Redis GET)
 SELECT redis_get('user:1', 'redis') AS user_name;
 
 -- Bulk write from a column
@@ -27,41 +43,47 @@ SELECT id,
        redis_set('user:' || id::VARCHAR, name, 'redis')
 FROM new_users;
 
--- Multi-get in one round-trip
+-- Multi-get in one round-trip (Redis MGET)
 SELECT redis_mget('user:1,user:2,user:3', 'redis');
 ```
+
+Maps to [`GET`](https://redis.io/docs/latest/commands/get/), [`SET`](https://redis.io/docs/latest/commands/set/), [`MGET`](https://redis.io/docs/latest/commands/mget/). See [`redis_get`](#redis_get) / [`redis_set`](#redis_set) / [`redis_mget`](#redis_mget) for the function signatures.
 
 ## Hash operations
 
 ```sql
--- Set fields
+-- Set fields (Redis HSET)
 SELECT redis_hset('user:1', 'email', 'john@example.com', 'redis');
 SELECT redis_hset('user:1', 'age',   '30',               'redis');
 
--- Get one field
+-- Get one field (Redis HGET)
 SELECT redis_hget('user:1', 'email', 'redis') AS email;
 
--- All fields and values as a table
+-- All fields and values as a table (Redis HGETALL)
 SELECT * FROM redis_hgetall('user:1', 'redis');
 ```
+
+Maps to [`HGET`](https://redis.io/docs/latest/commands/hget/), [`HSET`](https://redis.io/docs/latest/commands/hset/), [`HGETALL`](https://redis.io/docs/latest/commands/hgetall/). See [`redis_hget`](#redis_hget) / [`redis_hset`](#redis_hset) / [`redis_hgetall`](#redis_hgetall).
 
 ## List operations
 
 ```sql
--- Push values
+-- Push values (Redis LPUSH)
 SELECT redis_lpush('queue:jobs', 'job-1', 'redis');
 SELECT redis_lpush('queue:jobs', 'job-2', 'redis');
 
--- Read as comma-separated
+-- Read as a comma-joined string
 SELECT redis_lrange('queue:jobs', 0, -1, 'redis');
 
 -- Or as a table — one row per element
 SELECT * FROM redis_lrange_table('queue:jobs', 0, -1, 'redis');
 ```
 
+Maps to [`LPUSH`](https://redis.io/docs/latest/commands/lpush/) and [`LRANGE`](https://redis.io/docs/latest/commands/lrange/). [`redis_lrange_table`](#redis_lrange_table) is the table-shaped variant — pick it when you want one DuckDB row per list element instead of a single comma-joined string from [`redis_lrange`](#redis_lrange).
+
 ## Discovery (SCAN, KEYS)
 
-`KEYS` is convenient but blocks the Redis server on large keyspaces. In production, prefer cursor-paginated SCAN:
+[`KEYS`](https://redis.io/docs/latest/commands/keys/) is convenient but blocks the Redis server on large keyspaces. In production, prefer cursor-paginated [`SCAN`](https://redis.io/docs/latest/commands/scan/):
 
 ```sql
 -- KEYS — fine for development / small keyspaces
@@ -70,12 +92,14 @@ SELECT * FROM redis_keys('user:*', 'redis');
 -- SCAN — paginated, non-blocking
 SELECT redis_scan(0, 'user:*', 100, 'redis');
 -- → "1024:user:1,user:2,...,user:50"
--- Pass the returned cursor (1024) back in to fetch the next page.
+-- Pass the returned cursor (1024) back in to fetch the next page; cursor "0" means done.
 ```
+
+See [`redis_keys`](#redis_keys) and [`redis_scan`](#redis_scan).
 
 ## Bulk hash discovery (`redis_hscan_over_scan`)
 
-The killer feature for migration and bulk analysis — combines SCAN with HSCAN to emit `(key, field, value)` rows for every hash matching a key pattern, in one query:
+The killer feature for migration and bulk analysis — combines [`SCAN`](https://redis.io/docs/latest/commands/scan/) with [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) to emit `(key, field, value)` rows for every hash matching a key pattern, in one query:
 
 ```sql
 -- Every field of every user:* hash, as rows
@@ -89,13 +113,15 @@ FROM redis_hscan_over_scan(
 ORDER BY key, field;
 ```
 
-Pipe directly into a CREATE TABLE AS for offline analysis or migration:
+Pipe directly into a [`CREATE TABLE AS`](https://duckdb.org/docs/sql/statements/create_table) for offline analysis or migration:
 
 ```sql
 CREATE TABLE redis_users_dump AS
 SELECT key, field, value
 FROM redis_hscan_over_scan('user:*', '*', 100, 'redis');
 ```
+
+See [`redis_hscan_over_scan`](#redis_hscan_over_scan) for the full signature.
 
 ## Key management
 
@@ -105,3 +131,5 @@ SELECT redis_type('user:1', 'redis');     -- 'hash'
 SELECT redis_exists('user:1', 'redis');   -- TRUE
 SELECT redis_del('user:1', 'redis');      -- TRUE if existed and removed
 ```
+
+Maps to [`TYPE`](https://redis.io/docs/latest/commands/type/), [`EXISTS`](https://redis.io/docs/latest/commands/exists/), [`DEL`](https://redis.io/docs/latest/commands/del/). See [`redis_type`](#redis_type) / [`redis_exists`](#redis_exists) / [`redis_del`](#redis_del).

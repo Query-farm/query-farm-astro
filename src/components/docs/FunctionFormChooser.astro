@@ -1,0 +1,123 @@
+---
+import DuckDBExtensionFunctionParameters from './DuckDBExtensionFunctionParameters.astro';
+import type { FunctionForm } from '../../data/extension-types';
+
+interface Props {
+  functionName: string;
+  forms: FunctionForm[];
+}
+
+const { functionName, forms } = Astro.props;
+
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+function buildSignatureHtml(form: FunctionForm): string {
+  const params = form.parameters
+    .map((p) => {
+      const typeHtml = `<span class="text-blue-600">${escapeHtml(p.type)}</span>`;
+      if (p.paramType === 'named') {
+        const def = p.default ? ` = ${escapeHtml(p.default)}` : '';
+        return `<span class="text-purple-600">${p.name}</span> := ${typeHtml}${def}`;
+      }
+      return `<span class="text-duck-700">${p.name}</span>: ${typeHtml}`;
+    })
+    .join(', ');
+  const ret = form.returnType
+    ? `<span class="text-blue-600">${escapeHtml(form.returnType)}</span>`
+    : 'void';
+  return `<span class="text-harvest-700">${functionName}</span>(${params}) → ${ret}`;
+}
+
+const sigHtml = forms.map(buildSignatureHtml);
+const chooserId = `forms-${Math.random().toString(36).slice(2, 9)}`;
+---
+
+<div class="mb-4" data-form-chooser={chooserId}>
+  <div class="flex items-center justify-between mb-2">
+    <h5 class="text-sm font-semibold text-soil-700">Signature</h5>
+    <span class="text-xs text-soil-500">{forms.length} overloaded forms · click to inspect</span>
+  </div>
+  <div class="space-y-1.5" role="tablist">
+    {forms.map((_, idx) => (
+      <button
+        type="button"
+        role="tab"
+        aria-selected={idx === 0 ? 'true' : 'false'}
+        data-form-index={idx}
+        class:list={[
+          'form-row w-full text-left rounded font-mono text-sm leading-relaxed px-3 py-2.5 border-l-4 transition-colors cursor-pointer',
+          idx === 0
+            ? 'border-harvest-500 bg-harvest-50 text-soil-900 ring-1 ring-harvest-200'
+            : 'border-transparent bg-soil-50 hover:bg-soil-100 text-soil-700',
+        ]}
+      >
+        <span set:html={sigHtml[idx]} />
+      </button>
+    ))}
+  </div>
+</div>
+
+{forms.map((form, idx) => (
+  <div class="form-params" data-form-index={idx} hidden={idx !== 0}>
+    <DuckDBExtensionFunctionParameters parameters={form.parameters} />
+    {form.returnTypeUnion && form.returnTypeUnion.length > 1 && (
+      <div class="mb-4 -mt-2">
+        <details class="group">
+          <summary class="text-xs font-medium text-soil-500 cursor-pointer hover:text-soil-700 inline-flex items-center gap-1">
+            <svg class="w-3 h-3 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            </svg>
+            Return type varies by input — {form.returnTypeUnion.length} concrete types
+          </summary>
+          <div class="mt-2 flex flex-wrap gap-1">
+            {form.returnTypeUnion.map((t) => (
+              <code class="font-mono text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-200">{t}</code>
+            ))}
+          </div>
+        </details>
+      </div>
+    )}
+  </div>
+))}
+
+<script is:inline>
+  (function () {
+    function setup() {
+      document.querySelectorAll('[data-form-chooser]').forEach((chooser) => {
+        if (chooser.dataset.setup) return;
+        chooser.dataset.setup = '1';
+        const card = chooser.closest('[id]');
+        if (!card) return;
+        const rows = chooser.querySelectorAll('.form-row');
+        const panels = card.querySelectorAll('.form-params');
+        rows.forEach((row) => {
+          row.addEventListener('click', () => {
+            const idx = row.dataset.formIndex;
+            rows.forEach((r) => {
+              const sel = r.dataset.formIndex === idx;
+              r.setAttribute('aria-selected', sel ? 'true' : 'false');
+              r.classList.toggle('border-harvest-500', sel);
+              r.classList.toggle('bg-harvest-50', sel);
+              r.classList.toggle('ring-1', sel);
+              r.classList.toggle('ring-harvest-200', sel);
+              r.classList.toggle('text-soil-900', sel);
+              r.classList.toggle('border-transparent', !sel);
+              r.classList.toggle('bg-soil-50', !sel);
+              r.classList.toggle('text-soil-700', !sel);
+              r.classList.toggle('hover:bg-soil-100', !sel);
+            });
+            panels.forEach((p) => {
+              p.hidden = p.dataset.formIndex !== idx;
+            });
+          });
+        });
+      });
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', setup);
+    } else {
+      setup();
+    }
+  })();
+</script>

@@ -1,0 +1,95 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use Tributary?",
+  "description": "Read [Apache Kafka](https://kafka.apache.org/documentation/) topics directly from DuckDB SQL. No separate consumer process, no JSON-dump file in the middle — point a `SELECT` at a topic and treat its messages as rows you can `WHERE`, `JOIN`, and `CREATE TABLE AS`.",
+  "sections": [
+    {
+      "icon": "🌊",
+      "title": "What this extension is for",
+      "description": "Tributary makes Kafka topics queryable from inside DuckDB. The path between \"messages on a broker\" and \"rows in a SQL query\" collapses to one statement — no consumer code, no intermediate file, no DataFrame round-trip.",
+      "bulletPoints": [
+        {
+          "label": "Snapshot a topic",
+          "description": "Wrap [`tributary_scan_topic`](#tributary_scan_topic) in a [`CREATE TABLE AS`](https://duckdb.org/docs/sql/statements/create_table) to materialize a topic's current contents for offline analysis."
+        },
+        {
+          "label": "Join Kafka with local data",
+          "description": "Run a `JOIN` between [`tributary_scan_topic`](#tributary_scan_topic) output and a local DuckDB table — the typical pattern for enriching events with reference data on the fly."
+        },
+        {
+          "label": "Inspect a cluster",
+          "description": "[`tributary_metadata`](#tributary_metadata) returns broker and topic descriptors as a row, useful for scripted audits and partition-parallel scan planning."
+        },
+        {
+          "label": "Ad-hoc analytics",
+          "description": "Count, group, window, or aggregate the messages currently on a topic — without building a Kafka Streams or Flink job for a one-off question."
+        }
+      ]
+    },
+    {
+      "icon": "⚙️",
+      "title": "How it works",
+      "description": "Internally, Tributary is a thin DuckDB-table-function wrapper around [librdkafka](https://github.com/confluentinc/librdkafka). Every named parameter you pass to a function is forwarded as a librdkafka configuration key, so any consumer-side option Kafka supports is also a Tributary option — broker discovery, SASL, SSL, offset reset, fetch tuning, you name it.",
+      "bulletPoints": [
+        {
+          "label": "Configuration is parameter-passthrough",
+          "description": "Tributary doesn't define its own auth or transport settings. It accepts every name listed in [librdkafka's CONFIGURATION reference](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) — `bootstrap.servers`, `group.id`, `security.protocol`, `sasl.*`, `ssl.*`, `auto.offset.reset`, etc. — as a named SQL parameter."
+        },
+        {
+          "label": "Multi-partition parallelism",
+          "description": "[`tributary_scan_topic`](#tributary_scan_topic) reads each partition concurrently, so cluster scans scale with topic partition count rather than serializing through one consumer."
+        },
+        {
+          "label": "Output shape",
+          "description": "Each row from [`tributary_scan_topic`](#tributary_scan_topic) is `(topic, partition, offset, message)`. The message is a `BLOB` — decode it in SQL with DuckDB's [JSON functions](https://duckdb.org/docs/data/json/loading_json.html), Avro/Protobuf extensions, or `decode(...)` based on your topic's serialization."
+        },
+        {
+          "label": "No catalog, no secrets",
+          "description": "There is no `ATTACH ... (TYPE tributary)` and no managed `CREATE SECRET TYPE tributary`. Every call passes its own credentials through named parameters — for production, source them from `getenv()` and pass via SQL variables so they never appear inline in queries."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "Production caveats",
+      "description": "What to know before pointing this at a busy production cluster.",
+      "bulletPoints": [
+        {
+          "label": "Reads, not writes",
+          "description": "The verifiable function surface is consumer-side. There is no documented producer / write-back function in the current version — for cache-priming or topic-publishing workflows, keep a real Kafka producer."
+        },
+        {
+          "label": "Whole-topic scan by default",
+          "description": "[`tributary_scan_topic`](#tributary_scan_topic) reads the topic's current contents. Pair with `WHERE` on `partition` / `offset` / decoded `timestamp`, or use `librdkafka` offset-control parameters (e.g. `auto.offset.reset := 'latest'`) to scope the scan."
+        },
+        {
+          "label": "Credentials in named parameters",
+          "description": "Pass [SASL](https://kafka.apache.org/documentation/#security_sasl) / [SSL](https://kafka.apache.org/documentation/#security_ssl) credentials as `:bind_var` references seeded from `getenv()` — inline literals appear in cached SQL plans."
+        },
+        {
+          "label": "Experimental status",
+          "description": "The function surface may change as more `librdkafka` paths get exposed. Pin a known-good extension version in production CTAS jobs that schedule against this."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Snapshot a topic for offline analysis",
+          "description": "[`CREATE TABLE AS SELECT`](https://duckdb.org/docs/sql/statements/create_table) wrapping [`tributary_scan_topic`](#tributary_scan_topic) — the simplest path from \"the events currently on `orders`\" to a Parquet-exportable DuckDB table."
+        },
+        {
+          "title": "Enrich Kafka events with local reference data",
+          "description": "Decode JSON messages on the way in, then JOIN against local lookup tables — `users`, `products`, geography. Ideal for audits, sampling, and one-off correlation questions."
+        },
+        {
+          "title": "Cluster discovery and audit",
+          "description": "Use [`tributary_metadata`](#tributary_metadata) to list topics and partition layouts as rows you can `WHERE`/`GROUP BY` — easier than parsing `kafka-topics.sh` output by hand."
+        }
+      ]
+    }
+  ]
+}

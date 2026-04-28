@@ -5,47 +5,71 @@
   loading="lazy"
 />
 
-## What is Arrow Flight?
+## What Airport gets you
 
-[Arrow Flight](https://arrow.apache.org/docs/format/Flight.html) is the standard wire protocol for moving Apache Arrow data over the network. It's built on gRPC and HTTP/2, uses the columnar Arrow IPC format end-to-end (no row/column transposition), and is supported across many languages and platforms — Python (PyArrow), Java, Go, Rust, C++.
+If you operate a service that already speaks [Arrow Flight](https://arrow.apache.org/docs/format/Flight.html) — a custom Python or Go data API, an internal federation gateway, or a Flight-native system like [Dremio](https://www.dremio.com/blog/an-introduction-to-apache-arrow-flight-sql/) or [InfluxDB 3](https://docs.influxdata.com/influxdb3/cloud-serverless/reference/client-libraries/flight/) — Airport makes it queryable from DuckDB with a single `ATTACH`:
 
-Compared to ODBC/JDBC or REST APIs, Flight gives you:
+```sql
+CREATE SECRET my_service (
+  TYPE airport,
+  location 'grpc+tls://flight.example.com:8815',
+  auth_token :token
+);
 
-- **Zero-copy columnar transport** — the bytes on the wire are already Arrow's columnar in-memory layout.
-- **Native streaming** — large result sets stream lazily; the client doesn't buffer the whole thing.
-- **Parallel data fetching** — endpoints can describe multiple data locations the client can pull from concurrently.
-- **A standard RPC vocabulary** — `ListFlights`, `GetFlightInfo`, `DoGet`, `DoPut`, `DoExchange`, `DoAction`.
+ATTACH 'my_service' AS svc (TYPE airport);
 
-Airport implements the Flight client side inside DuckDB, so any Flight-aware backend becomes queryable from SQL.
+SELECT user_id, COUNT(*) AS events
+FROM svc.public.activity
+WHERE ts >= CURRENT_DATE - 7
+GROUP BY user_id;
+```
+
+No client library, no DataFrame round-trip, no separate query API on top of your service. Just SQL.
+
+import Callout from '../../../components/docs/Callout.astro';
+
+<Callout type="note" title="Airport is a Flight client — its capabilities follow your server's">
+Airport translates DuckDB SQL into [Arrow Flight RPC calls](https://arrow.apache.org/docs/format/Flight.html#rpc-methods). Anything the protocol can express, Airport can carry; anything beyond what your Flight server implements doesn't suddenly start working because Airport is loaded.
+
+- **Filter pushdown** runs to the extent your server honors `GetFlightInfo` filter predicates. Servers that don't push filters down will see DuckDB scan the whole result and filter locally.
+- **Mutation** (`INSERT` / `UPDATE` / `DELETE`) requires the server to implement `DoPut` for those operations. Read-only servers stay read-only.
+- **Schema discovery** depends on the server exposing a `ListFlights` / catalog interface. Servers that only answer specific descriptors won't `ATTACH` cleanly — use [`airport_take_flight`](#airport_take_flight) for one-off reads instead.
+</Callout>
 
 ## What can I connect to?
 
-Anything that speaks Flight. Some practical examples:
+The honest answer: any service that implements [Arrow Flight](https://arrow.apache.org/docs/format/Flight.html). In practice that's a narrower list than "data systems that use Arrow internally."
 
-- **Custom Python or Go services** that wrap proprietary data with `pyarrow.flight.FlightServerBase` or the Go `flight` package — Airport queries them directly.
-- **Snowflake's Arrow Flight endpoints**, **Dremio**, **InfluxDB IOx**, **Microsoft Fabric**.
-- **Internal data products** built on top of object storage where the Flight server handles authorization and Arrow conversion centrally.
-- **Federation gateways** that expose multiple backend systems behind a single Flight URL.
+**Confirmed Flight-speaking systems:**
 
-If you can write a Flight server, Airport can query it as if it were a DuckDB catalog.
+- **Custom services** built with [`pyarrow.flight.FlightServerBase`](https://arrow.apache.org/docs/python/flight.html), the [Arrow Java Flight library](https://arrow.apache.org/cookbook/java/flight.html), or the [Arrow Go Flight package](https://pkg.go.dev/github.com/apache/arrow-go/v18/arrow/flight). This is where Airport's value is unambiguous — you write a 30–50 line Flight server, point Airport at it, and your service is queryable from SQL with zero client SDK on the consumer side.
+- **[Dremio](https://www.dremio.com/blog/an-introduction-to-apache-arrow-flight-sql/)** — exposes Flight SQL natively.
+- **[InfluxDB 3](https://docs.influxdata.com/influxdb3/cloud-serverless/reference/client-libraries/flight/)** — documented Flight endpoint for query.
+
+**Not Arrow Flight, even if they use Arrow internally:**
+
+Snowflake, Microsoft Fabric, BigQuery, and several other warehouses use Arrow as their *result-format wire encoding* but don't expose a public Flight server you can `ATTACH` to. Airport won't help you here. For database-style remote query against systems with [ADBC](https://arrow.apache.org/adbc/) drivers, see the sibling [`adbc_scanner`](/products/extensions/adbc_scanner) extension.
+
+## Who Airport is for
+
+The most underrated angle: **platform and data engineering teams who already run an internal data service**. If your service produces tabular data and you're considering inventing a SQL query API on top of it (translating predicates, paginating, handling joins), don't. Implement [`pyarrow.flight.FlightServerBase`](https://arrow.apache.org/docs/python/flight.html) — a few dozen lines — and your service inherits SQL access for free via Airport. DuckDB becomes the query engine; you just write the data-fetch path.
+
+The other natural fit is **federation**: DuckDB joining across multiple Flight backends (your custom service, a Dremio instance, an InfluxDB measurement) in one query, without an orchestration layer.
 
 ## How it integrates with DuckDB
 
-- **`ATTACH ... (TYPE airport)`** — full catalog integration. Schema discovery, joins across local and remote tables, query pushdown where the server supports it, and INSERT/UPDATE/DELETE to writable backends.
-- **Table functions** — `airport_flights`, `airport_take_flight`, `airport_action`, `airport_databases` for ad-hoc / streaming use without ATTACH.
-- **Secret type `airport`** — managed credentials (`location`, `auth_token`, `criteria`) passed by name to all of the above.
+- **[`ATTACH ... (TYPE airport)`](https://duckdb.org/docs/sql/statements/attach)** — full catalog integration. Schema discovery, joins across local and remote tables, query pushdown where the server supports it, and `INSERT` / `UPDATE` / `DELETE` to writable backends.
+- **Table functions** — [`airport_flights`](#airport_flights), [`airport_take_flight`](#airport_take_flight), [`airport_action`](#airport_action), [`airport_databases`](#airport_databases) for ad-hoc / streaming use without `ATTACH`.
+- **Secret type `airport`** — managed credentials (`location`, `auth_token`, `criteria`) passed by name to all of the above. See [`CREATE SECRET`](https://duckdb.org/docs/sql/statements/create_secret) and the [DuckDB Secrets Manager](https://duckdb.org/docs/configuration/secrets_manager).
 
-## When should I use Airport?
+## Airport vs ADBC Scanner
 
-- You want **SQL access to a service that already speaks Flight**.
-- You're building a **federation layer** where DuckDB is the query engine over multiple backends.
-- You want **streaming Arrow** between a producer and DuckDB without intermediate serialization (CSV/Parquet/JDBC).
-- You need **mutation** against a remote system from inside SQL (DML statements through Flight's `DoPut`).
+Both extensions stream Arrow from a remote system end-to-end, but they target different worlds — pick by what's on the other end of the wire:
 
-For one-off file reads (CSV/Parquet/JSON over HTTP or S3), use DuckDB's built-in readers — Flight is overkill there. Airport's value is the bidirectional, schema-rich, streaming RPC channel.
+- **Use Airport** when the upstream speaks [Arrow Flight](https://arrow.apache.org/docs/format/Flight.html) — typically custom services, Flight-native systems, or federation gateways. Flight is an *RPC protocol*.
+- **Use [`adbc_scanner`](/products/extensions/adbc_scanner)** when the upstream is a database with an [ADBC](https://arrow.apache.org/adbc/) driver — SQLite, PostgreSQL, Snowflake, BigQuery, etc. ADBC is a *client API standard*, not a wire protocol.
+- **Both can coexist** in the same DuckDB session: Airport for Flight-native services, `adbc_scanner` for traditional databases, all queryable side by side.
 
-## Further reading
+## Background: what is Arrow Flight?
 
-- **[airport.query.farm](https://airport.query.farm)** — full extension documentation, including server implementation guides.
-- **[Motivation for the extension](https://airport.query.farm/motivation.html)** — the original design rationale.
-- **[Apache Arrow Flight format spec](https://arrow.apache.org/docs/format/Flight.html)** — the wire protocol.
+Arrow Flight is the [Apache Arrow](https://arrow.apache.org/) project's wire protocol for moving Arrow data over the network. It runs on [gRPC](https://grpc.io/) over [HTTP/2](https://httpwg.org/specs/rfc7540.html) and uses Arrow's [columnar IPC format](https://arrow.apache.org/docs/format/IPC.html) end-to-end, so result batches arrive on the client in the same layout the server produced them — no row/column transposition. The protocol's standard verb vocabulary — `ListFlights`, `GetFlightInfo`, `DoGet`, `DoPut`, `DoExchange`, `DoAction` — is what Airport translates DuckDB SQL into. The full [design rationale for Airport](https://airport.query.farm/motivation.html) and server implementation guides live at [airport.query.farm](https://airport.query.farm).

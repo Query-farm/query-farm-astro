@@ -1,14 +1,27 @@
-## Subscribe to a feed
+## Subscribe to a WebSocket channel
 
 ```sql
 -- Open a subscription to a WebSocket
-CALL radio_subscribe('ws://stream.example.com/events', 'feed1');
+CALL radio_subscribe('wss://stream.example.com/events', 'feed1');
 
 -- Inspect what's subscribed
 SELECT * FROM radio_subscriptions();
 ```
 
-Each subscription has a logical name (`'feed1'`) — use it to filter the inbox/outbox.
+Each subscription gets a logical name (`'feed1'`) — use it everywhere downstream to filter the inbox / outbox. See [`radio_subscribe`](#radio_subscribe) and [`radio_subscriptions`](#radio_subscriptions) for the full signatures.
+
+## Subscribe to Redis Pub/Sub
+
+Same function, different URL — Radio routes WebSocket and [Redis Pub/Sub](https://redis.io/docs/latest/develop/interact/pubsub/) through the same surface:
+
+```sql
+CALL radio_subscribe('redis://cache.example.com:6379/0?channel=events', 'redis-feed');
+
+-- Drain the same way as a WebSocket subscription
+SELECT received_at, payload
+FROM radio_subscription_received_messages('redis-feed')
+ORDER BY received_at DESC;
+```
 
 ## Drain received messages
 
@@ -25,12 +38,26 @@ FROM radio_subscription_received_messages('feed1')
 ORDER BY received_at DESC;
 ```
 
-These are normal DuckDB table functions — JOIN, filter, aggregate, push to Parquet, anything you'd do with a regular table.
+These are normal DuckDB table functions — `JOIN`, filter, aggregate, push to Parquet, anything you'd do with a regular table. See [`radio_received_messages`](#radio_received_messages) and [`radio_subscription_received_messages`](#radio_subscription_received_messages).
 
-## Send a message
+## Wait for fresh messages before reading
+
+For loops that need to act *as* messages arrive (rather than polling on a timer), [`radio_listen`](#radio_listen) blocks the connection until something lands in the inbox or a timeout elapses:
 
 ```sql
-CALL radio_transmit_message('feed1', '{"type":"hello","at":"2026-04-27T12:00:00Z"}');
+-- Block until a message arrives on any subscription
+CALL radio_listen();
+
+-- Then drain
+SELECT * FROM radio_received_messages() ORDER BY received_at DESC LIMIT 1;
+```
+
+Pair with [`radio_sleep`](#radio_sleep) when scripting between polls.
+
+## Send a message and track delivery
+
+```sql
+CALL radio_transmit_message('feed1', '{"type":"hello","at":"2026-04-28T12:00:00Z"}');
 
 -- Inspect transmit queue + delivery state
 SELECT message_id, status, transmitted_at, payload
@@ -38,24 +65,23 @@ FROM radio_subscription_transmit_messages('feed1')
 ORDER BY queued_at DESC;
 ```
 
-Pending messages get a `status` column you can poll until it flips to `delivered`.
+Pending messages get a `status` column you can poll until it flips to `delivered`. See [`radio_transmit_message`](#radio_transmit_message) and [`radio_subscription_transmit_messages`](#radio_subscription_transmit_messages).
 
-## Tear down
+## Garbage-collect the outbox
 
 ```sql
--- Garbage-collect already-delivered transmit messages
+-- Drop all already-delivered transmit messages
 CALL radio_subscription_transmit_messages_delete_finished('feed1');
 
--- Drop a single pending outgoing message
+-- Or drop one specific pending outgoing message
 CALL radio_subscription_transmit_message_delete('feed1', :message_id);
-
--- Close the subscription
-CALL radio_unsubscribe('feed1');
 ```
 
-## Test without a real server
+See [`radio_subscription_transmit_messages_delete_finished`](#radio_subscription_transmit_messages_delete_finished) and [`radio_subscription_transmit_message_delete`](#radio_subscription_transmit_message_delete).
 
-Inject messages into the inbox to drive a downstream query as if they came from the wire:
+## Test pipelines without a real upstream
+
+Inject messages straight into a subscription's inbox to exercise downstream SQL — no broker, no real WebSocket, no flake:
 
 ```sql
 CALL radio_subscription_received_message_add('feed1', '{"type":"test","value":42}');
@@ -63,10 +89,21 @@ CALL radio_subscription_received_message_add('feed1', '{"type":"test","value":42
 SELECT * FROM radio_subscription_received_messages('feed1');
 ```
 
-Useful for unit-testing pipelines that consume `radio_*` tables.
+See [`radio_subscription_received_message_add`](#radio_subscription_received_message_add). Useful for unit-testing pipelines that consume `radio_*` tables.
 
-## Caveats
+## Tear down
 
-- **Process-scoped.** When the DuckDB process exits, all subscriptions are torn down and unread messages are lost. Use external durable buffering (Redis, Kafka) when you need at-least-once semantics across restarts.
-- **Single-connection** — multiple connections in one process don't share subscription state.
-- **Delivery is best-effort by default.** Poll `radio_subscription_transmit_messages` for delivery status and retry as needed.
+```sql
+-- Close the subscription
+CALL radio_unsubscribe('feed1');
+```
+
+See [`radio_unsubscribe`](#radio_unsubscribe).
+
+## Diagnostics
+
+```sql
+SELECT radio_version();   -- e.g. '0.4.x'
+```
+
+Use [`radio_version`](#radio_version) to confirm what's loaded when matching against bug reports. [`radio_flush`](#radio_flush) drains all currently-buffered messages so subsequent reads see only fresh data.

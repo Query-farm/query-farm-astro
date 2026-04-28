@@ -93,10 +93,32 @@ const pricingConfig = {
 // Platform icons mapping to Simple Icons
 const platformIcons: Record<string, string> = {
   'Linux': 'simple-icons:linux',
+  'Linux (musl)': 'simple-icons:linux',
   'Windows': 'simple-icons:windows',
   'macOS': 'simple-icons:apple',
   'WASM': 'simple-icons:webassembly'
 };
+
+// Canonical list — render every row even if the extension doesn't ship for
+// some of them. Unsupported rows render greyed-out so the user can see at a
+// glance "this extension is not available on WASM" rather than wondering why
+// WASM is just missing from the list.
+const CANONICAL_PLATFORMS = ['Linux', 'Linux (musl)', 'macOS', 'Windows', 'WASM'] as const;
+const supportedByName = new Map(platforms.map((p) => [p.platform, p]));
+type DisplayPlatform = { platform: string; architectures: string[]; supported: boolean };
+const displayPlatforms: DisplayPlatform[] = CANONICAL_PLATFORMS.map((name) => {
+  const hit = supportedByName.get(name);
+  return hit
+    ? { platform: hit.platform, architectures: hit.architectures, supported: true }
+    : { platform: name, architectures: [], supported: false };
+});
+// Surface anything the extension reports that isn't in the canonical set
+// (so we don't silently drop e.g. a future "FreeBSD" row).
+for (const p of platforms) {
+  if (!CANONICAL_PLATFORMS.includes(p.platform as (typeof CANONICAL_PLATFORMS)[number])) {
+    displayPlatforms.push({ platform: p.platform, architectures: p.architectures, supported: true });
+  }
+}
 ---
 
 <ExtensionSection id="compatibility" background="soil" class="border-y border-soil-200">
@@ -252,12 +274,24 @@ const platformIcons: Record<string, string> = {
 
             <!-- Platform Icons Row -->
             <div class="flex flex-wrap gap-3 mb-4">
-              {platforms.map((platformInfo) => (
-                <div class="flex items-center gap-2 px-3 py-2 bg-white border border-soil-200 rounded-lg">
-                  <Icon name={platformIcons[platformInfo.platform] || platformIcons['WASM']} class="w-5 h-5 text-soil-700" />
-                  <span class="font-medium text-soil-900 text-sm">{platformInfo.platform}</span>
-                </div>
-              ))}
+              {displayPlatforms.map((platformInfo) => {
+                const iconName = platformIcons[platformInfo.platform];
+                return platformInfo.supported ? (
+                  <div class="flex items-center gap-2 px-3 py-2 bg-white border border-soil-200 rounded-lg">
+                    {iconName && <Icon name={iconName} class="w-5 h-5 text-soil-700" />}
+                    <span class="font-medium text-soil-900 text-sm">{platformInfo.platform}</span>
+                  </div>
+                ) : (
+                  <div
+                    class="flex items-center gap-2 px-3 py-2 bg-soil-50 border border-soil-200 rounded-lg opacity-60"
+                    aria-disabled="true"
+                    title={`${platformInfo.platform} is not available for this extension`}
+                  >
+                    {iconName && <Icon name={iconName} class="w-5 h-5 text-soil-400" />}
+                    <span class="font-medium text-soil-400 text-sm">{platformInfo.platform}</span>
+                  </div>
+                );
+              })}
             </div>
 
             <!-- Supported Platform Architectures (Collapsible) -->
@@ -270,13 +304,15 @@ const platformIcons: Record<string, string> = {
               </summary>
               <div class="mt-3 pt-3 border-t border-soil-200">
                 <div class="grid grid-cols-2 gap-2">
-                  {platforms.map((platformInfo) => (
-                    <div class="text-sm">
-                      <span class="font-medium text-soil-700">{platformInfo.platform}:</span>
-                      <span class="text-soil-600 ml-1">
-                        {platformInfo.architectures.length > 0
-                          ? platformInfo.architectures.join(', ')
-                          : 'Browser-based'}
+                  {displayPlatforms.map((platformInfo) => (
+                    <div class={`text-sm ${platformInfo.supported ? '' : 'opacity-60'}`}>
+                      <span class={`font-medium ${platformInfo.supported ? 'text-soil-700' : 'text-soil-400'}`}>{platformInfo.platform}:</span>
+                      <span class={`ml-1 ${platformInfo.supported ? 'text-soil-600' : 'text-soil-400 italic'}`}>
+                        {platformInfo.supported
+                          ? (platformInfo.architectures.length > 0
+                              ? platformInfo.architectures.join(', ')
+                              : 'Browser-based')
+                          : 'Not available'}
                       </span>
                     </div>
                   ))}

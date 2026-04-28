@@ -1,56 +1,59 @@
-## Response shape
+import Callout from '../../../components/docs/Callout.astro';
 
-Every function returns a struct with four fields:
+## Read the response shape
 
-| Field | Type | What |
-|---|---|---|
-| `status` | INT (in JSON) | HTTP response code |
-| `reason` | VARCHAR | Status reason phrase ("OK", "Not Found", ...) |
-| `body` | VARCHAR | Raw response body |
-| `headers` | VARCHAR | Response headers (JSON object) |
-
-Use `->>` and JSON casts to pull what you need.
-
-## GET
+Every `http_*` function returns a [JSON](https://duckdb.org/docs/data/json/overview) object with three fields. Pull them out with [`->>`](https://duckdb.org/docs/data/json/json_functions):
 
 ```sql
 WITH r AS (
-  SELECT http_get('https://api.example.com/users/42') AS res
+  SELECT http_get('https://httpbin.org/get') AS res
 )
-SELECT (res->>'status')::INT  AS status,
-       (res->>'reason')       AS reason,
-       (res->>'body')::JSON->>'$.name' AS name
+SELECT
+  (res->>'status')::INT  AS status,
+  (res->>'reason')       AS reason,
+   res->>'body'          AS body
 FROM r;
 ```
 
-## POST with JSON body
+To dive into a JSON response body, cast it on the way out: `((res->>'body')::JSON)->>'$.field'`. See [`http_get`](#http_get) for the full signature.
 
-`params` becomes the JSON body. `headers` are sent verbatim.
+## GET a JSON API and project a field
+
+```sql
+SELECT ((http_get('https://api.github.com/repos/duckdb/duckdb')->>'body')::JSON)->>'$.stargazers_count' AS stars;
+```
+
+Same pattern for any read endpoint that returns JSON — fetch, cast `body` to `JSON`, project with [`->>`](https://duckdb.org/docs/data/json/json_functions).
+
+## POST a JSON body
+
+`params` becomes the JSON body. Set `content-type` so the server knows to parse it as JSON:
 
 ```sql
 SELECT http_post(
   'https://api.example.com/users',
-  headers => MAP {
+  headers => MAP{
     'accept':       'application/json',
-    'content-type': 'application/json',
-    'authorization': 'Bearer ' || :token
+    'content-type': 'application/json'
   },
-  params  => MAP {
+  params  => MAP{
     'name':  'Alice',
     'email': 'alice@example.com'
   }
 );
 ```
 
-## POST as form-encoded
+See [`http_post`](#http_post).
 
-For APIs that expect `application/x-www-form-urlencoded`:
+## POST as `application/x-www-form-urlencoded`
+
+For HTML forms, older REST APIs, and most [OAuth 2.0](https://datatracker.ietf.org/doc/html/rfc6750) token endpoints. The extension sets the `Content-Type` for you — you don't need to put it in `headers`:
 
 ```sql
 SELECT http_post_form(
   'https://oauth.example.com/token',
-  headers => MAP {},
-  params  => MAP {
+  headers => MAP{},
+  params  => MAP{
     'grant_type':    'client_credentials',
     'client_id':     :client_id,
     'client_secret': :client_secret
@@ -58,36 +61,117 @@ SELECT http_post_form(
 );
 ```
 
-## Per-row API enrichment
+See [`http_post_form`](#http_post_form).
 
-Join a database column against a remote API:
+## Authorize with a Bearer token from the environment
+
+Source credentials from the environment with [`getenv`](https://duckdb.org/docs/sql/functions/utility#getenv) and bind them via [`SET VARIABLE`](https://duckdb.org/docs/sql/statements/set) so they don't leak into cached query plans or `EXPLAIN` output:
 
 ```sql
-SELECT u.id,
-       u.email,
-       ((http_get('https://api.example.com/score/' || u.id)->>'body')::JSON)->>'$.score' AS score
-FROM users u
-WHERE u.last_seen > now() - INTERVAL 1 HOUR;
+SET VARIABLE api_token = getenv('API_TOKEN');
+
+SELECT http_post(
+  'https://api.example.com/comments',
+  headers => MAP{
+    'authorization': 'Bearer ' || :api_token,
+    'content-type':  'application/json'
+  },
+  params  => MAP{'body': 'Hello from DuckDB'}
+);
 ```
 
-⚠ One HTTP call per row. For 10K rows that's 10K calls — slow and probably rate-limited. Cache responses or pre-aggregate keys before the call.
+## Exchange OAuth credentials for an access token
 
-## When to reach for shellfs instead
+The classic [`application/x-www-form-urlencoded`](https://datatracker.ietf.org/doc/html/rfc1866) handshake — followed by a JSON parse on the response body to lift the access token out:
 
-[`shellfs`](/products/extensions/shellfs) lets you pipe `curl` output through `read_csv` / `read_json`. Use shellfs when:
+```sql
+SET VARIABLE client_id     = getenv('OAUTH_CLIENT_ID');
+SET VARIABLE client_secret = getenv('OAUTH_CLIENT_SECRET');
 
-- You need streaming reads of large responses (HTTP Client buffers the whole body).
-- The endpoint requires curl-only features (cookies, complex auth, custom TLS).
-- You want pipeline composition with awk/sed/jq.
+WITH t AS (
+  SELECT http_post_form(
+    'https://oauth.example.com/token',
+    headers => MAP{},
+    params  => MAP{
+      'grant_type':    'client_credentials',
+      'client_id':     :client_id,
+      'client_secret': :client_secret
+    }
+  ) AS res
+)
+SELECT ((res->>'body')::JSON)->>'$.access_token' AS access_token
+FROM t;
+```
 
-Use HTTP Client when:
+## Per-row enrichment from a REST API
 
-- The response is small and you want it as a struct directly in SQL.
-- You're calling many endpoints inside a single query and want it to be portable.
+```sql
+SELECT
+  u.id,
+  u.email,
+  ((http_get('https://api.example.com/score/' || u.id::VARCHAR)->>'body')::JSON)->>'$.score' AS score
+FROM users u
+WHERE u.last_seen > now() - INTERVAL 1 HOUR
+LIMIT 100;
+```
 
-## Caveats
+Practical for tens or hundreds of rows. For thousands, pre-aggregate to distinct keys first or cache the result into a DuckDB table — one HTTP call per row adds up fast.
 
-- **Sync** — DuckDB blocks until the response arrives. Slow endpoints stall queries.
-- **No retries / backoff** — handle in SQL or wrap calls in your application layer.
-- **No streaming** — full response is buffered into the body field.
-- **Limited TLS configurability** — for custom CA trust or client certs, prefer shellfs + curl.
+## Cache responses into a table
+
+Hit the API once, query the cache forever after:
+
+```sql
+CREATE TABLE api_scores AS
+SELECT
+  u.id,
+  ((http_get('https://api.example.com/score/' || u.id::VARCHAR)->>'body')::JSON)->>'$.score' AS score
+FROM (SELECT DISTINCT id FROM users) u;
+```
+
+Re-run this only when you want a refresh. Subsequent joins against `api_scores` are local and fast.
+
+## Conditional logic on the status code
+
+Branch in SQL based on the HTTP status — use [`CASE`](https://duckdb.org/docs/sql/expressions/case) on the [`status`](https://datatracker.ietf.org/doc/html/rfc9110#name-status-codes) field:
+
+```sql
+WITH r AS (
+  SELECT http_get('https://api.example.com/things/42') AS res
+)
+SELECT
+  CASE (res->>'status')::INT
+    WHEN 200 THEN 'ok'
+    WHEN 404 THEN 'missing'
+    WHEN 429 THEN 'rate-limited'
+    ELSE       'unexpected'
+  END AS outcome,
+  res->>'body' AS body
+FROM r;
+```
+
+## Liveness check with `HEAD`
+
+```sql
+SELECT (http_head('https://httpbin.org/')->>'status')::INT AS status;
+```
+
+[`http_head`](#http_head) returns the same response metadata as [`http_get`](#http_get) but the server skips the body. Useful for "is this URL reachable?" probes before a heavier `GET`.
+
+## Trigger a webhook from a SQL pipeline
+
+End a pipeline by POSTing a summary to a webhook — synchronous, so the webhook either succeeds or the surrounding statement sees the error:
+
+```sql
+SET VARIABLE hook = getenv('WEBHOOK_URL');
+
+SELECT http_post(
+  :hook,
+  headers => MAP{'content-type': 'application/json'},
+  params  => MAP{
+    'event':     'pipeline_complete',
+    'rows':      (SELECT count(*)::VARCHAR FROM staging),
+    'finished':  now()::VARCHAR
+  }
+);
+```
