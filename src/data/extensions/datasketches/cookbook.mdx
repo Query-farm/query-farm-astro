@@ -46,10 +46,10 @@ Theta is the only distinct-count family with full set algebra.
 WITH a AS (SELECT datasketch_theta(12, user_id) AS s FROM events_jan),
      b AS (SELECT datasketch_theta(12, user_id) AS s FROM events_feb)
 SELECT
-  datasketch_theta_estimate(datasketch_theta_union(12, a.s, b.s))     AS jan_or_feb,
-  datasketch_theta_estimate(datasketch_theta_intersect(12, a.s, b.s)) AS retained,    -- in both
-  datasketch_theta_estimate(datasketch_theta_a_not_b(a.s, b.s))       AS churned,     -- jan not feb
-  datasketch_theta_estimate(datasketch_theta_a_not_b(b.s, a.s))       AS new_users    -- feb not jan
+  datasketch_theta_estimate(datasketch_theta_union(a.s, b.s))     AS jan_or_feb,
+  datasketch_theta_estimate(datasketch_theta_intersect(a.s, b.s)) AS retained,    -- in both
+  datasketch_theta_estimate(datasketch_theta_a_not_b(a.s, b.s))   AS churned,     -- jan not feb
+  datasketch_theta_estimate(datasketch_theta_a_not_b(b.s, a.s))   AS new_users    -- feb not jan
 FROM a, b;
 ```
 
@@ -64,13 +64,13 @@ WITH agg AS (
   SELECT datasketch_kll(200, latency_ms) AS sketch FROM requests
 )
 SELECT
-  datasketch_kll_quantile(sketch, 0.50) AS p50,
-  datasketch_kll_quantile(sketch, 0.95) AS p95,
-  datasketch_kll_quantile(sketch, 0.99) AS p99
+  datasketch_kll_quantile(sketch, 0.50, true) AS p50,
+  datasketch_kll_quantile(sketch, 0.95, true) AS p95,
+  datasketch_kll_quantile(sketch, 0.99, true) AS p99
 FROM agg;
 ```
 
-`K = 200` is a sensible production starting point. Higher `K` → smaller error, larger sketch. Use [`datasketch_kll_normalized_rank_error`](#datasketch_kll_normalized_rank_error) to inspect the actual rank-error guarantee for the configured `K`.
+`K = 200` is a sensible production starting point. Higher `K` → smaller error, larger sketch. The trailing `true` is the *inclusive* flag — `true` for inclusive search (`P[X ≤ q]`), `false` for exclusive (`P[X < q]`). Use [`datasketch_kll_normalized_rank_error`](#datasketch_kll_normalized_rank_error) to inspect the actual rank-error guarantee for the configured `K`.
 
 ## Histograms in one query — KLL CDF / PMF
 
@@ -79,7 +79,8 @@ Get the cumulative distribution at any set of split points without a second pass
 ```sql
 SELECT datasketch_kll_cdf(
          datasketch_kll(200, latency_ms),
-         [10, 50, 100, 250, 500, 1000]
+         [10, 50, 100, 250, 500, 1000],
+         /* inclusive */ true
        ) AS cdf
 FROM requests;
 ```
@@ -118,13 +119,13 @@ Find the most frequent items in a stream — with confidence bounds on each esti
 
 ```sql
 SELECT datasketch_frequent_items_get_frequent(
-         datasketch_frequent_items(1024, country_code),
+         datasketch_frequent_items(8, country_code),
          'NO_FALSE_POSITIVES'
        ) AS heavy_hitters
 FROM page_views;
 ```
 
-The result is a list of structs — `(item, estimate, lower_bound, upper_bound)`. Use `'NO_FALSE_POSITIVES'` for items that are *definitely* heavy hitters, `'NO_FALSE_NEGATIVES'` for the union of all candidates that *might* be. The leading `1024` is `map_size` (a power of two) — bigger sketches keep more candidates and tighten the per-item error bound.
+The result is a list of structs — `(item, estimate, lower_bound, upper_bound)`. Use `'NO_FALSE_POSITIVES'` for items that are *definitely* heavy hitters, `'NO_FALSE_NEGATIVES'` for the union of all candidates that *might* be. The leading `8` is `lg_max_map_size` — log₂ of the maximum number of tracked items (so `8` → up to 256 candidates). Bigger values track more candidates and tighten the per-item error bound; typical values run 4–12.
 
 ## Skew-aware quantiles with REQ
 
@@ -132,9 +133,9 @@ When the distribution is heavily skewed and you want predictable accuracy across
 
 ```sql
 SELECT
-  datasketch_req_quantile(datasketch_req(12, value), 0.001) AS p001,
-  datasketch_req_quantile(datasketch_req(12, value), 0.5)   AS p50,
-  datasketch_req_quantile(datasketch_req(12, value), 0.999) AS p999
+  datasketch_req_quantile(datasketch_req(12, value), 0.001, true) AS p001,
+  datasketch_req_quantile(datasketch_req(12, value), 0.5,   true) AS p50,
+  datasketch_req_quantile(datasketch_req(12, value), 0.999, true) AS p999
 FROM measurements;
 ```
 

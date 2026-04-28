@@ -5,19 +5,22 @@
 CALL radio_subscribe('wss://stream.example.com/events');
 
 -- 2. (later, or in another query) drain the inbox
-SELECT received_at, payload
+SELECT receive_time, channel, message
 FROM radio_subscription_received_messages('wss://stream.example.com/events')
-ORDER BY received_at DESC
+ORDER BY receive_time DESC
 LIMIT 100;
 
 -- 3. Reply or broadcast back
 CALL radio_transmit_message(
   'wss://stream.example.com/events',
-  '{"type":"ack","at":"2026-04-28T12:00:00Z"}'
+  'main',                                            -- channel
+  '{"type":"ack","at":"2026-04-28T12:00:00Z"}'::BLOB,
+  3,                                                 -- max_attempts
+  INTERVAL '500 milliseconds'                        -- retry_delay
 );
 ```
 
-[`radio_subscribe`](#radio_subscribe) opens the connection and starts buffering. [`radio_subscription_received_messages`](#radio_subscription_received_messages) exposes that buffer as an ordinary table — `JOIN`, `WHERE`, `GROUP BY`, `CREATE TABLE AS`. [`radio_transmit_message`](#radio_transmit_message) queues an outbound message; poll [`radio_subscription_transmit_messages`](#radio_subscription_transmit_messages) for `status`.
+[`radio_subscribe`](#radio_subscribe) opens the connection and starts buffering. [`radio_subscription_received_messages`](#radio_subscription_received_messages) exposes that buffer as an ordinary table with columns `(subscription_id, subscription_url, message_id, message_type, receive_time, seen_count, channel, message)` — `JOIN`, `WHERE`, `GROUP BY`, `CREATE TABLE AS`. [`radio_transmit_message`](#radio_transmit_message) queues an outbound message; poll [`radio_subscriptions`](#radio_subscriptions) for the per-subscription `transmit_successes` / `transmit_failures` counters.
 
 import Callout from '../../../components/docs/Callout.astro';
 
@@ -26,7 +29,7 @@ Subscriptions, the received-message buffer, and the transmit queue all live in D
 
 - **Process exit drops everything.** When DuckDB shuts down, subscriptions are torn down and unread messages are lost. For at-least-once delivery across restarts, persist drained messages to a durable store before processing.
 - **The received buffer is size-limited.** Older messages are evicted as new ones arrive — drain with [`radio_received_messages`](#radio_received_messages) at a cadence that keeps up with your inbound rate.
-- **Outbound delivery is asynchronous and best-effort.** [`radio_transmit_message`](#radio_transmit_message) returns once the message is queued; check [`radio_subscription_transmit_messages`](#radio_subscription_transmit_messages) for `delivered` / `pending` / `failed` status.
+- **Outbound delivery is asynchronous and best-effort.** [`radio_transmit_message`](#radio_transmit_message) returns once the message is queued; the per-subscription `transmit_successes`, `transmit_failures`, `transmit_last_success_time`, and `transmit_last_failure_time` columns on [`radio_subscriptions`](#radio_subscriptions) report progress.
 
 Status is **experimental**. The function surface may change as more transports get added.
 </Callout>

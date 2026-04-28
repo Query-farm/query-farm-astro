@@ -29,38 +29,39 @@ Same function, different URL — Radio routes WebSocket and [Redis Pub/Sub](http
 CALL radio_subscribe('redis://cache.example.com:6379/0?channel=events');
 
 -- Drain the same way as a WebSocket subscription, keyed by URL
-SELECT received_at, payload
+SELECT receive_time, message
 FROM radio_subscription_received_messages('redis://cache.example.com:6379/0?channel=events')
-ORDER BY received_at DESC;
+ORDER BY receive_time DESC;
 ```
 
 ## Drain received messages
 
 ```sql
 -- Recent messages across all subscriptions
-SELECT subscription, received_at, payload
+SELECT subscription_url, channel, receive_time, message
 FROM radio_received_messages()
-ORDER BY received_at DESC
+ORDER BY receive_time DESC
 LIMIT 100;
 
 -- One feed only — pass the same URL you subscribed with
-SELECT received_at, payload
+SELECT receive_time, channel, message
 FROM radio_subscription_received_messages('wss://stream.example.com/events')
-ORDER BY received_at DESC;
+ORDER BY receive_time DESC;
 ```
 
-These are normal DuckDB table functions — `JOIN`, filter, aggregate, push to Parquet, anything you'd do with a regular table. See [`radio_received_messages`](#radio_received_messages) and [`radio_subscription_received_messages`](#radio_subscription_received_messages).
+The full row shape from `radio_received_messages()` / `radio_subscription_received_messages(url)` is `(subscription_id UBIGINT, subscription_url VARCHAR, message_id UBIGINT, message_type, receive_time TIMESTAMP_MS, seen_count UBIGINT, channel VARCHAR, message BLOB)`. The payload is a `BLOB` — cast it to `VARCHAR` for text or use [DuckDB's JSON functions](https://duckdb.org/docs/data/json/loading_json.html) for structured payloads. These are normal DuckDB table functions — `JOIN`, filter, aggregate, push to Parquet, anything you'd do with a regular table. See [`radio_received_messages`](#radio_received_messages) and [`radio_subscription_received_messages`](#radio_subscription_received_messages).
 
 ## Wait for fresh messages before reading
 
 For loops that need to act *as* messages arrive (rather than polling on a timer), [`radio_listen`](#radio_listen) blocks the connection until something lands in the inbox or a timeout elapses:
 
 ```sql
--- Block until a message arrives on any subscription
-CALL radio_listen();
+-- Block up to 30 seconds for a message on any subscription.
+-- Args: (return_on_first_message, max_wait).
+CALL radio_listen(true, INTERVAL '30 seconds');
 
 -- Then drain
-SELECT * FROM radio_received_messages() ORDER BY received_at DESC LIMIT 1;
+SELECT * FROM radio_received_messages() ORDER BY receive_time DESC LIMIT 1;
 ```
 
 Pair with [`radio_sleep`](#radio_sleep) when scripting between polls.
@@ -68,18 +69,22 @@ Pair with [`radio_sleep`](#radio_sleep) when scripting between polls.
 ## Send a message and track delivery
 
 ```sql
+-- Args: (subscription_url, channel, payload, max_attempts, retry_delay).
 CALL radio_transmit_message(
   'wss://stream.example.com/events',
-  '{"type":"hello","at":"2026-04-28T12:00:00Z"}'
+  /* channel       */ 'main',
+  /* payload       */ '{"type":"hello","at":"2026-04-28T12:00:00Z"}'::BLOB,
+  /* max_attempts  */ 3,
+  /* retry_delay   */ INTERVAL '500 milliseconds'
 );
 
 -- Inspect transmit queue + delivery state
-SELECT message_id, status, transmitted_at, payload
+SELECT message_id, message
 FROM radio_subscription_transmit_messages('wss://stream.example.com/events')
-ORDER BY queued_at DESC;
+ORDER BY message_id DESC;
 ```
 
-Pending messages get a `status` column you can poll until it flips to `delivered`. See [`radio_transmit_message`](#radio_transmit_message) and [`radio_subscription_transmit_messages`](#radio_subscription_transmit_messages).
+Per-subscription delivery counters live on [`radio_subscriptions`](#radio_subscriptions) (`transmit_successes`, `transmit_failures`, `transmit_last_success_time`, `transmit_last_failure_time`); poll those to confirm delivery progress. See [`radio_transmit_message`](#radio_transmit_message) and [`radio_subscription_transmit_messages`](#radio_subscription_transmit_messages).
 
 ## Garbage-collect the outbox
 

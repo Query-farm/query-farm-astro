@@ -1,26 +1,15 @@
 -- Fixtures for json_schema cookbook / functions / quickstart examples.
 --
--- Most cookbook recipes reference a JSON `payload` column together with a
--- `:schema` (or `:event_schema`) bind variable. The check-examples harness
--- substitutes every `:name` reference with a literal `'<__BIND_name__>'`
--- string placeholder before execution — that placeholder is not valid JSON,
--- so any executable snippet that touches `json_schema_validate(:schema, ...)`
--- will hit a "Malformed JSON" Conversion Error at execute time. There is no
--- way for this fixture file to feed real bind values past that substitution.
+-- The check-examples harness now substitutes `:name` bind variables with a
+-- valid JSON object placeholder (`'{"_bind":"name"}'`), so functions like
+-- `json_schema_validate(:schema, payload)` execute successfully against the
+-- placeholder schema rather than failing with a Malformed JSON Conversion
+-- Error. That lets these fixture tables convert previously-skipped snippets
+-- into PASSes.
 --
--- Strategy: only create fixture tables for snippets that do NOT use a bind
--- variable. Snippets that do use a bind variable stay as PARSE-SKIP (table
--- fixture missing) — same as the pre-fixture baseline. Creating those tables
--- here would only convert PARSE-SKIPs into EXEC-FAILs.
---
--- Idempotent (CREATE OR REPLACE / DROP IF EXISTS).
+-- Idempotent via CREATE OR REPLACE.
 
--- Used by:
---   functions.json:json_schema_validate_schema.examples[1]
---   cookbook.mdx:L48-L50  (lint-the-registry recipe — no bind var)
--- Both run `SELECT name, version FROM schema_registry WHERE NOT
--- json_schema_validate_schema(definition);` directly, so this table is
--- enough to take them from PARSE-SKIP to PASS.
+-- Author-blessed schema-registry recipe (no bind variable).
 CREATE OR REPLACE TABLE schema_registry AS
 SELECT * FROM (VALUES
   (
@@ -34,3 +23,28 @@ SELECT * FROM (VALUES
     '{"$schema": "https://json-schema.org/draft-07/schema", "type": "object", "properties": {"id": {"type": "string"}}}'::JSON
   )
 ) t(name, version, definition);
+
+-- Source / sink / quarantine tables for the validation-and-routing recipes.
+-- Payloads are intentionally varied — some valid against a typical "object
+-- with id" schema, some not — so `json_schema_validate` returns mixed rows.
+CREATE OR REPLACE TABLE events AS
+SELECT * FROM (VALUES
+  (1, '{"id": 1, "type": "click", "ts": "2026-04-28T12:00:00Z"}'::JSON),
+  (2, '{"id": 2, "type": "view"}'::JSON),
+  (3, '{"id": "not-a-number", "type": "click"}'::JSON),
+  (4, '{"type": "missing-id"}'::JSON),
+  (5, '{}'::JSON)
+) t(row_num, payload);
+
+CREATE OR REPLACE TABLE events_raw AS
+SELECT * FROM events;
+
+CREATE OR REPLACE TABLE events_clean (
+  row_num INTEGER,
+  payload JSON
+);
+
+CREATE OR REPLACE TABLE events_quarantine (
+  row_num INTEGER,
+  payload JSON
+);

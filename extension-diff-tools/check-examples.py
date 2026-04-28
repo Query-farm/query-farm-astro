@@ -366,10 +366,14 @@ def collect_snippets_for(slug: str) -> list[Snippet]:
 
 
 def substitute_bind_vars(sql: str) -> tuple[str, list[str]]:
-    """Replace `:foo` bind references with literal `'<__BIND_foo__>'`
-    placeholder strings so parse succeeds. Skips `:` inside string
-    literals (so `':memory:'` URI literals stay intact) and `::TYPE`
-    casts.
+    """Replace `:foo` bind references with a placeholder string that's
+    *also valid JSON*. We use `'{"_bind":"foo"}'` — a valid SQL VARCHAR
+    literal and a parseable JSON object — so functions like
+    `json_schema_validate(:schema, payload)` execute against a real
+    JSON value rather than failing on a `<__BIND_…__>` placeholder.
+
+    Skips `:` inside string literals (so `':memory:'` URI literals stay
+    intact) and `::TYPE` casts.
     """
     names: list[str] = []
     out: list[str] = []
@@ -415,7 +419,10 @@ def substitute_bind_vars(sql: str) -> tuple[str, list[str]]:
                     name = m.group(0)
                     if name not in names:
                         names.append(name)
-                    out.append(f"'<__BIND_{name}__>'")
+                    # Valid JSON object that's also a valid VARCHAR
+                    # literal. Encodes the bind name so error messages
+                    # remain debuggable.
+                    out.append(f"""'{{"_bind":"{name}"}}'""")
                     i += 1 + len(name)
                     continue
         out.append(c)
