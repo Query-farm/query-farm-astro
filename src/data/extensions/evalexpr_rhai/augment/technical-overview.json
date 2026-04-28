@@ -1,0 +1,118 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Embed Rhai in DuckDB?",
+  "description": "Run row-by-row scripted transforms when SQL alone can't express the logic, with bounded execution. [Rhai](https://rhai.rs/) is a small, Rust-native scripting language ([source](https://github.com/rhaiscript/rhai), [book](https://rhai.rs/book/)) — sandboxed by default, no host filesystem / process / network access from inside scripts. This extension exposes it as a single SQL function: [`evalexpr_rhai`](#evalexpr_rhai).",
+  "sections": [
+    {
+      "icon": "🧮",
+      "title": "What this extension is for",
+      "description": "Use Rhai when SQL is too constrained for the expression you need to write, but a real DuckDB UDF or a Python pipeline is too heavy. The script is text — store it in a column, edit it without redeploying, evaluate it per row.",
+      "bulletPoints": [
+        {
+          "label": "Dynamic rules from a column",
+          "description": "Membership rules, scoring rules, eligibility predicates — store them as Rhai source in a config table and run them with [`evalexpr_rhai`](#evalexpr_rhai) at query time. Admins edit a row, the next query picks up the new rule."
+        },
+        {
+          "label": "Branching that's awkward in CASE",
+          "description": "Multi-step conditional logic with intermediate variables, early returns, or computed thresholds — clearer in a few lines of Rhai than a tower of nested `CASE WHEN` expressions."
+        },
+        {
+          "label": "Custom math with named helpers",
+          "description": "Define a function with `fn`, then call it. Useful for one-off calculations that don't deserve their own DuckDB scalar function but that you want to read top-to-bottom in source."
+        },
+        {
+          "label": "Sandboxed by construction",
+          "description": "Rhai scripts cannot open files, spawn processes, or make network calls. The host program decides what's exposed — and this extension exposes only the `context` JSON object. Safe to run text supplied by users or stored in tables."
+        }
+      ]
+    },
+    {
+      "icon": "⚙️",
+      "title": "How it works",
+      "description": "[`evalexpr_rhai`](#evalexpr_rhai) parses the script string, evaluates it inside an embedded [Rhai](https://rhai.rs/) interpreter, and serializes the result back to DuckDB as a `UNION(ok JSON, \"error\" VARCHAR)`. Constant script strings are parsed once and the resulting AST is cached, so the same script in a `WHERE` clause doesn't re-parse per row.",
+      "bulletPoints": [
+        {
+          "label": "Single function surface",
+          "description": "[`evalexpr_rhai(expression)`](#evalexpr_rhai) and [`evalexpr_rhai(expression, context)`](#evalexpr_rhai) — one name, two overloads. Read `.ok` on success, `.error` on failure. There is no separate `evalexpr_rhai_safe` / `evalexpr_rhai_strict` split; the union return type is the only error-handling shape."
+        },
+        {
+          "label": "Per-row context as JSON",
+          "description": "The second argument is a `JSON` object DuckDB builds from row columns (`{ 'salary': salary }`). Inside the script it appears as `context.<field>`. Anything DuckDB can encode to JSON crosses the boundary — numbers, strings, booleans, arrays, nested objects."
+        },
+        {
+          "label": "Compile-and-cache for constant scripts",
+          "description": "When the script string is a literal (or otherwise constant within a query), the parser runs once. Per-row cost after warmup is interpreter execution only. When the script comes from a column (the rules-from-a-column pattern), each distinct script string parses on first encounter."
+        },
+        {
+          "label": "Errors don't kill the query",
+          "description": "A script that throws — runtime error, type error, divide-by-zero — produces the `error` arm of the union for that row. The query keeps running. Read the failure arm with `.error` if you need to surface it."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "Performance and limits",
+      "description": "Rhai is an interpreter running per row. Be honest about what that means.",
+      "bulletPoints": [
+        {
+          "label": "Slower than vectorized SQL",
+          "description": "Row-by-row interpretation is fundamentally slower than DuckDB's vectorized execution. Expect interpreter execution to dominate at high row counts — for hot OLAP paths over millions of rows, prefer native SQL or a real DuckDB extension function."
+        },
+        {
+          "label": "Best fit: moderate volumes",
+          "description": "Where flexibility wins over peak throughput — config-driven rules, ad-hoc transforms, audits, exploratory analysis, batches in the thousands-to-low-millions of rows. Beyond that, profile."
+        },
+        {
+          "label": "Sandbox is intentional",
+          "description": "Rhai has no module loading, no file I/O, no networking. That's a feature here — you can evaluate untrusted script text from a column without granting it access to anything outside the `context`. If you need those capabilities, this is the wrong tool."
+        },
+        {
+          "label": "Language is constrained",
+          "description": "Rhai is smaller than full JavaScript. No package ecosystem, no async / await, no regex unless you reach for Rhai-specific helpers. The full feature set is documented in the [Rhai Book](https://rhai.rs/book/)."
+        }
+      ]
+    },
+    {
+      "icon": "↔️",
+      "title": "Rhai vs. QuickJS — pick by need",
+      "description": "[`evalexpr_rhai`](/products/extensions/evalexpr_rhai) and the sibling [`quickjs`](/products/extensions/quickjs) extension occupy the same slot — embedded scripting in DuckDB SQL — but make different trade-offs. They can coexist; pick per use case.",
+      "bulletPoints": [
+        {
+          "label": "Pick Rhai when safety matters more than expressiveness",
+          "description": "Sandboxed by default, no module loading, no host I/O, smaller language surface. The right choice for evaluating script text supplied by users or stored in a config table — there's nothing inside Rhai to reach the host with."
+        },
+        {
+          "label": "Pick QuickJS when you need full JavaScript",
+          "description": "Full ECMAScript semantics, regex, JSON ergonomics, the JavaScript idioms developers already know. The right choice when you're porting expressions from a JavaScript codebase or need a richer standard library — at the cost of a larger attack surface and a heavier interpreter."
+        },
+        {
+          "label": "Both are row-by-row",
+          "description": "Neither vectorizes. The choice is about language and sandboxing, not throughput. If raw throughput dominates, push the logic into SQL or a compiled UDF instead."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Rules stored as data",
+          "description": "Membership / eligibility / scoring rules live in a table as Rhai source. Each query evaluates the rule against the row's columns via `context`. Admins edit text; nothing redeploys."
+        },
+        {
+          "title": "Branching too tangled for CASE",
+          "description": "When `CASE WHEN ... THEN ... WHEN ... THEN ...` becomes hard to read or shares intermediate variables, a few lines of Rhai with named locals reads better and is easier to evolve."
+        },
+        {
+          "title": "Custom math helpers",
+          "description": "Define `fn` helpers inside the script, call them on row data. Cheap one-off calculations that you don't want to register as a permanent DuckDB function."
+        },
+        {
+          "title": "Safe evaluation of user input",
+          "description": "Because Rhai is sandboxed, evaluating script text submitted by users (with the row context they're allowed to see) is straightforward. The sibling [`quickjs`](/products/extensions/quickjs) extension is more permissive; choose Rhai when that matters."
+        }
+      ]
+    }
+  ]
+}

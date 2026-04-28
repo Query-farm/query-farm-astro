@@ -1,43 +1,38 @@
-## Why Rhai?
+## One-shot expression
 
-[Rhai](https://rhai.rs) is a small, fast scripting language designed to embed inside Rust programs. It feels like a cross between Rust and JavaScript with dynamic typing. Compared to other scripting options:
-
-- Smaller and faster startup than [`quickjs`](/products/extensions/quickjs).
-- Stricter syntax than [`minijinja`](/products/extensions/minijinja) — Rhai is a real programming language, not a template engine.
-- Strong sandboxing — no host filesystem / process / network access from inside scripts.
-
-Use it when SQL alone is too constrained but a full UDF would be overkill: dynamic rules pulled from a config table, conditional branching that doesn't fit in CASE, custom math that doesn't deserve its own DuckDB function.
-
-## Result shape
-
-Every call returns a JSON struct: `{ok: ..., err: ...}`. On success, read `.ok`; on failure, read `.err` and the row keeps moving.
+The simplest call — no context, no setup. Returns a `UNION(ok JSON, error VARCHAR)`:
 
 ```sql
-SELECT evalexpr_rhai('5 + 6').ok;        -- 11
-SELECT evalexpr_rhai('1 / 0').err;       -- 'Runtime error: ...'
+SELECT evalexpr_rhai('5 + 6').ok;            -- 11
+SELECT evalexpr_rhai('[1, 2, 3].map(|x| x * 2)').ok;
+-- [2, 4, 6]
 ```
 
-This shape means scripting failures don't crash a query — they just produce a NULL `ok`.
+See [`evalexpr_rhai`](#evalexpr_rhai) for the full signature.
 
 ## Per-row evaluation with context
 
-The second argument is a JSON object that becomes available inside the script as `context.<field>`. Everything DuckDB can serialize to JSON works:
+The second argument is a `JSON` object exposed inside the script as `context.<field>`. Build it from row columns:
 
 ```sql
--- Boolean rule per row
 SELECT name,
-       evalexpr_rhai('context.salary > 100000', { 'salary': salary }).ok AS high_earner
+       evalexpr_rhai('context.salary > 100000',
+                     { 'salary': salary }).ok AS high_earner
 FROM employees;
+```
 
--- Arithmetic on row data
+```sql
 SELECT id,
-       evalexpr_rhai('context.qty * context.price * 1.0875', { 'qty': qty, 'price': price }).ok::DECIMAL AS taxed_total
+       evalexpr_rhai('context.qty * context.price * 1.0875',
+                     { 'qty': qty, 'price': price }).ok::DECIMAL AS taxed_total
 FROM orders;
 ```
 
-## Rules from a column (the big one)
+Anything DuckDB can serialize to JSON crosses the boundary — numbers, strings, booleans, arrays, nested objects.
 
-Membership rules, scoring rules, dynamic predicates — store them as text and evaluate at query time. Admins can edit the rules without redeploying:
+## Rules stored in a column
+
+The pattern that makes this extension worth the install. Store the rule as text, evaluate per row, edit the table to change the rule:
 
 ```sql
 CREATE TABLE group_membership(group_name TEXT, logic TEXT);
@@ -52,9 +47,11 @@ WHERE evalexpr_rhai(logic, { 'name': 'John' }).ok = TRUE;
 -- 'shift_leads'
 ```
 
-## Full scripts and functions
+Each distinct `logic` string parses on first use and caches by content.
 
-For anything beyond a one-liner, you can pass a multi-line script with function definitions. Classic Collatz example:
+## Multi-line scripts and `fn` definitions
+
+For anything beyond a one-liner, pass a multi-line script — define helpers with `fn`, call them at the bottom:
 
 ```sql
 CREATE MACRO collatz_length(n) AS
@@ -75,8 +72,63 @@ SELECT range AS n,
 FROM range(1000, 1005);
 ```
 
-## Performance
+The full language reference lives in the [Rhai Book](https://rhai.rs/book/).
 
-Constant expressions get compiled and cached the first time DuckDB sees them, so a script in a `WHERE` clause doesn't re-parse per row. Expect ~1–10 μs per call after cache warmup — fast for an embedded interpreter.
+## Branching that's awkward in CASE
 
-For hot OLAP paths over millions of rows, prefer native SQL. Rhai is for moderate volumes where flexibility wins over peak throughput.
+When `CASE WHEN` chains share intermediate values or thresholds, Rhai with named locals reads better:
+
+```sql
+SELECT id,
+       evalexpr_rhai('
+         let base   = context.qty * context.price;
+         let disc   = if context.tier == "gold" { 0.20 }
+                      else if context.tier == "silver" { 0.10 }
+                      else { 0.0 };
+         let taxed  = base * (1.0 - disc) * 1.0875;
+         taxed
+       ', { 'qty': qty, 'price': price, 'tier': tier }).ok::DECIMAL AS final_total
+FROM orders;
+```
+
+## Reading the error arm
+
+A script that throws produces the `error` arm of the union. The query keeps running:
+
+```sql
+SELECT evalexpr_rhai('1 / 0').error;          -- 'Runtime error: ...'
+
+-- Surface failures alongside successes
+SELECT id,
+       evalexpr_rhai(rule, { 'x': x }).ok    AS result,
+       evalexpr_rhai(rule, { 'x': x }).error AS failure
+FROM jobs;
+```
+
+For a single column that's "result on success, NULL on failure," use `.ok` directly — it's `NULL` for the rows whose script threw.
+
+## Filtering on a script result
+
+Booleans returned from `.ok` work in `WHERE` directly:
+
+```sql
+SELECT *
+FROM employees
+WHERE evalexpr_rhai('context.salary > 100000 && context.years >= 5',
+                    { 'salary': salary, 'years': years }).ok = TRUE;
+```
+
+Constant script strings parse once and cache, so the rule isn't re-parsed per row.
+
+## Diagnostics
+
+```sql
+-- Smoke-test that the extension is loaded and the interpreter runs
+SELECT evalexpr_rhai('1 + 1').ok;             -- 2
+
+-- Check arrays / closures land intact
+SELECT evalexpr_rhai('[1, 2, 3].filter(|x| x > 1)').ok;
+-- [2, 3]
+```
+
+If a call returns the `error` arm where you expected `ok`, the message in `.error` comes from Rhai itself — the [Rhai Book](https://rhai.rs/book/) covers the language's error and exception model in the [`throw`](https://rhai.rs/book/language/throw.html) chapter.

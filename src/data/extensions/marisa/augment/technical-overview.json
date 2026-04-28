@@ -1,0 +1,99 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use a MARISA Trie from DuckDB?",
+  "description": "Build one BLOB from a column of strings, then run membership tests, autocomplete prefix searches, and longest-prefix matches against it — in O(|key|), independent of dictionary size. The static-trie companion to [`bitfilters`](/products/extensions/bitfilters): both answer set-membership questions, but a [MARISA trie](https://github.com/s-yata/marisa-trie) keeps the strings and supports prefix queries.",
+  "sections": [
+    {
+      "icon": "🌳",
+      "title": "What this extension is for",
+      "description": "Big static string sets — English wordlists, city/airport names, IP-CIDR labels, URL routing tables, autocomplete dictionaries — packed into a single self-contained BLOB you can store in any DuckDB column.",
+      "bulletPoints": [
+        {
+          "label": "Autocomplete and type-ahead",
+          "description": "[`marisa_predictive`](#marisa_predictive) returns every entry that starts with a given prefix, capped at `max_results`. One BLOB, microsecond lookups — drop it behind a search box without standing up a separate service."
+        },
+        {
+          "label": "Spell-check and dictionary lookups",
+          "description": "[`marisa_lookup`](#marisa_lookup) is a BOOLEAN “is this exact string in the set?” test. Smaller and prefix-aware where a hash set or [`bitfilters`](/products/extensions/bitfilters) Bloom would otherwise live."
+        },
+        {
+          "label": "Longest-prefix-match routing",
+          "description": "[`marisa_common_prefix`](#marisa_common_prefix) returns every string in the trie that is itself a prefix of the query string — the primitive behind URL routers, IP-CIDR label tables, and rule lookups."
+        },
+        {
+          "label": "Compact dictionary side of a join",
+          "description": "Materialize one trie per partition / day / tenant at write time and ship the BLOB — a [Patricia trie](https://en.wikipedia.org/wiki/Radix_tree) of prefix-rich data is dramatically smaller than the equivalent flat string list."
+        }
+      ]
+    },
+    {
+      "icon": "⚙️",
+      "title": "How it works",
+      "description": "MARISA — *Matching Algorithm with Recursively Implemented StorAge* — is a [succinct](https://en.wikipedia.org/wiki/Succinct_data_structure) static [Patricia/radix trie](https://en.wikipedia.org/wiki/Radix_tree) maintained for over a decade as [`s-yata/marisa-trie`](https://github.com/s-yata/marisa-trie). This extension is a thin DuckDB wrapper over that library.",
+      "bulletPoints": [
+        {
+          "label": "One aggregate, one BLOB",
+          "description": "[`marisa_trie`](#marisa_trie) is the only constructor — an aggregate over a `VARCHAR` column that emits a single self-contained `BLOB`. Store it in any column type, persist to Parquet, ship to another DuckDB instance."
+        },
+        {
+          "label": "Three query primitives",
+          "description": "[`marisa_lookup`](#marisa_lookup) (exact membership), [`marisa_predictive`](#marisa_predictive) (“starts with”), and [`marisa_common_prefix`](#marisa_common_prefix) (“is a prefix of”). All read the BLOB directly — no decode or warm-up step."
+        },
+        {
+          "label": "O(|key|), not O(|dictionary|)",
+          "description": "Lookup work scales with the length of the search key, not the size of the trie. The first query is as fast as the millionth, whether the dictionary holds a thousand strings or ten million."
+        },
+        {
+          "label": "Prefix-rich data wins big",
+          "description": "URLs, paths, names, and dictionary words share enormous prefix structure — a typical English wordlist of ~470K entries fits in around 800 KB, roughly a fifth the size of the same words as a flat sorted list."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "When to choose something else",
+      "description": "MARISA is a sharp, narrow tool. Knowing where it isn't the right fit is half the value.",
+      "bulletPoints": [
+        {
+          "label": "Static — no incremental insert or delete",
+          "description": "Once built, the trie is immutable. Updates require rebuilding from the source set. For a 470K-entry dictionary that's milliseconds; for billions, plan accordingly."
+        },
+        {
+          "label": "String keys only",
+          "description": "No numeric or composite keys. `VARCHAR` in, `VARCHAR` out. Encode integers as text upstream if you must, or pick a different index."
+        },
+        {
+          "label": "Random unrelated strings: prefer a hash or filter",
+          "description": "Without shared prefixes, the trie loses its compression edge. For pure membership tests on uncorrelated keys, [`bitfilters`](/products/extensions/bitfilters) (Bloom / XOR / Binary Fuse) is smaller and just as fast — but it can't return the strings or answer prefix queries."
+        },
+        {
+          "label": "Lexicographic order only",
+          "description": "If you need a different ordering at query time, build separate tries. The trie itself is fixed at lexicographic key order."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Autocomplete backend in SQL",
+          "description": "Build [`marisa_trie`](#marisa_trie) over your search corpus once at ingest time, store the BLOB, and serve type-ahead requests with [`marisa_predictive`](#marisa_predictive) directly from DuckDB — no separate Elasticsearch / Trie service for static dictionaries."
+        },
+        {
+          "title": "Spell-check / dictionary membership",
+          "description": "An English wordlist or domain-specific term list compiled into a trie BLOB you can ship inside a Parquet file. Pair with [`fuzzycomplete`](/products/extensions/fuzzycomplete) or [`rapidfuzz`](/products/extensions/rapidfuzz) for fuzzy fallbacks when exact lookup misses."
+        },
+        {
+          "title": "Routing and longest-prefix-match tables",
+          "description": "URL paths, feature-flag rules, geo / CIDR labels — anywhere you ask \"which rules match this input?\" Use [`marisa_common_prefix`](#marisa_common_prefix) against a trie of the rule keys."
+        },
+        {
+          "title": "Compact join dictionary",
+          "description": "Materialize one trie per partition or per day at write time. The BLOB ships smaller than the underlying string list, decompresses to nothing (it's already mmap-ready), and serves prefix and membership queries from the same blob."
+        }
+      ]
+    }
+  ]
+}

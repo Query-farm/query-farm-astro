@@ -1,66 +1,35 @@
-## Use cases
+Recipes for inline ASCII / Unicode plots in the DuckDB CLI — distributions, trends, bars, and QR codes that live as `VARCHAR` columns in your `SELECT` output.
 
-- **Quick data exploration** — visualize distributions and trends directly in your terminal.
-- **Dashboard cells** — drop a sparkline into a status table without a charting library.
-- **Monitoring & alerting** — visual indicators for system metrics and KPIs.
-- **Data quality checks** — spot outliers and patterns at a glance.
-- **CLI analytics** — beautiful output for scripts and one-liners.
-- **Documentation** — embed live charts in READMEs and report exports.
-- **Embedded analytics** — lightweight visualizations in apps without heavy frontend dependencies.
+## See the shape of a column
 
-## Bars
-
-Inline bars with [`tp_bar`](#tp_bar) — value as a fraction of `min..max`.
+The headline use — point an aggregate at [`tp_density`](#tp_density) and you've got a one-line distribution plot in CLI output:
 
 ```sql
--- Simple progress
-SELECT tp_bar(0.5);
-
--- Out-of-100 with explicit width
-SELECT tp_bar(75, min := 0, max := 100, width := 20);
+SELECT tp_density(array_agg(value)) AS distribution
+FROM measurements;
 ```
 
-### Threshold-based coloring
-
-Conditional colors based on the value — green/yellow/red zones for SLAs and dashboards:
+For a wider plot or a different character set:
 
 ```sql
-SELECT tp_bar(85, min := 0, max := 100,
-  thresholds := [
-    {'threshold': 90, 'color': 'red'},
-    {'threshold': 70, 'color': 'yellow'},
-    {'threshold':  0, 'color': 'green'}
-  ]) AS sla;
+SELECT tp_density(array_agg(value), width := 40, style := 'height') AS distribution
+FROM measurements;
 ```
 
-### Random walk dashboard
+Available styles: `shaded` (default), `ascii`, `dots`, `height`, `circles`, `safety`, `rainbow_circle`, `rainbow_square`, `moon`, `sparse`, `white`. See [`tp_density`](#tp_density) for the full parameter list.
+
+## Sparkline per row in a status table
+
+The pattern that makes [`tp_sparkline`](#tp_sparkline) most useful — pre-aggregate a series per entity, render a sparkline cell:
 
 ```sql
-SELECT round(n, 4) AS value,
-       tp_bar(n,
-              width := 14,
-              shape := 'circle',
-              off_color := 'black',
-              filled := true,
-              thresholds := [
-                (0.8, 'red'), (0.7, 'orange'), (0.6, 'yellow'), (0.0, 'green')
-              ]) AS bar
-FROM (SELECT random() AS n FROM generate_series(10));
+SELECT host,
+       tp_sparkline(cpu_history, theme := 'utf8_blocks', width := 24) AS cpu_24h
+FROM hosts_status
+ORDER BY host;
 ```
 
-### Custom characters
-
-`on` and `off` are SQL reserved words — quote them:
-
-```sql
-SELECT tp_bar(0.7, "on" := '█', "off" := '░', width := 15);
-```
-
-## Sparklines
-
-[`tp_sparkline`](#tp_sparkline) — compact one-line trends.
-
-### Three modes
+Three modes change what the sparkline encodes:
 
 ```sql
 -- Absolute mode (default) — height ∝ value
@@ -73,74 +42,91 @@ SELECT tp_sparkline([100, 105, 102, 108, 95], mode := 'delta');
 SELECT tp_sparkline([100, 110, 105, 125, 90], mode := 'trend', theme := 'intensity');
 ```
 
-### Themes
+## Threshold-colored health bars
 
-Each mode has a vocabulary of themes. A few favorites:
+[`tp_bar`](#tp_bar) with a `thresholds` list is the natural shape for SLA, disk-utilization, or risk indicators. Each block adopts the highest threshold ≤ value:
 
 ```sql
--- Faces emoji for delta
-SELECT tp_sparkline([72, 75, 75, 78, 71], mode := 'delta', theme := 'faces');
-
--- Slopes for trend
-SELECT tp_sparkline([10, 12, 11, 15, 8], mode := 'trend', theme := 'slopes');
-
--- ASCII for terminal compatibility
-SELECT tp_sparkline([25, 45, 78, 92, 67, 34], theme := 'ascii_basic', width := 15);
+SELECT host,
+       disk_pct,
+       tp_bar(disk_pct, min := 0, max := 100, width := 14,
+              thresholds := [
+                {'threshold': 90, 'color': 'red'},
+                {'threshold': 75, 'color': 'yellow'},
+                {'threshold':  0, 'color': 'green'}
+              ]) AS disk
+FROM hosts_status
+ORDER BY disk_pct DESC;
 ```
 
-## Density plots
+Sort by the underlying number; let the bar carry the visual.
 
-[`tp_density`](#tp_density) — compact distribution view for an array.
+## ASCII output for portable terminals
+
+When the destination doesn't render emoji or wide Unicode reliably (older terminals, log aggregators, plain-text email), pin every function to its ASCII vocabulary:
 
 ```sql
--- Default shaded style
-SELECT tp_density([1, 2, 3, 4, 5, 4, 3, 2, 1]);
-
--- Wide plot in 'height' style
-SELECT tp_density([1, 2, 3, 2, 1], width := 30, style := 'height');
-
--- ASCII style
+-- Density
 SELECT tp_density([1, 5, 3, 8, 2], style := 'ascii');
 
--- Dot style for subtle visualization
-SELECT tp_density([1, 5, 3, 8, 2], style := 'dots');
+-- Sparkline
+SELECT tp_sparkline([1, 3, 2, 5, 4, 6], theme := 'ascii_basic');
 
--- Rainbow emoji
-SELECT tp_density([1, 5, 3, 8, 2], style := 'rainbow_circle');
+-- Bar with custom characters ("on" / "off" are reserved — quote them)
+SELECT tp_bar(0.7, "on" := '#', "off" := '-', width := 15);
+
+-- QR code in ASCII blocks
+SELECT tp_qr('https://query.farm', "on" := '##', "off" := '  ');
 ```
 
-### Built-in styles
+## Per-row charts on a generated series
 
-| Style | Characters |
-|---|---|
-| `shaded` (default) | ` ░▒▓█` |
-| `ascii` | `` .:+#@`` |
-| `dots` | ` .•●` |
-| `height` | ` ▁▂▃▄▅▆▇█` |
-| `circles` | `⚫⚪🟡🟠🔴` |
-| `rainbow_circle` | `⚫🟤🟣🔵🟢🟡🟠🔴⚪` |
+Useful when you're prototyping or want to demo the styling vocabulary without a real dataset:
 
-## QR codes
+```sql
+SELECT round(n, 4) AS value,
+       tp_bar(n,
+              width := 14,
+              shape := 'circle',
+              off_color := 'black',
+              filled := true,
+              thresholds := [
+                (0.8, 'red'), (0.7, 'orange'), (0.6, 'yellow'), (0.0, 'green')
+              ]) AS bar
+FROM (SELECT random() AS n FROM generate_series(1, 10));
+```
 
-[`tp_qr`](#tp_qr) — encode a string as Unicode-block QR.
+## QR codes for terminal output
 
 ```sql
 -- Default monochrome
 SELECT tp_qr('Hello, World!');
 
--- High error correction (more redundancy, slightly bigger code)
+-- High error correction (more redundancy, slightly larger code)
 SELECT tp_qr('https://query.farm', ecc := 'high');
 
--- Custom colors
+-- Custom emoji styling
 SELECT tp_qr('https://query.farm', ecc := 'high', "on" := '🟡', "off" := '⚫');
 ```
 
-`.mode ascii` in the DuckDB CLI gives the cleanest rendering of QR output.
+In the DuckDB CLI, `.mode ascii` gives the cleanest rendering of QR output — the default table borders interact poorly with the multi-line block grid.
+
+## Pair with fuzzycomplete for a CLI-first workflow
+
+Textplot makes CLI *output* readable; [`fuzzycomplete`](/products/extensions/fuzzycomplete) makes CLI *input* tolerable (VS-Code-style fuzzy tab-completion across schemas and databases). Install both if you live in the DuckDB REPL:
+
+```sql
+INSTALL fuzzycomplete FROM community;
+LOAD fuzzycomplete;
+
+INSTALL textplot FROM community;
+LOAD textplot;
+```
 
 ## Tips
 
-1. **Pick widths to match your output** — width 20–30 for dashboards, 10–15 for compact reports.
-2. **Use thresholds for status** — perfect for SLA / health / risk indicators.
-3. **Combine with numbers, don't replace them** — text plots complement raw values.
-4. **ASCII for portability, emoji for impact** — emoji needs a Unicode-capable terminal/font.
-5. **Sparklines shine in tables** — one cell per row, instant per-entity trend visibility.
+1. **Pick widths to match your output** — width 20–30 for dashboards, 10–15 for compact reports, ≥40 for distribution shapes you want to actually read.
+2. **Combine with raw numbers, don't replace them** — the visual is for shape; the number is for precision. Show both.
+3. **Sparklines shine in tables** — one cell per row is where they earn their keep.
+4. **ASCII for portability, emoji for impact** — emoji needs a Unicode-capable terminal and font.
+5. **For real visualization, use a real tool** — Textplot is for eyeballing in the CLI, not for the dashboard you ship to stakeholders.

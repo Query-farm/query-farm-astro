@@ -1,0 +1,99 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use RapidFuzz?",
+  "description": "Dedup messy customer, address, or product data with one SQL query — or fuzzy-join two datasets that don't share clean keys. Wraps the [RapidFuzz](https://github.com/maxbachmann/RapidFuzz) C++ library so [Levenshtein](https://en.wikipedia.org/wiki/Levenshtein_distance), [Jaro-Winkler](https://en.wikipedia.org/wiki/Jaro%E2%80%93Winkler_distance), Hamming, OSA / Damerau-Levenshtein, LCS, and the full `fuzz`-style ratio family run inline as scalar functions over DuckDB columns.",
+  "sections": [
+    {
+      "icon": "🔍",
+      "title": "What this extension is for",
+      "description": "Anywhere you have two strings and want a numeric answer to \"how similar are they?\" — record linkage across customer or vendor lists, dedup of free-text fields, spell-check against a dictionary, ranking of candidate matches.",
+      "bulletPoints": [
+        {
+          "label": "Record linkage / fuzzy join",
+          "description": "Two datasets that should match on `name` or `address` but don't share clean keys: score every candidate pair with [`rapidfuzz_jaro_winkler_normalized_similarity`](#rapidfuzz_jaro_winkler_normalized_similarity) or [`rapidfuzz_ratio`](#rapidfuzz_ratio), filter by threshold, keep the best per row with `QUALIFY ROW_NUMBER()`."
+        },
+        {
+          "label": "Dedup messy free-text",
+          "description": "Cluster near-duplicate rows in a customer or product table — pick a ratio variant that matches your data semantics (token-set for reordered or stuttering text, partial-ratio for fragments) and emit pairs above a threshold."
+        },
+        {
+          "label": "Spell-check / typo tolerance",
+          "description": "Score an input against a known-good dictionary with [`rapidfuzz_osa_distance`](#rapidfuzz_osa_distance) or [`rapidfuzz_jaro_winkler_normalized_similarity`](#rapidfuzz_jaro_winkler_normalized_similarity) and pick the closest match. Handles single-character typos and adjacent-key swaps directly."
+        },
+        {
+          "label": "Similarity ranking",
+          "description": "Score a query string against every row in a small table and `ORDER BY` the score — the simplest \"which of these is closest?\" pattern, no separate search index."
+        }
+      ]
+    },
+    {
+      "icon": "⚙️",
+      "title": "How it works",
+      "description": "RapidFuzz is a C++ implementation of the same algorithms exposed by Python's [`rapidfuzz`](https://maxbachmann.github.io/RapidFuzz/) and the older `fuzzywuzzy`. This extension binds those algorithms as DuckDB scalar functions — every call is a vectorized in-process C++ kernel; no Python, no FFI, no per-row interpreter overhead.",
+      "bulletPoints": [
+        {
+          "label": "Two function families",
+          "description": "**Ratio scores** ([`rapidfuzz_ratio`](#rapidfuzz_ratio), [`rapidfuzz_partial_ratio`](#rapidfuzz_partial_ratio), [`rapidfuzz_token_sort_ratio`](#rapidfuzz_token_sort_ratio), [`rapidfuzz_token_set_ratio`](#rapidfuzz_token_set_ratio), [`rapidfuzz_partial_token_set_ratio`](#rapidfuzz_partial_token_set_ratio)) return 0–100 similarity, matching Python `rapidfuzz.fuzz`. **Distance algorithms** (Jaro, Jaro-Winkler, Hamming, Indel, Levenshtein/OSA, LCS, prefix, postfix) each ship four variants — `_distance`, `_similarity`, `_normalized_distance`, `_normalized_similarity`."
+        },
+        {
+          "label": "Pick distance vs. normalized",
+          "description": "Raw `_distance` / `_similarity` return integer edit counts — useful when the strings are the same length or you want a numeric threshold (e.g. \"differ by ≤ 2 characters\"). The `_normalized_*` variants scale to `[0, 1]` and divide by the longer string's length, so they don't penalize length mismatches; reach for these for cross-pair comparisons."
+        },
+        {
+          "label": "Vectorized over columns",
+          "description": "Every function is scalar with `(VARCHAR, VARCHAR) -> DOUBLE`. Use it in `SELECT`, `WHERE`, `JOIN ... ON`, `ORDER BY`, `QUALIFY` — anywhere a scalar fits. DuckDB pipelines and multi-threads the call."
+        },
+        {
+          "label": "Behavior parity with upstream",
+          "description": "Outputs match the upstream Python library, so [the RapidFuzz docs](https://maxbachmann.github.io/RapidFuzz/) are an authoritative reference for algorithm semantics. The naming scheme is `rapidfuzz_<algo>[_normalized]_<distance|similarity>` — predictable across all eight algorithm groups."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "Cost and scaling",
+      "description": "Every comparison is cheap. Comparing every row to every other row is not — pairwise self-joins are O(n²) and that's the limit you hit on real datasets.",
+      "bulletPoints": [
+        {
+          "label": "Self-joins are O(n²)",
+          "description": "100k rows × 100k rows is 10 billion pairs — still tractable on a fast machine for the simpler ratios, but will dominate query time. 1M × 1M is not. Filter the pair space before scoring."
+        },
+        {
+          "label": "Use blocking to prune candidates",
+          "description": "**Blocking** (a.k.a. indexing) is the standard record-linkage technique: only compare rows that share a cheap key. First letter, length bucket, normalized prefix, or a phonetic code (e.g. soundex via the [`fuzzy`](https://duckdb.org/docs/extensions/fuzzy.html) extension) — join on the block, score on the strings. Reduces O(n²) to O(n·k) where k is the average block size."
+        },
+        {
+          "label": "Pre-normalize once",
+          "description": "Lowercase, strip punctuation, collapse whitespace before scoring — every per-row transformation you can hoist out of the join saves it from running on every pair. Pair with the [`inflector`](/products/extensions/inflector) extension when you need consistent casing across both sides."
+        },
+        {
+          "label": "Threshold inside the join",
+          "description": "Push the similarity threshold into the `WHERE`/`ON` clause so DuckDB can short-circuit. For top-1 per left row, layer `QUALIFY ROW_NUMBER() OVER (PARTITION BY left_id ORDER BY score DESC) = 1`."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Dedup a customer / vendor / product table",
+          "description": "Self-join with a blocking key (length bucket, first letter, soundex), score with [`rapidfuzz_token_set_ratio`](#rapidfuzz_token_set_ratio) or [`rapidfuzz_jaro_winkler_normalized_similarity`](#rapidfuzz_jaro_winkler_normalized_similarity), filter by threshold, walk the resulting pair graph to assign cluster IDs."
+        },
+        {
+          "title": "Fuzzy-join two datasets without a clean key",
+          "description": "Score every candidate pair, take the best per row with `QUALIFY`. The classic record-linkage pattern, expressed as one SQL statement."
+        },
+        {
+          "title": "Match free-text input against a dictionary",
+          "description": "Spell-correct a query against a known-good list — [`rapidfuzz_osa_distance`](#rapidfuzz_osa_distance) ≤ 2 captures most typing mistakes."
+        },
+        {
+          "title": "Rank candidates by similarity",
+          "description": "`ORDER BY rapidfuzz_ratio(query, candidate) DESC LIMIT N` — the simplest \"top-N closest\" without standing up a search index."
+        }
+      ]
+    }
+  ]
+}

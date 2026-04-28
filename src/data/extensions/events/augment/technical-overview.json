@@ -1,0 +1,99 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use Events?",
+  "description": "Capture DuckDB's internal lifecycle — queries executed, transactions opened and closed, errors raised, connections churning — and stream the timeline as JSON lines into any external program. In-process telemetry, audit trails, cost tracking, and SIEM feeds, all wired up with PRAGMAs.",
+  "sections": [
+    {
+      "icon": "📡",
+      "title": "What this extension is for",
+      "description": "Events makes the otherwise-opaque inside of a DuckDB process observable. You get a structured event line for every query, transaction, and connection — without instrumenting your application code or scraping logs after the fact.",
+      "bulletPoints": [
+        {
+          "label": "Audit trails",
+          "description": "Capture `query_begin` / `query_end` for every statement and ship the JSON to a tamper-resistant log store. Every query, with timestamps, error status, and the originating session name."
+        },
+        {
+          "label": "Error alerting",
+          "description": "`query_end` carries `has_error`, `error_message`, and `error_type` when a query fails — pipe the stream into a handler that pages on regressions or unexpected error types."
+        },
+        {
+          "label": "Cost and usage tracking",
+          "description": "Pair `query_begin` and `query_end` by `query_id` to get per-query latency and per-session volume. Use `events_session_name` to attribute events to tenants, jobs, or replicas."
+        },
+        {
+          "label": "Transaction lifecycle observability",
+          "description": "`transaction_begin` / `transaction_commit` / `transaction_rollback` each carry the same `transaction_id` and `is_read_only` flag — so you can reconstruct exactly which statements ran inside which transaction."
+        }
+      ]
+    },
+    {
+      "icon": "⚙️",
+      "title": "How it works",
+      "description": "The extension hooks DuckDB's internal event surface and pipes one JSON object per event into the **stdin of an external program**. There is no SQL function to call — configuration is entirely PRAGMA-driven, so wiring up event capture is four `SET` statements.",
+      "bulletPoints": [
+        {
+          "label": "Configure with PRAGMAs",
+          "description": "Set [`events_destination`](#events-destination) to a fully-qualified executable path. Pick the event types to capture with [`events_types`](#events-types). Optional: [`events_session_name`](#events-session-name) tags every event, and [`events_async`](#events-async) switches between synchronous and fire-and-forget delivery."
+        },
+        {
+          "label": "Seven event types",
+          "description": "`connection_opened`, `connection_closed`, `query_begin`, `query_end`, `transaction_begin`, `transaction_commit`, and `transaction_rollback`. Default capture is `['query_begin', 'query_end']` — the smallest set that still gives you query-level audit visibility."
+        },
+        {
+          "label": "JSON lines on stdin",
+          "description": "Every event becomes one line of JSON on the handler's stdin. Common fields are `event`, `timestamp` (ISO 8601), `database_path`, `session_name`, `connection_id`, and `process_id`. Type-specific fields layer on top — `query_id`, `transaction_id`, `error_message`, etc."
+        },
+        {
+          "label": "Sync or fire-and-forget",
+          "description": "Default delivery is synchronous: DuckDB writes the event and waits for the handler to read it before returning from the originating query. Reliable, but each event adds latency. `SET events_async = TRUE` switches to fire-and-forget — no blocking, but events can be dropped if the handler is slow or dies."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "Production caveats",
+      "description": "What to know before pointing this at a production database.",
+      "bulletPoints": [
+        {
+          "label": "Process-scoped, not durable",
+          "description": "Configuration lives in the running DuckDB process — restart and it's gone. Set the PRAGMAs at session start (or wrap them in a startup script). Same caveat as the [`cronjob`](/products/extensions/cronjob) extension: events are observable while the process is up, not durable across restarts."
+        },
+        {
+          "label": "One handler per session",
+          "description": "Only one destination at a time. If you need fan-out — file plus Kafka plus alerting — point `events_destination` at a small dispatcher that reads stdin and forks the stream itself (`tee`, a Python script, `vector`, etc.)."
+        },
+        {
+          "label": "Sync mode blocks queries",
+          "description": "In synchronous mode (the default) a slow or hung handler will hold up every query. Add timeouts in the handler, or switch to `events_async = TRUE` for high-throughput workloads where the occasional dropped event is acceptable."
+        },
+        {
+          "label": "Handler runs as DuckDB",
+          "description": "The destination program is launched by the DuckDB process and inherits its privileges. Treat the `events_destination` path as security-sensitive — point it at a fully-qualified, read-only-by-others script."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "In-process audit log",
+          "description": "Capture `query_begin` / `query_end` and append the JSON lines to a daily file or a tamper-evident store. Every statement that touched the database, with timestamps and error status."
+        },
+        {
+          "title": "Real-time error alerting",
+          "description": "Filter `query_end` events for `has_error = true` and post the payload to PagerDuty, OpsGenie, Slack, or your SIEM. No log scraping, no polling — events arrive as they happen."
+        },
+        {
+          "title": "Per-session cost attribution",
+          "description": "Tag each DuckDB process with `events_session_name` (tenant id, job id, replica name) and emit `query_begin`/`query_end` pairs. Aggregate downstream for query latency, count, and error rate per attribution key."
+        },
+        {
+          "title": "Transaction replay and forensics",
+          "description": "Capture all three transaction events plus query events. Group by `transaction_id` to reconstruct exactly which statements ran inside each commit or rollback — useful for incident postmortems."
+        }
+      ]
+    }
+  ]
+}

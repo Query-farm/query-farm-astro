@@ -1,36 +1,120 @@
-## What is A5?
+import Callout from '../../../components/docs/Callout.astro';
 
-<img
-  src="/images/extensions/a5/thumbnails.png"
-  alt="A5 example renderings — pentagonal cells at multiple resolutions covering different regions of the globe"
-  width="472"
-  loading="lazy"
-/>
+<div class="flex items-center gap-4 mb-8 not-prose">
+  <img
+    src="/images/extensions/a5/thumbnails.png"
+    alt="A5 example renderings — pentagonal cells at multiple resolutions"
+    width="120"
+    height="120"
+    class="rounded-md flex-shrink-0"
+    loading="lazy"
+  />
+  <div>
+    <p class="text-xs font-semibold uppercase tracking-wider text-soil-500">DuckDB ↔ A5 Pentagonal Grid</p>
+    <p class="text-lg text-soil-700">A pentagon-based <a href="https://a5geo.org/docs/technical/dggs" class="text-harvest-700 underline underline-offset-2 decoration-harvest-300 hover:decoration-harvest-700">discrete global grid system</a> — an alternative to <a href="https://h3geo.org/" class="text-harvest-700 underline underline-offset-2 decoration-harvest-300 hover:decoration-harvest-700">H3</a> and <a href="https://s2geometry.io/" class="text-harvest-700 underline underline-offset-2 decoration-harvest-300 hover:decoration-harvest-700">S2</a> with equal-area cells at every resolution.</p>
+  </div>
+</div>
 
-A5 is a global geospatial index that partitions the world into [pentagonal cells](https://a5geo.org/examples/teohedron-dodecahedron) based on a geodesic grid.
+## What you can do with one query
 
-- **Global Coverage**: Seamless indexing from global to millimeter scales.
-- **Equal Area**: All cells at the same resolution level have identical area ([OGC compliant](https://docs.ogc.org/as/20-040r3/20-040r3.html#toc29)).
-- **31 Resolution Levels**: From world-spanning cells to sub-30 mm² precision.
-- **Fast Spatial Operations**: Optimized for aggregation, filtering, and spatial joins.
+Turn a table of `(longitude, latitude)` points into a heatmap-style aggregation in one statement:
 
-## Resolution Guide
+```sql
+SELECT
+  a5_lonlat_to_cell(longitude, latitude, 10) AS cell_id,
+  COUNT(*)                                   AS point_count
+FROM   pickups
+GROUP  BY cell_id
+ORDER  BY point_count DESC;
+```
 
-| Resolution | Cell Area (approx)    | Use Case                        |
-|------------|-----------------------|---------------------------------|
-| 0–5        | 42M km² – 33k km²     | Continental / country analysis  |
-| 6–10       | 8k km² – 130 km²      | Regional / state analysis       |
-| 11–15      | 32 km² – 32 hectares  | City / district analysis        |
-| 16–20      | 8 hectares – 124 m²   | Neighborhood / building analysis|
-| 21–25      | 31 m² – 0.5 m²        | Room / vehicle analysis         |
-| 26–30      | 8 cm² – 0.03 mm²      | Precision measurements          |
+[`a5_lonlat_to_cell`](#a5_lonlat_to_cell) returns a `UBIGINT` you can `GROUP BY`, `JOIN`, or index — the same role H3 / S2 cell IDs play in those systems. Because A5 cells are equal-area at each resolution, the resulting counts are directly comparable across latitudes without per-cell normalization.
 
-## Credits
+<Callout type="note" title="Best fit, scoped honestly">
+A5 is a **newer** discrete global grid system. Its specification and reference library at [github.com/felixpalmer/a5](https://github.com/felixpalmer/a5) are stable, but the surrounding ecosystem is much smaller than [H3](https://h3geo.org/)'s — fewer first-party bindings (Postgres, BigQuery, Spark), fewer Stack Overflow answers, fewer existing pipelines that emit A5 IDs.
 
-- **A5 Algorithm**: Uses the [`a5`](https://crates.io/crates/a5) Rust crate by [felixpalmer](https://github.com/felixpalmer).
-- **A5 Specification**: Based on the [A5 geospatial index specification](https://a5geo.org).
+Reach for A5 specifically when **uniform cell area** matters: cross-latitude density comparisons, equal-area sampling, anything where H3's hex-area variation near the poles is a problem. For "the broadest tool support" or "matching what the rest of my stack uses," H3 is still the conservative pick. The upstream [A5 vs H3 page](https://a5geo.org/docs/recipes/a5-vs-h3) walks through the trade in detail.
+</Callout>
 
-## Related Links
+## A5 vs H3 vs S2 at a glance
 
-- [A5 Official Website](https://a5geo.org)
-- [A5 Examples and Visualizations](https://a5geo.org/examples/)
+| Property        | A5 (this extension)                 | [H3](https://h3geo.org/)                       | [S2](https://s2geometry.io/)                   |
+|-----------------|-------------------------------------|------------------------------------------------|------------------------------------------------|
+| Cell shape      | Pentagons throughout                | Hexagons (+ 12 pentagon exceptions)            | Curvilinear quadrilaterals                     |
+| Equal area      | Yes, at every resolution            | Approximate; varies with latitude              | Approximate; varies with face                  |
+| Edge neighbors  | 5                                   | 6 (mostly)                                     | 4                                              |
+| ID type         | `UBIGINT`                           | `UBIGINT`                                      | `UBIGINT`                                      |
+| Resolution levels | 31 (0–30)                          | 16 (0–15)                                      | 31 (0–30)                                      |
+| DuckDB extension here | Yes                            | Via [`h3` community extension](https://duckdb.org/community_extensions/extensions/h3.html) | No first-party DuckDB extension as of writing |
+| Ecosystem       | Newer; small but growing            | Large (Uber, Postgres, BigQuery, Snowflake, …) | Large inside Google products                   |
+
+If you're already on H3 and the area drift across latitudes isn't biting you, there's no reason to switch. If you're starting fresh and equal-area cells matter, A5 is a good pick.
+
+## Resolution guide
+
+Pick the coarsest resolution that still distinguishes the phenomena you're measuring — each finer level is roughly a 4× row count after `GROUP BY`.
+
+| Resolution | Cell area (approx)    | Typical use                       |
+|------------|-----------------------|-----------------------------------|
+| 0–5        | 42M km² – 33k km²     | Continental / country-scale rollup |
+| 6–10       | 8k km² – 130 km²      | Regional / metro-scale analysis    |
+| 11–15      | 32 km² – 32 hectares  | City / district analysis           |
+| 16–20      | 8 hectares – 124 m²   | Neighborhood / building analysis   |
+| 21–25      | 31 m² – 0.5 m²        | Room / vehicle scale               |
+| 26–30      | 8 cm² – 0.03 mm²      | Sub-meter precision                |
+
+[`a5_cell_area`](#a5_cell_area) returns the exact equal-area size for any resolution; [`a5_get_num_cells`](#a5_get_num_cells) returns the global cell count.
+
+## Hierarchy and compaction
+
+A5's 31-level hierarchy means one encode at the finest resolution you'll need supports every coarser zoom:
+
+```sql
+-- Encode once at the finest resolution
+CREATE TABLE indexed AS
+SELECT *, a5_lonlat_to_cell(lon, lat, 15) AS cell_15
+FROM raw_points;
+
+-- Roll up to a coarser view without re-reading raw points
+SELECT a5_cell_to_parent(cell_15, 10) AS cell_10,
+       COUNT(*)                       AS n
+FROM indexed
+GROUP BY cell_10;
+```
+
+[`a5_cell_to_parent`](#a5_cell_to_parent) walks any cell to a coarser ancestor; [`a5_cell_to_children`](#a5_cell_to_children) goes the other way. For a region-of-interest expressed as a set of cells, [`a5_compact`](#a5_compact) replaces complete groups of siblings with their parent — useful before storing or shipping a coverage set. [`a5_uncompact`](#a5_uncompact) is the inverse.
+
+## Neighborhoods and proximity search
+
+Three traversal primitives, depending on how you define "near":
+
+- [`a5_grid_disk`](#a5_grid_disk) — all cells within `k` **edge-steps** of a center cell.
+- [`a5_grid_disk_vertex`](#a5_grid_disk_vertex) — all cells within `k` **vertex-steps** (a slightly wider disk that includes corner-touching cells).
+- [`a5_spherical_cap`](#a5_spherical_cap) — all cells within a **metric radius** (in meters) of a center cell.
+
+Each returns a `UBIGINT[]`. The typical use is to expand to a coverage set, then probe an indexed cell column with `WHERE cell_id IN (UNNEST(...))` — much cheaper than `ST_DWithin` against raw geometries.
+
+## Boundary rendering
+
+[`a5_cell_to_boundary`](#a5_cell_to_boundary) returns cell vertices as `[lon, lat]` pairs. Pair with the [`spatial`](https://duckdb.org/docs/extensions/spatial) extension to render cells as GeoJSON or any other format DuckDB-spatial supports — see the [Cookbook](#cookbook) for the exact polygon-construction pattern. The `closed_ring` variant repeats the first vertex at the end so the result is directly usable as a polygon ring; the `segments` overload interpolates additional points along each edge for smoother rendering on curved projections.
+
+## Cell IDs as hex strings
+
+A5 IDs round-trip through the canonical 16-character hex form used by the [reference A5 library](https://github.com/felixpalmer/a5):
+
+```sql
+SELECT a5_u64_to_hex(a5_lonlat_to_cell(-74.0060, 40.7128, 10));
+-- e.g. '2607000000000000'
+
+SELECT a5_hex_to_u64('2607000000000000');
+-- the corresponding UBIGINT
+```
+
+Use [`a5_u64_to_hex`](#a5_u64_to_hex) / [`a5_hex_to_u64`](#a5_hex_to_u64) when sharing cell IDs with non-DuckDB code (the upstream JS / TypeScript library expects hex strings; integer storage is more compact inside DuckDB).
+
+## Sibling extensions
+
+For other geospatial / spatial-key work in DuckDB:
+
+- [`geosilo`](/products/extensions/geosilo) — geographic data utilities, complementary to A5 when you need richer spatial primitives alongside cell-based indexing.
+- [`lindel`](/products/extensions/lindel) — space-filling curves (Hilbert, Morton). A different approach to the same "flatten 2D into a sortable 1D key" problem. Use space-filling curves when you want neighbor locality on a sorted column; use A5 when you want explicit equal-area cell membership.

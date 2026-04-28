@@ -1,43 +1,15 @@
-## What this extension is for
+import Callout from '../../../components/docs/Callout.astro';
 
-Textplot generates **string-renderable charts** — every function returns a `VARCHAR` you can put in a `SELECT` list, dump to a terminal, log line, status email, README, dashboard cell, or alert payload. There's no client-side rendering, no asset pipeline, no chart library to ship — just SQL output.
+## What you can do with one query
 
-Four chart types cover the common cases:
+The shortest path from "a column of numbers" to "I can see what's going on" — without leaving the [DuckDB CLI](https://duckdb.org/docs/api/cli/overview):
 
-| Function | Shape | Use for |
-|---|---|---|
-| [`tp_bar`](#tp_bar) | Single bar | Progress, percentages, SLA indicators |
-| [`tp_sparkline`](#tp_sparkline) | One-line trend | Time series, KPIs in tables |
-| [`tp_density`](#tp_density) | Distribution histogram | Spotting outliers / shape of data |
-| [`tp_qr`](#tp_qr) | QR code | Scannable links in terminal/docs |
+```sql
+SELECT tp_density(array_agg(value)) AS distribution
+FROM measurements;
+```
 
-## When to use Textplot vs a real chart library
-
-Use **Textplot** when:
-
-- The output goes to a **terminal**, **log file**, **email**, or **plain-text dashboard**.
-- You're using **DuckDB CLI** for ad-hoc analysis and want to *see* data without leaving SQL.
-- You need to **embed visuals in a status payload** (a Slack message, a webhook body, an alerting hook).
-- You're rendering a **table where each row needs its own chart** — sparklines as table cells are unbeatable.
-
-Use a **real chart library** when:
-
-- You're building an **interactive web dashboard** with hover/zoom/drilldown.
-- You need **precise pixel control** for publication-quality figures.
-- The audience is **non-technical** and expects polished graphics.
-
-## Styling vocabulary
-
-Each function has its own knobs but they share a philosophy: pick a style/theme, optionally override individual characters, optionally apply value-conditional coloring.
-
-- **Shapes / styles** — `square`, `circle`, `heart` for `tp_bar`; named character-set themes for sparklines and density.
-- **Colors** — bar and density support `on_color` / `off_color`. Threshold lists give value-dependent colors.
-- **Custom characters** — every function with `on` / `off` accepts arbitrary Unicode. Quote them as `"on"` / `"off"` because they're SQL reserved words.
-- **Width** — fixed character width keeps charts aligned in tables.
-
-## Embedding charts in row output
-
-The most powerful use case — one sparkline per row, in a table where each row is a different entity:
+[`tp_density`](#tp_density) renders the array as a one-line Unicode density plot — enough to tell whether the data is roughly normal, bimodal, or has a long tail. No notebook, no `matplotlib`, no BI tool round-trip. The same shape works for sparklines and threshold-colored bars in any result table:
 
 ```sql
 SELECT host,
@@ -48,18 +20,68 @@ FROM hosts_status
 ORDER BY disk_pct DESC;
 ```
 
-Run that in any SQL client and you get an at-a-glance fleet view that fits in a terminal window.
+One sparkline per row, one threshold-colored bar per row, all inline in the result table.
 
-## QR rendering tips
+<Callout type="note" title="Quick eyeballing, not real visualization">
+Textplot is a CLI ergonomics tool. Character-grid resolution caps the detail you can see — these plots are for *quick visual checks during interactive SQL*, not a replacement for [Matplotlib](https://matplotlib.org/), [Vega-Lite](https://vega.github.io/vega-lite/), or a proper BI dashboard. When you need axes, hover, drilldown, or pixels, use a real charting tool. When you just want to know the shape of a column without leaving the terminal, use this.
+</Callout>
 
-The default characters (`⬛` / `⬜`) render at native Unicode block width. In the DuckDB CLI, `.mode ascii` gives the cleanest output (no box-drawing wrapping the result). For terminals with narrow fonts, swap to non-emoji:
+## How it fits the CLI workflow
+
+Every function returns a single `VARCHAR`. That's the whole API: any chart you produce is just another column in the result set. It composes with [`.mode line`](https://duckdb.org/docs/api/cli/output_formats), `.mode markdown`, log redirection, `tee` to a file, or paste into a status email — same as any other string column.
+
+The companion piece for the CLI is [`fuzzycomplete`](/products/extensions/fuzzycomplete), which fixes tab-completion for table and column names. Together they're the two extensions worth installing for "I live in the DuckDB REPL" workflows: `fuzzycomplete` makes typing queries painless, `textplot` makes reading their output painless.
+
+## Function map
+
+| Function | Shape | Use for |
+|---|---|---|
+| [`tp_bar`](#tp_bar) | Single bar | Progress, percentages, SLA indicators |
+| [`tp_sparkline`](#tp_sparkline) | One-line trend | Time series, KPIs in tables |
+| [`tp_density`](#tp_density) | Distribution plot | Spotting outliers, shape of a column |
+| [`tp_qr`](#tp_qr) | QR code | Scannable links in terminal/docs |
+
+## Styling vocabulary
+
+The named-parameter surface is shared in spirit across functions:
+
+- **Shapes / styles / themes** — `shape := 'circle' | 'square' | 'heart'` on [`tp_bar`](#tp_bar); named character-set styles on [`tp_density`](#tp_density) (`shaded`, `ascii`, `dots`, `height`, `circles`, `rainbow_circle`, ...); per-mode themes on [`tp_sparkline`](#tp_sparkline) (`utf8_blocks`, `arrows`, `faces`, `slopes`, ...).
+- **Colors** — `on_color` / `off_color` on [`tp_bar`](#tp_bar) and [`tp_density`](#tp_density). `thresholds := [(threshold, color), ...]` gives value-conditional coloring; each block uses the highest threshold it satisfies.
+- **Custom characters** — every function with `on` / `off` accepts arbitrary strings (single chars, emoji, multi-char sequences). They're SQL reserved words — quote them as `"on"` and `"off"`.
+- **Width** — fixed character width keeps charts aligned in tables.
+
+## Portability: ASCII vs Unicode
+
+Defaults use Unicode block characters and emoji, which look great in modern terminals but vary by font. For maximum portability:
 
 ```sql
-SELECT tp_qr('https://query.farm', "on" := '#', "off" := ' ');
+-- ASCII-only density plot
+SELECT tp_density([1, 5, 3, 8, 2], style := 'ascii');
+
+-- ASCII sparkline
+SELECT tp_sparkline([1, 3, 2, 5, 4, 6], theme := 'ascii_basic');
+
+-- ASCII bar with custom characters
+SELECT tp_bar(0.7, "on" := '#', "off" := '-', width := 15);
+
+-- ASCII QR code
+SELECT tp_qr('https://query.farm', "on" := '##', "off" := '  ');
 ```
 
-Higher error-correction (`ecc := 'high'`) tolerates more visual damage at the cost of a larger code — useful when rendering through fonts that handle Unicode block characters imperfectly.
+For QR codes specifically, `.mode ascii` in the CLI gives the cleanest rendering — the default table borders interact poorly with multi-line block output.
 
-## License
+## When to reach for it (and when not to)
 
-MIT — same terms as DuckDB itself.
+**Reach for Textplot when:**
+
+- You're in the **DuckDB CLI** doing ad-hoc analysis and want to *see* a distribution or trend without copying values out.
+- You need **per-row visual cells** in a result table — sparklines per host, bars per SLA, etc.
+- The output goes to a **terminal**, **log file**, **status email**, or **README**.
+
+**Reach for a real charting tool when:**
+
+- You're building an **interactive web dashboard** with hover/zoom/drilldown.
+- You need **precise pixel control** for publication-quality figures.
+- The audience expects **polished graphics** and the data deserves them.
+
+The two are complementary, not competing — Textplot is the "I'm at a SQL prompt right now" tool.

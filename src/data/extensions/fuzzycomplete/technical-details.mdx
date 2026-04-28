@@ -1,0 +1,51 @@
+## What changes the moment you load it
+
+Two lines in the DuckDB CLI is the whole installation:
+
+```sql
+INSTALL fuzzycomplete FROM community;
+LOAD fuzzycomplete;
+```
+
+From there on, every Tab in the shell is fuzzy-matched. Type `usrs` and Tab, and `users` is the first suggestion. Type `gnst` against a table called `getNotificationStatus` — it appears at the top, because matches at camelCase word starts get a bonus. ATTACH a second database and Tab through `FROM ` — completions span both catalogs, properly qualified.
+
+import Callout from '../../../components/docs/Callout.astro';
+
+<Callout type="note" title="DuckDB CLI only">
+Fuzzycomplete plugs into the [DuckDB CLI](https://duckdb.org/docs/api/cli/overview)'s interactive line editor. It has **no effect when DuckDB is embedded in another process** — Python, Node.js, JDBC/ODBC, Rust, WASM, and other client libraries don't have a CLI input loop to hook into. If you want fuzzy string scoring inside SQL queries themselves, use [`rapidfuzz`](/products/extensions/rapidfuzz).
+</Callout>
+
+## How it ranks suggestions
+
+Fuzzycomplete uses the Rust crate [`code-fuzzy-match`](https://crates.io/crates/code-fuzzy-match) — a port of the matcher Visual Studio Code uses for its command palette and Quick Open. The matching rules:
+
+- **Ordered subsequence.** Every character of your query must appear in the candidate, in order. They don't have to be contiguous — `usr` matches `users` and `user_settings` but not `setUR`.
+- **Word-boundary bonuses.** Characters that follow a separator (`_`, `.`) or sit at a camelCase boundary score higher. That's why `gNS` reliably picks `getNotificationStatus`.
+- **Run bonuses.** Contiguous match runs score higher than scattered hits — `users` beats `u_e_r_s` for the query `usr`.
+- **Tie-breakers.** Equal fuzzy scores break by candidate length (shorter wins), then lexicographically.
+
+## Replaces, not supplements, the built-in
+
+DuckDB ships an [autocomplete extension](https://duckdb.org/docs/extensions/autocomplete.html) that uses edit-distance scoring. Both that extension and this one register a function called `sql_auto_complete` — and the DuckDB CLI calls whatever's currently registered. **Whichever extension was loaded last wins.** If your environment auto-loads the built-in `autocomplete` on session start, run `LOAD fuzzycomplete` afterwards (or in your `~/.duckdbrc`) so fuzzycomplete takes over.
+
+## Inspecting the matcher from SQL
+
+Tab-completion in the CLI calls [`sql_auto_complete`](#sql_auto_complete) under the hood, but you can also query it directly — useful for sanity-checking ranking, for tests, or for scripts that want to surface suggestions:
+
+```sql
+SELECT trim(suggestion) AS suggestion
+FROM sql_auto_complete('SELECT * FROM ord')
+LIMIT 5;
+```
+
+The function returns rows ordered best-first. It walks the live catalog, so newly [`ATTACH`](https://duckdb.org/docs/sql/statements/attach)-ed databases and freshly created tables show up immediately — there's no separate index to refresh.
+
+## What's in the box
+
+| Surface | Where it lives |
+|---|---|
+| Tab-completion in the CLI | Implicit — DuckDB's line editor calls `sql_auto_complete` on every Tab |
+| [`sql_auto_complete(query)`](#sql_auto_complete) | One table function; returns ranked suggestions for a partial SQL string |
+| Configuration | None — install, load, done |
+
+For SQL-level fuzzy primitives (similarity scores, distances, record linkage) load [`rapidfuzz`](/products/extensions/rapidfuzz). For prefix-tree lookups against large dictionaries, load [`marisa`](/products/extensions/marisa).

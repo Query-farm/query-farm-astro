@@ -1,51 +1,87 @@
-## Non-cryptographic vs cryptographic hashes
+## Magic moment — partition a billion rows in one query
 
-Hashfuncs provides **non-cryptographic** hashes. They're optimized for:
-
-- **Speed** — typically 5–40 GB/s on a single core; an order of magnitude faster than cryptographic hashes.
-- **Distribution** — uniform output across the hash space, with very few collisions on real-world inputs.
-- **Determinism** — same input + same seed always produces the same output.
-
-What they explicitly **don't** provide:
-
-- **Collision resistance against an adversary**. An attacker who controls the input *can* craft collisions. Don't use these for digital signatures, message authentication, or anywhere a collision could matter for security. Use [`crypto`](/products/extensions/crypto) for those.
-
-For partitioning, sharding, cache keys, and feeding probabilistic filters, the speed wins by a wide margin and the adversarial concern doesn't apply.
-
-## When to pick which family
-
-**`xxh3_64`** — start here. Modern xxHash3, written for vectorized CPUs (SSE2/AVX2). Excellent speed and distribution; broad cross-language support.
-
-**`xxh3_128`** / **`xxh3_128_hex`** — use when 64 bits isn't enough hash space (e.g. billions of cache keys), or when you need a stable hex digest that interops with Python / Rust / C xxhash bindings.
-
-**`xxh64`** — older 64-bit xxHash. Slower than xxh3_64 on modern hardware but identical on the wire to xxhash 0.6.x callers; pick this only when you need to match an existing xxh64-based system.
-
-**`xxh32`** — only when 32 bits is sufficient AND you specifically need the older xxh32 format (e.g. legacy hashtables).
-
-**`rapidhash`** — chase maximum throughput. Generally the fastest 64-bit option on modern x86_64 with quality comparable to xxh3_64.
-
-**`murmurhash3_*`** — strict cross-system compatibility. Many distributed systems (Cassandra, Redis cluster, Spark) use MurmurHash3 in their hash-routing logic. If you're producing hashes that need to match those systems, use the matching variant.
-
-## Seeds
-
-Every function accepts an optional seed (overload selection — second argument). Seeds give you independent hash spaces from the same input — useful when you want, for example, two different shardings of the same column without correlation between them.
-
-The seed types match the platform:
-- 32-bit functions take `UINTEGER` seeds.
-- 64-bit / 128-bit xxHash functions take `UBIGINT` seeds.
-- 128-bit MurmurHash3 takes `UINTEGER` seed.
-
-## Pairing with `bitfilters`
-
-[`bitfilters`](/products/extensions/bitfilters) (probabilistic set-membership filters: Bloom, XOR, Quotient, Binary Fuse) takes `UBIGINT` hash values as filter input. Hashfuncs is the natural producer:
+Take any column, hit it with a fast hash, modulo the partition count, and you have a stable, well-distributed bucket assignment with zero configuration:
 
 ```sql
--- Build an xor8 filter
-SELECT xor8_filter(xxh3_64(key)) AS filter FROM allowed;
-
--- Test membership in queries
-SELECT * FROM events e, filter_table f
-WHERE xor8_filter_contains(f.filter, xxh3_64(e.key));
+-- Bucket every event into one of 64 shards using xxHash3
+SELECT
+  event_id,
+  payload,
+  xxh3_64(event_id) % 64 AS shard
+FROM events;
 ```
 
-The combination gives you sub-microsecond probabilistic filtering at SQL speed.
+[`xxh3_64`](#xxh3_64) runs at near-RAM bandwidth on modern CPUs — typically an order of magnitude faster than a cryptographic hash. For workloads where the only "adversary" is randomness — partitioning, sharding, deduplication, [Bloom filter](https://en.wikipedia.org/wiki/Bloom_filter) inputs, cache keys — that's the right trade.
+
+import Callout from '../../../components/docs/Callout.astro';
+
+<Callout type="warning" title="Not cryptographically secure — by design">
+Every function in this extension is a **non-cryptographic** hash. They are fast and well-distributed against random inputs, but they **do not resist a motivated adversary** who controls the input. Treating [`xxh3_128`](#xxh3_128) like a SHA-256 digest is a security bug, not a performance optimization.
+
+For digital signatures, HMAC, content-addressed storage with adversarial input, password salts, tamper-evident audit logs, or secure random bytes, use the [crypto](/products/extensions/crypto) extension instead — it provides BLAKE3, SHA-2, SHA-3, HMAC, and a CSPRNG.
+</Callout>
+
+## Architecture
+
+Hashfuncs is a small, focused extension: a set of scalar SQL functions, each a thin wrapper around an upstream-faithful C/C++ implementation linked into the extension binary. There is no catalog, no secrets, no network — every call is pure CPU.
+
+Three families ship in the box:
+
+- **[xxHash](https://cyan4973.github.io/xxHash/)** — Yann Collet's family. [`xxh32`](#xxh32) and [`xxh64`](#xxh64) are the original 32- and 64-bit forms; [`xxh3_64`](#xxh3_64) and [`xxh3_128`](#xxh3_128) are the modern XXH3 variants tuned for SSE2 / AVX2 / NEON. [`xxh3_128_hex`](#xxh3_128_hex) emits the canonical 32-character hex digest defined by the [xxHash specification](https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md).
+- **[MurmurHash3](https://github.com/aappleby/smhasher)** — Austin Appleby's classic. Three forms are exposed: [`murmurhash3_32`](#murmurhash3_32), [`murmurhash3_128`](#murmurhash3_128) (x86 variant), and [`murmurhash3_x64_128`](#murmurhash3_x64_128) (x64 variant). The x64 form is what [Apache Cassandra](https://cassandra.apache.org/_/index.html)'s `Murmur3Partitioner` and [Apache Spark](https://spark.apache.org/)'s default hash partitioner use.
+- **[RapidHash](https://github.com/Nicoshev/rapidhash)** — a newer 64-bit hash optimized purely for throughput. Exposed as [`rapidhash`](#rapidhash); generally wins published benchmarks against XXH3_64 on x86_64.
+
+Every function accepts any DuckDB scalar value and (optionally) a seed. Two different seeds produce two uncorrelated hash spaces from the same input — useful for double-hashing in [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter) or running parallel shardings without correlation.
+
+## Hashfuncs vs. crypto — picking the right extension
+
+Both extensions output deterministic hashes, but they answer different questions.
+
+| You need… | Reach for | Why |
+|---|---|---|
+| Partitioning / sharding | [`xxh3_64`](#xxh3_64), [`murmurhash3_x64_128`](#murmurhash3_x64_128) | Speed; well-distributed for random input |
+| [Bloom](https://en.wikipedia.org/wiki/Bloom_filter) / XOR / Cuckoo filter input | [`xxh3_64`](#xxh3_64), [`rapidhash`](#rapidhash) | `UBIGINT` output, near-RAM bandwidth |
+| Cross-language fingerprint | [`xxh3_128_hex`](#xxh3_128_hex) | Canonical hex; matches Python / Rust / C |
+| Cassandra / Spark interop | [`murmurhash3_x64_128`](#murmurhash3_x64_128) | Standard hash for those routers |
+| Cheap deduplication | [`xxh3_64`](#xxh3_64) or [`xxh3_128`](#xxh3_128) | 64 vs 128 bits = collision-safety vs speed |
+| Digital signatures, HMAC | [`crypto`](/products/extensions/crypto) | Adversarial collision resistance |
+| Tamper-evident logs / chains | [`crypto`](/products/extensions/crypto) | SHA-2 / SHA-3 / BLAKE3 |
+| Salts, keys, nonces (CSPRNG) | [`crypto`](/products/extensions/crypto) | `crypto_random_bytes` from OpenSSL |
+| Password storage | Neither — use a real password hash (bcrypt / argon2) outside DuckDB | These are general-purpose hashes |
+
+The two extensions compose. A common pattern is a [`crypto`](/products/extensions/crypto) digest as the durable identity hash on a row, and an [`xxh3_64`](#xxh3_64) hash for the routing decision that picks which shard processes it.
+
+## Compared to alternatives
+
+**vs. DuckDB's built-in [`hash()`](https://duckdb.org/docs/sql/functions/utility):** `hash()` is non-cryptographic too and is great for join/group-by internals. But its algorithm is implementation-defined and may change between DuckDB versions — don't persist its output, and don't expect another tool to reproduce it. Hashfuncs gives you named, stable algorithms whose output other systems can compute identically.
+
+**vs. cryptographic hashes (SHA-256, BLAKE3):** roughly an order of magnitude slower per byte, but they resist adversarial collisions. Use [`crypto`](/products/extensions/crypto) when that property matters; don't pay for it when it doesn't.
+
+**vs. doing this in Python / Pandas:** pulling the column out of DuckDB just to hash it usually costs more than the hash itself. `xxh3_64(...)` in SQL is one vectorized scan with no Python round-trip — the same algorithm [`xxhash`](https://pypi.org/project/xxhash/) would compute, but in-process.
+
+## Seeds and overloads
+
+Every function has both an unseeded form and a seeded form. The seed type follows the hash width:
+
+- 32-bit functions ([`xxh32`](#xxh32), [`murmurhash3_32`](#murmurhash3_32), [`murmurhash3_128`](#murmurhash3_128)) take a `UINTEGER` seed.
+- 64-bit and 128-bit xxHash variants ([`xxh64`](#xxh64), [`xxh3_64`](#xxh3_64), [`xxh3_128`](#xxh3_128), [`xxh3_128_hex`](#xxh3_128_hex)) and [`rapidhash`](#rapidhash) take a `UBIGINT` seed.
+- [`murmurhash3_x64_128`](#murmurhash3_x64_128) takes a `UINTEGER` seed (matching the upstream MurmurHash3 API).
+
+Seeded variants are the right tool whenever you want the same column to participate in two different hash spaces — for example, a Bloom filter that uses two independent hash functions, or two independent shardings with no correlation between bucket assignments.
+
+## Pairing with [`bitfilters`](/products/extensions/bitfilters)
+
+The [`bitfilters`](/products/extensions/bitfilters) extension (Bloom, XOR, Quotient, and Binary Fuse filters) takes `UBIGINT` hashes as its input. Hashfuncs is the natural producer:
+
+```sql
+-- Build an xor8 filter from a column of strings
+SELECT xor8_filter(xxh3_64(email)) AS filter
+FROM allowed_users;
+
+-- Test membership in a streaming query
+SELECT *
+FROM events e, filter_table f
+WHERE xor8_filter_contains(f.filter, xxh3_64(e.email));
+```
+
+The combination gives you sub-microsecond probabilistic set-membership at SQL speed — `INSTALL hashfuncs FROM community; INSTALL bitfilters FROM community;` and you have everything in one DuckDB session.

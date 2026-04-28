@@ -1,0 +1,63 @@
+## What you can do with four PRAGMAs
+
+The single most useful pattern: turn every query DuckDB runs into a structured JSON line on the stdin of a program of your choice, with no SQL functions to call and no application code to change:
+
+```sql
+LOAD events;
+
+SET events_destination  = '/usr/local/bin/event-handler.py';
+SET events_types        = ['query_begin', 'query_end'];
+SET events_session_name = 'analytics-replica';
+SET events_async        = TRUE;
+```
+
+From this point on, every statement you run produces a `query_begin` and `query_end` line on the handler's stdin — paired by `query_id`, tagged with the session name, with `has_error` and `error_message` populated when something goes wrong. The handler can be a shell script, a Python service, a Go binary, or anything else that reads stdin a line at a time.
+
+import Callout from '../../../components/docs/Callout.astro';
+
+<Callout type="note" title="Process-scoped, just like cronjob">
+Events is configured per running DuckDB process, not in the database file. PRAGMAs are forgotten on restart — set them again at session start, or stash them in a startup script. The same caveat applies to the sibling [`cronjob`](/products/extensions/cronjob) extension: both are "operate your DuckDB process" tools and observability is only available while the process is up.
+
+For a durable audit trail, point `events_destination` at a handler that writes to durable storage (file, S3, Kafka, syslog) — the **destination** is durable, the configuration is not.
+</Callout>
+
+## How delivery works
+
+The extension launches the program at `events_destination` as a child process and writes one JSON event per line to its stdin. The handler is a long-lived consumer — DuckDB does not re-spawn it per event.
+
+- **Synchronous (default).** DuckDB writes the event line and waits for the handler to consume it before returning from the originating query. Reliable: every event the database emits is acknowledged by the handler before the query completes. The cost is latency on every query.
+- **`SET events_async = TRUE`.** Fire-and-forget. DuckDB does not block on the handler. If the handler stalls, dies, or can't keep up, events are dropped silently. Use for high-throughput workloads where "best-effort observability" is the right tradeoff.
+
+There's no in-between mode — pick one per session.
+
+## Event types and what they carry
+
+All events share a common envelope: `event`, `timestamp` (ISO 8601), `database_path`, `session_name`, `connection_id`, `process_id`. Per-type fields layer on top:
+
+| Event | Extra fields |
+|---|---|
+| `connection_opened`, `connection_closed` | (envelope only) |
+| `query_begin` | `query_id`, `transaction_id`, `attached_databases[]` |
+| `query_end` | `query_id`, `transaction_id`, `has_error`, `error_message?`, `error_type?`, `attached_databases[]` |
+| `transaction_begin`, `transaction_commit` | `transaction_id`, `start_timestamp`, `is_read_only` |
+| `transaction_rollback` | `transaction_id`, `start_timestamp`, `is_read_only`, `has_error`, `error_message?`, `error_type?` |
+
+`query_id` correlates `query_begin` and `query_end` for the same statement; `transaction_id` ties query events to the surrounding transaction. `attached_databases` is an array of `{name, path, type, read_only, temporary}` records describing every database visible to the connection at event time — useful when you have multiple `ATTACH`-ed catalogs and want to attribute activity to one of them.
+
+## Choosing what to capture
+
+The default `['query_begin', 'query_end']` is the right starting point: query-level audit visibility, two events per statement. Scale up or down as needed:
+
+- **Audit-only:** keep the default. Two events per query, both with `query_id` so you can pair them.
+- **Errors-only:** `['query_end']` and filter `has_error = true` in the handler — half the volume.
+- **Connection churn:** add `connection_opened`, `connection_closed` to spot connection leaks or ephemeral session storms.
+- **Transactional forensics:** add the three `transaction_*` events; group by `transaction_id` to reconstruct exactly which statements ran inside each commit or rollback.
+
+There's no per-query filter at the extension layer — every event of an enabled type is emitted. Filter downstream in the handler if you need to.
+
+## Operational guidance
+
+- **Path must be fully qualified.** `events_destination` is invoked directly, not via a shell. `python3 my_handler.py` won't work — point at the executable file (`/usr/local/bin/my-handler.py` with a shebang, or `/usr/bin/python3` with the script as `argv[1]` if you wrap it).
+- **The handler runs as DuckDB.** It inherits the database process's privileges and environment. Treat the destination path as security-sensitive: write-protect it from the database user.
+- **Sync mode = your handler is on the critical path.** A 50ms-per-event handler adds 50ms to every query. Add timeouts and a fast path; or accept the tradeoff and switch to async.
+- **Use `events_session_name` for attribution.** When several DuckDB processes feed the same handler — replicas, tenant-per-process layouts, CI runners — give each one a session name so events are distinguishable downstream.

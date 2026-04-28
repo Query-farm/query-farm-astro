@@ -1,134 +1,180 @@
-## Why GeoSilo?
-
-DuckDB's `spatial` extension stores geometries as **WKB** — IEEE-754 float64 coordinate pairs. Adjacent vertices in a polygon share nearly all their bits but the format spends 16 bytes per pair anyway. GeoSilo exploits that locality:
-
-1. Scale coordinates to integers (`-75.509491 × 1e7 = -755094910`).
-2. Store the first vertex per ring as 4-byte int32.
-3. Store every subsequent vertex as a **2-byte int16 delta** from the previous.
-4. ~90% of deltas fit in 2 bytes; the rest fall back to a 6-byte escape.
-5. Polygon rings omit the closing duplicate vertex (reconstructed on decode).
-
-Result: **~70% smaller raw blobs**, and ZSTD compresses them ~3–4× better because tiny integer deltas have very repetitive byte patterns.
-
-On the [TIGER/Line 2025](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html) US Census dataset:
-
-| Format | Size | vs GEOMETRY |
-|---|---|---|
-| GEOMETRY (WKB + ALP) | 183 MB | 1.00× |
-| GEOSILO (no ZSTD) | 230 MB | 1.26× |
-| **GEOSILO + ZSTD** | **144 MB** | **0.79×** |
-
-GeoSilo without ZSTD is bigger than DuckDB's columnar GEOMETRY storage. **GeoSilo + ZSTD wins by 21%** because the delta-encoded integers compress so well.
-
 ## Setup
 
-GeoSilo overlays the `spatial` extension's ST_* surface — load both:
+Load `spatial` first, then `geosilo`:
 
 ```sql
 INSTALL spatial; LOAD spatial;
 INSTALL geosilo FROM community; LOAD geosilo;
 ```
 
-## GEOSILO column type
+The `GEOSILO` column type and the native `ST_*` overloads only register once both are loaded — `geosilo` overlays `spatial`'s `ST_*` namespace.
 
-Create a table with a GEOSILO column. CRS is optional; with one, the scale is auto-detected:
+## Define a compact geometry table
+
+The recommended shape — explicit CRS, ZSTD compression:
 
 ```sql
--- With CRS (scale auto-detected: degrees → 1e7, meters → 100)
 CREATE TABLE parcels (
-  id   INTEGER,
-  geom GEOSILO('EPSG:4326') USING COMPRESSION zstd
+  id    INTEGER,
+  name  VARCHAR,
+  geom  GEOSILO('EPSG:4326') USING COMPRESSION zstd
 );
-
--- Without CRS (default scale 1e7)
-CREATE TABLE t (geom GEOSILO USING COMPRESSION zstd);
 ```
 
-`USING COMPRESSION zstd` is the recommended setting — it's where most of the storage savings come from.
+The CRS lets GeoSilo pick a sensible integer scale automatically (`1e7` for degrees, `100` for projected meters). `USING COMPRESSION zstd` is where the storage win comes from — without it, raw GEOSILO blobs are larger than DuckDB's columnar `GEOMETRY` storage. See [`CREATE TABLE`](https://duckdb.org/docs/sql/statements/create_table) for the DDL surface.
 
-## Insert from any GEOMETRY source
+## Load from any GEOMETRY source
 
-The implicit GEOMETRY → GEOSILO cast auto-encodes:
+The implicit `GEOMETRY → GEOSILO` cast auto-encodes on insert:
 
 ```sql
-INSERT INTO parcels SELECT id, geom FROM raw_data;
+-- From another DuckDB table
+INSERT INTO parcels
+SELECT id, name, geom FROM raw_parcels;
+
+-- From WKT in CSV
+INSERT INTO parcels
+SELECT id, name, ST_GeomFromText(wkt) FROM read_csv('parcels.csv');
+
+-- From Parquet with a WKB column
+INSERT INTO parcels
+SELECT id, name, ST_GeomFromWKB(geom_wkb)
+FROM read_parquet('parcels.parquet');
 ```
 
-Sources can be CSV, Parquet, another DuckDB table, or any expression returning GEOMETRY.
+Sources can be any expression returning `GEOMETRY` — see [`spatial`'s constructor functions](https://duckdb.org/docs/extensions/spatial) for the full list.
 
-## Query with ST_*
+## Native bounding-box prefilter
 
-Standard spatial functions work directly on GEOSILO columns. Many have **native GEOSILO overloads** that skip the WKB decode and run 2–3× faster:
-
-| Function | Native? |
-|---|---|
-| `ST_GeometryType(GEOSILO)` | ✅ (1 byte read) |
-| `ST_IsEmpty(GEOSILO)` | ✅ |
-| `ST_NPoints(GEOSILO)` | ✅ |
-| `ST_X` / `ST_Y(GEOSILO)` | ✅ |
-| `ST_XMin / XMax / YMin / YMax(GEOSILO)` | ✅ (delta walk) |
-| `ST_Area(GEOSILO)` | ✅ (shoelace on int64) |
-| `ST_Length / ST_Perimeter(GEOSILO)` | ✅ |
-| `ST_Buffer / ST_Union / ST_AsText(...)` | ❌ (auto-decodes via cast) |
-
-So bounding-box filters, area calculations, and basic introspection stay fast; the heavy spatial operations transparently round-trip through GEOMETRY.
+The four `ST_XMin` / `ST_XMax` / `ST_YMin` / `ST_YMax` calls have GEOSILO-native implementations — they walk the integer delta stream without rebuilding a `GEOMETRY`. Use them in `WHERE` clauses to prefilter before any GEOS-backed work:
 
 ```sql
--- Native (no decode)
-SELECT id, ST_Area(geom) FROM parcels;
-SELECT id, ST_X(geom), ST_Y(geom) FROM parcels;
-
--- Auto-decodes
-SELECT id, ST_Buffer(geom, 0.01) FROM parcels;
-
--- Bounding-box prefilter — entirely native
-SELECT * FROM parcels
+-- Everything in a longitude band — entirely native
+SELECT id, name
+FROM parcels
 WHERE ST_XMin(geom) > -78
   AND ST_XMax(geom) < -76;
+
+-- Hand off to GEOS only for the survivors of the prefilter
+SELECT id, ST_AsText(ST_Centroid(geom))
+FROM parcels
+WHERE ST_XMin(geom) > -78
+  AND ST_XMax(geom) < -76
+  AND ST_YMin(geom) >  39
+  AND ST_YMax(geom) <  41;
 ```
 
-## Manual encode / decode
+See [`ST_XMin`](#st_xmin) / [`ST_XMax`](#st_xmax) / [`ST_YMin`](#st_ymin) / [`ST_YMax`](#st_ymax).
 
-For BLOB workflows where you control the pipeline:
+## Native area, length, perimeter
+
+[`ST_Area`](#st_area) on a GEOSILO column runs the [shoelace formula](https://en.wikipedia.org/wiki/Shoelace_formula) on int64 coordinates rebuilt from the delta stream — no WKB decode:
 
 ```sql
-SELECT geosilo_encode(geom) FROM source_table;
+-- Per-feature area
+SELECT id, ST_Area(geom) AS area
+FROM parcels
+ORDER BY area DESC
+LIMIT 10;
 
-SELECT ST_Area(geosilo_decode(silo_blob)) FROM compact_table;
+-- Total length of a road network
+SELECT SUM(ST_Length(geom)) AS total_road_length
+FROM roads;
+
+-- Perimeter histogram
+SELECT FLOOR(LOG(ST_Perimeter(geom))) AS bucket, COUNT(*) AS n
+FROM parcels
+GROUP BY bucket
+ORDER BY bucket;
 ```
 
-## Inspect headers without decoding
+See [`ST_Area`](#st_area), [`ST_Length`](#st_length), [`ST_Perimeter`](#st_perimeter).
 
-`geosilo_metadata` reads the blob header directly:
+## Per-point coordinate access
+
+`ST_X` / `ST_Y` on point geometries decode straight from the silo header:
 
 ```sql
+SELECT id,
+       ST_X(geom) AS lon,
+       ST_Y(geom) AS lat
+FROM stations;
+```
+
+For non-point geometries, use [`ST_Centroid`](https://duckdb.org/docs/extensions/spatial) (which auto-decodes to `GEOMETRY`) and then `ST_X` / `ST_Y` on the resulting point.
+
+## Filter by geometry type without decoding
+
+[`geosilo_metadata`](#geosilo_metadata) reads the silo header directly. Combine with [`ST_GeometryType`](#st_geometrytype) (which is also native) to filter cheaply by type:
+
+```sql
+-- Counts by geometry type — no WKB decode per row
+SELECT ST_GeometryType(geom) AS gtype, COUNT(*) AS n
+FROM mixed_geom_table
+GROUP BY gtype
+ORDER BY n DESC;
+
+-- Inspect the integer scale of stored blobs
 SELECT geosilo_metadata(silo_blob) AS meta
 FROM compact_table
 LIMIT 5;
 -- {'geometry_type':'POLYGON','vertex_type':'XY','scale':10000000}
 ```
 
-Useful for filtering by geometry type before any heavy spatial work.
+## Manual encode / decode for BLOB pipelines
 
-## Arrow IPC transport
+When you control the BLOB pipeline directly — exporting to a file format, shipping over a non-Arrow protocol, staging — use [`geosilo_encode`](#geosilo_encode) and [`geosilo_decode`](#geosilo_decode):
 
-GeoSilo registers an Arrow extension type `queryfarm.geosilo`. When a producer sends an Arrow column with that metadata, DuckDB (with GeoSilo loaded) auto-decodes silo blobs to GEOMETRY on read and re-encodes GEOMETRY to silo blobs on write. CRS rides through the metadata so scale stays consistent.
+```sql
+-- Encode for export
+COPY (
+  SELECT id, geosilo_encode(geom) AS silo
+  FROM parcels_geometry
+) TO 'parcels_silo.parquet' (FORMAT 'parquet');
 
-```python
-# Python producer
-geom_field = pa.field("geom", pa.binary(), metadata={
-  b"ARROW:extension:name":     b"queryfarm.geosilo",
-  b"ARROW:extension:metadata": b'{"crs":"EPSG:4326"}',
-})
+-- Decode on read
+SELECT id, ST_AsText(geosilo_decode(silo)) AS wkt
+FROM read_parquet('parcels_silo.parquet')
+LIMIT 5;
 ```
 
-The DuckDB consumer sees a `GEOMETRY(EPSG:4326)` column.
+For a custom integer scale (e.g. millimeter-precision projected data), pass the second argument:
 
-## Scale picking
+```sql
+SELECT geosilo_encode(geom, 1000) FROM mm_precision_data;
+```
 
-| CRS | Units | Scale | Precision |
-|---|---|---|---|
-| WGS84 / NAD83 (default) | degrees | 10,000,000 | ~1 cm |
-| UTM / Web Mercator | meters | 100 | 1 cm |
+## Mix native fast paths with GEOS-backed operations
 
-Auto-detected when you declare `GEOSILO('EPSG:...')`. Override with `geosilo_encode(geom, <scale>)` when needed.
+Anything outside the native overload set auto-decodes through the implicit `GEOSILO → GEOMETRY` cast. You don't need to think about it — but if you're scanning many rows, push the native operations first to shrink the candidate set:
+
+```sql
+-- ST_Buffer auto-decodes; ST_XMin/XMax/YMin/YMax run native first
+SELECT id, ST_AsText(ST_Buffer(geom, 0.001)) AS buffered_wkt
+FROM parcels
+WHERE ST_XMin(geom) > -78
+  AND ST_XMax(geom) < -76
+LIMIT 100;
+```
+
+See the [`spatial` extension](https://duckdb.org/docs/extensions/spatial) for the GEOS-backed surface that auto-decodes.
+
+## Pair with sibling geo extensions
+
+GeoSilo handles compact storage; pair it with the other geo bucket extensions for indexing and ordering:
+
+```sql
+-- a5: pentagonal geospatial index for aggregation / joins
+INSTALL a5 FROM community; LOAD a5;
+
+-- Bin parcels by A5 cell at resolution 12
+SELECT a5_lonlat_to_cell(ST_X(ST_Centroid(geom)),
+                         ST_Y(ST_Centroid(geom)),
+                         12) AS cell,
+       COUNT(*) AS parcels_in_cell
+FROM parcels
+GROUP BY cell
+ORDER BY parcels_in_cell DESC;
+```
+
+See [`a5`](/products/extensions/a5) for the indexing surface, and [`lindel`](/products/extensions/lindel) for [space-filling curve](https://en.wikipedia.org/wiki/Space-filling_curve) ordering — sort a GEOSILO table by a Hilbert-encoded centroid to keep nearby geometries on the same DuckDB block / Parquet row group.

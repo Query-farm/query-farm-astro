@@ -1,4 +1,129 @@
-## Six-field cron expressions
+## Schedule a query
+
+```sql
+-- Refresh an hourly rollup every 5 minutes
+SELECT cron(
+  'CREATE OR REPLACE TABLE hourly_rollup AS
+     SELECT bucket, SUM(amount) AS total
+     FROM events
+     WHERE ts >= now() - INTERVAL 1 HOUR
+     GROUP BY bucket',
+  '0 */5 * * * *'
+);
+-- → 'task_0'
+```
+
+[`cron`](#cron) returns a `job_id` (e.g. `task_0`) — capture it if you need to cancel later. Schedules tick only while this DuckDB process is running.
+
+## Inspect what's scheduled
+
+```sql
+-- All scheduled jobs and their last result
+SELECT job_id, schedule, next_run, status, last_run, last_result
+FROM cron_jobs()
+ORDER BY next_run;
+
+-- Jobs that have never run yet
+SELECT job_id, schedule
+FROM cron_jobs()
+WHERE last_run IS NULL;
+
+-- Recently failed runs
+SELECT job_id, last_run, last_result
+FROM cron_jobs()
+WHERE status = 'error';
+```
+
+## Cancel a job
+
+```sql
+SELECT cron_delete('task_0');
+-- TRUE if a matching job was found
+```
+
+Restart of the DuckDB process also cancels every registered job — `cron_delete` is for un-registering during a live process.
+
+## Periodic refresh of materialized data
+
+```sql
+-- Every 5 minutes: rebuild a recent-events rollup
+SELECT cron(
+  'CREATE OR REPLACE TABLE recent_events AS
+     SELECT * FROM events WHERE ts >= now() - INTERVAL 1 HOUR',
+  '0 */5 * * * *'
+);
+
+-- Daily at 02:00: rebuild a heavy daily aggregate
+SELECT cron(
+  'CREATE OR REPLACE TABLE daily_summary AS
+     SELECT date_trunc(''day'', ts) AS day,
+            user_id,
+            SUM(amount) AS total
+     FROM events
+     GROUP BY 1, 2',
+  '0 0 2 * * *'
+);
+```
+
+## Recurring exports to disk or S3
+
+With the [`httpfs`](https://duckdb.org/docs/extensions/httpfs/overview) extension loaded, [`COPY ... TO`](https://duckdb.org/docs/sql/statements/copy) writes to S3 / GCS just like any local path:
+
+```sql
+-- Local Parquet snapshot every hour
+SELECT cron(
+  'COPY (SELECT * FROM events WHERE ts >= now() - INTERVAL 1 HOUR)
+   TO ''/var/exports/events_'' || strftime(now(), ''%Y%m%d_%H'') || ''.parquet''
+   (FORMAT PARQUET)',
+  '0 0 * * * *'
+);
+
+-- Daily export to S3 at 03:00
+SELECT cron(
+  'COPY (SELECT * FROM daily_summary)
+   TO ''s3://my-bucket/exports/daily/'' || strftime(now(), ''%Y-%m-%d'') || ''.parquet''
+   (FORMAT PARQUET)',
+  '0 0 3 * * *'
+);
+```
+
+## Periodic Slack / webhook alerts
+
+Pair with the [`http_client`](/products/extensions/http_client) extension to fire a webhook when a metric crosses a threshold:
+
+```sql
+-- Every minute: post to Slack if error rate is high
+SELECT cron(
+  'WITH r AS (
+     SELECT 100.0 * SUM(CASE WHEN status >= 500 THEN 1 END) / COUNT(*) AS pct
+     FROM requests WHERE ts >= now() - INTERVAL 5 MINUTE
+   )
+   SELECT http_post(
+     ''https://hooks.slack.com/services/XXX/YYY/ZZZ'',
+     ''{"text":"Error rate '' || round(pct, 2) || ''%"}'',
+     MAP {''Content-Type'': ''application/json''}
+   )
+   FROM r WHERE pct > 5',
+  '0 * * * * *'
+);
+```
+
+The query writes nothing to disk — `http_post` is a side effect that fires only when the `WHERE` filter passes.
+
+## Maintenance: ANALYZE and pruning
+
+```sql
+-- Nightly ANALYZE at 01:30
+SELECT cron('ANALYZE', '0 30 1 * * *');
+
+-- Prune log rows older than 30 days, weekly on Sunday at 04:00
+SELECT cron(
+  'DELETE FROM audit_log WHERE ts < now() - INTERVAL 30 DAY',
+  '0 0 4 ? * SUN'
+);
+```
+
+## Six-field cron quick reference
 
 ```
 ┌────────── second  (0–59)
@@ -6,54 +131,27 @@
 │ │ ┌────── hour    (0–23)
 │ │ │ ┌──── day of month (1–31)
 │ │ │ │ ┌── month   (1–12)
-│ │ │ │ │ ┌ day of week (0–6, Sun..Sat, or MON-SUN)
+│ │ │ │ │ ┌ day of week (0–6, Sun..Sat, or MON–SUN)
 * * * * * *
 ```
 
-Special characters: `*` (any), `?` (no specific value, used for day-of-month/day-of-week), `,` (list), `-` (range), `/` (step).
+| Pattern | Meaning |
+|---|---|
+| `0 0 * * * *` | Top of every hour |
+| `0 */5 * * * *` | Every 5 minutes |
+| `*/15 * * * * *` | Every 15 seconds |
+| `0 0 0 * * *` | Daily at midnight |
+| `0 0 7 ? * MON-FRI` | Weekdays at 07:00 |
+| `0 0 0 1 * ?` | First of every month |
 
-## Common patterns
+Operators: `*` (any), `?` (no specific value), `,` (list), `-` (range), `/` (step). Sanity-check on [crontab.guru](https://crontab.guru/) — note crontab.guru is five-field POSIX, so drop the leading seconds field when pasting.
+
+## Restart-safe scheduling: external orchestrator
+
+When jobs must survive process restarts, drive DuckDB from system [`cron(8)`](https://man7.org/linux/man-pages/man8/cron.8.html) instead of using this extension. Example crontab entry:
 
 ```
-0 0 * * * *       Top of every hour
-0 */15 * * * *    Every 15 minutes
-0 0 0 * * *       Once per day at midnight
-0 0 12 ? * MON-FRI  Weekdays at noon
-0 0 0 1 * ?       First day of every month
+*/5 * * * * /usr/local/bin/duckdb /var/data/analytics.db -c "CREATE OR REPLACE TABLE hourly_rollup AS SELECT ..."
 ```
 
-## Schedule a job
-
-```sql
--- Refresh a materialized view every 5 minutes
-SELECT cron('REFRESH ALL', '0 */5 * * * *');
-
--- Hourly cleanup of stale rows
-SELECT cron('DELETE FROM events WHERE ts < now() - INTERVAL 7 DAY',
-            '0 0 * * * *');
-
--- Every weekday at 7:00 AM
-SELECT cron('CALL daily_metrics_export()', '0 0 7 ? * MON-FRI');
-```
-
-`cron(...)` returns a `job_id` like `task_0` you can use to manage the job later.
-
-## Inspect
-
-```sql
-SELECT * FROM cron_jobs();
-```
-
-Columns: `job_id`, `query`, `schedule`, `next_run`, `status`, `last_run`, `last_result`.
-
-## Cancel
-
-```sql
-SELECT cron_delete('task_0');
-```
-
-## Important caveats
-
-- **Jobs run only while the DuckDB process is alive.** When the process exits, schedules are forgotten. For restart-safe scheduling, drive cron from an external orchestrator (systemd timers, cron itself, k8s CronJob) and have *that* invoke DuckDB.
-- **Single-process scope.** Two DuckDB processes don't coordinate; both will run their own jobs.
-- **The query body is just SQL.** It runs in the same DB connection as the scheduler — same access rights, same database.
+Or a [`systemd` timer](https://www.freedesktop.org/software/systemd/man/systemd.timer.html), or a [Kubernetes CronJob](https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/). Use the Cronjob extension only when DuckDB is already a long-running service and the schedule's lifetime can equal the process's.

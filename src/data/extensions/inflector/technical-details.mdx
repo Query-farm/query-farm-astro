@@ -1,0 +1,78 @@
+## The one-call rename
+
+The single most useful pattern: take a CSV or JSON file with `camelCase` headers and snake-case the entire result set in one statement, no per-column boilerplate:
+
+```sql
+SELECT *
+FROM inflect('snake', (FROM read_csv('https://example.com/users.csv')));
+-- firstName,lastName,emailAddress  →  first_name,last_name,email_address
+```
+
+[`inflect`](#inflect) is polymorphic on its second argument — pass it a `VARCHAR`, a `STRUCT`, or a parenthesized query. Same function name, three shapes:
+
+```sql
+-- 1. A single string
+SELECT inflect('snake', 'helloWorld');                          -- 'hello_world'
+
+-- 2. A struct — every key renamed, values untouched
+SELECT inflect('snake', {'firstName':'John','lastName':'Doe'});
+-- {'first_name': 'John', 'last_name': 'Doe'}
+
+-- 3. A query result — every column header renamed
+SELECT * FROM inflect('kebab', (FROM read_json('events.json')));
+```
+
+That's the headline feature. The rest of the surface is Rails / ActiveSupport-style scalar helpers for individual values.
+
+import Callout from '../../../components/docs/Callout.astro';
+
+<Callout type="warning" title="Pluralization is English-only">
+[`inflector_to_plural`](#inflector_to_plural) and [`inflector_to_singular`](#inflector_to_singular) wrap the [`cruet`](https://crates.io/crates/cruet) Rust crate, whose ruleset and irregular-word table are English. They handle real English irregulars well — `person` ↔ `people`, `mouse` ↔ `mice`, `analysis` ↔ `analyses`, `quiz` ↔ `quizzes` — but they have **no awareness of French, German, Spanish, or any other language**. Pass non-English input and you'll get a mechanical English-rule output, silently. For multilingual content, do inflection upstream and store the result.
+
+A handful of edge cases inside English are also worth knowing:
+
+- **Modern uncountables** — `data`, `species`, `series` — round-trip irregularly.
+- **Mechanical case tokenization** — [`inflector_to_snake_case('XMLHttpRequest')`](#inflector_to_snake_case) yields `xml_http_request`. Right for column work; tune in app code if you need different acronym rules.
+- **Single-character tokens are skipped.** The tokenizer requires a 2-character minimum, so `aB` ⇒ `b`-prefixed tokens are dropped.
+</Callout>
+
+## Case formats supported
+
+Every shape Rails / ActiveSupport ships, plus the obvious extras:
+
+| Format | Example | To-function |
+|---|---|---|
+| `camelCase` | `helloWorld` | [`inflector_to_camel_case`](#inflector_to_camel_case) |
+| `PascalCase` / `ClassCase` | `HelloWorld` | [`inflector_to_pascal_case`](#inflector_to_pascal_case) / [`inflector_to_class_case`](#inflector_to_class_case) |
+| `snake_case` | `hello_world` | [`inflector_to_snake_case`](#inflector_to_snake_case) |
+| `kebab-case` | `hello-world` | [`inflector_to_kebab_case`](#inflector_to_kebab_case) |
+| `Train-Case` | `Hello-World` | [`inflector_to_train_case`](#inflector_to_train_case) |
+| `SCREAMING_SNAKE_CASE` | `HELLO_WORLD` | [`inflector_to_screamingsnake_case`](#inflector_to_screamingsnake_case) |
+| `Title Case` | `Hello World` | [`inflector_to_title_case`](#inflector_to_title_case) |
+| `Sentence case` | `Hello world` | [`inflector_to_sentence_case`](#inflector_to_sentence_case) |
+| `table_case` (snake plural) | `user_accounts` | [`inflector_to_table_case`](#inflector_to_table_case) |
+
+Each has a matching [`inflector_is_*`](#inflector_is_camel_case) predicate — useful when you need to *route* a value based on its current shape rather than blindly transform.
+
+## Inflection helpers
+
+Beyond pure case work:
+
+- **Pluralize / singularize** — [`inflector_to_plural`](#inflector_to_plural), [`inflector_to_singular`](#inflector_to_singular).
+- **Ordinalize** — [`inflector_ordinalize`](#inflector_ordinalize) (`1` → `1st`), [`inflector_deordinalize`](#inflector_deordinalize) (`1st` → `1`).
+- **Foreign keys** — [`inflector_to_foreign_key`](#inflector_to_foreign_key) (`Message` → `message_id`).
+- **Module paths** — [`inflector_demodulize`](#inflector_demodulize) (`ActiveRecord::CoreExtensions::String` → `String`), [`inflector_deconstantize`](#inflector_deconstantize) (`Net::HTTP` → `Net`).
+
+These are direct ports of the corresponding [ActiveSupport::Inflector](https://api.rubyonrails.org/classes/ActiveSupport/Inflector.html) methods.
+
+## Inflector vs RapidFuzz
+
+Both extensions live in the **Matching & casing** group, but they answer different questions:
+
+- **Use Inflector** when you know exactly what shape you want (`snake_case`, `kebab-case`, plural, foreign-key) and need to mechanically produce it. Single-input, deterministic output.
+- **Use [`rapidfuzz`](/products/extensions/rapidfuzz)** when you have *two* strings and want a similarity score — record linkage, dedupe, spell-check. Fuzzy comparison, not transformation.
+- **Both can coexist** — normalize naming with Inflector, then fuzzy-match across normalized values with RapidFuzz.
+
+## Source
+
+Inflector is implemented in C++ with a Rust binding ([`cruet`](https://crates.io/crates/cruet) + [`convert_case`](https://crates.io/crates/convert_case)) for the actual rule engine. Source at [github.com/Query-farm/inflector](https://github.com/Query-farm/inflector).

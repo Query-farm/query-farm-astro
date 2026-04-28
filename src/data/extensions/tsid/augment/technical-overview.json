@@ -1,0 +1,118 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use TSID?",
+  "description": "Mint sortable, time-ordered unique identifiers from inside DuckDB SQL. [`tsid()`](#tsid) gives you the same property [UUIDv7](https://datatracker.ietf.org/doc/html/rfc9562) and [ULID](https://github.com/ulid/spec) provide — IDs that sort chronologically by plain comparison — without leaving SQL or wiring an application-side library into your pipeline.",
+  "sections": [
+    {
+      "icon": "🆔",
+      "title": "What this extension is for",
+      "description": "DuckDB ships [`uuid()`](https://duckdb.org/docs/stable/sql/functions/utility) — a UUIDv4 generator, random and unsortable. TSID fills the gap: a generator whose output sorts by creation time when compared as text. The same shape PostgreSQL users get from `gen_random_uuid()` plus `now()`, except the timestamp is embedded in the ID itself and recoverable.",
+      "bulletPoints": [
+        {
+          "label": "Surrogate primary keys that sort by insert time",
+          "description": "Use [`tsid()`](#tsid) as a column `DEFAULT`. `ORDER BY id` returns insert order — no separate `created_at` index needed for chronological scans."
+        },
+        {
+          "label": "Audit-log and event identifiers",
+          "description": "B-tree friendly: new rows append at the high end of the index instead of scattering randomly the way [`uuid()`](https://duckdb.org/docs/stable/sql/functions/utility) v4 does. Reduces page splits and improves cache locality on append-mostly tables."
+        },
+        {
+          "label": "Time-range pagination cursors",
+          "description": "Because IDs are sortable strings, you can paginate by `WHERE id < :cursor ORDER BY id DESC` without joining a timestamp index — the [Twitter snowflake](https://en.wikipedia.org/wiki/Snowflake_ID) trick, in pure SQL."
+        },
+        {
+          "label": "Embedded timestamp recovery",
+          "description": "[`tsid_to_timestamp`](#tsid_to_timestamp) decodes the leading bits back to a [`TIMESTAMP`](https://duckdb.org/docs/stable/sql/data_types/timestamp). One column does the work of two."
+        }
+      ]
+    },
+    {
+      "icon": "⚙️",
+      "title": "How it works",
+      "description": "TSIDs are 128-bit identifiers rendered as 32 lowercase hexadecimal characters — the leading bits are a high-resolution timestamp, the trailing bits are random. The format is conceptually the same family as [UUIDv7](https://datatracker.ietf.org/doc/html/rfc9562) and [ULID](https://github.com/ulid/spec); the rendering differs.",
+      "bulletPoints": [
+        {
+          "label": "Output type is VARCHAR, not BIGINT",
+          "description": "[`tsid()`](#tsid) returns a 32-character hex [`VARCHAR`](https://duckdb.org/docs/stable/sql/data_types/text), the same width as a UUID hex string. Plain string comparison gives you time order — no special operator or cast required."
+        },
+        {
+          "label": "Optional seed for monotonic bulk generation",
+          "description": "Inside one query, parallel evaluation can produce TSIDs in non-deterministic order. Passing a seed (e.g. `tsid(random()::VARCHAR)`) keeps the sub-millisecond entropy consistent within a query, so bulk-generated IDs from `range(N)` stay strictly increasing."
+        },
+        {
+          "label": "Embedded timestamp",
+          "description": "[`tsid_to_timestamp`](#tsid_to_timestamp) decodes the leading bits to a `TIMESTAMP` with sub-millisecond precision. Same primitive UUIDv7-aware tools use to extract creation time from a v7 UUID."
+        },
+        {
+          "label": "No external dependencies",
+          "description": "The extension generates IDs in-process — no network call, no clock-server coordination. Safe to use as a column `DEFAULT` in [`CREATE TABLE`](https://duckdb.org/docs/stable/sql/statements/create_table) without latency surprises."
+        }
+      ]
+    },
+    {
+      "icon": "🧭",
+      "title": "TSID vs UUIDv4 vs UUIDv7 vs ULID",
+      "description": "All four occupy the same niche — opaque, unique, application-mintable IDs. The differences are about ordering, rendering, and standardization.",
+      "bulletPoints": [
+        {
+          "label": "vs UUIDv4 (DuckDB built-in [`uuid()`](https://duckdb.org/docs/stable/sql/functions/utility))",
+          "description": "UUIDv4 is random — great for collision avoidance, terrible for B-tree locality and unusable for time-ordered pagination. TSID wins anywhere insert order, recent-first scans, or index-append behavior matters."
+        },
+        {
+          "label": "vs UUIDv7 ([RFC 9562](https://datatracker.ietf.org/doc/html/rfc9562))",
+          "description": "UUIDv7 is the IETF-standardized time-sortable UUID. Functionally TSID and UUIDv7 cover the same ground; UUIDv7 wins on portability (every modern UUID library understands it), TSID wins because DuckDB ships v4 only and TSID gives you the v7-shaped behavior without bringing your own generator."
+        },
+        {
+          "label": "vs ULID ([ulid/spec](https://github.com/ulid/spec))",
+          "description": "ULID is the same idea — millisecond-precision time prefix plus random tail — rendered in 26-character Crockford base32. TSID's hex rendering is two characters wider but lines up cleanly with how DuckDB users already format UUIDs, and avoids Crockford-base32 ambiguity edge cases."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "Caveats",
+      "description": "Things to know before reaching for TSID over a built-in UUID.",
+      "bulletPoints": [
+        {
+          "label": "TSIDs leak creation time",
+          "description": "The timestamp is recoverable by anyone holding the ID — that's the feature, but it's also a privacy and competitive-intelligence concern. Don't use TSIDs as public-facing identifiers for resources where the creation moment is sensitive (signup time, order placement, account creation). [`uuid()`](https://duckdb.org/docs/stable/sql/functions/utility) v4 stays the right choice for opaque external IDs."
+        },
+        {
+          "label": "Not an IETF or de-facto standard",
+          "description": "Unlike [UUIDv7](https://datatracker.ietf.org/doc/html/rfc9562) (RFC 9562) or [ULID](https://github.com/ulid/spec) (widely adopted spec), the TSID rendering is library-specific. The conceptual primitive — time prefix + random tail — is portable; the exact 32-hex layout produced here may not parse with TSID libraries from other ecosystems such as [`f4b6a3/tsid-creator`](https://github.com/f4b6a3/tsid-creator). Stay self-contained, or pin the format you serialize to disk."
+        },
+        {
+          "label": "VARCHAR storage, not BINARY",
+          "description": "Each TSID occupies 32 bytes as text — twice the 16 bytes a binary UUID column needs in some engines. DuckDB's dictionary encoding compresses this well in practice, but plan for it on multi-billion-row tables where every byte counts."
+        },
+        {
+          "label": "Experimental status",
+          "description": "The upstream README marks the extension experimental. The exposed surface is small ([`tsid`](#tsid), [`tsid_to_timestamp`](#tsid_to_timestamp)), so churn risk is low — but pin a known-good version in production schemas that depend on the on-disk hex layout."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Primary keys for append-mostly tables",
+          "description": "Use [`tsid()`](#tsid) as `DEFAULT` on the primary-key column of an event log, audit table, or message store. New rows append at the index head, `ORDER BY id` is `ORDER BY created_at`, and you can drop a redundant timestamp column."
+        },
+        {
+          "title": "Recent-first pagination without timestamp join",
+          "description": "Paginate by `WHERE id < :cursor ORDER BY id DESC LIMIT N` — no separate `created_at` index, no `OFFSET` cost on large tables. The Twitter-snowflake / cursor-pagination pattern, available in plain DuckDB."
+        },
+        {
+          "title": "Drop a `created_at` column",
+          "description": "When the only thing a `created_at` column does is record insertion time, replace it with a TSID primary key and recover the timestamp via [`tsid_to_timestamp`](#tsid_to_timestamp) when you need it. One column instead of two."
+        },
+        {
+          "title": "Replacement for `uuid()` where ordering matters",
+          "description": "Anywhere you'd reach for [`uuid()`](https://duckdb.org/docs/stable/sql/functions/utility) but actually wanted UUIDv7-style ordering, [`tsid()`](#tsid) is the in-DuckDB equivalent. No application-side generator, no client library."
+        }
+      ]
+    }
+  ]
+}

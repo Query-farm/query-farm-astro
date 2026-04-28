@@ -1,0 +1,96 @@
+import Callout from '../../../components/docs/Callout.astro';
+
+## What you can do with one query
+
+The magic moment: store the rule as text, evaluate it per row, no redeploy.
+
+```sql
+CREATE TABLE eligibility(name TEXT, rule TEXT);
+INSERT INTO eligibility VALUES
+  ('high_earner',  'context.salary > 100000'),
+  ('senior',       'context.salary > 80000 && context.years >= 5'),
+  ('manager_path', 'context.title.contains("Lead") || context.salary > 120000');
+
+SELECT e.name AS bucket, emp.id, emp.name
+FROM employees emp
+CROSS JOIN eligibility e
+WHERE evalexpr_rhai(e.rule,
+        { 'salary': emp.salary,
+          'years':  emp.years,
+          'title':  emp.title }).ok = TRUE;
+```
+
+[`evalexpr_rhai`](#evalexpr_rhai) parses each distinct rule string once, caches the AST, and runs the [Rhai](https://rhai.rs/) interpreter per row against the row's `context`. Admins edit the `eligibility` table; the next query picks up the change. No code path between "rule edited" and "rule evaluated."
+
+<Callout type="note" title="Best fit, scoped honestly">
+Rhai runs **row by row** — it does not vectorize. Per-call cost after parse-cache warmup is interpreter execution only, but it's still slower than native DuckDB SQL on the hot path. The right slot is config-driven rules, branching that's awkward in `CASE`, custom math, and ad-hoc transforms — moderate volumes where flexibility wins over peak throughput.
+
+For sustained OLAP scans over millions of rows, push the logic into SQL or a compiled DuckDB extension function. For full JavaScript expressiveness instead of Rhai's smaller surface, see the sibling [`quickjs`](/products/extensions/quickjs) extension.
+</Callout>
+
+## Result shape — `UNION(ok JSON, error VARCHAR)`
+
+Every call returns a DuckDB `UNION` with two arms. On success, read `.ok`; on failure, read `.error`. The query keeps running either way.
+
+```sql
+SELECT evalexpr_rhai('5 + 6').ok;          -- 11
+SELECT evalexpr_rhai('1 / 0').error;       -- 'Runtime error: ...'
+```
+
+This is the entire error-handling story — there's no `evalexpr_rhai_safe` / `evalexpr_rhai_strict` split. A script that throws produces the `error` arm for that row; rows whose scripts succeed continue to produce `.ok`.
+
+## Per-row context as JSON
+
+The second argument is a `JSON` object DuckDB builds from row columns. Inside the script it appears as `context.<field>`. Anything DuckDB can encode to JSON crosses the boundary — numbers, strings, booleans, arrays, nested objects:
+
+```sql
+SELECT id,
+       evalexpr_rhai('context.qty * context.price * 1.0875',
+                     { 'qty': qty, 'price': price }).ok::DECIMAL AS taxed_total
+FROM orders;
+```
+
+For a multi-line script with a defined function, pass the whole thing as a string literal:
+
+```sql
+SELECT range AS n,
+       evalexpr_rhai('
+         fn collatz(n) {
+           let count = 0;
+           while n > 1 {
+             count += 1;
+             n = if n % 2 == 0 { n / 2 } else { n * 3 + 1 };
+           }
+           count
+         }
+         collatz(context.n)
+       ', { 'n': range }).ok::INTEGER AS length
+FROM range(1000, 1005);
+```
+
+The Rhai language itself — operators, control flow, type system, the standard string / array / map methods — is documented in the [Rhai Book](https://rhai.rs/book/). The source and issue tracker live at [rhaiscript/rhai](https://github.com/rhaiscript/rhai).
+
+## Compile-and-cache for constant scripts
+
+When the script string is a literal in the SQL — or otherwise constant within the query — the Rhai parser runs **once**. The resulting AST is cached and reused for every row. Per-row cost after warmup is interpreter execution only.
+
+When the script string comes from a column (the rules-from-a-column pattern in the lead snippet), each distinct script value parses on first encounter and caches by content. A handful of distinct rules is fine; thousands of distinct rules per query is the point at which parse cost starts to matter.
+
+## The sandbox
+
+Rhai has no host I/O. Scripts cannot:
+
+- Open files, read environment variables, or touch the filesystem.
+- Spawn processes or invoke shell commands.
+- Make network connections.
+- Load Rhai modules from disk (module loading is disabled in this extension).
+
+The only thing a script can see is the `context` object you pass in. That makes it safe to evaluate script text supplied by users or stored in a config table — there's no host surface to reach. The full sandbox model is described in the [Rhai Book — Safety](https://rhai.rs/book/safety/) chapter.
+
+## Rhai vs. QuickJS — pick by need
+
+The sibling [`quickjs`](/products/extensions/quickjs) extension occupies the same slot. They can coexist in one DuckDB session; pick per use case:
+
+- **Rhai is more constrained and safer.** Sandboxed by default, no module loading, no host I/O, smaller language. The right choice when you're evaluating script text from users or a config table, or when you want a small, predictable surface.
+- **QuickJS is more expressive.** Full ECMAScript semantics, regex, the JavaScript standard library, the idioms developers already know. The right choice when you're porting expressions from a JavaScript codebase or need a richer standard library.
+- **Neither vectorizes.** Both run row by row. If raw throughput dominates, push the logic into native SQL or a compiled UDF instead — the choice between Rhai and QuickJS is about language and sandboxing, not speed.

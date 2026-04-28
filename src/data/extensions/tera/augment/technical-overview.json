@@ -1,0 +1,95 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use Tera from DuckDB?",
+  "description": "Render [Tera](https://keats.github.io/tera/) templates inside SQL with JSON context. Tera is a [Jinja2-inspired](https://jinja.palletsprojects.com/) template engine written in Rust; this extension makes it a scalar function so each query row can produce its own rendered string — emails, config blocks, dynamic SQL, Slack payloads, IaC fragments — without leaving DuckDB.",
+  "sections": [
+    {
+      "icon": "📝",
+      "title": "What this extension is for",
+      "description": "Anywhere you'd otherwise pull rows out of DuckDB just to feed them into a template loop in Python or Node, [`tera_render`](#tera_render) collapses that loop into a single SQL projection. The template stays declarative; the data stays in the query.",
+      "bulletPoints": [
+        {
+          "label": "Per-row HTML / email",
+          "description": "Build the body of a transactional email per row: pass the row's columns as a JSON object via [`json_object`](https://duckdb.org/docs/sql/functions/json) and render against a template literal."
+        },
+        {
+          "label": "Config-file generation",
+          "description": "Materialize one nginx / systemd / Kubernetes manifest per row of a configuration table. Disable autoescape with `autoescape := false` for non-HTML output."
+        },
+        {
+          "label": "Dynamic SQL",
+          "description": "Use Tera as a meta-SQL preprocessor — render `SELECT ... FROM {{ table }} WHERE {{ pred }}` against context columns, then execute the result. Treat templates as trusted; Tera interpolation is not parameter-safe."
+        },
+        {
+          "label": "Notifications and webhook payloads",
+          "description": "Render Slack / PagerDuty / webhook JSON bodies from query results so a single SQL pipeline takes you from event to delivered message."
+        }
+      ]
+    },
+    {
+      "icon": "⚙️",
+      "title": "How it works",
+      "description": "A scalar function backed by the [Tera](https://github.com/Keats/tera) Rust crate. Each call compiles (or reuses a cached) template, binds the JSON context, and returns the rendered text. There is no `ATTACH`, no secrets — the function surface is one name and a few optional named arguments.",
+      "bulletPoints": [
+        {
+          "label": "Inline and file-backed templates",
+          "description": "The first argument is either an inline template string or a template name. Pass `template_path := './templates/*.html'` to load templates from disk by name; this enables `{% extends %}` / `{% include %}` across the matched files. See Tera's [inheritance docs](https://keats.github.io/tera/docs/#inheritance)."
+        },
+        {
+          "label": "JSON context",
+          "description": "The second argument is a `JSON` value — a literal string, [`json_object(...)`](https://duckdb.org/docs/sql/functions/json), or a column. Nested objects, arrays, and primitives are all addressable as `{{ user.name }}`, `{% for x in items %}`, `{{ items | length }}`."
+        },
+        {
+          "label": "Autoescape on by default",
+          "description": "HTML special characters in context values are escaped — safe default for HTML / email output. Pass `autoescape := false` when generating raw text (configs, SQL, JSON payloads)."
+        },
+        {
+          "label": "Full Tera vocabulary",
+          "description": "Filters (`upper`, `lower`, `length`, `default`, `join`, `date`, `truncate`, etc.), control flow (`if` / `elif` / `else`, `for` with `loop.index` / `loop.last`), inheritance, macros, and includes — see the [Tera manual](https://keats.github.io/tera/docs/) for the full surface."
+        }
+      ]
+    },
+    {
+      "icon": "🤝",
+      "title": "Tera vs MiniJinja",
+      "description": "This catalog ships two Jinja-style template engines as DuckDB extensions: [Tera](#) and [`minijinja`](/products/extensions/minijinja). They overlap heavily — both render `{{ var }}` / `{% for %}` / `{% if %}` against JSON context. The differences are real but small.",
+      "bulletPoints": [
+        {
+          "label": "Pick Tera for the bigger feature surface",
+          "description": "Tera ships a wider [built-in filter and tester library](https://keats.github.io/tera/docs/#built-ins), template inheritance via `template_path`, and macros — choose Tera when your templates lean on Jinja2's richer authoring features."
+        },
+        {
+          "label": "Pick MiniJinja for speed and Jinja2 fidelity",
+          "description": "[MiniJinja](https://github.com/mitsuhiko/minijinja) targets strict Python-Jinja2 semantics with a tiny, fast core. Choose [`minijinja`](/products/extensions/minijinja) when you want behavior that matches an existing Python Jinja codebase, or when render-rate per row matters most."
+        },
+        {
+          "label": "Either is fine for everyday substitution",
+          "description": "For `{{ name }}` / `{{ x | upper }}` / `{% for x in xs %}`, both produce identical output. Lock in whichever syntax matches your team's existing templates."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Render transactional emails per row",
+          "description": "One row per recipient, one [`tera_render`](#tera_render) call producing the HTML body — fed straight into a downstream sender."
+        },
+        {
+          "title": "Generate per-host configuration",
+          "description": "A `virtual_hosts` table plus a single Tera template equals one rendered nginx / Caddy / Envoy block per host, ready to write to disk or push to a config repo."
+        },
+        {
+          "title": "Build dynamic SQL from metadata",
+          "description": "Drive `SELECT` / `CREATE TABLE` shape from a metadata table — Tera renders the SQL, your driver executes it. Useful for codegen, schema migrations, and templated reporting."
+        },
+        {
+          "title": "Format Slack / webhook payloads",
+          "description": "Render alert JSON bodies directly from the query that detected the alert. Pair with [`http_client`](/products/extensions/http_client) to deliver them in the same pipeline."
+        }
+      ]
+    }
+  ]
+}

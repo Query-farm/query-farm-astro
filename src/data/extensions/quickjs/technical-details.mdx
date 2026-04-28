@@ -1,0 +1,85 @@
+import Callout from '../../../components/docs/Callout.astro';
+
+## What you can do with one query
+
+The magic moment — when SQL doesn't have the right primitive, drop into JavaScript inline:
+
+```sql
+SELECT id,
+       quickjs_eval(
+         '(payload) => {
+            const d = JSON.parse(payload);
+            if (d.event === "purchase") {
+              return { user: d.user, amount: d.amount, ccy: d.meta?.currency ?? "USD" };
+            }
+            return { user: d.user, event: d.event };
+          }',
+         payload
+       ) AS extracted
+FROM events;
+```
+
+[`quickjs_eval`](#quickjs_eval) hands each row's `payload` to the arrow function, runs it inside the embedded [QuickJS-NG](https://github.com/quickjs-ng/quickjs) engine, and returns the result as `JSON` — ready to chain into `->>` extractors or `UNNEST`. Conditional shapes that turn into a tower of `CASE` and [`json_extract`](https://duckdb.org/docs/data/json/json_functions) in pure SQL stay short and readable here.
+
+<Callout type="note" title="A power feature, not a default">
+Row-by-row JavaScript is genuinely slower than vectorized SQL. **Reach for QuickJS when you actually need expressiveness JavaScript provides** — conditional JSON reshaping, text munging beyond regex, custom parsing — not as a first resort.
+
+- If [DuckDB's scalar functions](https://duckdb.org/docs/sql/functions/overview), the [`json_*`](https://duckdb.org/docs/data/json/loading_json.html) family, or [regex functions](https://duckdb.org/docs/sql/functions/patternmatching) cover your transform, they will be substantially faster.
+- This is fine for ETL and ad-hoc analytics over millions of rows. It is not the right tool for an interactive dashboard that runs the same UDF against a billion-row fact table on every refresh.
+- Don't `quickjs_eval` untrusted JavaScript in a multi-tenant context. QuickJS has no I/O surface, but it isn't hardened against adversarial source.
+
+If your snippet is small and type-driven, the sibling [`evalexpr_rhai`](/products/extensions/evalexpr_rhai) extension embeds [Rhai](https://rhai.rs/) — a more constrained language that tends to integrate more cleanly with SQL types. Worth comparing.
+</Callout>
+
+## Two surfaces
+
+The extension exposes the same engine two ways. The right one depends on what you want back.
+
+[`quickjs`](#quickjs) — used after `SELECT`, evaluates a JS expression and returns a `VARCHAR`:
+
+```sql
+SELECT quickjs('2 + 2');                       -- '4'
+SELECT quickjs('"hello".toUpperCase()');       -- 'HELLO'
+```
+
+The same name used after `FROM` is the *table form* — JS returns an array, DuckDB unpacks it into rows:
+
+```sql
+SELECT * FROM quickjs('[1, 2, 3].map(x => x * x)');
+-- 1, 4, 9
+```
+
+[`quickjs_eval`](#quickjs_eval) — calls a JS function with positional arguments and returns the result as `JSON`. This is the form to use for per-row UDFs:
+
+```sql
+SELECT quickjs_eval('(a, b) => a + b', 5, 3);  -- 8 (JSON)
+```
+
+## Argument binding
+
+Positional arguments to the table form of [`quickjs`](#quickjs) are exposed inside the snippet as `arg0`, `arg1`, … . When an argument is a JSON-shaped string, a parsed copy is also bound as `parsed_arg0`, `parsed_arg1`, … so the snippet doesn't have to call `JSON.parse` itself:
+
+```sql
+SELECT *
+FROM quickjs('parsed_arg0.map(x => x * arg1)',
+             '[1, 2, 3, 4, 5]', 3);
+-- 3, 6, 9, 12, 15
+```
+
+For [`quickjs_eval`](#quickjs_eval), arguments map to the function's formal parameters — no `argN` aliasing.
+
+## What's in the language
+
+The extension links [QuickJS-NG](https://github.com/quickjs-ng/quickjs), an actively-maintained fork of [Fabrice Bellard's QuickJS](https://bellard.org/quickjs/). It implements the bulk of the [ECMAScript specification](https://tc39.es/ecma262/) — arrow functions, destructuring, `let`/`const`, `Map`/`Set`, `Promise`, modern `Array` / `String` / `Object` methods, template literals, optional chaining, nullish coalescing.
+
+There is no browser layer and no Node API surface — no `fetch`, no `fs`, no `process`, no `require`. This is a pure language runtime, by design. If your snippet needs network or filesystem access, do it in DuckDB's own httpfs / file readers and pass the resulting value into the JS as an argument.
+
+## Performance shape
+
+Each call instantiates a JS context, evaluates the supplied source, and converts the result back across the SQL boundary. There is no cross-row caching of compiled functions, so cost scales linearly with row count. Empirically, expect microseconds-per-row for typical snippets — fine for ETL and ad-hoc work over millions of rows, wrong for hot interactive paths.
+
+The standard playbook:
+
+1. Start in pure SQL. If the [scalar function reference](https://duckdb.org/docs/sql/functions/overview) or [`json_*`](https://duckdb.org/docs/data/json/loading_json.html) family covers it, you're done.
+2. If regex isn't expressive enough or `CASE` chains are getting unreadable, reach for QuickJS.
+3. If the snippet is small and type-driven (numbers, strings, simple records), benchmark against [`evalexpr_rhai`](/products/extensions/evalexpr_rhai) — Rhai's tighter SQL-type integration sometimes wins.

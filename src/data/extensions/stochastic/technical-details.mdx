@@ -1,3 +1,33 @@
+import Callout from '../../../components/docs/Callout.astro';
+
+## What you can do with one query
+
+Estimate π with a million-draw [Monte Carlo](https://en.wikipedia.org/wiki/Monte_Carlo_method) — entirely inside DuckDB, no Python, no NumPy:
+
+```sql
+WITH samples AS (
+  SELECT dist_uniform_real_sample(-1.0, 1.0) AS x,
+         dist_uniform_real_sample(-1.0, 1.0) AS y
+  FROM range(1000000)
+)
+SELECT 4.0 * COUNT(*) FILTER (WHERE x*x + y*y <= 1) / COUNT(*) AS pi_estimate
+FROM samples;
+```
+
+The same shape — generate, filter, aggregate — handles portfolio [VaR](https://en.wikipedia.org/wiki/Value_at_risk), payoff integration, queueing simulation, or generating a million-row synthetic dataset for a load test. Every `dist_<family>_sample` is a vectorized scalar function, so a million draws is one columnar scan.
+
+<Callout type="note" title="Best fit, scoped honestly">
+This extension is a **statistical-distributions library**, not a full simulation framework. It covers the 22 [most common distributions](https://en.wikipedia.org/wiki/List_of_probability_distributions) with the full PDF / CDF / quantile / hazard / sampling / properties surface — built on the [Boost.Math distributions library](https://www.boost.org/doc/libs/release/libs/math/doc/html/dist.html).
+
+What it deliberately doesn't ship:
+
+- **No copulas / multivariate distributions.** The 22 families are univariate; correlated draws need a Cholesky-style transform you write yourself.
+- **No user-controlled RNG seed.** For exactly-reproducible runs, materialize the draws into a table and treat that as the seed.
+- **No fitters or hypothesis-test wrappers.** Compute the test statistic in SQL, then call the appropriate `_cdf_complement` for the p-value.
+
+For production-grade simulation, MCMC, or anything needing [SciPy](https://docs.scipy.org/doc/scipy/reference/stats.html)-level fitting, keep a Python notebook with NumPy and SciPy. For quick analysis, what-if exploration, and synthetic data right next to your warehouse data, this is the right tool.
+</Callout>
+
 ## What this extension covers
 
 22 named probability distributions — 16 continuous, 6 discrete — each exposed through the same uniform set of operations:

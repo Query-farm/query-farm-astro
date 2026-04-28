@@ -1,22 +1,9 @@
 import GeoJsonMap from '../../../components/docs/GeoJsonMap.astro';
 import QueryResult from '../../../components/docs/QueryResult.astro';
 
-## Spatial Data Aggregation
+## Encode a point as a cell ID
 
-Group point data spatially to understand distributions:
-
-```sql
--- Analyze restaurant density by A5 cells
-SELECT a5_lonlat_to_cell(longitude, latitude, 15) AS cell_id,
-       COUNT(*) AS restaurant_count
-FROM restaurants
-GROUP BY cell_id
-ORDER BY restaurant_count DESC;
-```
-
-## Basic Cell Operations
-
-Get the A5 cell for a specific location (longitude, latitude, resolution):
+The everyday entry point — convert `(lon, lat)` to a `UBIGINT` cell ID at a chosen resolution:
 
 ```sql
 SELECT a5_lonlat_to_cell(-74.0060, 40.7128, 15) AS nyc_cell;
@@ -24,7 +11,7 @@ SELECT a5_lonlat_to_cell(-74.0060, 40.7128, 15) AS nyc_cell;
 
 <QueryResult columns={["nyc_cell"]} rows={[["2742821848331845632"]]} />
 
-Find the area of that cell in square meters:
+Higher resolution = smaller cells. See [`a5_lonlat_to_cell`](#a5_lonlat_to_cell) for the full signature and [`a5_cell_area`](#a5_cell_area) for the equal-area cell size at any resolution:
 
 ```sql
 SELECT a5_cell_area(15) AS cell_area_m2;
@@ -32,7 +19,25 @@ SELECT a5_cell_area(15) AS cell_area_m2;
 
 <QueryResult columns={[{ name: "cell_area_m2", align: "right" }]} rows={[[31669.04205949599]]} />
 
-Get the center coordinates of a cell:
+## Aggregate point data into cells
+
+The common heatmap pattern — bucket points by cell, then count / sum / aggregate:
+
+```sql
+SELECT a5_lonlat_to_cell(longitude, latitude, 10) AS cell_id,
+       COUNT(*)                                   AS point_count,
+       AVG(amount)                                AS avg_amount
+FROM   transactions
+GROUP  BY cell_id
+ORDER  BY point_count DESC
+LIMIT  100;
+```
+
+Because A5 cells are equal-area at each resolution, the resulting counts are directly comparable across latitudes — no per-cell area normalization needed.
+
+## Recover the cell center
+
+Round-trip a cell ID back to `(lon, lat)` for labeling or display:
 
 ```sql
 SELECT a5_cell_to_lonlat(a5_lonlat_to_cell(-74.0060, 40.7128, 15)) AS center_coords;
@@ -40,27 +45,11 @@ SELECT a5_cell_to_lonlat(a5_lonlat_to_cell(-74.0060, 40.7128, 15)) AS center_coo
 
 <QueryResult columns={["center_coords"]} rows={[["[-74.00764805615836, 40.71280225138428]"]]} />
 
-## Hierarchy
+For radians instead of degrees, use [`a5_cell_to_spherical`](#a5_cell_to_spherical).
 
-Find the parent cell at a coarser resolution:
+## Render a cell as a polygon
 
-```sql
-SELECT a5_cell_to_parent(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 10) AS parent_cell;
-```
-
-<QueryResult columns={["parent_cell"]} rows={[["2742821365684895744"]]} />
-
-Get all child cells at a finer resolution:
-
-```sql
-SELECT a5_cell_to_children(a5_lonlat_to_cell(-74.0060, 40.7128, 10), 11) AS child_cells;
-```
-
-<QueryResult columns={["child_cells"]} rows={[["[2742820953368035328, 2742821228245942272, 2742821503123849216, 2742821778001756160]"]]} />
-
-## Visualizing a Cell as GeoJSON
-
-Combine [`a5_cell_to_boundary`](#a5_cell_to_boundary) with the spatial extension to produce a GeoJSON polygon for any cell:
+[`a5_cell_to_boundary`](#a5_cell_to_boundary) returns the cell's vertices as `[lon, lat]` pairs — pair with the [`spatial`](https://duckdb.org/docs/extensions/spatial) extension to produce GeoJSON:
 
 ```sql
 SELECT
@@ -95,33 +84,121 @@ The cell at resolution 10 covering Madrid (-3.7037, 40.41677):
   caption="A5 cell at resolution 10 (Madrid). The five-sided shape reflects A5's pentagonal partitioning of the globe."
 />
 
-## Neighborhood Queries
+## Roll up to a coarser resolution
 
-All cells within `k` edge-steps (edge adjacency):
+Encode once at the finest resolution you'll need, then re-aggregate at every coarser zoom without re-reading raw points:
 
 ```sql
-SELECT a5_grid_disk(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 1) AS neighbors;
+-- Encode at resolution 15 once
+CREATE TABLE indexed AS
+SELECT *, a5_lonlat_to_cell(lon, lat, 15) AS cell_15
+FROM raw_points;
+
+-- Roll up to resolution 10
+SELECT a5_cell_to_parent(cell_15, 10) AS cell_10,
+       COUNT(*)                       AS n
+FROM indexed
+GROUP BY cell_10;
 ```
 
-All cells within a radius (in meters) of a center cell:
+[`a5_get_resolution`](#a5_get_resolution) recovers the resolution from a cell ID; [`a5_get_num_children`](#a5_get_num_children) returns the parent/child cell ratio between two resolutions.
+
+## Drill down to children
+
+The inverse of roll-up — get the immediate children, or all descendants at a target resolution:
 
 ```sql
+-- Immediate children (one level finer)
+SELECT a5_cell_to_children(a5_lonlat_to_cell(-74.0060, 40.7128, 10)) AS kids;
+
+-- All descendants at resolution 12
+SELECT a5_cell_to_children(a5_lonlat_to_cell(-74.0060, 40.7128, 10), 12) AS descendants;
+```
+
+## Neighborhood search by cell-step
+
+[`a5_grid_disk`](#a5_grid_disk) returns all cells within `k` edge-steps of a center cell — the typical "k-ring" pattern from H3:
+
+```sql
+SELECT unnest(a5_grid_disk(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 1)) AS neighbor_cell;
+```
+
+[`a5_grid_disk_vertex`](#a5_grid_disk_vertex) is the slightly wider variant that includes vertex-touching cells.
+
+## Neighborhood search by metric radius
+
+When you have a real-world distance budget rather than a step count:
+
+```sql
+-- All cells within 5 km of Times Square at resolution 15
 SELECT a5_spherical_cap(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 5000.0) AS nearby_cells;
 ```
 
-## Compaction
-
-[`a5_compact`](#a5_compact) replaces complete groups of sibling cells with their parent cell:
+The typical proximity-query pattern: expand to a coverage set, then probe an indexed cell column.
 
 ```sql
-SELECT a5_compact([
-    324259173170675712,
-    396316767208603648,
-    468374361246531584,
-    540431955284459520
-]::ubigint[]) AS result;
+WITH cells AS (
+  SELECT unnest(a5_spherical_cap(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 5000.0)) AS c
+)
+SELECT t.*
+FROM   transactions t
+JOIN   cells ON cells.c = t.cell_15;
 ```
 
-<QueryResult columns={["result"]} rows={[["[360287970189639680]"]]} />
+## Compact a coverage set
 
-[`a5_uncompact`](#a5_uncompact) is the inverse — expanding a set of cells to a target resolution.
+[`a5_compact`](#a5_compact) replaces complete groups of sibling cells with their parent — fewer rows to ship, expandable on the consumer side:
+
+```sql
+SELECT a5_compact(a5_cell_to_children(a5_lonlat_to_cell(-122.4, 37.8, 5))) AS compacted;
+```
+
+<QueryResult columns={["compacted"]} rows={[["[1937110789722734592]"]]} />
+
+[`a5_uncompact`](#a5_uncompact) is the inverse — expand a mixed-resolution set to a uniform target resolution:
+
+```sql
+SELECT a5_uncompact([a5_lonlat_to_cell(-122.4, 37.8, 5)], 7) AS expanded;
+```
+
+## Round-trip cell IDs as hex strings
+
+Useful when sharing cell IDs with the upstream JS / TypeScript [A5 library](https://github.com/felixpalmer/a5), which uses the canonical 16-character hex form:
+
+```sql
+SELECT a5_u64_to_hex(a5_lonlat_to_cell(-122.4, 37.8, 10)) AS hex_id;
+-- '1ae2988000000000'
+
+SELECT a5_hex_to_u64('1ae2988000000000') AS cell_id;
+```
+
+[`a5_u64_to_hex`](#a5_u64_to_hex) and [`a5_hex_to_u64`](#a5_hex_to_u64) are pure conversions — store the `UBIGINT` form for compactness, hex for interchange.
+
+## Spatial join via shared cell ID
+
+Encode both sides at the same resolution and join on the cell ID — much cheaper than `ST_Intersects` for the "are these in the same neighborhood" question:
+
+```sql
+WITH events AS (
+  SELECT *, a5_lonlat_to_cell(lon, lat, 12) AS cell FROM event_points
+),
+zones AS (
+  SELECT *, a5_lonlat_to_cell(lon, lat, 12) AS cell FROM zone_centroids
+)
+SELECT z.zone_name, COUNT(*) AS event_count
+FROM   events e
+JOIN   zones  z USING (cell)
+GROUP  BY z.zone_name;
+```
+
+For polygon zones rather than centroids, encode each zone as a covering set (via [`a5_spherical_cap`](#a5_spherical_cap) or by walking children of a parent cell) and `UNNEST` it before joining.
+
+## Inspect the base grid
+
+The 12 root cells covering the entire globe at resolution 0:
+
+```sql
+SELECT unnest(a5_get_res0_cells()) AS root_cell;
+```
+
+[`a5_get_num_cells`](#a5_get_num_cells) returns the total cell count at any resolution — useful for sizing decisions before encoding a large dataset.

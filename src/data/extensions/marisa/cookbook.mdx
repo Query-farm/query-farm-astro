@@ -1,6 +1,6 @@
 ## Build a trie
 
-`marisa_trie` is an aggregate — feed it a column of strings, get one BLOB back.
+[`marisa_trie`](#marisa_trie) is an aggregate — feed it a column of strings, get one `BLOB` back. Build at ingest time, store the BLOB, query forever.
 
 ```sql
 CREATE TABLE employees(name TEXT);
@@ -8,59 +8,135 @@ INSERT INTO employees VALUES
   ('Alice'),('Bob'),('Charlie'),('David'),('Eve'),('Frank'),
   ('Mallory'),('Megan'),('Oscar'),('Melissa');
 
--- Build once, store
 CREATE TABLE employees_trie AS
   SELECT marisa_trie(name) AS trie FROM employees;
 
--- The trie is a compact BLOB
-SELECT octet_length(trie) FROM employees_trie;
+SELECT octet_length(trie) AS bytes FROM employees_trie;
 ```
 
-For 10 names this is ~4 KB; the size scales with shared-prefix density rather than raw input bytes.
+Trie size scales with shared-prefix density rather than raw input bytes; the more prefix structure your strings share, the bigger the win versus a flat sorted list.
 
-## Membership lookup
+## Membership lookup (spell-check, dictionary)
 
-`marisa_lookup` returns BOOLEAN — does this exact string exist in the trie?
+[`marisa_lookup`](#marisa_lookup) returns `BOOLEAN` — does this exact string exist in the trie?
 
 ```sql
 SELECT marisa_lookup(trie, 'Alice')   FROM employees_trie;  -- TRUE
 SELECT marisa_lookup(trie, 'Unknown') FROM employees_trie;  -- FALSE
 ```
 
-Use this for spell-check ("is this word in our dictionary?") or any place a hash-set would otherwise live.
+This is the spell-check / "is this term in our dictionary?" primitive. It also stands in for a hash set anywhere you'd otherwise pre-load one for `IN (...)`-style filtering.
 
-## Autocomplete
+## Autocomplete (type-ahead UI)
 
-`marisa_predictive(trie, prefix, max_results)` returns every entry whose prefix matches:
+[`marisa_predictive(trie, prefix, max_results)`](#marisa_predictive) returns every entry in the trie whose prefix matches:
 
 ```sql
 -- Names starting with 'Me'
-SELECT marisa_predictive(trie, 'Me', 10) FROM employees_trie;
+SELECT marisa_predictive(trie, 'Me', 10) AS suggestions
+FROM employees_trie;
 -- ['Megan', 'Melissa']
 ```
 
-Drop this into a type-ahead UI's backend — one row, one BLOB, microsecond lookups.
+Drop this into the backend of a type-ahead search box: one row, one BLOB, microsecond lookups. The `max_results` cap is a hard cutoff so a short prefix against a million-entry dictionary doesn't return the whole table.
 
-## Longest-prefix match (routing)
+## Longest-prefix match (routing tables)
 
-`marisa_common_prefix` is the inverse — every string in the trie that is a *prefix* of the search input:
+[`marisa_common_prefix`](#marisa_common_prefix) is the inverse of predictive — every string in the trie that is *itself* a prefix of the search input:
 
 ```sql
-CREATE TABLE countries(name TEXT);
-INSERT INTO countries VALUES ('U'), ('US'), ('USA');
-CREATE TABLE countries_trie AS
-  SELECT marisa_trie(name) AS trie FROM countries;
+CREATE TABLE country_codes(code TEXT);
+INSERT INTO country_codes VALUES ('U'), ('US'), ('USA');
 
-SELECT marisa_common_prefix(trie, 'USA', 10) FROM countries_trie;
+CREATE TABLE country_codes_trie AS
+  SELECT marisa_trie(code) AS trie FROM country_codes;
+
+SELECT marisa_common_prefix(trie, 'USA', 10) AS matches
+FROM country_codes_trie;
 -- ['U', 'US', 'USA']
 ```
 
-Useful for routing tables, IP-prefix matching, and any "find all rules that match" lookup.
+Useful for routing tables, IP-prefix labels, feature-flag rule lookups, and any "find every rule that matches this input" pattern.
 
-## When to use a trie vs a HashSet vs `IN (...)`
+## Big static dictionary: English words
 
-- **Trie** — wins when the dataset has lots of shared prefixes (URLs, names, dictionary words). Memory: ~30–60% of the equivalent flat string list. Lookup: O(|key|) regardless of dictionary size.
-- **HashSet** (DuckDB's built-in `IN`, or `bitfilters`) — wins for unrelated random strings without prefix structure.
-- **Tries also support prefix and predictive queries**, which hashes can't do at all.
+The classic MARISA workload — load a wordlist into a trie once, ship the BLOB inside a Parquet file:
 
-If you're doing autocomplete or you have prefix-rich data, a trie is the right structure. For pure membership tests on random strings, hashes win on simplicity.
+```sql
+-- Load any newline-delimited wordlist (e.g. /usr/share/dict/words on macOS/Linux)
+CREATE TABLE words AS
+  SELECT trim(column0) AS word
+  FROM read_csv('/usr/share/dict/words', columns := {'column0': 'VARCHAR'});
+
+CREATE TABLE words_trie AS
+  SELECT marisa_trie(word) AS trie FROM words;
+
+-- Spell-check
+SELECT marisa_lookup(trie, 'duckling') FROM words_trie;        -- TRUE
+SELECT marisa_lookup(trie, 'qwxzy')    FROM words_trie;        -- FALSE
+
+-- Autocomplete
+SELECT marisa_predictive(trie, 'duck', 8) FROM words_trie;
+-- ['duck','duckbill','duckboard','ducker',...]
+```
+
+For ~470K English words the resulting BLOB lands around 800 KB — about a fifth the size of the source list, queryable directly with no decode step.
+
+## Persist a trie to Parquet
+
+The trie is just a `BLOB` — Parquet handles it natively. Build once, write, ship anywhere a DuckDB lives:
+
+```sql
+COPY (SELECT trie FROM words_trie)
+  TO 'words_trie.parquet' (FORMAT 'parquet');
+
+-- On the other side
+CREATE TABLE words_trie AS
+  SELECT * FROM 'words_trie.parquet';
+
+SELECT marisa_predictive(trie, 'rou', 5) FROM words_trie;
+```
+
+Loading is a pointer-walk — no parsing, no decompression. Useful for shipping a fixed dictionary alongside an application without standing up a separate index service.
+
+## One trie per partition / tenant
+
+Materialize one trie per logical partition (day, tenant, region) at write time. The set of tries is tiny compared to the source data and serves all three lookup operations at query time:
+
+```sql
+CREATE TABLE name_tries AS
+SELECT day,
+       marisa_trie(name) AS trie
+FROM signups
+GROUP BY day;
+
+-- Did a given name show up on a specific day?
+SELECT day
+FROM name_tries
+WHERE marisa_lookup(trie, 'Megan');
+
+-- All names that started with 'Me' on each day
+SELECT day, marisa_predictive(trie, 'Me', 20) AS matches
+FROM name_tries
+ORDER BY day;
+```
+
+## Updating a trie
+
+There is no `marisa_insert` — to update, rebuild from the new source set:
+
+```sql
+-- Source set changed; rebuild the trie
+CREATE OR REPLACE TABLE words_trie AS
+  SELECT marisa_trie(word) AS trie FROM words;
+```
+
+For a dictionary that changes daily this is a millisecond-scale CTAS. For a billion-key set, schedule the rebuild offline and treat the trie as a build artifact.
+
+## When a trie vs a HashSet vs `bitfilters`
+
+- **Trie** — wins when the data has shared prefixes (URLs, names, dictionary words) **or** you need prefix / predictive queries. Memory: roughly 30–60% of the equivalent flat string list. Lookup: O(|key|), independent of dictionary size.
+- **HashSet** (DuckDB's built-in `IN`) — wins for small, random, unrelated string sets where simplicity dominates.
+- **[`bitfilters`](/products/extensions/bitfilters)** — wins for very large random key sets where you only need a yes/no answer and memory is the binding constraint. Doesn't store the strings; can't do prefix queries.
+
+If you're building autocomplete or have prefix-rich data, MARISA is the right structure. For pure membership tests on uncorrelated random strings, a Bloom / XOR / Binary Fuse filter is smaller. For evolving sets that need insert and delete, neither MARISA nor the static `bitfilters` variants apply — use a Quotient filter or a real index.

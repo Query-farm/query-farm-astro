@@ -1,0 +1,70 @@
+import Callout from '../../../components/docs/Callout.astro';
+
+## What you can do with one query
+
+Replace a multi-column `ORDER BY` with one locality-preserving sort key, and watch Parquet block-skipping start working on every dimension at once:
+
+```sql
+COPY (
+  SELECT * FROM points
+  ORDER BY hilbert_encode([x, y, z]::INTEGER[3])
+) TO 'points.parquet' (FORMAT PARQUET);
+```
+
+Rows that were close in `(x, y, z)` end up adjacent in the file. A later query like `WHERE x BETWEEN ... AND y BETWEEN ... AND z BETWEEN ...` skips whole row groups whose stats don't overlap any of the three predicates — instead of skipping only on the first sort column. The same trick compresses the file better, because adjacent rows have adjacent coordinates and Parquet's RLE / dictionary / delta encodings find more runs.
+
+<Callout type="note" title="Best fit, scoped honestly">
+Lindel encodes **multi-dimensional unsigned integer points** to one integer. To use it on floats or signed values, **quantize first** — e.g. `(lat * 1e6)::UINTEGER` — so the meaningful precision lands in the high bits of each dimension.
+
+It is a **write-time sort key**, not a runtime index: the gain comes from how the data is laid out in Parquet, so updates mean rewriting the affected files. For streaming inserts, batch and re-sort on a cadence rather than hoping one row at a time will help.
+</Callout>
+
+## Hilbert vs Morton — pick one
+
+Both [`hilbert_encode`](#hilbert_encode) and [`morton_encode`](#morton_encode) take an array of unsigned integers and return one sortable integer. They differ in how locality-preserving the ordering is:
+
+- **[Hilbert curve](https://en.wikipedia.org/wiki/Hilbert_curve)** — neighbours along the curve are always neighbours in N-D. Tighter row-group bounds, slightly more CPU to compute. The geometry indexing systems [S2](https://s2geometry.io/) (Google) and [H3](https://h3geo.org/) (Uber) use Hilbert-style ordering for the same reason. **Default choice.**
+- **[Morton / Z-order curve](https://en.wikipedia.org/wiki/Z-order_curve)** — bit-interleave the dimensions. Trivially cheap, occasional long jumps at quadrant boundaries. The [Bing Maps Tile System](https://learn.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system) uses Morton-style quadkeys; Delta Lake's original `ZORDER BY` was Morton before it moved to Hilbert-based [liquid clustering](https://docs.databricks.com/aws/en/delta/clustering).
+
+When in doubt: Hilbert. Pick Morton when encoding throughput dominates and you can tolerate slightly looser row-group bounding boxes.
+
+## Type coverage and output width
+
+Both encoders are polymorphic over `UTINYINT` through `UHUGEINT`. The output type is the smallest unsigned integer that fits *bit-width × number of dimensions*:
+
+| Input array | Total bits | Output type |
+|---|---|---|
+| `UTINYINT[2]` | 16 | `USMALLINT` |
+| `UINTEGER[2]` | 64 | `UBIGINT` |
+| `UINTEGER[3]` | 96 | `UHUGEINT` |
+| `UBIGINT[2]` | 128 | `UHUGEINT` |
+
+Pre-scale your inputs so the precision you care about lands in the **high bits** of each dimension — those are the bits that drive locality. For latitude/longitude in degrees, multiply by `1e6` (~10 cm resolution worldwide) and cast to `UINTEGER`. For epoch milliseconds in time-series, the value is already a sensibly-scaled unsigned integer.
+
+## Decoding
+
+[`hilbert_decode`](#hilbert_decode) and [`morton_decode`](#morton_decode) recover the original array. Three trailing arguments tell DuckDB how to reconstruct the values, since they aren't carried in the encoded integer:
+
+```sql
+SELECT hilbert_decode(
+  hilbert_encode([5, 8]::UINTEGER[2]),  -- the encoded value
+  2,      -- num_elements
+  false,  -- return_float
+  true    -- return_unsigned
+);
+-- [5, 8]
+```
+
+Useful for sanity-checking transforms and for storing the encoded value as an indexable single-column key while still being able to read back the components on demand.
+
+## Why this works on Parquet
+
+Parquet stores per-row-group min/max statistics for every column. A predicate like `WHERE lat BETWEEN 40 AND 41` lets the reader skip any row group whose `lat` range doesn't overlap. With single-column sorting, that skipping works for one column at a time — the file is sorted by `lat`, so `lon` is scattered across row groups. With Hilbert / Morton sorting, **every** input column gets tight per-row-group bounds, so multi-column predicates each contribute to skipping.
+
+Performance gains depend on data shape and query mix. For multi-column range queries against multi-million-row Parquet files, expect order-of-magnitude reductions in scanned bytes when the filter selectivity is high — the same regime the [Delta Lake liquid clustering](https://docs.databricks.com/aws/en/delta/clustering) work targets.
+
+## Compared to alternatives
+
+- **`ORDER BY a, b`** — sorts on `a` first, then `b` within `a`. Great for `a`-only or `(a, b)`-prefix queries; useless if you filter on `b` alone. Lindel gives every input column meaningful per-row-group bounds.
+- **Multiple Parquet files partitioned by category** — works for low-cardinality keys (year, region). Falls apart on continuous dimensions. Lindel sorts continuous dimensions inside one file.
+- **GeoHash / quadkey strings** — same idea (locality-preserving 1-D key), but as strings. Lindel returns native unsigned integers, which compare and store more cheaply and round-trip back to the original components.

@@ -1,0 +1,77 @@
+import Callout from '../../../components/docs/Callout.astro';
+
+## What you can do with one query
+
+The shortest path from "I need a primary key default" to "rows that already sort by insert time":
+
+```sql
+CREATE TABLE events (
+  id      VARCHAR DEFAULT tsid() PRIMARY KEY,
+  payload JSON
+);
+
+INSERT INTO events(payload) VALUES ('{"type":"login"}');
+INSERT INTO events(payload) VALUES ('{"type":"click"}');
+
+-- Insertion order, no separate created_at column
+SELECT id,
+       tsid_to_timestamp(id) AS created_at,
+       payload
+FROM events
+ORDER BY id;
+```
+
+[`tsid()`](#tsid) returns a 32-character hex [`VARCHAR`](https://duckdb.org/docs/stable/sql/data_types/text) whose leading bits are a high-resolution timestamp. Plain string compare gives you time order — no special operator, no `created_at` join. [`tsid_to_timestamp`](#tsid_to_timestamp) decodes the leading bits back to a [`TIMESTAMP`](https://duckdb.org/docs/stable/sql/data_types/timestamp) when you need the wall-clock value.
+
+<Callout type="warning" title="TSIDs reveal creation time — by design, and that's a tradeoff">
+The headline feature is also the headline caveat: the timestamp embedded in a TSID is recoverable by anyone holding the ID. That's perfect for an internal primary key, an audit log, or a server-side pagination cursor. It's a leak when the ID surfaces externally — a public order URL, a referral link, a webhook payload — and the creation moment is competitively or personally sensitive (signup time, account age, when an order was placed).
+
+For internal-only IDs, use [`tsid()`](#tsid). For public-facing identifiers where ordering doesn't matter, stick with DuckDB's built-in [`uuid()`](https://duckdb.org/docs/stable/sql/functions/utility) (UUIDv4 — random, opaque, leaks nothing).
+</Callout>
+
+## TSID vs the alternatives
+
+DuckDB ships [`uuid()`](https://duckdb.org/docs/stable/sql/functions/utility) — a [UUIDv4](https://datatracker.ietf.org/doc/html/rfc9562) generator. It's random and unsortable, which is the right call for opaque external IDs and the wrong call when insertion order matters. TSID, [UUIDv7](https://datatracker.ietf.org/doc/html/rfc9562), and [ULID](https://github.com/ulid/spec) are three renderings of the same idea: high-resolution time prefix plus random tail.
+
+| | DuckDB `uuid()` | `tsid()` | UUIDv7 | ULID |
+|---|---|---|---|---|
+| Time-sortable | No | Yes | Yes | Yes |
+| Embeds creation time | No | Yes | Yes | Yes |
+| Rendering | UUID hex (36 chars w/ dashes) | 32 hex chars | UUID hex (36 chars w/ dashes) | 26 chars Crockford base32 |
+| Standardized | [RFC 9562](https://datatracker.ietf.org/doc/html/rfc9562) | Library-specific | [RFC 9562](https://datatracker.ietf.org/doc/html/rfc9562) | [ulid/spec](https://github.com/ulid/spec) |
+| In-DuckDB built-in | Yes | This extension | No | No |
+
+Pick [`tsid()`](#tsid) when you want UUIDv7-shaped behavior **inside SQL today** without wiring a v7 generator into your client. If you control both ends of a system that already produces UUIDv7s elsewhere, keep using those — interop wins. If your IDs only need to make sense within DuckDB, TSID stays self-contained.
+
+The reference TSID concept also lives in non-DuckDB form as [`f4b6a3/tsid-creator`](https://github.com/f4b6a3/tsid-creator) on the JVM and similar libraries in other ecosystems; the rendering produced by this extension is library-specific, so don't assume cross-ecosystem parsing without testing.
+
+## Why time-sortable IDs help the index
+
+A B-tree primary-key index on a UUIDv4 column scatters writes uniformly across the tree — every insert touches a different page, page splits cascade, and the cache works against you. A time-sortable ID concentrates writes at one end (the most recent leaf), so:
+
+- New rows append next to each other in physical layout
+- Recent-first pagination (`ORDER BY id DESC LIMIT N`) hits a small hot range
+- Bulk loads compact better — adjacent rows tend to be adjacent in time
+
+This is the same argument that drove [UUIDv7](https://datatracker.ietf.org/doc/html/rfc9562) into RFC 9562. TSID brings the property to DuckDB SQL without the client-side generator.
+
+## Bulk generation and ordering
+
+Inside one query, parallel evaluation of [`tsid()`](#tsid) can produce IDs in non-deterministic order — same wall-clock millisecond, different threads, different sub-millisecond entropy. Pass a per-row seed to keep them strictly increasing:
+
+```sql
+-- Strictly increasing within the query
+SELECT tsid(random()::VARCHAR) AS id
+FROM range(1000)
+ORDER BY id;
+```
+
+The seed pins the sub-millisecond bits, so the timestamp prefix dominates ordering and the IDs sort cleanly. For one-off inserts (`DEFAULT tsid()` on a primary key), you don't need a seed — there's only one call per row.
+
+## When to keep `uuid()` instead
+
+- **Public-facing IDs** where leaking creation time matters — order URLs, share links, account references.
+- **Cross-system identifiers** where a peer expects a canonical UUID format and you don't control the consumer.
+- **You don't care about insertion order** and the table is small enough that index locality is irrelevant.
+
+In every other case where `uuid()` was the reach-for default — internal primary keys, event logs, audit tables — [`tsid()`](#tsid) is the better fit.

@@ -1,0 +1,103 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use Stochastic?",
+  "description": "Compute [probability distributions](https://en.wikipedia.org/wiki/List_of_probability_distributions) directly in DuckDB SQL — [PDF](https://en.wikipedia.org/wiki/Probability_density_function), [CDF](https://en.wikipedia.org/wiki/Cumulative_distribution_function), [quantile](https://en.wikipedia.org/wiki/Quantile_function), [hazard](https://en.wikipedia.org/wiki/Failure_rate), and random sampling for 22 named distributions, all with a uniform `dist_<family>_<op>` naming scheme. Built for Monte Carlo experiments, what-if analysis, and synthetic data generation without leaving SQL.",
+  "sections": [
+    {
+      "icon": "🎲",
+      "title": "What this extension is for",
+      "description": "Stochastic gives DuckDB a complete statistical-distributions library. Each of 22 distributions exposes the same uniform set of operations, so once you've used one you've used them all. Best fit: ad-hoc analysis, Monte Carlo sketches, [synthetic data](https://en.wikipedia.org/wiki/Synthetic_data) generation, hypothesis-test p-values, and inline statistical math in SQL pipelines.",
+      "bulletPoints": [
+        {
+          "label": "Monte Carlo and what-if analysis",
+          "description": "Run a [Monte Carlo simulation](https://en.wikipedia.org/wiki/Monte_Carlo_method) by combining `_sample` functions with [`range()`](https://duckdb.org/docs/sql/functions/nested.html). Aggregate the draws with regular SQL — no Python, no DataFrame round-trip."
+        },
+        {
+          "label": "Synthetic data generation",
+          "description": "Populate test fixtures or anonymized columns with realistic distributions in a single [`CREATE TABLE AS`](https://duckdb.org/docs/sql/statements/create_table). Mix-and-match heights from [`dist_normal_sample`](#dist_normal_sample), counts from [`dist_poisson_sample`](#dist_poisson_sample), wait times from [`dist_exponential_sample`](#dist_exponential_sample)."
+        },
+        {
+          "label": "Inline statistical math",
+          "description": "Compute [Z-scores](https://en.wikipedia.org/wiki/Standard_score), p-values, [Value at Risk](https://en.wikipedia.org/wiki/Value_at_risk), or Bayesian credible intervals as plain SQL expressions. [`dist_normal_cdf_complement`](#dist_normal_cdf_complement) for tail probabilities, [`dist_chi_squared_cdf`](#dist_chi_squared_cdf) for goodness-of-fit, [`dist_beta_quantile`](#dist_beta_quantile) for posterior intervals."
+        },
+        {
+          "label": "Distribution properties as functions",
+          "description": "Mean, median, mode, variance, skewness, kurtosis, support range — every property is a function (not a constant), so it composes inline anywhere a value is allowed."
+        }
+      ]
+    },
+    {
+      "icon": "📐",
+      "title": "How it works",
+      "description": "The extension wraps the [Boost.Math statistical-distributions library](https://www.boost.org/doc/libs/release/libs/math/doc/html/dist.html) — the same battle-tested implementations used across C++ statistics tooling. Every distribution gets the same 21-operation surface, generated from a single template; that's where the ~444 function count comes from.",
+      "bulletPoints": [
+        {
+          "label": "Uniform naming: `dist_<family>_<op>`",
+          "description": "Every function is named `dist_<distribution>_<operation>`. The operation suffix is one of `sample`, `pdf`, `log_pdf`, `cdf`, `log_cdf`, `cdf_complement`, `log_cdf_complement`, `quantile`, `quantile_complement`, `hazard`, `chf`, `mean`, `median`, `mode`, `variance`, `stddev`, `skewness`, `kurtosis`, `kurtosis_excess`, `range`, `support`."
+        },
+        {
+          "label": "Parameter-then-x argument order",
+          "description": "Distribution parameters come first; the evaluation point comes last. `dist_normal_pdf(mean, stddev, x)`, `dist_binomial_cdf(n, p, k)`. Property functions ([`dist_normal_mean`](#dist_normal_mean), etc.) take only the distribution parameters."
+        },
+        {
+          "label": "Vectorized over columns",
+          "description": "All functions are scalar — they run column-at-a-time over DuckDB's columnar engine, so a million calls in a `SELECT` over `range(1000000)` is a single vectorized scan, not a Python loop."
+        },
+        {
+          "label": "Strict parameter validation",
+          "description": "Illegal parameters raise a SQL error — no silent NaN. `dist_normal_pdf(0, -1, 0.5)` returns `Error: normal: Standard deviation must be > 0`. This catches typos in long pipelines that NumPy would otherwise carry forward as silent NaNs."
+        },
+        {
+          "label": "Log-scale variants",
+          "description": "Every PDF/CDF has [`_log_pdf`](#dist_normal_log_pdf) / [`_log_cdf`](#dist_normal_log_cdf) / [`_log_cdf_complement`](#dist_normal_log_cdf_complement) variants for log-likelihoods and very-small-tail probabilities — direct computation in log space avoids underflow."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "Scope and honest caveats",
+      "description": "This extension is a deep statistical-distributions library, but it is intentionally not a full simulation framework. Know the boundaries before you reach for it.",
+      "bulletPoints": [
+        {
+          "label": "No copulas or multivariate distributions",
+          "description": "The 22 distributions are univariate. There is no [copula](https://en.wikipedia.org/wiki/Copula_(probability_theory)) or multivariate-normal sampler in this version — for correlated draws, sample independently and apply a [Cholesky-style transform](https://en.wikipedia.org/wiki/Cholesky_decomposition) yourself, or use NumPy / SciPy."
+        },
+        {
+          "label": "RNG seeding is not user-controlled",
+          "description": "`_sample` functions use the underlying [PRNG](https://en.wikipedia.org/wiki/Pseudorandom_number_generator) — there is no documented per-query seed parameter. For exactly-reproducible runs (papers, regulatory submissions), generate the draws once into a table and treat that table as the seed."
+        },
+        {
+          "label": "Production simulation may want a notebook",
+          "description": "For large-scale agent-based simulation, MCMC, or anything needing [SciPy](https://docs.scipy.org/doc/scipy/reference/stats.html)-grade fitting, keep a Python notebook with NumPy / SciPy. Stochastic shines for quick analyses, what-if exploration, and synthetic-data generation that lives next to your warehouse data."
+        },
+        {
+          "label": "No fitting / inference helpers",
+          "description": "The extension is one-way: parameters → distribution. There are no MLE / method-of-moments fitters and no built-in hypothesis tests; compute the test statistic in SQL, then call the appropriate `_cdf_complement` for the p-value."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Monte Carlo over warehouse data",
+          "description": "Wrap [`dist_normal_sample`](#dist_normal_sample) / [`dist_uniform_real_sample`](#dist_uniform_real_sample) in a CTE over `range(N)` and aggregate with SQL — estimate π, integrate a payoff function, run a [VaR](https://en.wikipedia.org/wiki/Value_at_risk) calculation against live position data, all without leaving the warehouse."
+        },
+        {
+          "title": "Generate realistic synthetic data",
+          "description": "Build a fixture table with [`CREATE TABLE AS SELECT`](https://duckdb.org/docs/sql/statements/create_table): heights from a [Normal](https://en.wikipedia.org/wiki/Normal_distribution), session counts from a [Poisson](https://en.wikipedia.org/wiki/Poisson_distribution), session lengths from an [Exponential](https://en.wikipedia.org/wiki/Exponential_distribution), conversion flags from a [Bernoulli](https://en.wikipedia.org/wiki/Bernoulli_distribution). One query, hundreds of thousands of rows."
+        },
+        {
+          "title": "Inline p-values and confidence intervals",
+          "description": "Compute a Z-statistic, then `2 * dist_normal_cdf_complement(0, 1, ABS(z))` for the two-sided p-value. Same shape works for [`dist_chi_squared_cdf_complement`](#dist_chi_squared_cdf_complement) and [`dist_students_t_cdf_complement`](#dist_students_t_cdf_complement) — analytics dashboards with first-class statistics."
+        },
+        {
+          "title": "Bayesian conjugate updates",
+          "description": "[Beta-Binomial](https://en.wikipedia.org/wiki/Conjugate_prior#Discrete_distributions), Gamma-Poisson, Normal-Normal — closed-form posteriors are one [`dist_<family>_quantile`](#dist_beta_quantile) call away. Useful for A/B-test dashboards and conversion-rate experiments."
+        }
+      ]
+    }
+  ]
+}

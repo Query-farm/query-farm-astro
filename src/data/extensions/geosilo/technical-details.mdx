@@ -1,0 +1,119 @@
+## What you can do with one column type
+
+The single most useful pattern: take an existing `GEOMETRY` column and re-declare it as `GEOSILO` with `ZSTD` compression. Every existing `ST_*` query still works — and the introspection / bounding-box / measurement calls get faster:
+
+```sql
+INSTALL spatial; LOAD spatial;
+INSTALL geosilo FROM community; LOAD geosilo;
+
+-- Compact geometry, transparent ST_* surface
+CREATE TABLE parcels (
+  id   INTEGER,
+  geom GEOSILO('EPSG:4326') USING COMPRESSION zstd
+);
+
+INSERT INTO parcels SELECT id, geom FROM raw_data;
+
+-- Bounding-box prefilter — entirely native, no WKB decode
+SELECT id, ST_Area(geom)
+FROM parcels
+WHERE ST_XMin(geom) > -78
+  AND ST_XMax(geom) < -76;
+```
+
+The `GEOSILO` type [delta-encodes](https://en.wikipedia.org/wiki/Delta_encoding) coordinates as scaled integers — each subsequent vertex of a ring is a 2-byte int16 offset from the previous one. On the [TIGER/Line 2025](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html) US Census dataset, `GEOSILO + ZSTD` is **~21% smaller** than DuckDB's columnar `GEOMETRY` storage.
+
+import Callout from '../../../components/docs/Callout.astro';
+
+<Callout type="note" title="Storage and a few fast paths — not a GEOS replacement">
+GeoSilo is a **compact storage format with a handful of native `ST_*` overloads**. It is *not* a re-implementation of [GEOS](https://libgeos.org/). The native fast path covers exactly: [`ST_GeometryType`](#st_geometrytype), [`ST_IsEmpty`](#st_isempty), [`ST_NPoints`](#st_npoints), [`ST_X`](#st_x) / [`ST_Y`](#st_y), [`ST_XMin`](#st_xmin) / [`ST_XMax`](#st_xmax) / [`ST_YMin`](#st_ymin) / [`ST_YMax`](#st_ymax), [`ST_Area`](#st_area), [`ST_Length`](#st_length), [`ST_Perimeter`](#st_perimeter). Everything else — `ST_Buffer`, `ST_Union`, `ST_Intersection`, `ST_AsText`, and the rest of the [`spatial` extension](https://duckdb.org/docs/extensions/spatial) surface — works via the implicit `GEOSILO → GEOMETRY` cast (which runs [`geosilo_decode`](#geosilo_decode) under the hood).
+
+The encoding is also **lossy at the chosen integer scale**. Defaults give ~1 cm precision; finer data needs an explicit [`geosilo_encode(geom, scale)`](#geosilo_encode).
+
+For unbounded GEOS-backed analytics, use `spatial` directly. For storage-heavy workflows where bounding-box filtering and area / length scans dominate, GeoSilo is the right tool.
+</Callout>
+
+## Setup
+
+GeoSilo overlays `spatial`'s `ST_*` namespace, so load both — `spatial` first:
+
+```sql
+INSTALL spatial; LOAD spatial;
+INSTALL geosilo FROM community; LOAD geosilo;
+```
+
+## The GEOSILO column type
+
+Declare a column as `GEOSILO`, optionally tagging the [CRS](https://epsg.io/4326). With a CRS the integer scale is auto-detected (degrees → `1e7`, meters → `100`); without one, the default is `1e7`:
+
+```sql
+-- With CRS — scale auto-detected
+CREATE TABLE parcels (
+  id   INTEGER,
+  geom GEOSILO('EPSG:4326') USING COMPRESSION zstd
+);
+
+-- Without CRS — default scale 1e7
+CREATE TABLE shapes (geom GEOSILO USING COMPRESSION zstd);
+```
+
+`USING COMPRESSION zstd` is the recommended setting — it's where the storage win comes from. See [`CREATE TABLE`](https://duckdb.org/docs/sql/statements/create_table) for the full DDL.
+
+The implicit `GEOMETRY → GEOSILO` cast auto-encodes on insert, so you can populate from any `GEOMETRY` source — Parquet, CSV-then-`ST_GeomFromText`, another DuckDB table:
+
+```sql
+INSERT INTO parcels SELECT id, geom FROM raw_data;
+```
+
+## What's native, what auto-decodes
+
+Standard [`spatial`](https://duckdb.org/docs/extensions/spatial) functions all work on `GEOSILO` columns. The ones below have **native GEOSILO overloads** that read the silo header or walk the integer delta stream — no WKB round-trip:
+
+| Group | Native overloads |
+|---|---|
+| Introspection | [`ST_GeometryType`](#st_geometrytype), [`ST_IsEmpty`](#st_isempty), [`ST_NPoints`](#st_npoints), [`ST_X`](#st_x), [`ST_Y`](#st_y) |
+| Bounding box | [`ST_XMin`](#st_xmin), [`ST_XMax`](#st_xmax), [`ST_YMin`](#st_ymin), [`ST_YMax`](#st_ymax) |
+| Measurement | [`ST_Area`](#st_area), [`ST_Length`](#st_length), [`ST_Perimeter`](#st_perimeter) |
+
+Everything else (`ST_Buffer`, `ST_Union`, `ST_Intersection`, `ST_AsText`, `ST_Centroid`, etc.) auto-decodes via the implicit cast and runs through the GEOS-backed `spatial` implementation.
+
+## Encoding format, briefly
+
+The format is verifiable and small enough to summarize:
+
+1. Coordinates scale to integers (`-75.509491 × 1e7 = -755094910`).
+2. The first vertex of each ring is a 4-byte int32 absolute coordinate.
+3. Subsequent vertices are stored as **2-byte int16 deltas** from the previous; ~90% fit. The rest use a 6-byte escape sequence.
+4. Polygon rings omit the closing duplicate vertex — it's reconstructed on decode.
+5. Points use a 1-byte compact header.
+
+The header (`geometry_type`, `vertex_type`, `scale`) is readable without decoding the body — see [`geosilo_metadata`](#geosilo_metadata).
+
+## Scale and precision
+
+| CRS family | Units | Default scale | Precision |
+|---|---|---|---|
+| [`EPSG:4326`](https://epsg.io/4326) / NAD83 | degrees | `10,000,000` | ~1 cm |
+| UTM / [`EPSG:3857`](https://epsg.io/3857) | meters | `100` | 1 cm |
+
+Auto-applied when you declare `GEOSILO('EPSG:...')`. Override per-call with the two-argument form:
+
+```sql
+SELECT geosilo_encode(geom, 1000) FROM millimeter_data;
+```
+
+## Arrow IPC transport
+
+GeoSilo registers an [Arrow extension type](https://arrow.apache.org/docs/format/CanonicalExtensions.html) named `queryfarm.geosilo`. A producer tags an Arrow `binary` field with the right metadata and the DuckDB consumer (with GeoSilo loaded) auto-decodes silo blobs to `GEOMETRY` on read and re-encodes on write — CRS rides through the field's metadata:
+
+```python
+geom_field = pa.field("geom", pa.binary(), metadata={
+  b"ARROW:extension:name":     b"queryfarm.geosilo",
+  b"ARROW:extension:metadata": b'{"crs":"EPSG:4326"}',
+})
+```
+
+## Sibling extensions in the geo bucket
+
+- [`a5`](/products/extensions/a5) — pentagonal global geospatial index for spatial aggregation, joins, and equal-area binning. Pairs well: index with `a5`, store the underlying geometry with `geosilo`.
+- [`lindel`](/products/extensions/lindel) — [Hilbert / Morton space-filling curves](https://en.wikipedia.org/wiki/Space-filling_curve) for ordering multi-dimensional data on disk. Sort a `GEOSILO` table by a `lindel`-encoded centroid to keep nearby geometries on the same Parquet row group / DuckDB block.

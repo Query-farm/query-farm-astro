@@ -1,0 +1,99 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use QuickJS in DuckDB?",
+  "description": "Embed the [QuickJS](https://bellard.org/quickjs/) JavaScript engine inside DuckDB so a `SELECT` can call out to JS for the cases SQL doesn't have a primitive for — modern [ECMAScript](https://tc39.es/ecma262/) syntax, scalar and table-valued forms, parameter passthrough. Reach for it when SQL alone can't express the transform; stay in SQL when it can.",
+  "sections": [
+    {
+      "icon": "🟨",
+      "title": "What this extension is for",
+      "description": "QuickJS adds a row-by-row JavaScript escape hatch to DuckDB. The shape of the problem is usually one of: text or JSON manipulation that exceeds what regex or [`json_*`](https://duckdb.org/docs/data/json/loading_json.html) functions express cleanly, custom parsing or formatting, or a JS snippet you already have and don't want to port to SQL.",
+      "bulletPoints": [
+        {
+          "label": "Conditional JSON reshaping",
+          "description": "When the output shape depends on values inside the input JSON, [`quickjs_eval`](#quickjs_eval) with a per-row arrow function is more readable — and often faster to write — than a tower of `CASE` over [`json_extract`](https://duckdb.org/docs/data/json/json_functions)."
+        },
+        {
+          "label": "Text munging beyond regex",
+          "description": "Tokenizers, lightweight parsers, custom slug rules, normalization passes that depend on imperative control flow. JS gives you `for`, `if`, `switch`, and string methods without leaving SQL."
+        },
+        {
+          "label": "Array fan-out",
+          "description": "The table form of [`quickjs`](#quickjs) lets a JS expression return an array and have DuckDB emit one row per element — handy for unrolling computed sequences or splitting a value into its components."
+        },
+        {
+          "label": "Reusing existing JS",
+          "description": "Validation rules, formatting helpers, or small library snippets you already trust in JavaScript can be dropped into a query without rewriting them."
+        }
+      ]
+    },
+    {
+      "icon": "⚙️",
+      "title": "How it works",
+      "description": "The extension links [QuickJS-NG](https://github.com/quickjs-ng/quickjs) — an actively-maintained fork of [Fabrice Bellard's QuickJS](https://bellard.org/quickjs/) — into DuckDB as scalar and table functions. Each call instantiates a JS context, evaluates the supplied source, and converts the result back across the SQL boundary. There is no shared state between rows.",
+      "bulletPoints": [
+        {
+          "label": "Two surfaces, picked by call site",
+          "description": "[`quickjs`](#quickjs) used after `SELECT` evaluates an expression and returns a `VARCHAR`. The same name used after `FROM` expects an array and unpacks it into rows. [`quickjs_eval`](#quickjs_eval) calls a JS function with positional arguments and returns `JSON`."
+        },
+        {
+          "label": "Argument binding",
+          "description": "Positional arguments to the table form of [`quickjs`](#quickjs) are exposed inside the JS as `arg0`, `arg1`, … . When an argument is a JSON-shaped string, a parsed copy is also bound as `parsed_arg0`, `parsed_arg1`, … so you don't pay for `JSON.parse` in the snippet."
+        },
+        {
+          "label": "Modern ECMAScript",
+          "description": "QuickJS-NG implements the bulk of the [ECMAScript](https://tc39.es/ecma262/) standard — arrow functions, destructuring, `let`/`const`, `Map`/`Set`, `Promise`, modern `Array` / `String` / `Object` methods. No browser, no Node APIs (no `fetch`, `fs`, etc.) — this is a pure language runtime."
+        },
+        {
+          "label": "Per-row evaluation",
+          "description": "Snippets are JIT-compiled within the QuickJS context per call. There's no cross-row caching of compiled functions, so cost scales linearly with input row count."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "When to reach for it (and when to stay in SQL)",
+      "description": "Row-by-row JavaScript is inherently slower than vectorized SQL. QuickJS is a power feature, not a default — use it when the expressiveness of JS justifies the cost.",
+      "bulletPoints": [
+        {
+          "label": "Prefer native DuckDB functions",
+          "description": "If [DuckDB's scalar functions](https://duckdb.org/docs/sql/functions/overview), [`json_*`](https://duckdb.org/docs/data/json/loading_json.html) family, or [regex functions](https://duckdb.org/docs/sql/functions/patternmatching) cover your transform, they will be substantially faster — they run vectorized over column batches instead of one row at a time."
+        },
+        {
+          "label": "Hot OLAP paths are the wrong place",
+          "description": "Per-row JS interpretation is fine for ETL and ad-hoc work over millions of rows. It is not the right tool for an interactive dashboard query that runs against a billion-row fact table on every refresh."
+        },
+        {
+          "label": "Untrusted input is risky",
+          "description": "QuickJS is a sandbox in the sense that it has no I/O surface. It is not hardened against adversarial JS — don't `quickjs_eval` user-supplied source in a multi-tenant context."
+        },
+        {
+          "label": "Consider Rhai for tighter SQL integration",
+          "description": "[`evalexpr_rhai`](/products/extensions/evalexpr_rhai) embeds the [Rhai](https://rhai.rs/) scripting language. Rhai is more constrained as a language, but it tends to integrate more cleanly with SQL types — fewer JSON round-trips at the boundary. Worth comparing if your snippet is small and type-driven."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Reshape semi-structured payloads",
+          "description": "Per-row [`quickjs_eval`](#quickjs_eval) with a small arrow function over a JSON column — readable when the output shape branches on values in the input."
+        },
+        {
+          "title": "Custom string transforms",
+          "description": "Slug rules, identifier normalization, lightweight tokenization where regex stops being expressive enough."
+        },
+        {
+          "title": "Array fan-out from a computed expression",
+          "description": "The table form of [`quickjs`](#quickjs) — generate a sequence in JS and let DuckDB emit one row per element — useful for unrolling permutations or test data."
+        },
+        {
+          "title": "Drop in an existing JS helper",
+          "description": "Validation logic, date/string formatters, or small library snippets reused inside a SQL pipeline without porting them."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,116 @@
+import Callout from '../../../components/docs/Callout.astro';
+
+## What you can do with one query
+
+The magic moment — dedup a messy customer table without leaving SQL:
+
+```sql
+CREATE TABLE customer_dupes AS
+SELECT a.id AS left_id,
+       b.id AS right_id,
+       rapidfuzz_token_set_ratio(a.name, b.name) AS score
+FROM customers a
+JOIN customers b
+  ON a.id < b.id
+ AND length(a.name) BETWEEN length(b.name) - 3 AND length(b.name) + 3
+ AND lower(left(a.name, 1)) = lower(left(b.name, 1))
+WHERE rapidfuzz_token_set_ratio(a.name, b.name) > 88
+ORDER BY score DESC;
+```
+
+Two predicates do the heavy lifting before any string comparison runs: a length-bucket filter and a same-first-letter filter. Only pairs that pass both get scored by [`rapidfuzz_token_set_ratio`](#rapidfuzz_token_set_ratio). That's blocking — and it's what makes fuzzy matching tractable at scale.
+
+<Callout type="note" title="Be honest about cost">
+Every individual call is fast — the algorithms are vectorized C++ kernels from the upstream [RapidFuzz](https://github.com/maxbachmann/RapidFuzz) library. Pairwise self-joins, on the other hand, are **O(n²)**: 100k rows comparing against themselves is 10 billion candidate pairs. Without a blocking strategy that prunes the pair space first, fuzzy matching does not scale past a few tens of thousands of rows.
+
+This page treats blocking as a first-class concern, not an afterthought.
+</Callout>
+
+## Architecture
+
+This extension binds the [RapidFuzz](https://maxbachmann.github.io/RapidFuzz/) C++ library — the same engine behind Python's `rapidfuzz` package and the spiritual successor to `fuzzywuzzy` — as a set of DuckDB scalar functions. Each function takes `(VARCHAR, VARCHAR)` and returns a `DOUBLE`. There is no extra state, no secrets, no `ATTACH` interface; calls are pure functions composable into any `SELECT`, `WHERE`, `ON`, or `ORDER BY` clause.
+
+Two function families coexist:
+
+- **Ratio scores** (`rapidfuzz_ratio` and friends) return 0–100, mirroring the Python [`rapidfuzz.fuzz`](https://maxbachmann.github.io/RapidFuzz/Usage/fuzz.html) family.
+- **Distance algorithms** (Jaro, Jaro-Winkler, Hamming, Indel, [Levenshtein](https://en.wikipedia.org/wiki/Levenshtein_distance) / OSA, LCS, Prefix, Postfix) ship four variants each — `_distance`, `_similarity`, `_normalized_distance`, `_normalized_similarity`. The naming is mechanical: `rapidfuzz_<algo>[_normalized]_<distance|similarity>`.
+
+Behavior matches the upstream library closely enough that the [RapidFuzz documentation](https://maxbachmann.github.io/RapidFuzz/) is the authoritative reference for algorithm semantics.
+
+## Pick the right algorithm
+
+| Situation | Function |
+|---|---|
+| One score, 0–100, sane default | [`rapidfuzz_ratio`](#rapidfuzz_ratio) |
+| One string is a fragment of the other | [`rapidfuzz_partial_ratio`](#rapidfuzz_partial_ratio) |
+| Same words, different order | [`rapidfuzz_token_sort_ratio`](#rapidfuzz_token_sort_ratio) |
+| Duplicated or stray words | [`rapidfuzz_token_set_ratio`](#rapidfuzz_token_set_ratio) |
+| Human names, typos at the end | [`rapidfuzz_jaro_winkler_normalized_similarity`](#rapidfuzz_jaro_winkler_normalized_similarity) |
+| Single-character typos / adjacent swaps | [`rapidfuzz_osa_distance`](#rapidfuzz_osa_distance) |
+| Equal-length identifiers (SKUs, hashes) | [`rapidfuzz_hamming_distance`](#rapidfuzz_hamming_distance) |
+
+For cross-pair comparisons where strings differ in length, prefer the `_normalized_*` variants — raw distance penalizes longer strings just for being long. See the [Wikipedia article on Jaro–Winkler distance](https://en.wikipedia.org/wiki/Jaro%E2%80%93Winkler_distance) for the formal definitions of the name-matching variants.
+
+## Blocking strategies
+
+The whole game on real datasets is reducing the candidate-pair space before scoring. A few patterns that compose cleanly:
+
+**Length bucket.** Two strings that differ in length by more than `k` characters can't have a Levenshtein distance ≤ `k`. Filter on `length(a) BETWEEN length(b) - k AND length(b) + k`.
+
+**First-letter (or first-N) prefix.** Cheap join key. Misses pairs where the first letter is itself the typo (rare for names, common for OCR'd text).
+
+**Length + first-letter combined.** What the lead snippet uses; usually enough to make a 100k × 100k join finish in seconds.
+
+**Phonetic prefix (soundex / metaphone).** When typos are phonetic ("Smyth" vs "Smith"). DuckDB's built-in [`fuzzy`](https://duckdb.org/docs/extensions/fuzzy.html) extension supplies the codes; group by code and only score within a group.
+
+**Token-based blocking.** For multi-word strings, require at least one token in common (e.g. via a normalized array intersection). Excellent for company names where the legal suffix differs but the brand word is shared.
+
+Compose blocking with the actual scoring step in a single SQL pass — the planner pushes the cheap predicates ahead of the expensive ratio call automatically.
+
+## Pre-normalize once, score many
+
+Hoist deterministic transformations out of the join so they run `O(n)` instead of `O(n²)`:
+
+```sql
+WITH normalized AS (
+  SELECT id,
+         lower(regexp_replace(name, '[^a-z0-9 ]', '', 'g')) AS name_n,
+         length(name) AS len,
+         left(lower(name), 1)              AS block_letter
+  FROM customers
+)
+SELECT a.id, b.id,
+       rapidfuzz_token_set_ratio(a.name_n, b.name_n) AS score
+FROM normalized a
+JOIN normalized b
+  ON a.id < b.id
+ AND a.block_letter = b.block_letter
+ AND a.len BETWEEN b.len - 3 AND b.len + 3
+WHERE rapidfuzz_token_set_ratio(a.name_n, b.name_n) > 90;
+```
+
+When you also need consistent casing, pluralization, or struct-key rewrites, the sibling [`inflector`](/products/extensions/inflector) extension covers the cleanup side of the same workflow — both sit in the matching-and-casing string-munging bucket.
+
+## Top-1 per left row
+
+Record-linkage usually wants exactly one best match per left record. Use `QUALIFY` (DuckDB's window-filter clause):
+
+```sql
+SELECT a.id AS left_id,
+       b.id AS right_id,
+       rapidfuzz_jaro_winkler_normalized_similarity(a.name, b.name) AS score
+FROM left_records  a
+JOIN right_records b
+  ON left(a.name, 1) = left(b.name, 1)            -- blocking
+WHERE rapidfuzz_jaro_winkler_normalized_similarity(a.name, b.name) > 0.92
+QUALIFY ROW_NUMBER() OVER (
+  PARTITION BY a.id
+  ORDER BY rapidfuzz_jaro_winkler_normalized_similarity(a.name, b.name) DESC
+) = 1;
+```
+
+## When to reach for something else
+
+- **Trigram indexes / FTS.** For a single query string against millions of rows, a trigram or full-text index returns top-N candidates in sub-linear time. Score the candidates with RapidFuzz, but don't expect this extension to replace the index.
+- **Embeddings / vector search.** If "similarity" really means semantic similarity (paraphrase, translation), edit distance is the wrong tool. Reach for an embedding model and a vector index instead.
+- **Production fuzzy joins on >10M rows.** Even with aggressive blocking, very large self-joins benefit from purpose-built record-linkage tooling (Splink, Dedupe). RapidFuzz is the right primitive for the inner-loop score; a record-linkage framework manages the candidate generation, blocking, and resolution around it.

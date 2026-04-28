@@ -1,0 +1,122 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use Bitfilters?",
+  "description": "Build a probabilistic set-membership filter from a column, ship it as a small `BLOB`, and probe it from anywhere DuckDB runs. Answer **\"is this maybe in the set?\"** in O(1) using a fraction of the memory of the source set — with **no false negatives** and a tunable false-positive rate. The classic use is *skipping work when the answer is definitely no*: pre-filter joins, skip partitions, dodge cache misses.",
+  "sections": [
+    {
+      "icon": "🎯",
+      "title": "What this extension is for",
+      "description": "Bitfilters materializes four families of [approximate-membership-query (AMQ) data structures](https://en.wikipedia.org/wiki/Approximate_membership_query_filter) as DuckDB aggregate functions. Build the filter once, store the BLOB as an ordinary column, probe it later — locally, in another DuckDB instance, or shipped over the network.",
+      "bulletPoints": [
+        {
+          "label": "Skip a join when the answer is definitely no",
+          "description": "Build a filter from the small \"interesting\" side of a join, then test the large side against it. False positives let an unwanted row through; false negatives never happen — so the cheap probe + expensive verify pattern is exact for correctness."
+        },
+        {
+          "label": "Per-partition data skipping",
+          "description": "Materialize one filter per logical partition, store alongside metadata, and use [`*_filter_contains`](#xor8_filter_contains) at query time to skip whole partitions that can't possibly contain the key. For high-cardinality lookups against fact tables this routinely skips 99%+ of partitions."
+        },
+        {
+          "label": "Compact set artifacts",
+          "description": "A [Binary Fuse 8](https://arxiv.org/abs/1912.08258) filter is under 9 bits per key — three orders of magnitude smaller than the source set for typical UUID workloads. Persist it in a Parquet column, ship it to another process, embed it in a manifest."
+        },
+        {
+          "label": "DuckDB-native join filters",
+          "description": "[`bitfilters_duckdb_bloom_filter_create`](#bitfilters_duckdb_bloom_filter_create) emits filters in the *same internal format* DuckDB uses for its own runtime join filters — so you can persist a filter, then re-use it in custom data-skipping logic that the optimizer recognizes."
+        }
+      ]
+    },
+    {
+      "icon": "🧪",
+      "title": "Filter families",
+      "description": "Four families, three design points. Pick on **mutation**, **memory**, and **false-positive rate** in that order — not the other way around.",
+      "bulletPoints": [
+        {
+          "label": "Quotient — dynamic sets",
+          "description": "[`quotient_filter`](#quotient_filter) is the only family here that supports **deletion and resize**. Pick this when the underlying set evolves at runtime. Tunable via `q` (slot count = 2^q) and `r` (remainder bits, FPR ≈ 2^(−r)). See [Quotient filter](https://en.wikipedia.org/wiki/Quotient_filter)."
+        },
+        {
+          "label": "XOR — static, cross-system compatible",
+          "description": "[`xor8_filter`](#xor8_filter) is ~9 bits per key at ~0.39% FPR; [`xor16_filter`](#xor16_filter) is ~18 bits per key at ~0.0015% FPR. ~20% smaller than a Bloom filter at the same FPR. Static — built once, queried many times. See the [Xor filters paper (Graf & Lemire, 2019)](https://arxiv.org/abs/1912.08258)."
+        },
+        {
+          "label": "Binary Fuse — modern best-in-class",
+          "description": "[`binary_fuse8_filter`](#binary_fuse8_filter) typically lands **under 9 bits per key** with very fast construction and lookups — currently the most space-efficient static filter family. [`binary_fuse16_filter`](#binary_fuse16_filter) for very-low-FPR static workloads. Default choice for read-heavy, append-only sets."
+        },
+        {
+          "label": "DuckDB Bloom — native compatibility",
+          "description": "[`bitfilters_duckdb_bloom_filter_create`](#bitfilters_duckdb_bloom_filter_create) and [`bitfilters_duckdb_bloom_filter_probe`](#bitfilters_duckdb_bloom_filter_probe) speak DuckDB's *internal* [Bloom filter](https://en.wikipedia.org/wiki/Bloom_filter) format. Pair with [`bitfilters_duckdb_hash`](#bitfilters_duckdb_hash) — the hash layout matches what DuckDB's optimizer expects."
+        }
+      ]
+    },
+    {
+      "icon": "⚙️",
+      "title": "How it works",
+      "description": "Every filter constructor is a DuckDB **aggregate function** that takes `UBIGINT` hashes as input and returns a single `BLOB`. The result is dense, self-contained, and storable like any other column.",
+      "bulletPoints": [
+        {
+          "label": "Hashes go in, BLOBs come out",
+          "description": "Hash your input first — DuckDB's built-in [`hash()`](https://duckdb.org/docs/sql/functions/utility#hashvalue) is fine for most cases. For specific algorithms (xxh3_64, MurmurHash3, rapidhash), pair with the [`hashfuncs`](/products/extensions/hashfuncs) extension. Filters distribute keys based on hash bits — quality of the hash matters."
+        },
+        {
+          "label": "Filters as columns",
+          "description": "Every filter is just a `BLOB`. Store it in a regular column, persist to Parquet, send over the wire, hold in a CTE, partition by anything — there is no special filter type, only the matching `*_contains` probe function."
+        },
+        {
+          "label": "No false negatives, ever",
+          "description": "The filter never lies about absence: if [`xor8_filter_contains`](#xor8_filter_contains) returns `false`, the key is definitively not in the source set. False positives are bounded — count them empirically by probing known non-members and verify the rate matches the family."
+        },
+        {
+          "label": "Set-membership only — not cardinality",
+          "description": "Bitfilters answers **\"is X in the set?\"**. For cardinality estimation (\"how many distinct items?\") and set intersection sizes, use the sibling [`datasketches`](/products/extensions/datasketches) extension — it has Theta sketches and HyperLogLog for that workload. The two extensions cover complementary problems."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "Honest limitations",
+      "description": "What probabilistic filters cannot do — read this before designing a system around one.",
+      "bulletPoints": [
+        {
+          "label": "False positives are inherent",
+          "description": "Every family here trades exactness for memory. A `true` from `*_contains` means *probably present*, not *definitely present*. If your downstream cannot tolerate even one wrong yes, pair the probe with an exact verify — the filter just narrows the candidate set."
+        },
+        {
+          "label": "Filters cannot enumerate",
+          "description": "There's no way to list the members from a filter — it's set-membership only. If you need the elements themselves, store them; if you need cardinality, use [`datasketches`](/products/extensions/datasketches)."
+        },
+        {
+          "label": "Static families don't support updates",
+          "description": "XOR, Binary Fuse, and DuckDB-Bloom filters are built once and immutable. Adding a single key requires a full rebuild. Use [`quotient_filter`](#quotient_filter) when the set genuinely churns, or rebuild on a cadence that matches your write throughput."
+        },
+        {
+          "label": "Tiny sets don't earn the filter",
+          "description": "For a few thousand elements an in-memory hash set or a sorted array is faster and exact. Bitfilters earns its keep when the source set is large enough that **storing the full set is what hurts** — millions of keys, per-partition replication, network ship costs."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Pre-filter an expensive join or lookup",
+          "description": "Build a filter from the small side, probe from the large side, verify only candidates that pass. The probe is O(1) and fits in cache; the verify only runs at the false-positive rate. Net: the join sees a fraction of the rows it would otherwise."
+        },
+        {
+          "title": "Per-partition data skipping",
+          "description": "Materialize one [`binary_fuse8_filter`](#binary_fuse8_filter) per partition at write time, store alongside partition metadata. At query time, [`binary_fuse8_filter_contains`](#binary_fuse8_filter_contains) tells the planner which partitions can possibly contain the key — skip the rest."
+        },
+        {
+          "title": "Ship a set as a tiny artifact",
+          "description": "A 10M-key Binary Fuse 8 filter is ~11 MB. Persist it to S3, attach it to a manifest, distribute it to read replicas, embed it in a CDN — any place where shipping the full set would be too big."
+        },
+        {
+          "title": "Dedupe pre-check / cache hit prediction",
+          "description": "Probe a filter built from \"already-seen\" keys before doing the expensive dedupe work. Misses are free; hits go to the exact path. Same pattern for predicting cache hits before issuing the round-trip."
+        }
+      ]
+    }
+  ]
+}

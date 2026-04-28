@@ -1,0 +1,99 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use GeoSilo?",
+  "description": "DuckDB's [`spatial` extension](https://duckdb.org/docs/extensions/spatial) stores geometry as [WKB](https://en.wikipedia.org/wiki/Well-known_text_representation_of_geometry) — float64 coordinate pairs at 16 bytes each, even though adjacent vertices in a polygon share nearly all their bits. GeoSilo replaces that with a delta-encoded integer layout and a first-class `GEOSILO` column type. Most existing SQL keeps working because GeoSilo overlays the same `ST_*` surface; the introspection / bounding-box / measurement calls get **native** overloads that skip the WKB decode entirely.",
+  "sections": [
+    {
+      "icon": "📦",
+      "title": "What this extension is for",
+      "description": "Compact geometry storage with a transparent `ST_*` surface. The `GEOSILO` type is a drop-in replacement for `GEOMETRY` columns in the cases GeoSilo targets — large static or slowly-changing polygon / point datasets where on-disk size and bounding-box / area / length speed matter more than complex spatial operations.",
+      "bulletPoints": [
+        {
+          "label": "Smaller on disk",
+          "description": "On the [TIGER/Line 2025](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html) US Census dataset, `GEOSILO + ZSTD` is **~21% smaller than DuckDB's `GEOMETRY`** column (and ~70% smaller as raw blobs vs WKB). The win comes from delta-encoded int16 deltas compressing exceptionally well under [`ZSTD`](https://en.wikipedia.org/wiki/Zstd)."
+        },
+        {
+          "label": "Native ST_* fast paths",
+          "description": "[`ST_GeometryType`](#st_geometrytype), [`ST_IsEmpty`](#st_isempty), [`ST_NPoints`](#st_npoints), [`ST_X`](#st_x) / [`ST_Y`](#st_y), [`ST_XMin`](#st_xmin) / [`ST_XMax`](#st_xmax) / [`ST_YMin`](#st_ymin) / [`ST_YMax`](#st_ymax), [`ST_Area`](#st_area), [`ST_Length`](#st_length), [`ST_Perimeter`](#st_perimeter) all have GEOSILO-native implementations. They read the silo header or walk the integer delta stream directly — no GEOS round-trip."
+        },
+        {
+          "label": "Transparent fallback",
+          "description": "Any `ST_*` function without a native GEOSILO overload — [`ST_Buffer`](https://duckdb.org/docs/extensions/spatial), [`ST_Union`](https://duckdb.org/docs/extensions/spatial), `ST_AsText`, etc. — still works. The implicit `GEOSILO → GEOMETRY` cast runs [`geosilo_decode`](#geosilo_decode) on demand."
+        },
+        {
+          "label": "Arrow IPC interchange",
+          "description": "GeoSilo registers an [Arrow extension type](https://arrow.apache.org/docs/format/CanonicalExtensions.html) named `queryfarm.geosilo`. Producers tag a binary column with that metadata; the DuckDB consumer auto-decodes silo blobs to `GEOMETRY` on read and re-encodes on write. CRS rides through the metadata so scale stays consistent end-to-end."
+        }
+      ]
+    },
+    {
+      "icon": "🧮",
+      "title": "How the encoding works",
+      "description": "GeoSilo's encoding is straightforward and verifiable from the README. No ML, no learned codec — just delta encoding plus integer scaling.",
+      "bulletPoints": [
+        {
+          "label": "Coordinates as scaled integers",
+          "description": "Each `(x, y)` pair is multiplied by an integer scale and stored as integers. For [`EPSG:4326`](https://epsg.io/4326) (degrees), the default scale is `1e7` — about 1 cm precision. For projected CRSes like UTM or [`EPSG:3857`](https://epsg.io/3857) (meters), the default is `100`, also 1 cm."
+        },
+        {
+          "label": "Delta encoding within rings",
+          "description": "The first vertex of each ring is stored as a 4-byte int32. Every subsequent vertex is a **2-byte int16 [delta](https://en.wikipedia.org/wiki/Delta_encoding)** from the previous one. Roughly 90% of deltas fit in 2 bytes; the remainder fall back to a 6-byte escape sequence."
+        },
+        {
+          "label": "Tight headers, no closing vertex",
+          "description": "Points use a 1-byte compact header. Polygon rings omit the closing duplicate vertex (it's reconstructed on decode). The header carries `geometry_type`, `vertex_type`, and `scale`, all readable by [`geosilo_metadata`](#geosilo_metadata) without touching the body."
+        },
+        {
+          "label": "Bounding-box and area on integers",
+          "description": "Native `ST_XMin`/`XMax`/`YMin`/`YMax` walk the int16 delta stream and accumulate; native `ST_Area` runs the [shoelace formula](https://en.wikipedia.org/wiki/Shoelace_formula) on int64 coordinates rebuilt from the same stream. Both avoid the GEOS dependency surface for these calls."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "Honest scope",
+      "description": "GeoSilo is a storage and fast-path extension, not a replacement for GEOS-backed spatial operations.",
+      "bulletPoints": [
+        {
+          "label": "Native overloads are limited",
+          "description": "The native fast path covers introspection, bounding-box accessors, and area / length / perimeter. Operations like `ST_Buffer`, `ST_Union`, `ST_Intersection`, `ST_AsText`, and most of the wider `ST_*` surface still auto-decode to `GEOMETRY` and use [`spatial`](https://duckdb.org/docs/extensions/spatial)'s GEOS-backed implementation."
+        },
+        {
+          "label": "Lossy at the chosen scale",
+          "description": "Coordinates round to the integer scale you pick. The defaults give ~1 cm precision for the common CRSes; finer-grained data needs an explicit `geosilo_encode(geom, scale)`. Round-tripping through GeoSilo and back is **not bit-exact** with the original float64 WKB."
+        },
+        {
+          "label": "ZSTD does the heavy lifting",
+          "description": "Without [`ZSTD`](https://en.wikipedia.org/wiki/Zstd), raw GEOSILO blobs are actually larger than DuckDB's columnar `GEOMETRY` storage. `USING COMPRESSION zstd` is what makes the storage win real — use it."
+        },
+        {
+          "label": "Spatial extension required",
+          "description": "GeoSilo overlays [`spatial`](https://duckdb.org/docs/extensions/spatial)'s `ST_*` namespace. Load `spatial` first, then `geosilo`, in every connection that needs the GEOSILO type."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Shrink a static polygon dataset",
+          "description": "TIGER/Line, OSM extracts, parcels, admin boundaries — geometry that's read often and rewritten rarely. Define the column as [`GEOSILO`](#how-the-encoding-works) `USING COMPRESSION zstd` and the same SQL keeps working at a fraction of the storage cost."
+        },
+        {
+          "title": "Native bounding-box prefilter",
+          "description": "Filter on [`ST_XMin`](#st_xmin) / [`ST_XMax`](#st_xmax) / [`ST_YMin`](#st_ymin) / [`ST_YMax`](#st_ymax) before any GEOS-backed operation. The native overloads run on integer deltas — fast enough that the prefilter pays for itself even in single-table scans."
+        },
+        {
+          "title": "Compact geometry over the wire",
+          "description": "Use the [`queryfarm.geosilo`](https://arrow.apache.org/docs/format/CanonicalExtensions.html) Arrow extension type to ship encoded geometry between services. Smaller payloads, transparent decode at the DuckDB consumer."
+        },
+        {
+          "title": "Fast measurement scans",
+          "description": "Per-row [`ST_Area`](#st_area) / [`ST_Length`](#st_length) / [`ST_Perimeter`](#st_perimeter) on millions of polygons without the WKB decode loop. The shoelace runs on int64; `ZSTD` keeps the data small enough that I/O isn't the bottleneck either."
+        }
+      ]
+    }
+  ]
+}

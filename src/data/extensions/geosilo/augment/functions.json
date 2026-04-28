@@ -2,24 +2,43 @@
   {
     "name": "geosilo_encode",
     "categories": ["Encoding"],
-    "description": "Encode a GEOMETRY into the compact GEOSILO format. With one argument, scale is auto-detected from the geometry's CRS (or defaults to 1e7); with two, the second argument explicitly sets the integer scale.",
+    "description": "Encode a `GEOMETRY` into the compact GEOSILO format and return a `BLOB`. With one argument, the integer scale is derived from the geometry's CRS — degrees default to `1e7` (≈1 cm), projected meters to `100` (1 cm). With two arguments, the second explicitly sets the scale.",
     "examples": [
-      { "description": "Default scale", "code": "SELECT geosilo_encode(ST_GeomFromText('POINT(1 2)'));" },
-      { "description": "Explicit scale (UTM / Web Mercator → 100 = 1cm precision)", "code": "SELECT geosilo_encode(geom, 100) FROM utm_data;" }
+      { "description": "Default scale (auto from CRS, or `1e7` if absent)", "code": "SELECT geosilo_encode(ST_GeomFromText('POINT(1 2)'));" },
+      { "description": "Explicit scale — UTM / Web Mercator data, 1 cm precision", "code": "SELECT geosilo_encode(geom, 100) FROM utm_data;" }
     ],
     "relatedFunctions": ["geosilo_decode", "geosilo_metadata"]
   },
   {
     "name": "geosilo_decode",
     "categories": ["Encoding"],
-    "description": "Decode a GEOSILO blob back into GEOMETRY. Most callers don't need this — the implicit cast from GEOSILO to GEOMETRY runs it for any ST_* function that doesn't have a native GEOSILO overload.",
-    "examples": [{ "description": "Roundtrip", "code": "SELECT ST_AsText(geosilo_decode(geosilo_encode(ST_GeomFromText('POLYGON((0 0,10 0,10 10,0 10,0 0))'))));" }],
-    "relatedFunctions": ["geosilo_encode"]
+    "description": "Decode a GEOSILO blob back into a standard `GEOMETRY`. Most callers don't need to call this directly — the implicit `GEOSILO → GEOMETRY` cast runs it on demand for any `ST_*` function that doesn't have a native GEOSILO overload (e.g. [`ST_Buffer`](https://duckdb.org/docs/extensions/spatial), [`ST_Union`](https://duckdb.org/docs/extensions/spatial), `ST_AsText`).",
+    "examples": [
+      { "description": "Round-trip a polygon through the encoding", "code": "SELECT ST_AsText(\n  geosilo_decode(geosilo_encode(ST_GeomFromText('POLYGON((0 0,10 0,10 10,0 10,0 0))')))\n);" }
+    ],
+    "relatedFunctions": ["geosilo_encode", "geosilo_metadata"]
   },
   {
     "name": "geosilo_metadata",
     "categories": ["Encoding"],
-    "description": "Read a GEOSILO blob's header without decoding the geometry. Returns `STRUCT(geometry_type, vertex_type, scale)` — useful for type filtering and schema inspection.",
-    "relatedFunctions": ["geosilo_encode"]
-  }
+    "description": "Read a GEOSILO blob's header **without decoding the geometry**. Returns `STRUCT(geometry_type VARCHAR, vertex_type VARCHAR, scale BIGINT)`. Useful for filtering by geometry type or auditing the integer scale of a stored column before any heavy spatial work.",
+    "examples": [
+      { "description": "Inspect the header of stored silo blobs", "code": "SELECT geosilo_metadata(silo_blob) AS meta\nFROM compact_table\nLIMIT 5;\n-- {'geometry_type':'POLYGON','vertex_type':'XY','scale':10000000}" }
+    ],
+    "relatedFunctions": ["geosilo_encode", "geosilo_decode"]
+  },
+
+  { "name": "ST_GeometryType", "categories": ["Introspection (native)"], "description": "Native GEOSILO overload — returns the geometry type (e.g. `POINT`, `POLYGON`) by reading a single byte of the silo header. No WKB decode.", "relatedFunctions": ["ST_IsEmpty", "ST_NPoints", "geosilo_metadata"] },
+  { "name": "ST_IsEmpty",      "categories": ["Introspection (native)"], "description": "Native GEOSILO overload — `TRUE` if the encoded geometry has no vertices.", "relatedFunctions": ["ST_NPoints", "ST_GeometryType"] },
+  { "name": "ST_NPoints",      "categories": ["Introspection (native)"], "description": "Native GEOSILO overload — total vertex count, read from the silo header.", "relatedFunctions": ["ST_IsEmpty", "ST_Length"] },
+  { "name": "ST_X",            "categories": ["Introspection (native)"], "description": "Native GEOSILO overload — X coordinate of a single-point geometry, decoded from the silo header without materializing a `GEOMETRY`.", "relatedFunctions": ["ST_Y", "ST_XMin", "ST_XMax"] },
+  { "name": "ST_Y",            "categories": ["Introspection (native)"], "description": "Native GEOSILO overload — Y coordinate of a single-point geometry, decoded from the silo header without materializing a `GEOMETRY`.", "relatedFunctions": ["ST_X", "ST_YMin", "ST_YMax"] },
+  { "name": "ST_XMin",         "categories": ["Introspection (native)"], "description": "Native GEOSILO overload — minimum X across the geometry, computed by walking the integer delta stream. Pair with `ST_XMax` / `ST_YMin` / `ST_YMax` for native bounding-box prefilters.", "relatedFunctions": ["ST_XMax", "ST_YMin", "ST_YMax"] },
+  { "name": "ST_XMax",         "categories": ["Introspection (native)"], "description": "Native GEOSILO overload — maximum X across the geometry. Walks the integer delta stream; no WKB decode.", "relatedFunctions": ["ST_XMin", "ST_YMin", "ST_YMax"] },
+  { "name": "ST_YMin",         "categories": ["Introspection (native)"], "description": "Native GEOSILO overload — minimum Y across the geometry. Walks the integer delta stream; no WKB decode.", "relatedFunctions": ["ST_XMin", "ST_XMax", "ST_YMax"] },
+  { "name": "ST_YMax",         "categories": ["Introspection (native)"], "description": "Native GEOSILO overload — maximum Y across the geometry. Walks the integer delta stream; no WKB decode.", "relatedFunctions": ["ST_XMin", "ST_XMax", "ST_YMin"] },
+
+  { "name": "ST_Area",      "categories": ["Measurement (native)"], "description": "Native GEOSILO overload — polygon area computed via the [shoelace formula](https://en.wikipedia.org/wiki/Shoelace_formula) directly on int64 coordinates rebuilt from the delta stream. Skips the WKB decode entirely.", "relatedFunctions": ["ST_Perimeter", "ST_Length"] },
+  { "name": "ST_Length",    "categories": ["Measurement (native)"], "description": "Native GEOSILO overload — total length of linear geometries, computed on the integer delta stream without rehydrating a `GEOMETRY`.", "relatedFunctions": ["ST_Perimeter", "ST_Area"] },
+  { "name": "ST_Perimeter", "categories": ["Measurement (native)"], "description": "Native GEOSILO overload — perimeter of polygonal geometries, computed on the integer delta stream without rehydrating a `GEOMETRY`.", "relatedFunctions": ["ST_Area", "ST_Length"] }
 ]

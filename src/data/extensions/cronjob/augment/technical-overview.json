@@ -1,0 +1,103 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use Cronjob?",
+  "description": "Schedule SQL queries to run on a [cron expression](https://en.wikipedia.org/wiki/Cron) directly from inside DuckDB — no external scheduler, no shell wrapper, no extra process. The catch is the scope: schedules live in memory inside the running DuckDB process. When the process exits, every job is forgotten. Best fit when DuckDB is already a long-running service (a server, a daemon, an analytics worker), not a CLI you start and stop.",
+  "sections": [
+    {
+      "icon": "⏰",
+      "title": "What this extension is for",
+      "description": "Cronjob turns a long-running DuckDB process into its own task scheduler. Register a SQL query against a cron expression and DuckDB fires it on schedule — useful when the work is already SQL and you want to keep it that way.",
+      "bulletPoints": [
+        {
+          "label": "Periodic refresh of materialized data",
+          "description": "Rebuild a rollup table every 5 minutes, or recompute a daily aggregate at 02:00 — wrap a [`CREATE OR REPLACE TABLE`](https://duckdb.org/docs/sql/statements/create_table) in [`cron`](#cron) and the scheduler keeps it current as long as the process is up."
+        },
+        {
+          "label": "Recurring exports",
+          "description": "Schedule a [`COPY ... TO`](https://duckdb.org/docs/sql/statements/copy) to write Parquet, CSV, or JSON to disk / S3 on a cadence. Pair with the [`httpfs`](https://duckdb.org/docs/extensions/httpfs/overview) extension for cloud destinations."
+        },
+        {
+          "label": "Periodic webhook / Slack alerts",
+          "description": "Combine with the [`http_client`](/products/extensions/http_client) or [`webmacro`](/products/extensions/webmacro) extensions: a scheduled query fires an HTTP POST whenever a metric crosses a threshold."
+        },
+        {
+          "label": "Maintenance tasks",
+          "description": "Schedule [`ANALYZE`](https://duckdb.org/docs/sql/statements/analyze), `VACUUM`, statistics rebuilds, log-table pruning, or any other housekeeping that should happen on a cadence rather than on every query."
+        }
+      ]
+    },
+    {
+      "icon": "⚙️",
+      "title": "How it works",
+      "description": "[`cron(query, schedule)`](#cron) registers an entry in an in-memory job table managed by the extension. A background thread inside the DuckDB process wakes on the cron tick, executes the registered SQL through the same connection, and records the result in [`cron_jobs`](#cron_jobs).",
+      "bulletPoints": [
+        {
+          "label": "Six-field cron expressions",
+          "description": "Schedules use the six-field form `second minute hour day-of-month month day-of-week`, with the standard `*`, `?`, `,`, `-`, `/` operators and `MON`–`SUN` weekday names. Sanity-check expressions on [crontab.guru](https://crontab.guru/) (note: crontab.guru parses the five-field POSIX form — Cronjob's leading `seconds` field is an extension)."
+        },
+        {
+          "label": "In-memory job registry",
+          "description": "Jobs live in process memory only. There is no table on disk, no WAL entry, no cluster coordination. [`cron_jobs`](#cron_jobs) is the introspection table; [`cron_delete`](#cron_delete) is the un-register call."
+        },
+        {
+          "label": "Same connection, same access",
+          "description": "Scheduled queries run against the database the scheduler was registered from, with the same access rights. Anything you can run interactively, you can schedule."
+        },
+        {
+          "label": "No persistence",
+          "description": "Restart the process and every registration is gone. There is no file to delete, no stale entry to clean up — and equally, no resume after a crash. Restart-safe scheduling lives outside this extension."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "Production caveats",
+      "description": "The fundamentals to internalize before scheduling anything important.",
+      "bulletPoints": [
+        {
+          "label": "Schedules die with the process",
+          "description": "This is the central caveat. A `kill -9`, a deploy, an OOM, or a clean shutdown all wipe the registry — there is no resume. If the work needs to happen on a wall-clock cadence regardless of process state, drive the run from an external orchestrator (system [`cron(8)`](https://man7.org/linux/man-pages/man8/cron.8.html), [`systemd` timers](https://www.freedesktop.org/software/systemd/man/systemd.timer.html), [Kubernetes CronJob](https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/)) and have *that* invoke DuckDB."
+        },
+        {
+          "label": "No multi-process coordination",
+          "description": "Two DuckDB processes that both load Cronjob and register the same job will both run it. There is no leader election, no lease — pick one process to own the schedule, or de-duplicate downstream."
+        },
+        {
+          "label": "Errors are recorded, not retried",
+          "description": "A failed query writes its error into `last_result` in [`cron_jobs`](#cron_jobs). The extension does not retry, back off, or alert — wrap your scheduled query in its own error-reporting logic (write to an audit table, fire a webhook) if you need notification."
+        },
+        {
+          "label": "Long-running queries block the next tick",
+          "description": "Each registered job is single-threaded against itself. If a query takes longer than the schedule interval, the next tick waits — no overlap, no parallel runs of the same job."
+        },
+        {
+          "label": "Experimental status",
+          "description": "Marked experimental upstream. The function surface is small and stable in spirit, but pin a known-good extension version in production until it's promoted."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Refresh a rollup table on a cadence",
+          "description": "[`CREATE OR REPLACE TABLE`](https://duckdb.org/docs/sql/statements/create_table) wrapped in [`cron`](#cron) — the simplest path to an always-fresh aggregate without an external scheduler."
+        },
+        {
+          "title": "Periodic exports to disk or S3",
+          "description": "Schedule a [`COPY ... TO`](https://duckdb.org/docs/sql/statements/copy) to write Parquet to a local path or, with [`httpfs`](https://duckdb.org/docs/extensions/httpfs/overview), to S3 / GCS — daily reports without leaving SQL."
+        },
+        {
+          "title": "Threshold-triggered webhooks",
+          "description": "Pair with the [`http_client`](/products/extensions/http_client) extension: a query that POSTs to a Slack / PagerDuty webhook whenever a metric crosses a threshold, scheduled to run every minute."
+        },
+        {
+          "title": "Routine maintenance",
+          "description": "Schedule [`ANALYZE`](https://duckdb.org/docs/sql/statements/analyze), prune log tables older than N days, or rebuild secondary indexes — work that doesn't belong on the hot path of any single query."
+        }
+      ]
+    }
+  ]
+}

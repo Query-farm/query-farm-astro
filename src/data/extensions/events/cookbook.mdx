@@ -1,107 +1,167 @@
-## How it works
-
-The extension intercepts DuckDB's internal events — queries, transactions, connections — and writes one JSON object per event to the **stdin of an external program**. The program lives outside DuckDB and can do whatever it wants with the stream: write to a file, ship to Kafka, post to an HTTP collector, hand to a SIEM.
-
-There's no SQL to call. Configuration is via PRAGMAs.
-
-## Setup
+## Wire up a handler
 
 ```sql
 LOAD events;
 
--- Where to send events
+-- Required: a fully-qualified path to an executable
 SET events_destination = '/usr/local/bin/event-handler.py';
 
--- Which events to capture (defaults to ['query_begin', 'query_end'])
+-- Pick the event types (default is ['query_begin', 'query_end'])
 SET events_types = ['query_begin', 'query_end'];
 
--- Optional: tag every event with a session name
+-- Optional: a tag included in every event line
 SET events_session_name = 'analytics-replica';
 
--- Optional: fire-and-forget delivery (don't block queries)
+-- Optional: don't block queries on the handler
 SET events_async = TRUE;
 ```
 
-## Audit logging
+## Append every query to a daily log file
 
-Track everything that runs against the database:
-
-```sql
-SET events_destination = '/usr/local/bin/log-to-file.sh';
-SET events_types = ['query_begin', 'query_end'];
-
--- All queries now appear in the log handler's stdin
-SELECT * FROM sensitive_data;
-```
-
-A simple handler:
+The smallest possible audit trail — one JSONL file per day, written by a shell handler:
 
 ```bash
 #!/usr/bin/env bash
-# log-to-file.sh — append every event line to a daily log
+# /usr/local/bin/log-to-file.sh — append every event to a daily log
 exec >> "/var/log/duckdb/events-$(date +%F).jsonl"
 cat
 ```
 
-## Error monitoring
-
-`query_end` includes error fields when a query fails. Pipe into your alerting system:
-
 ```sql
-SET events_destination = '/usr/local/bin/error-alerter.py';
-SET events_types = ['query_end'];
+SET events_destination = '/usr/local/bin/log-to-file.sh';
+SET events_types       = ['query_begin', 'query_end'];
 
--- Failed queries produce events with has_error=true
-SELECT * FROM nonexistent_table;
+-- Every query now appends two lines to today's log file
+SELECT count(*) FROM orders;
 ```
 
+## Page on query errors
+
+`query_end` includes `has_error`, `error_message`, and `error_type` when a query fails. Filter in the handler and post to your alerting system:
+
 ```python
-# error-alerter.py — page on query errors
+#!/usr/bin/env python3
+# /usr/local/bin/error-alerter.py
 import json, sys, urllib.request
+
 for line in sys.stdin:
     e = json.loads(line)
     if e.get('event') == 'query_end' and e.get('has_error'):
-        urllib.request.urlopen('https://alerts.example.com/page', data=line.encode())
+        urllib.request.urlopen(
+            'https://alerts.example.com/page',
+            data=line.encode(),
+        )
 ```
 
-## Transaction lifecycle
+```sql
+SET events_destination = '/usr/local/bin/error-alerter.py';
+SET events_types       = ['query_end'];
+SET events_async       = TRUE;     -- don't let a slow alerter block queries
+
+-- A failed query produces a query_end with has_error=true
+SELECT * FROM nonexistent_table;
+```
+
+## Track transaction lifecycle
+
+Capture the full begin/commit/rollback sequence and group by `transaction_id`:
 
 ```sql
 SET events_destination = '/usr/local/bin/txn-tracker.py';
-SET events_types = ['transaction_begin','transaction_commit','transaction_rollback'];
+SET events_types       = ['transaction_begin', 'transaction_commit', 'transaction_rollback'];
 
 BEGIN;
 INSERT INTO orders VALUES (1, 'widget', 99.99);
 COMMIT;
--- Two events: one begin, one commit, both with the same transaction_id
+-- Two events: transaction_begin and transaction_commit, same transaction_id.
 ```
 
-## Async vs sync
+A `transaction_rollback` carries `has_error` and `error_message` when the rollback was triggered by a failure.
 
-- **Sync (default)** — DuckDB writes the event, waits for the handler to acknowledge by reading the line, then returns from the originating query. Reliable but each event adds latency.
-- **`SET events_async = TRUE`** — fire and forget. DuckDB won't block on the handler. If the handler is slow or dies, events are dropped silently. Use for production high-throughput workloads where dropped audit events are tolerable.
+## Per-tenant attribution
 
-## Event schema
+When several DuckDB processes feed the same handler, tag each one and group downstream by `session_name`:
 
-Every event has these common fields:
-
-```json
-{
-  "event": "query_end",
-  "timestamp": "2026-01-12T15:30:45.123Z",
-  "database_path": "/data/analytics.duckdb",
-  "session_name": "my-session",
-  "connection_id": 1,
-  "process_id": 12345,
-  "query_id": 42,
-  "has_error": false
-}
+```sql
+-- In the per-tenant startup script
+SET events_destination  = '/usr/local/bin/multi-tenant-collector.py';
+SET events_session_name = 'tenant-acme';
+SET events_types        = ['query_begin', 'query_end'];
+SET events_async        = TRUE;
 ```
 
-Type-specific fields (query text, error message, transaction id, etc.) are added per event type. See the [EVENTS.md schema reference](https://github.com/Query-farm/events/blob/main/EVENTS.md) in the upstream repo.
+```python
+# /usr/local/bin/multi-tenant-collector.py — bucket events by tenant
+import json, sys, collections
 
-## Caveats
+counts = collections.Counter()
+for line in sys.stdin:
+    e = json.loads(line)
+    if e.get('event') == 'query_end':
+        counts[e.get('session_name', 'unknown')] += 1
+        # ... ship to your metrics backend, or write to per-tenant files
+```
 
-- **No persistent state** — restart DuckDB and the configuration is gone. Set the PRAGMAs again at session start (or wrap them in a profile).
-- **One handler per session.** Use a fan-out program (e.g. `tee | jq | ...`) if you want multiple consumers.
-- **Sync mode blocks queries.** If your handler hangs, queries hang. Use timeouts in the handler or switch to async.
+## Pair `query_begin` and `query_end` for latency
+
+Both events share a `query_id`. Maintain a small in-memory map in the handler:
+
+```python
+#!/usr/bin/env python3
+# /usr/local/bin/latency-recorder.py
+import json, sys
+from datetime import datetime
+
+starts = {}
+for line in sys.stdin:
+    e = json.loads(line)
+    qid = e.get('query_id')
+    ts  = datetime.fromisoformat(e['timestamp'].replace('Z', '+00:00'))
+
+    if e['event'] == 'query_begin':
+        starts[qid] = ts
+    elif e['event'] == 'query_end' and qid in starts:
+        latency_ms = (ts - starts.pop(qid)).total_seconds() * 1000
+        print(f"qid={qid} latency_ms={latency_ms:.1f} error={e.get('has_error')}",
+              flush=True)
+```
+
+```sql
+SET events_destination = '/usr/local/bin/latency-recorder.py';
+SET events_types       = ['query_begin', 'query_end'];
+```
+
+## Fan out to multiple consumers
+
+Only one `events_destination` is allowed. Point it at a small dispatcher that forks the stream:
+
+```bash
+#!/usr/bin/env bash
+# /usr/local/bin/fanout.sh — split the event stream three ways
+exec tee \
+  >(cat >> /var/log/duckdb/events.jsonl) \
+  >(curl -s -X POST -H 'content-type: application/x-ndjson' \
+        --data-binary @- https://collector.example.com/ingest) \
+  > /dev/null
+```
+
+```sql
+SET events_destination = '/usr/local/bin/fanout.sh';
+```
+
+## Re-applying configuration on session start
+
+PRAGMAs do not persist across restarts (same caveat as the [`cronjob`](/products/extensions/cronjob) extension). Stash the four `SET` statements in a startup file that every connection runs:
+
+```sql
+-- /etc/duckdb/init.sql
+LOAD events;
+SET events_destination  = '/usr/local/bin/event-handler.py';
+SET events_types        = ['query_begin', 'query_end'];
+SET events_session_name = 'prod-replica-1';
+SET events_async        = TRUE;
+```
+
+```bash
+duckdb -init /etc/duckdb/init.sql /data/analytics.duckdb
+```

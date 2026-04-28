@@ -1,18 +1,19 @@
-## Pick the Right Function
+## Pick the right function
 
 | You want… | Pick |
 |---|---|
-| A modern fast 64-bit default | `xxh3_64` |
-| Maximum throughput on 64-bit ints | `rapidhash` |
-| Cross-system compatibility with existing tools | `murmurhash3_32` or `murmurhash3_x64_128` |
-| Stable hex digest matching Python / Rust xxhash | `xxh3_128_hex` |
-| 128-bit space for billions of keys | `xxh3_128` or `murmurhash3_x64_128` |
+| A modern fast 64-bit default | [`xxh3_64`](#xxh3_64) |
+| Maximum throughput | [`rapidhash`](#rapidhash) |
+| Cross-system compatibility (Cassandra / Spark) | [`murmurhash3_x64_128`](#murmurhash3_x64_128) |
+| Stable hex digest matching Python / Rust xxhash | [`xxh3_128_hex`](#xxh3_128_hex) |
+| 128-bit space for billions of distinct keys | [`xxh3_128`](#xxh3_128) or [`murmurhash3_x64_128`](#murmurhash3_x64_128) |
+| Cryptographic guarantees | not this extension — use [`crypto`](/products/extensions/crypto) |
 
-For **cryptographic** uses (digests, signatures, anti-tamper), reach for [`crypto`](/products/extensions/crypto) instead — none of the functions in this extension are designed to resist adversarial collisions.
+For digests, signatures, HMAC, secure random, or anywhere an attacker controls the input, reach for [`crypto`](/products/extensions/crypto). None of the functions in this extension are designed to resist adversarial collisions.
 
-## Hash for Partitioning
+## Hash partitioning
 
-Pick a partition by taking the hash modulo the partition count. xxh3_64 is plenty here:
+Pick a partition by taking the hash modulo the partition count:
 
 ```sql
 SELECT user_id,
@@ -20,7 +21,7 @@ SELECT user_id,
 FROM users;
 ```
 
-A seed gives you a separate hash space — useful when you want different partitionings derived from the same column without correlating between them:
+A seed gives you a separate, uncorrelated hash space — useful when you want two different shardings of the same column without correlation between bucket assignments:
 
 ```sql
 SELECT user_id,
@@ -29,21 +30,36 @@ SELECT user_id,
 FROM users;
 ```
 
-## Cache Keys
+Materialize the result with [`CREATE TABLE AS`](https://duckdb.org/docs/sql/statements/create_table) to write a partitioned [Parquet](https://duckdb.org/docs/data/parquet/overview) dataset.
+
+## Cross-system routing (Cassandra / Spark)
+
+Use [`murmurhash3_x64_128`](#murmurhash3_x64_128) when DuckDB needs to compute the same routing hash that an upstream [Apache Cassandra](https://cassandra.apache.org/_/index.html) `Murmur3Partitioner` or [Apache Spark](https://spark.apache.org/) job would assign:
+
+```sql
+-- Same hash Cassandra's Murmur3Partitioner would compute
+SELECT key,
+       murmurhash3_x64_128(key) AS token
+FROM rows_to_route;
+```
+
+## String cache keys
+
+[`xxh3_128_hex`](#xxh3_128_hex) emits the canonical 32-character hex digest used by [Python xxhash](https://pypi.org/project/xxhash/) and [xxhash-rust](https://docs.rs/xxhash-rust/latest/xxhash_rust/) — the right pick when the key needs to be a string (Redis key, filename, URL component):
 
 ```sql
 -- Stable cache key for a (user, query) tuple
 SELECT user_id,
        query_text,
-       xxh3_128_hex([CAST(user_id AS VARCHAR), query_text]) AS cache_key
+       xxh3_128_hex(
+         CAST(user_id AS VARCHAR) || '|' || query_text
+       ) AS cache_key
 FROM query_log;
 ```
 
-Use the hex variant when the key needs to be a string — e.g. as a Redis key or filename.
+## Bloom / XOR / Cuckoo filter input
 
-## Bloom-Filter / XOR-Filter Inputs
-
-Pair with [`bitfilters`](/products/extensions/bitfilters) — most filter constructors take `UBIGINT` hash values as input:
+Pair with the [`bitfilters`](/products/extensions/bitfilters) extension. Most filter constructors take `UBIGINT` hashes — exactly what [`xxh3_64`](#xxh3_64) and [`rapidhash`](#rapidhash) produce:
 
 ```sql
 -- Build an xor8 filter from a column of strings
@@ -51,39 +67,67 @@ SELECT xor8_filter(xxh3_64(email)) AS filter
 FROM allowed_users;
 
 -- Test membership
-SELECT xor8_filter_contains(filter, xxh3_64(:candidate_email)) AS might_be_allowed
-FROM filter_table;
+SELECT xor8_filter_contains(f.filter, xxh3_64(:candidate_email))
+       AS might_be_allowed
+FROM filter_table f;
 ```
 
-## Reproducible Hash Across Languages
-
-`xxh3_128_hex` matches the canonical 32-character lowercase hex digest used by Python's `xxhash.xxh3_128().hexdigest()` and Rust's `xxhash_rust` (formatted as hex). That makes it useful as a cross-language fingerprint:
+For a [Bloom filter](https://en.wikipedia.org/wiki/Bloom_filter) using two independent hash functions, use two seeds of the same algorithm rather than two different algorithms:
 
 ```sql
--- This produces 7a83e2c999242f00c44b2b6fbdd3e5eb
-SELECT xxh3_128_hex('hello');
+SELECT xxh3_64(key, 1) AS h1,
+       xxh3_64(key, 2) AS h2
+FROM data;
 ```
 
-In Python:
+## Cross-language fingerprints
+
+[`xxh3_128_hex`](#xxh3_128_hex) matches the canonical lowercase 32-character hex form (`low64 || high64`) defined by the [xxHash specification](https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md). The same bytes hashed in any of these will produce the same digest:
+
+```sql
+SELECT xxh3_128_hex('hello');
+-- c779cfaa5e523818b5e9c1ad071b3e7f
+```
 
 ```python
+# Python — pip install xxhash (https://pypi.org/project/xxhash/)
 import xxhash
 xxhash.xxh3_128('hello').hexdigest()
-# '7a83e2c999242f00c44b2b6fbdd3e5eb'
+# 'c779cfaa5e523818b5e9c1ad071b3e7f'
 ```
 
-## Speed Comparison (rough)
+```rust
+// Rust — xxhash-rust (https://docs.rs/xxhash-rust/latest/xxhash_rust/)
+use xxhash_rust::xxh3::xxh3_128;
+format!("{:032x}", xxh3_128(b"hello").swap_bytes());
+```
 
-On modern x86_64, throughput on a single core (cached input):
+Useful as a content fingerprint shared between SQL and application code.
 
-| Function | Throughput |
-|---|---|
-| `rapidhash` | ~30–40 GB/s |
-| `xxh3_64` | ~25–35 GB/s |
-| `xxh64` | ~12–14 GB/s |
-| `xxh32` | ~6–8 GB/s |
-| `murmurhash3_x64_128` | ~5–7 GB/s |
-| `murmurhash3_32` | ~3–4 GB/s |
-| (cryptographic) `crypto_hash('sha2-256', …)` | ~0.5–2 GB/s |
+## Cheap deduplication
 
-Numbers vary with input size, alignment, and CPU. The point: non-crypto hashes are typically an order of magnitude faster than cryptographic ones — pick this extension when speed matters and adversarial collisions don't.
+`SELECT DISTINCT xxh3_64(...)` collapses duplicate payloads at near-RAM bandwidth. Drop to 128 bits when the keyspace is large enough that 64-bit birthday collisions matter:
+
+```sql
+-- Distinct payloads in a high-volume event stream
+SELECT DISTINCT xxh3_64(payload) AS payload_hash
+FROM events;
+
+-- Same idea with more headroom
+SELECT DISTINCT xxh3_128(payload) AS payload_hash
+FROM events;
+```
+
+Treat the hash as an *accidental*-collision-safe key, not a security claim.
+
+## Independent hashes via seeds
+
+Two different seeds give two uncorrelated hashes from the same input. Useful for double-hashing schemes, parallel shardings, and probabilistic data structures that need multiple hash functions:
+
+```sql
+SELECT key,
+       xxh3_64(key, 1) AS h1,
+       xxh3_64(key, 2) AS h2,
+       xxh3_64(key, 3) AS h3
+FROM keys;
+```

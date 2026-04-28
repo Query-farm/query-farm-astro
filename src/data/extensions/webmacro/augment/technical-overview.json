@@ -1,0 +1,103 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "Why Use WebMacro?",
+  "description": "Define a [DuckDB macro](https://duckdb.org/docs/sql/statements/create_macro) once — in a Git repo, gist, or any HTTP-served file — and `LOAD` it into any DuckDB session by URL. The point is **centralized, versioned macro distribution**: one source of truth for shared SQL helpers across machines, teammates, and notebooks.",
+  "sections": [
+    {
+      "icon": "📦",
+      "title": "What this extension is for",
+      "description": "DuckDB macros are great for encapsulating reusable SQL — a normalization helper, a parameterized search, a custom aggregate pattern. The friction is **distribution**: copy-paste between notebooks, drift between machines, no version control on the SQL itself. WebMacro replaces copy-paste with a URL.",
+      "bulletPoints": [
+        {
+          "label": "One source of truth",
+          "description": "Host the macro definition where your team already collaborates — a Git repo, an internal wiki that serves raw text, an S3 bucket, a private gist. Everyone calling [`load_macro_from_url`](#load_macro_from_url) gets the same SQL."
+        },
+        {
+          "label": "Version-controlled SQL",
+          "description": "Pin a specific commit URL (e.g. `https://raw.githubusercontent.com/org/repo/<sha>/macros/foo.sql`) and you've got reproducible macro loading. Reviewable in pull requests; rollback is a URL change."
+        },
+        {
+          "label": "Session-start bootstrap",
+          "description": "Load a handful of standard macros at the top of a notebook or script — one [`SELECT load_macro_from_url(url) FROM (VALUES (...))`](#load_macro_from_url) call and the session has its toolbox."
+        },
+        {
+          "label": "Both scalar and table macros",
+          "description": "DuckDB supports [scalar `MACRO`](https://duckdb.org/docs/sql/statements/create_macro#scalar-macros) and [table `MACRO`](https://duckdb.org/docs/sql/statements/create_macro#table-macros). WebMacro loads either — whatever the URL's body parses as."
+        }
+      ]
+    },
+    {
+      "icon": "🔌",
+      "title": "How it works",
+      "description": "[`load_macro_from_url`](#load_macro_from_url) is a single scalar function. Internally: `GET` the URL, validate the body, register the macro on the current connection, return a status string. There is no caching, no manifest, no dependency graph — it's deliberately the simplest possible primitive.",
+      "bulletPoints": [
+        {
+          "label": "Plain HTTP(S) GET",
+          "description": "Uses [`cpp-httplib`](https://github.com/yhirose/cpp-httplib) with OpenSSL for TLS. Redirects are followed automatically (so a `gist.github.com/...` URL that 301s to `gist.githubusercontent.com/...` works). The read timeout is 10 seconds."
+        },
+        {
+          "label": "Substring validation",
+          "description": "The fetched body must contain a `CREATE [OR REPLACE] [TEMP|TEMPORARY] MACRO` token. It's then scanned for dangerous keywords (`DELETE`, `DROP`, `TRUNCATE`, `ALTER`, `GRANT`, `REVOKE`, `CREATE USER`, `EXEC`, `EXECUTE`, `SHUTDOWN`, `RESTART`, `DETACH`); a hit raises an error. **This is a substring check, not a SQL parser** — treat it as a guardrail against accidentally fetching the wrong file, not a security boundary."
+        },
+        {
+          "label": "Session-scoped registration",
+          "description": "The macro is created on the current DuckDB connection (using whatever scope the SQL itself declared — persistent, `TEMP`, or `OR REPLACE`). It lives until the session ends or the macro is dropped, just like a hand-typed `CREATE MACRO`."
+        },
+        {
+          "label": "WASM build",
+          "description": "In DuckDB-WASM the extension uses a WASM-friendly HTTP shim instead of OpenSSL httplib — same function surface, browser-fetch under the hood."
+        }
+      ]
+    },
+    {
+      "icon": "🛡️",
+      "title": "Trust model",
+      "description": "**This extension fetches and executes SQL from a URL.** Any URL you load is, in effect, code running in your DuckDB session. The trust posture below is the central caveat — read it before pointing this at anything you didn't author.",
+      "bulletPoints": [
+        {
+          "label": "Only load from URLs you control",
+          "description": "Your own Git repos, your team's internal artifact host, your own gists. Don't load from URLs found in chat messages, Stack Overflow, or random blog posts — same posture you'd use for `curl ... | bash`. See [OWASP — Code Injection](https://owasp.org/www-community/attacks/Code_Injection)."
+        },
+        {
+          "label": "The dangerous-command filter is not a sandbox",
+          "description": "It's a literal substring scan over the response body. It catches obvious things (`DROP TABLE`, `DELETE FROM`) but does not understand SQL — comments, string literals, and creative formatting all bypass it. A motivated author can bypass the filter; the filter is there to catch wrong-file-by-accident, not malice."
+        },
+        {
+          "label": "Pin URLs to immutable revisions",
+          "description": "If you load from a Git host, prefer URLs with a commit SHA over branch names — `.../<sha>/macros/foo.sql` rather than `.../main/macros/foo.sql`. That way a compromised or rebased branch doesn't silently change what you load tomorrow."
+        },
+        {
+          "label": "TLS is on by default — keep it on",
+          "description": "HTTPS prevents network-level tampering between your DuckDB and the macro host. Plain `http://` URLs work but should be avoided outside of localhost / lab networks."
+        },
+        {
+          "label": "No cross-session caching",
+          "description": "Every [`load_macro_from_url`](#load_macro_from_url) call hits the network. If the upstream changes, the next session sees the change. Pin URLs for reproducibility."
+        }
+      ]
+    },
+    {
+      "icon": "🎯",
+      "title": "Common Use Cases",
+      "description": "",
+      "useCases": [
+        {
+          "title": "Team macro library in a Git repo",
+          "description": "Keep a `macros/` directory in a shared Git repo, one `.sql` file per macro. At session start, [`load_macro_from_url`](#load_macro_from_url) the ones you need. Pull requests review macro changes; URLs pinned to a tag give you reproducible builds."
+        },
+        {
+          "title": "Reusable analyst toolbox",
+          "description": "Domain-specific helpers (date bucketing for your fiscal calendar, custom string normalization, parameterized lookup macros) live at stable URLs and load at the top of every analyst notebook — no copy-paste drift."
+        },
+        {
+          "title": "Live demos and tutorials",
+          "description": "Host an example macro at a stable URL; tutorials and blog posts can `load_macro_from_url` it in one line instead of pasting twenty lines of `CREATE MACRO`. Readers see the focal SQL, not the boilerplate."
+        },
+        {
+          "title": "Versioned SQL distribution to ephemeral workers",
+          "description": "Short-lived workers that spin up DuckDB (Lambda, ETL containers) bootstrap their macro environment from a single trusted URL — no need to bake macro SQL into the image."
+        }
+      ]
+    }
+  ]
+}

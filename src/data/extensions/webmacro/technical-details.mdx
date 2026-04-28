@@ -1,0 +1,85 @@
+## What you can do with one query
+
+Define a macro in a Git repo, point [`load_macro_from_url`](#load_macro_from_url) at the raw URL, and use it like any built-in DuckDB function:
+
+```sql
+SELECT load_macro_from_url(
+  'https://raw.githubusercontent.com/your-org/sql-macros/main/search_posts.sql'
+);
+-- 'Successfully loaded macro: search_posts'
+
+SELECT *
+FROM search_posts('qxip.bsky.social', text := 'quack');
+```
+
+The whole extension is one function. One URL is one macro. The interesting part isn't the protocol — it's that the URL becomes the unit of distribution: pull requests review the SQL, tags pin versions, and every machine in your team gets the same macro from the same place.
+
+import Callout from '../../../components/docs/Callout.astro';
+
+<Callout type="danger" title="The URL is executable code — only load from URLs you control">
+[`load_macro_from_url`](#load_macro_from_url) fetches arbitrary text from a URL and executes it as SQL in your DuckDB session. Treat every URL you load with the same posture you'd use for `curl ... | bash`:
+
+- **Only load from URLs you control or fully trust.** Your own Git repos, your team's internal artifact host, your own gists — not arbitrary URLs from chat messages, blog posts, or Stack Overflow snippets.
+- **The built-in dangerous-command filter is not a sandbox.** It's a substring scan for `DROP`, `DELETE`, `ALTER`, etc. over the raw response body. Comments and string literals bypass it. A determined author can defeat it. The filter exists to catch *the wrong file by accident*, not malicious SQL.
+- **Pin URLs to immutable revisions.** Prefer `https://raw.githubusercontent.com/org/repo/<commit-sha>/macros/foo.sql` over `.../main/macros/foo.sql` so a rebase or branch compromise doesn't silently change what you load.
+- **Keep HTTPS.** Plain `http://` URLs are vulnerable to in-flight tampering. The extension speaks TLS by default — use it.
+
+In a multi-tenant or hosted DuckDB environment, consider not loading the WebMacro extension at all, or restricting which roles can use it. See [OWASP — Code Injection](https://owasp.org/www-community/attacks/Code_Injection) for the threat model.
+</Callout>
+
+## The single function
+
+```sql
+SELECT load_macro_from_url(url VARCHAR) -> VARCHAR;
+```
+
+[`load_macro_from_url`](#load_macro_from_url) does exactly four things, in order:
+
+1. `GET` the URL (HTTPS supported via OpenSSL; redirects followed; 10 s read timeout).
+2. Verify the response body contains a [`CREATE MACRO`](https://duckdb.org/docs/sql/statements/create_macro) variant — `CREATE MACRO`, `CREATE OR REPLACE MACRO`, `CREATE TEMP MACRO`, `CREATE TEMPORARY MACRO`, or the `OR REPLACE TEMP` / `OR REPLACE TEMPORARY` variants.
+3. Reject the response if it contains a dangerous keyword (`DELETE`, `DROP`, `TRUNCATE`, `ALTER`, `GRANT`, `REVOKE`, `CREATE USER`, `ALTER USER`, `DROP USER`, `DROP DATABASE`, `EXEC`, `EXECUTE`, `SHUTDOWN`, `RESTART`, `DETACH`).
+4. Execute the SQL on the current connection and return `Successfully loaded macro: <name>`.
+
+The macro is then callable by name in the session, like any hand-typed `CREATE MACRO`. There's no separate registry to query and no `unload` — drop the macro with [`DROP MACRO`](https://duckdb.org/docs/sql/statements/drop) if you need it gone before session end.
+
+## Hosting the macro
+
+WebMacro doesn't care where the URL lives, only that an HTTP `GET` against it returns a body that parses as a DuckDB macro. Common patterns:
+
+- **Git raw URL** (recommended): `https://raw.githubusercontent.com/org/repo/<sha>/macros/foo.sql`. Pinning to a commit SHA makes the macro deterministic forever.
+- **Gist raw URL**: `https://gist.githubusercontent.com/<user>/<id>/raw/foo.sql`. Convenient for one-off sharing; harder to review than a Git PR.
+- **Internal artifact server / S3 + presigned URL**: any HTTP(S) endpoint that returns the SQL body works. TLS is honored.
+- **Self-hosted "macro registry"**: a tiny static site at `macros.your-org.internal/` mapping path → SQL. The whole thing can be a directory of `.sql` files behind any static webserver.
+
+## Loading at session start
+
+A typical bootstrap pattern: pull a known set of macros at the top of a notebook or script, fail loudly if any URL is unreachable.
+
+```sql
+INSTALL webmacro FROM community;
+LOAD webmacro;
+
+SELECT
+  url,
+  load_macro_from_url(url) AS status
+FROM (VALUES
+  ('https://raw.githubusercontent.com/your-org/sql-macros/main/search_posts.sql'),
+  ('https://raw.githubusercontent.com/your-org/sql-macros/main/normalize_handle.sql'),
+  ('https://raw.githubusercontent.com/your-org/sql-macros/main/active_users.sql')
+) AS macros(url);
+```
+
+If any URL fails the fetch, validation, or dangerous-command checks, the query errors out — so a missing macro shows up immediately rather than as a "function not found" later.
+
+## Compared to alternatives
+
+- **Hand-rolled wrapper around [`http_client`](/products/extensions/http_client) + [`query`](https://duckdb.org/docs/sql/query_syntax/query)**. Possible — `http_client` returns the URL body, then you `EXECUTE` it. WebMacro collapses that to one statement and adds the (best-effort) safety filter. For everything beyond loading macros — calling REST APIs, posting form data, handling JSON responses — reach for [`http_client`](/products/extensions/http_client) directly.
+- **Copy-pasting `CREATE MACRO` into every notebook**. The thing this extension exists to replace. Drift between notebooks is the failure mode.
+- **Baking macros into a startup `.duckdbrc` / init script**. Works for a single machine, doesn't scale to a team or to ephemeral workers. WebMacro lets the URL be the artifact instead.
+
+## Caveats
+
+- **No caching.** Every call hits the network. If you load the same macro 100 times in a session, that's 100 HTTP requests.
+- **No dependency graph.** If macro `A` calls macro `B`, you must load `B` first. WebMacro doesn't parse the SQL to discover dependencies.
+- **No version negotiation.** The URL is the version. If you want immutability, pin to a commit SHA or a content-addressed URL.
+- **Status is experimental.** The function surface is small and stable in shape, but pin a known-good extension version in production setups.

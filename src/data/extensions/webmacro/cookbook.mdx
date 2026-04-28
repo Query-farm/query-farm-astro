@@ -1,61 +1,140 @@
-## Load a remote macro
+## Install and load
 
 ```sql
 INSTALL webmacro FROM community;
 LOAD webmacro;
+```
 
-SELECT load_macro_from_url('https://gist.githubusercontent.com/lmangani/518215a68e674ac662537d518799b893/raw/...') AS res;
+The extension registers a single function: [`load_macro_from_url`](#load_macro_from_url). Everything below is a recipe around it.
+
+## Load a macro from a Git repo
+
+The recommended pattern — host the SQL in a Git repo, load by raw URL:
+
+```sql
+SELECT load_macro_from_url(
+  'https://raw.githubusercontent.com/your-org/sql-macros/main/search_posts.sql'
+) AS res;
 -- 'Successfully loaded macro: search_posts'
+
+-- Now use it like any DuckDB macro
+SELECT *
+FROM search_posts('qxip.bsky.social', text := 'quack');
 ```
 
-The fetched URL must contain a `CREATE MACRO` (or `CREATE TABLE MACRO`) statement. WebMacro fetches it, parses it, and registers it in the current DuckDB session.
+The body of the URL must contain a [`CREATE MACRO`](https://duckdb.org/docs/sql/statements/create_macro) statement (scalar or table macro). See [`load_macro_from_url`](#load_macro_from_url) for the validation rules.
 
-## Use it
+## Pin to an immutable commit
 
-Once loaded, the macro behaves like any other DuckDB macro:
+Use a commit SHA in the URL so a branch rebase or upstream change can't silently swap the macro out from under you:
 
 ```sql
-SELECT * FROM search_posts('qxip.bsky.social', text := 'quack');
+SELECT load_macro_from_url(
+  'https://raw.githubusercontent.com/your-org/sql-macros/'
+  || 'a3f8d21c9e7b4f0e6d2a1b5c8e9f0a1b2c3d4e5f'
+  || '/macros/search_posts.sql'
+);
 ```
 
-Scalar macros are called inline; table macros appear as `FROM`-able sources.
+The commit SHA pins the SQL forever — the same URL today and a year from now returns the same bytes. This is the closest thing to a versioned macro release.
 
-## Where to host macros
+## Load several macros at once
 
-Anywhere reachable over HTTPS:
-
-- **GitHub Gists** — the canonical "raw" URL of a public gist works directly.
-- **Pastebin / Hastebin / dpaste** — same idea; use the raw-content URL.
-- **Your own static-hosted directory** — `https://macros.example.com/<name>.sql`.
-- **A short-link service** — `https://quacks.cc/r/<name>` style redirectors are great for memorable URLs.
-
-## Patterns
-
-**Team library** — host a directory of macros at a known URL prefix:
+A common bootstrap pattern at the top of a notebook or script:
 
 ```sql
-SELECT load_macro_from_url('https://macros.example.com/users_with_unread.sql');
-SELECT load_macro_from_url('https://macros.example.com/sla_summary.sql');
-
-SELECT * FROM users_with_unread();
-SELECT * FROM sla_summary('2026-04-01');
+SELECT
+  url,
+  load_macro_from_url(url) AS status
+FROM (VALUES
+  ('https://raw.githubusercontent.com/your-org/sql-macros/main/search_posts.sql'),
+  ('https://raw.githubusercontent.com/your-org/sql-macros/main/normalize_handle.sql'),
+  ('https://raw.githubusercontent.com/your-org/sql-macros/main/active_users.sql')
+) AS macros(url);
 ```
 
-**Versioned macros** — pin a specific gist revision:
+Any URL that fails the fetch, the macro-statement check, or the dangerous-command filter raises an error — the bootstrap halts, you find out at session start instead of at first use.
+
+## Load from a private host with auth
+
+[`load_macro_from_url`](#load_macro_from_url) issues a plain unauthenticated `GET`. If your macro lives behind auth, the simplest pattern is a **presigned URL** — generate a short-lived signed URL upstream (S3, GCS, etc.) and load that:
 
 ```sql
-SELECT load_macro_from_url('https://gist.githubusercontent.com/me/abc123/raw/v2/macro.sql');
+SET VARIABLE macro_url = getenv('MACRO_PRESIGNED_URL');
+
+SELECT load_macro_from_url(:macro_url);
 ```
 
-**Dynamic loading** — pick a macro from a config table:
+For an internally-routable host where TLS or network ACLs are the access control (e.g. `https://macros.your-org.internal/foo.sql`), a plain URL is fine.
+
+## Use scalar and table macros
+
+Either macro form loads the same way — the difference is how you call the result.
+
+A **scalar macro** definition at `https://example.com/macros/normalize_handle.sql`:
 
 ```sql
-SELECT load_macro_from_url(macro_url)
-FROM enabled_macros;
+CREATE OR REPLACE MACRO normalize_handle(h)
+AS lower(trim(h, '@'));
 ```
 
-## Caveats
+A **table macro** at `https://example.com/macros/active_users.sql`:
 
-- **Trust the source.** WebMacro will run whatever SQL the URL returns. Treat it like `eval()`. Pinned, signed, or self-hosted URLs only.
-- **Macros aren't persisted across sessions.** Re-load on each connection (or include in your session-startup script).
-- **Network round-trip per load.** Cache locally if you depend on offline use.
+```sql
+CREATE OR REPLACE MACRO active_users(since_date) AS TABLE
+SELECT user_id, last_seen
+FROM users
+WHERE last_seen >= since_date;
+```
+
+After loading both, scalar macros go in the `SELECT` list; table macros go in the `FROM` clause:
+
+```sql
+SELECT load_macro_from_url('https://example.com/macros/normalize_handle.sql');
+SELECT load_macro_from_url('https://example.com/macros/active_users.sql');
+
+SELECT normalize_handle('@Alice  ') AS handle,
+       u.last_seen
+FROM active_users(DATE '2026-01-01') u;
+```
+
+## Replace a macro mid-session
+
+`CREATE OR REPLACE MACRO` is the supported way to update a macro you've already loaded. If the URL's body uses `CREATE OR REPLACE MACRO`, re-loading swaps the definition in place:
+
+```sql
+-- Edit the SQL upstream, then re-run:
+SELECT load_macro_from_url(
+  'https://raw.githubusercontent.com/your-org/sql-macros/main/search_posts.sql'
+);
+-- 'Successfully loaded macro: search_posts'  -- now the new definition
+```
+
+If the macro was created without `OR REPLACE`, you'll need to [`DROP MACRO`](https://duckdb.org/docs/sql/statements/drop) it first.
+
+## Pair with `http_client` for richer pipelines
+
+WebMacro is a one-trick extension on purpose — it loads macros and nothing else. For HTTP request patterns it doesn't cover (POST bodies, custom headers, reading non-macro JSON), pair with the [`http_client`](/products/extensions/http_client) extension, which exposes general-purpose `http_get` / `http_post` for SQL-level HTTP.
+
+```sql
+-- Fetch a macro index from your registry, then load each entry
+INSTALL http_client FROM community;
+LOAD http_client;
+
+WITH index AS (
+  SELECT (http_get('https://macros.your-org.internal/index.json')->>'body')::JSON AS j
+)
+SELECT load_macro_from_url(unnest(j->'$.macros[*].url')::VARCHAR)
+FROM index;
+```
+
+## Drop a loaded macro
+
+A loaded macro is just a regular DuckDB macro — drop it like any other:
+
+```sql
+DROP MACRO search_posts;
+DROP MACRO IF EXISTS active_users;
+```
+
+See [`DROP MACRO`](https://duckdb.org/docs/sql/statements/drop) for the upstream syntax.

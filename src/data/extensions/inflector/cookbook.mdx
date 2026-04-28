@@ -1,37 +1,49 @@
+## Quick reference
+
+| Need | Pick |
+|---|---|
+| Convert one string between cases | `inflector_to_<case>` or [`inflect(case_name, value)`](#inflect) |
+| Rewrite every key in a struct | [`inflect('snake', struct_col)`](#inflect) |
+| Rewrite every column of a query | [`SELECT * FROM inflect('snake', (FROM ...))`](#inflect) |
+| Pluralize / singularize an English word | [`inflector_to_plural`](#inflector_to_plural) / [`inflector_to_singular`](#inflector_to_singular) |
+| Rails-style table name from class name | [`inflector_to_table_case`](#inflector_to_table_case) |
+| Class name → foreign-key column | [`inflector_to_foreign_key`](#inflector_to_foreign_key) |
+| Detect what case a string is in | [`inflector_is_*`](#inflector_is_camel_case) predicates |
+| Number → ordinal label | [`inflector_ordinalize`](#inflector_ordinalize) |
+
 ## Single-string transforms
 
 ```sql
-SELECT inflector_to_camel_case('hello_world');     -- 'helloWorld'
-SELECT inflector_to_snake_case('HelloWorld');      -- 'hello_world'
-SELECT inflector_to_pascal_case('hello_world');    -- 'HelloWorld'
-SELECT inflector_to_kebab_case('helloWorld');      -- 'hello-world'
-SELECT inflector_to_title_case('hello_world');     -- 'Hello World'
+SELECT inflector_to_camel_case('hello_world');                 -- 'helloWorld'
+SELECT inflector_to_snake_case('HelloWorld');                  -- 'hello_world'
+SELECT inflector_to_pascal_case('hello_world');                -- 'HelloWorld'
+SELECT inflector_to_kebab_case('helloWorld');                  -- 'hello-world'
+SELECT inflector_to_train_case('helloWorld');                  -- 'Hello-World'
+SELECT inflector_to_screamingsnake_case('helloWorld');         -- 'HELLO_WORLD'
+SELECT inflector_to_title_case('hello_world');                 -- 'Hello World'
+SELECT inflector_to_sentence_case('helloWorld');               -- 'Hello world'
 ```
 
-`inflect(case_name, value)` is the dispatching equivalent — same result, lets you parameterize the case at runtime:
+[`inflect(case_name, value)`](#inflect) is the dispatching equivalent — same result, lets you parameterize the case at runtime:
 
 ```sql
-SELECT inflect('camel', 'hello_world');            -- 'helloWorld'
-SELECT inflect(:target_case, column_value)         -- :target_case from a config table
+SELECT inflect('camel', 'hello_world');                        -- 'helloWorld'
+SELECT inflect(target_case, column_value)                      -- target_case from a config table
 FROM ...;
 ```
 
-## Pluralize / singularize
+## Pluralize / singularize (English only)
 
 ```sql
-SELECT inflector_to_plural('person');              -- 'people'
-SELECT inflector_to_plural('child');               -- 'children'
-SELECT inflector_to_plural('quiz');                -- 'quizzes'
+SELECT inflector_to_plural('person');                          -- 'people'
+SELECT inflector_to_plural('child');                           -- 'children'
+SELECT inflector_to_plural('quiz');                            -- 'quizzes'
 
-SELECT inflector_to_singular('mice');              -- 'mouse'
-SELECT inflector_to_singular('analyses');          -- 'analysis'
+SELECT inflector_to_singular('mice');                          -- 'mouse'
+SELECT inflector_to_singular('analyses');                      -- 'analysis'
 ```
 
-Used heavily by `inflector_to_table_case` for Rails-style naming:
-
-```sql
-SELECT inflector_to_table_case('UserAccount');     -- 'user_accounts'
-```
+These wrap the [`cruet`](https://crates.io/crates/cruet) Rust crate's English ruleset. **Non-English input gets English-rule output, silently** — handle multilingual text upstream.
 
 ## Rewrite struct keys
 
@@ -43,28 +55,105 @@ SELECT inflect('camel', {'first_name':'John','last_name':'Doe'});
 -- {'firstName': 'John', 'lastName': 'Doe'}
 ```
 
-The killer ETL feature — normalize the shape of an API response or struct column in one call.
+Apply against a struct column to normalize a stored API payload in place:
+
+```sql
+SELECT id, inflect('snake', payload) AS payload_snake
+FROM api_events;
+```
 
 ## Rewrite every column of a query
 
-```sql
--- A CSV with camelCase headers, rewritten to snake_case
-SELECT * FROM inflect('snake', (FROM read_csv('data.csv')));
+The killer ETL pattern — normalize the headers of a remote file in one statement:
 
--- An API ingest with mixed casing → kebab-case
+```sql
+-- camelCase CSV → snake_case columns
+SELECT * FROM inflect('snake', (FROM read_csv('https://example.com/users.csv')));
+
+-- Mixed-casing JSON → kebab-case columns
 SELECT * FROM inflect('kebab', (FROM read_json('events.json')));
 ```
 
-`inflect` recognizes when its second argument is a query result and rewrites every column name through the chosen transform — no per-column boilerplate.
-
-## Building Rails-style derivations
+Wrap with [`CREATE TABLE AS`](https://duckdb.org/docs/sql/statements/create_table) to land it in the warehouse with clean names:
 
 ```sql
--- ClassName ↔ table_name ↔ ForeignKey
-SELECT inflector_to_table_case('UserAccount');     -- 'user_accounts' (table)
-SELECT inflector_to_class_case('user_accounts');   -- 'UserAccount'   (class)
-SELECT inflector_to_snake_case('UserAccount') || '_id' AS fk;
--- 'user_account_id'                                -- foreign key column
+CREATE TABLE users AS
+SELECT * FROM inflect('snake', (FROM read_csv('users.csv')));
 ```
 
-Useful when you're generating DDL or ORM-style migration code from SQL.
+## Build Rails-style derivations
+
+The classic class ↔ table ↔ foreign-key triangle:
+
+```sql
+SELECT inflector_to_table_case('UserAccount');                 -- 'user_accounts' (table)
+SELECT inflector_to_class_case('user_accounts');               -- 'UserAccount'   (class)
+SELECT inflector_to_foreign_key('Message');                    -- 'message_id'    (FK column)
+```
+
+Useful when emitting DDL or migration code from a model registry:
+
+```sql
+SELECT
+  class_name,
+  inflector_to_table_case(class_name)   AS table_name,
+  inflector_to_foreign_key(class_name)  AS fk_column
+FROM models;
+```
+
+## Detect-then-transform
+
+Use [`inflector_is_*`](#inflector_is_camel_case) predicates to *route* values whose case you don't trust on the way in:
+
+```sql
+SELECT
+  raw,
+  CASE
+    WHEN inflector_is_snake_case(raw)         THEN raw
+    WHEN inflector_is_camel_case(raw)         THEN inflector_to_snake_case(raw)
+    WHEN inflector_is_pascal_case(raw)        THEN inflector_to_snake_case(raw)
+    WHEN inflector_is_kebab_case(raw)         THEN replace(raw, '-', '_')
+    ELSE inflector_to_snake_case(raw)
+  END AS normalized
+FROM mixed_input;
+```
+
+## Ordinalize numbers
+
+```sql
+SELECT inflector_ordinalize('1');                              -- '1st'
+SELECT inflector_ordinalize('22');                             -- '22nd'
+SELECT inflector_ordinalize('103');                            -- '103rd'
+
+SELECT inflector_deordinalize('1st');                          -- '1'
+```
+
+Useful for report labels: `'Top ' || inflector_ordinalize(rank::VARCHAR) || ' result'`.
+
+## Strip module / namespace prefixes
+
+```sql
+SELECT inflector_demodulize('ActiveRecord::CoreExtensions::String');  -- 'String'
+SELECT inflector_deconstantize('Net::HTTP');                          -- 'Net'
+```
+
+For working with stack traces or class names imported from systems that use Ruby- or C++-style namespaces.
+
+## Pair with RapidFuzz for normalize-then-match
+
+If you're deduping records that arrive in mixed cases, normalize first, then fuzzy-match — the [`rapidfuzz`](/products/extensions/rapidfuzz) extension is the sibling tool:
+
+```sql
+SELECT a.id, b.id,
+       rapidfuzz_ratio(
+         inflector_to_snake_case(a.name),
+         inflector_to_snake_case(b.name)
+       ) AS sim
+FROM left_records a, right_records b
+WHERE rapidfuzz_ratio(
+        inflector_to_snake_case(a.name),
+        inflector_to_snake_case(b.name)
+      ) > 90;
+```
+
+This is why both extensions share the **Matching & casing** group — they compose.

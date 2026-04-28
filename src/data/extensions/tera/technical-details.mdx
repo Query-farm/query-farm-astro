@@ -1,0 +1,74 @@
+import Callout from '../../../components/docs/Callout.astro';
+
+## What you can do with one query
+
+The single most useful pattern: render one transactional email body per row, directly inside the query that selected the recipients.
+
+```sql
+SELECT email,
+       tera_render(
+         '<h1>Hi {{ name }}!</h1>
+          <p>You have {{ unread }} new messages.</p>',
+         json_object('name', name, 'unread', unread_count)
+       ) AS html
+FROM users
+WHERE unread_count > 0;
+```
+
+[`tera_render`](#tera_render) compiles the template once, binds [`json_object(...)`](https://duckdb.org/docs/sql/functions/json) as context for each row, and returns the rendered string as a regular `VARCHAR` column. Anywhere SQL gives you a string column, this extension can fill it with templated text — emails, config blocks, dynamic SQL, Slack JSON, IaC fragments.
+
+<Callout type="note" title="Tera vs MiniJinja — pick once, stay consistent">
+This catalog ships two Jinja-style template engines. They overlap heavily on everyday syntax (`{{ var }}` / `{% for %}` / `{% if %}` / common filters); the differences only matter at the edges.
+
+- **Pick Tera** for the **larger feature surface** — more [built-in filters and testers](https://keats.github.io/tera/docs/#built-ins), template inheritance via `template_path`, and macros. Best when your templates lean on Jinja2's richer authoring features.
+- **Pick [`minijinja`](/products/extensions/minijinja)** for **strict Python-Jinja2 fidelity and faster per-row rendering**. Best when you're matching an existing Python Jinja codebase or render rate per row matters most.
+
+For brand-new projects with simple substitution-and-loops templates, either is a defensible choice — lock in whichever your team already knows.
+</Callout>
+
+## Inline templates vs files on disk
+
+By default, the first argument to [`tera_render`](#tera_render) is the template body itself — handy for short templates that live inside the SQL.
+
+For non-trivial templates, pass `template_path := '<glob>'` and use a template **name**:
+
+```sql
+SELECT tera_render(
+  'email.html',
+  json_object('name', name, 'unread', unread_count),
+  template_path := './templates/*.html'
+)
+FROM users;
+```
+
+Loading from disk is what unlocks Tera's [`{% extends %}` / `{% include %}` / `{% import %}`](https://keats.github.io/tera/docs/#inheritance) constructs — you can't `extends "base.html"` against a template that has no name. Authoring large templates in a `.html` file alongside the rest of your project is also nicer than embedding them as SQL string literals.
+
+## Autoescape — on by default
+
+Tera escapes HTML special characters in interpolated context values by default, which is the right default for HTML output:
+
+```sql
+SELECT tera_render('{{ v }}', '{"v":"B&O"}');
+-- 'B&amp;O'
+```
+
+Turn it off when you're rendering anything that **isn't** HTML — config files, SQL, Slack JSON, plain text — otherwise apostrophes and ampersands come out as `&#39;` and `&amp;`:
+
+```sql
+SELECT tera_render('{{ v }}', '{"v":"B&O"}', autoescape := false);
+-- 'B&O'
+```
+
+## Treat templates as trusted code
+
+Tera interpolation is **not** an injection-safe parameterization mechanism. A context value that contains `{{ ... }}` or `{% ... %}` syntax won't be re-evaluated, but a template body assembled from untrusted input absolutely can render arbitrary SQL or shell strings. Keep the template surface fixed and authored by trusted code; only the context (the second argument) should come from query data or user input.
+
+For SQL specifically: use Tera to template the **shape** of a query (column lists, table names from a metadata table, predicates from a config), and use ordinary parameter binding for any value that originated outside your control.
+
+## What's in the box
+
+| Function | Purpose |
+|---|---|
+| [`tera_render`](#tera_render) | Render an inline template, or a named template from a `template_path` glob, with JSON context. The full extension surface. |
+
+This is a deliberately small extension — one function, two optional named arguments, the full [Tera](https://keats.github.io/tera/) language available inside the templates. See the [Tera manual](https://keats.github.io/tera/docs/) for the template language itself; recipes for common SQL-side patterns live in the [Cookbook](#cookbook).

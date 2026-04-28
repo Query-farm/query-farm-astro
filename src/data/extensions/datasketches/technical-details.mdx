@@ -1,47 +1,95 @@
-<img
-  src="/images/extensions/datasketches/hero.jpg"
-  alt="Apache DataSketches for DuckDB"
-  width="800"
-  loading="lazy"
-/>
+import { Icon } from 'astro-icon/components';
+import Callout from '../../../components/docs/Callout.astro';
 
-## Why this extension?
+<div class="flex items-center gap-4 mb-8 not-prose">
+  <Icon name="mdi:chart-bell-curve-cumulative" class="w-12 h-12 text-soil-900 flex-shrink-0" />
+  <div>
+    <p class="text-xs font-semibold uppercase tracking-wider text-soil-500">DuckDB ↔ Apache DataSketches</p>
+    <p class="text-lg text-soil-700">Mergeable, persistable streaming sketches — distinct counts, quantiles, and heavy hitters — from the <a href="https://datasketches.apache.org/" class="text-harvest-700 underline underline-offset-2 decoration-harvest-300 hover:decoration-harvest-700">Apache DataSketches</a> library.</p>
+  </div>
+</div>
 
-DuckDB already has built-in HyperLogLog (`approx_count_distinct`) and TDigest (`approx_quantile`), but those primitives don't expose the underlying sketch state and don't let you tune the sketch parameters. This extension exposes the [Apache DataSketches](https://datasketches.apache.org/) library directly: every sketch serializes to a `BLOB` that can be stored in a column, shipped between processes, and merged later — without re-scanning the source data.
+## A billion-row distinct count, persisted
 
-That makes it the right pick for distributed pipelines: build per-partition sketches once, persist them, and roll them up at query time.
+A naive `COUNT(DISTINCT user_id)` over a billion-row event table is a sort plus a hash table — minutes of work, gigabytes of memory, a fresh scan every time someone asks again. With a [Theta sketch](https://datasketches.apache.org/docs/Theta/ThetaSketches.html), it's a fixed-memory aggregate you build once per partition and roll up on demand:
 
-## Which sketch should I use?
+```sql
+-- One pass, per-day sketch state, persisted as a typed BLOB column
+CREATE TABLE daily_uniques AS
+SELECT date_trunc('day', ts)        AS day,
+       datasketch_theta(12, user_id) AS sketch        -- ~64 KB per day
+FROM events
+GROUP BY 1;
 
-### Quantile estimation
+-- Rolling 7-day uniques: union the per-day sketches, no rescan
+SELECT datasketch_theta_estimate(
+         datasketch_theta_union(12, sketch)
+       ) AS uniques_last_7d
+FROM daily_uniques
+WHERE day >= CURRENT_DATE - 7;
 
-| Sketch       | Best for                       | K range  | Notes                                                           |
-|--------------|--------------------------------|----------|-----------------------------------------------------------------|
-| **KLL**      | General purpose                | 1–32768  | Best balance of accuracy, speed, and size. Start here.          |
-| **TDigest**  | Extreme quantiles (p99, p999)  | 10–1000  | Most accurate at distribution tails. FLOAT/DOUBLE only.         |
-| **REQ**      | Relative error guarantees      | 4–1024   | Error scales with rank, not fixed. Good for skewed data.        |
-| **Quantiles**| Compatibility / classic        | 1–32768  | Original mergeable algorithm. Use KLL for new projects.         |
+-- Retention: users active in BOTH last week AND this week
+WITH last_week AS (SELECT datasketch_theta_union(12, sketch) AS s
+                   FROM daily_uniques
+                   WHERE day BETWEEN CURRENT_DATE - 14 AND CURRENT_DATE - 7),
+     this_week AS (SELECT datasketch_theta_union(12, sketch) AS s
+                   FROM daily_uniques
+                   WHERE day >= CURRENT_DATE - 7)
+SELECT datasketch_theta_estimate(
+         datasketch_theta_intersect(12, last_week.s, this_week.s)
+       ) AS retained
+FROM last_week, this_week;
+```
 
-**Default**: pick **KLL** unless you specifically need TDigest's tail accuracy or REQ's relative-error guarantees.
+The first query touches the source rows once. The next two — and any other window, set difference, or intersection you care to ask — operate on the sketch state alone.
 
-### Distinct counting
+<Callout type="note" title="Approximate by design — that's the value prop">
+Sketches are not a faster way to get exact answers. They give bounded-memory, mergeable, *approximately correct* aggregates with a small, predictable error. The default HLL sketch (`lg_k = 12`) is roughly ±1.6% on distinct counts; the default KLL (`K = 200`) puts quantile error at roughly ±1.5% rank. Pick the size knob to match your accuracy budget — and don't reach for sketches when policy demands exact (billing, audits, reconciliation).
+</Callout>
 
-| Sketch    | Best for          | lg_k range | Notes                                                    |
-|-----------|-------------------|------------|----------------------------------------------------------|
-| **HLL**   | Speed / interop   | 4–21       | Industry standard. Faster serialize/deserialize.         |
-| **CPC**   | Storage           | 4–26       | ~40% smaller than HLL at same accuracy. Slower to write. |
-| **Theta** | Set operations    | —          | Only family that supports union, intersection, A-not-B.  |
+## Architecture
 
-**Default**: pick **HLL** for speed and interop, **CPC** if you store many sketches at rest, **Theta** if you need set operations beyond merge.
+This extension is a thin DuckDB wrapper around the [Apache DataSketches C++ library](https://github.com/apache/datasketches-cpp). Every sketch family registers:
 
-### Frequent items
+- **An aggregate** (`datasketch_kll`, `datasketch_hll`, `datasketch_theta`, …) that builds the sketch in one pass over input values.
+- **A typed BLOB column type** (`sketch_kll_double`, `sketch_hll`, `sketch_theta`, …) — a strict superset of `BLOB` carrying the serialized sketch.
+- **Reader scalars** (`datasketch_*_quantile`, `datasketch_*_estimate`, `datasketch_*_cdf`, …) that decode the BLOB and return values without rebuilding from rows.
+- **Mergers** (`datasketch_hll_union`, `datasketch_theta_union`, …) — aggregates over a sketch column that produce a rolled-up sketch.
 
-For top-N analysis on high-cardinality streams, the **Frequent Items** sketch returns each heavy hitter with lower-bound, upper-bound, and estimated frequency.
+The serialization format is the same one the [Java reference implementation](https://github.com/apache/datasketches-java) writes, which is the format Druid, Pinot, BigQuery, and Spark integrations consume. A sketch built in DuckDB and written to Parquet can be merged inside Druid or vice versa — no re-aggregation across systems.
+
+## Choosing a sketch
+
+The right sketch depends on what you're estimating and which constraint binds first — read latency, sketch size, or set algebra.
+
+**Distinct counts (cardinality)**
+
+| Family | When to pick                                                        | Notes                                              |
+|--------|---------------------------------------------------------------------|----------------------------------------------------|
+| HLL    | Default — fastest reads, broad cross-system interop                 | `lg_k` 4–21; 12 is a good default (~4 KB sketch)   |
+| CPC    | Storage-bound — many sketches at rest                               | ~40% smaller than HLL at the same accuracy         |
+| Theta  | You need union, intersection, or A-not-B (funnel, retention, churn) | Only family with full set algebra                  |
+
+**Quantiles**
+
+| Family    | When to pick                          | Notes                                        |
+|-----------|---------------------------------------|----------------------------------------------|
+| KLL       | Default — best accuracy/size balance  | `K = 200` is a sensible production starting point |
+| TDigest   | p99 / p999 SLO reporting              | FLOAT/DOUBLE only; tail-accurate             |
+| REQ       | Skewed distributions                  | Error scales with rank, not fixed            |
+| Quantiles | Compatibility with classic pipelines  | Use KLL for new work                         |
+
+**Frequency**
+
+A single family — [Frequent Items](https://datasketches.apache.org/docs/Frequency/FrequentItemsOverview.html) — for top-K heavy hitters with confidence-bounded frequencies. Use `'NO_FALSE_POSITIVES'` to get items that are *definitely* heavy, `'NO_FALSE_NEGATIVES'` to get every candidate that *might* be.
+
+## Compared to alternatives
+
+- **DuckDB's built-in [`approx_count_distinct`](https://duckdb.org/docs/stable/sql/functions/aggregates) and [`approx_quantile`](https://duckdb.org/docs/stable/sql/functions/aggregates)** — both ship in DuckDB and use HLL / TDigest internally, but expose only the final estimate. Reach for this extension when you need the sketch *as state* — to persist it as a column, merge later, tune sketch parameters (`lg_k`, `K`, `map_size`), or interoperate with other Apache DataSketches consumers.
+- **Exact aggregates (`COUNT(DISTINCT)`, `quantile_cont`, `mode`)** — the right answer when policy demands exact and your data fits. DuckDB's vectorized exact aggregates are fast at most analytical scales; measure before reaching for an approximate sketch.
+- **Reservoir / streaming aggregates rolled by hand** — sketches give you the same bounded-memory streaming property *plus* mathematically grounded error bounds *plus* mergeability across processes. For anything that needs to survive a process restart or roll up across shards, the sketch is the better primitive.
+- **Druid / Pinot / BigQuery sketch columns** — those systems use the same serialization format. If you're already producing sketches there, this extension lets DuckDB read and merge them; if you're building them in DuckDB, downstream OLAP systems can consume the BLOBs directly.
 
 ## Persistence and portability
 
-Every sketch round-trips through a typed BLOB column (`sketch_kll_double`, `sketch_hll`, etc.) that's a strict superset of `BLOB`. That means:
-
-- Sketches can be persisted in a Parquet file and read back into any DuckDB instance with this extension loaded.
-- The same BLOB encoding is used by other Apache DataSketches integrations (Druid, Pinot, BigQuery, the Java reference impl), so a sketch built in DuckDB can be merged in another system and vice-versa.
-- Aggregate functions (`datasketch_*`) accept either raw values *or* an existing sketch column, so building incremental rollups is just `SELECT datasketch_kll(200, sketch_blob) FROM ...`.
+Every sketch round-trips through a typed BLOB column (`sketch_kll_double`, `sketch_hll`, `sketch_theta`, etc.) that's a strict superset of `BLOB`. Sketches written into a Parquet file can be read back into any DuckDB instance with this extension loaded, or into any other DataSketches-aware system, and merged without a re-scan. Aggregate functions accept either raw input values *or* an existing sketch column, so incremental rollup is just another `SELECT`.

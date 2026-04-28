@@ -1,43 +1,63 @@
+import { Icon } from 'astro-icon/components';
 import QueryResult from '../../../components/docs/QueryResult.astro';
 
-## Approximate Quantiles with TDigest
+<div class="flex items-center gap-3 mb-6 not-prose text-soil-600">
+  <Icon name="mdi:chart-bell-curve-cumulative" class="w-6 h-6 text-soil-900" />
+  <p class="text-sm">Recipes for distinct counts, quantiles, and heavy hitters with <a href="https://datasketches.apache.org/" class="text-harvest-700 underline underline-offset-2 decoration-harvest-300 hover:decoration-harvest-700">Apache DataSketches</a>.</p>
+</div>
 
-TDigest is the right pick for tail-heavy distributions where p99 / p99.9 accuracy matters more than median accuracy.
+## Distinct count with HLL
 
-```sql
-CREATE TABLE readings(temp INTEGER);
-INSERT INTO readings(temp) SELECT unnest(generate_series(1, 10));
-
--- Get the rank of value 5 within the aggregated sketch
-SELECT datasketch_tdigest_rank(datasketch_tdigest(10, temp), 5) AS rank_of_5
-FROM readings;
-```
-
-<QueryResult columns={["rank_of_5"]} rows={[[0.45]]} />
-
-After skewing the distribution by adding more high values, the rank of 5 drops:
+The bread-and-butter sketch — approximate `COUNT(DISTINCT)` in a few KB of memory.
 
 ```sql
-INSERT INTO readings(temp) VALUES (10), (10), (10), (10);
-
-SELECT datasketch_tdigest_rank(datasketch_tdigest(10, temp), 5) AS rank_of_5
-FROM readings;
+SELECT datasketch_hll_estimate(datasketch_hll(12, user_id)) AS distinct_users
+FROM events;
 ```
 
-<QueryResult columns={["rank_of_5"]} rows={[["0.32142857142857145"]]} />
+The `12` is `lg_k` — base-2 log of the bucket count. `lg_k = 12` (4096 buckets, ~4 KB sketch, ~1.6% standard error) is a common default. Bracket the estimate with [`datasketch_hll_lower_bound`](#datasketch_hll_lower_bound) / [`datasketch_hll_upper_bound`](#datasketch_hll_upper_bound) when you want a confidence interval.
 
-Compute a CDF over multiple split points in one call:
+## Per-day HLL sketches, rolled up on demand
+
+Build the sketch state once; query any window without rescanning.
 
 ```sql
-SELECT datasketch_tdigest_cdf(datasketch_tdigest(10, temp), [1, 5, 9]) AS cdf
-FROM readings;
+CREATE TABLE daily_uniques (day DATE, hll sketch_hll);
+
+INSERT INTO daily_uniques
+SELECT date_trunc('day', ts) AS day,
+       datasketch_hll(12, user_id) AS hll
+FROM events
+GROUP BY 1;
+
+-- Rolling 7-day uniques — reads sketch state, not source events
+SELECT datasketch_hll_estimate(datasketch_hll_union(12, hll)) AS uniques_last_7d
+FROM daily_uniques
+WHERE day >= CURRENT_DATE - 7;
 ```
 
-<QueryResult columns={["cdf"]} rows={[["[0.0357, 0.3214, 0.6071, 1.0]"]]} />
+The same pattern works for [`datasketch_cpc`](#datasketch_cpc) (smaller on disk, slower to write) and [`datasketch_theta`](#datasketch_theta) (supports set operations beyond union).
+
+## Set operations with Theta — funnel, retention, churn
+
+Theta is the only distinct-count family with full set algebra.
+
+```sql
+WITH a AS (SELECT datasketch_theta(12, user_id) AS s FROM events_jan),
+     b AS (SELECT datasketch_theta(12, user_id) AS s FROM events_feb)
+SELECT
+  datasketch_theta_estimate(datasketch_theta_union(12, a.s, b.s))     AS jan_or_feb,
+  datasketch_theta_estimate(datasketch_theta_intersect(12, a.s, b.s)) AS retained,    -- in both
+  datasketch_theta_estimate(datasketch_theta_a_not_b(a.s, b.s))       AS churned,     -- jan not feb
+  datasketch_theta_estimate(datasketch_theta_a_not_b(b.s, a.s))       AS new_users    -- feb not jan
+FROM a, b;
+```
+
+This is the headline use case for Theta — funnel and cohort analysis directly off sketch state.
 
 ## p50 / p95 / p99 with KLL
 
-KLL is the recommended general-purpose quantile sketch: best balance of accuracy, speed, and size.
+KLL is the recommended general-purpose quantile sketch.
 
 ```sql
 WITH agg AS (
@@ -50,76 +70,86 @@ SELECT
 FROM agg;
 ```
 
-The `200` is the *K* parameter — higher K means better accuracy at the cost of memory.
+`K = 200` is a sensible production starting point. Higher `K` → smaller error, larger sketch. Use [`datasketch_kll_normalized_rank_error`](#datasketch_kll_normalized_rank_error) to inspect the actual rank-error guarantee for the configured `K`.
 
-## Distinct Counts with HLL
+## Histograms in one query — KLL CDF / PMF
 
-HyperLogLog estimates cardinality with very small memory. The `lg_k = 12` argument (4096 buckets) is a common production setting.
-
-```sql
-CREATE TABLE items(id INTEGER);
-INSERT INTO items(id) SELECT unnest(generate_series(1, 100000));
-INSERT INTO items(id) SELECT unnest(generate_series(1, 100000));  -- duplicates
-
-SELECT datasketch_hll_estimate(datasketch_hll(8, id)) AS estimated_unique
-FROM items;
-```
-
-<QueryResult columns={["estimated_unique"]} rows={[["99156.23"]]} />
-
-The actual number is 100,000 — within ~1% on a tiny `lg_k = 8` sketch.
-
-## Persist and Merge Sketches
-
-Sketches serialize to BLOBs that can be stored, shipped between processes, and merged later without rescanning the source data:
+Get the cumulative distribution at any set of split points without a second pass.
 
 ```sql
--- Build per-day sketches
-CREATE TABLE daily_uniques (
-  day DATE,
-  hll_blob sketch_hll
-);
-
-INSERT INTO daily_uniques
-SELECT DATE_TRUNC('day', ts) AS day,
-       datasketch_hll(12, user_id) AS hll_blob
-FROM events
-GROUP BY 1;
-
--- Merge any subset of days into a rolling estimate, no re-scan needed
-SELECT datasketch_hll_estimate(
-         datasketch_hll_union(12, hll_blob)
-       ) AS uniques_last_7d
-FROM daily_uniques
-WHERE day >= CURRENT_DATE - 7;
+SELECT datasketch_kll_cdf(
+         datasketch_kll(200, latency_ms),
+         [10, 50, 100, 250, 500, 1000]
+       ) AS cdf
+FROM requests;
 ```
 
-The same pattern works for [`datasketch_cpc`](#datasketch_cpc) (more compact, slower) and [`datasketch_theta`](#datasketch_theta) (supports set intersection / difference).
+Returns one row of cumulative ranks at each split point — directly usable for histograms. Swap `cdf` for [`datasketch_kll_pmf`](#datasketch_kll_pmf) to get per-bucket probability mass instead.
 
-## Set Operations with Theta Sketches
+## Tail-accurate quantiles with TDigest
 
-Theta is the only distinct-count sketch family that supports intersection and difference:
+When p99 / p999 matters more than the median (SLO reporting), reach for [t-digest](https://datasketches.apache.org/docs/tdigest/tdigest.html).
 
 ```sql
-WITH a AS (SELECT datasketch_theta(12, user_id) AS s FROM events_jan),
-     b AS (SELECT datasketch_theta(12, user_id) AS s FROM events_feb)
-SELECT
-  datasketch_theta_estimate(datasketch_theta_union(12, a.s, b.s))      AS jan_or_feb,
-  datasketch_theta_estimate(datasketch_theta_intersect(12, a.s, b.s))  AS jan_and_feb,
-  datasketch_theta_estimate(datasketch_theta_a_not_b(a.s, b.s))        AS jan_only
-FROM a, b;
+CREATE TABLE readings(temp DOUBLE);
+INSERT INTO readings(temp) SELECT unnest(generate_series(1, 10))::DOUBLE;
+
+-- Rank of value 5 within the aggregated sketch
+SELECT datasketch_tdigest_rank(datasketch_tdigest(100, temp), 5) AS rank_of_5
+FROM readings;
 ```
 
-## Heavy Hitters with Frequent Items
+<QueryResult columns={["rank_of_5"]} rows={[[0.45]]} />
 
-Find the top items in a high-cardinality stream, with confidence bounds on each estimate:
+CDF over multiple split points in one call:
+
+```sql
+SELECT datasketch_tdigest_cdf(datasketch_tdigest(100, temp), [1, 5, 9]) AS cdf
+FROM readings;
+```
+
+<QueryResult columns={["cdf"]} rows={[["[0.0357, 0.3214, 0.6071, 1.0]"]]} />
+
+TDigest accepts FLOAT/DOUBLE only. For integer or skewed-rank quantile work, see [`datasketch_kll`](#datasketch_kll) or [`datasketch_req`](#datasketch_req).
+
+## Top-K heavy hitters with Frequent Items
+
+Find the most frequent items in a stream — with confidence bounds on each estimate.
 
 ```sql
 SELECT datasketch_frequent_items_get_frequent(
          datasketch_frequent_items(1024, country_code),
-         /* error_type = */ 'NO_FALSE_POSITIVES'
+         'NO_FALSE_POSITIVES'
        ) AS heavy_hitters
 FROM page_views;
 ```
 
-The result is a list of structs containing the item, lower bound, upper bound, and estimate.
+The result is a list of structs — `(item, estimate, lower_bound, upper_bound)`. Use `'NO_FALSE_POSITIVES'` for items that are *definitely* heavy hitters, `'NO_FALSE_NEGATIVES'` for the union of all candidates that *might* be. The leading `1024` is `map_size` (a power of two) — bigger sketches keep more candidates and tighten the per-item error bound.
+
+## Skew-aware quantiles with REQ
+
+When the distribution is heavily skewed and you want predictable accuracy across the whole rank space, REQ scales its error with rank rather than fixing it.
+
+```sql
+SELECT
+  datasketch_req_quantile(datasketch_req(12, value), 0.001) AS p001,
+  datasketch_req_quantile(datasketch_req(12, value), 0.5)   AS p50,
+  datasketch_req_quantile(datasketch_req(12, value), 0.999) AS p999
+FROM measurements;
+```
+
+## Persist sketches to Parquet, merge in another DuckDB
+
+Sketch BLOBs are portable across processes and across DuckDB instances:
+
+```sql
+COPY (SELECT day, hll FROM daily_uniques)
+  TO 'daily_uniques.parquet' (FORMAT PARQUET);
+
+-- Later, anywhere with this extension loaded:
+SELECT datasketch_hll_estimate(datasketch_hll_union(12, hll))
+FROM read_parquet('daily_uniques.parquet')
+WHERE day BETWEEN DATE '2026-01-01' AND DATE '2026-01-31';
+```
+
+The serialization format is the same one used by Druid, Pinot, BigQuery, and the [Apache DataSketches Java library](https://github.com/apache/datasketches-java) — sketches built here can be merged in those systems and vice versa.

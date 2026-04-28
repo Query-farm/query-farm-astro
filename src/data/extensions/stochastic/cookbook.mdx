@@ -1,113 +1,139 @@
-import QueryResult from '../../../components/docs/QueryResult.astro';
+Recipes are organized by distribution family. Every distribution exposes the same operations — `sample`, `pdf` / `log_pdf`, `cdf` / `log_cdf` / `cdf_complement`, `quantile`, plus property functions (`mean`, `variance`, `skewness`, …). Once you've used one family, the rest follow the same shape.
 
-Every distribution provides the same set of operations — sample, pdf/log_pdf, cdf/log_cdf, cdf_complement, quantile, mean, variance, etc. — so once you've used one, you've used them all. The recipes below show common shapes.
+## Normal — the workhorse
 
-## Normal Distribution Basics
-
-```sql
--- Find the 95th percentile of a standard Normal
-SELECT dist_normal_quantile(0.0, 1.0, 0.95) AS p95;
-
--- Density at x = 0.5 for N(0, 1)
-SELECT dist_normal_pdf(0.0, 1.0, 0.5) AS density;
-
--- P(X ≤ 1.96) for N(0, 1)
-SELECT dist_normal_cdf(0.0, 1.0, 1.96) AS prob;
-
--- Distribution properties
-SELECT
-  dist_normal_mean(100.0, 15.0)     AS mean,
-  dist_normal_stddev(100.0, 15.0)   AS stddev,
-  dist_normal_variance(100.0, 15.0) AS variance,
-  dist_normal_skewness(100.0, 15.0) AS skewness;
-```
-
-## Z-scores via Distribution Properties
-
-Since every property is a function (not a hard-coded constant), you can use them inline anywhere a value goes:
+Z-scores, confidence intervals, two-sided p-values, [VaR](https://en.wikipedia.org/wiki/Value_at_risk). The [Normal distribution](https://en.wikipedia.org/wiki/Normal_distribution) is parameterized by mean and standard deviation:
 
 ```sql
+-- Quantiles, density, CDF
+SELECT dist_normal_quantile(0.0, 1.0, 0.95)  AS p95;     -- 1.6449
+SELECT dist_normal_pdf(0.0, 1.0, 0.5)        AS density;
+SELECT dist_normal_cdf(0.0, 1.0, 1.96)       AS prob;    -- ~0.975
+
+-- Z-score using property functions inline
 SELECT
   height_cm,
   (height_cm - dist_normal_mean(100, 15))
    / dist_normal_stddev(100, 15) AS height_zscore
 FROM observations;
-```
 
-## Discrete: Binomial
-
-Probability mass and cumulative probability:
-
-```sql
--- P(X = 7) for Binomial(n=10, p=0.3)
-SELECT dist_binomial_pdf(10, 0.3, 7) AS prob_exactly_7;
-
--- P(X ≤ 5) — cumulative
-SELECT dist_binomial_cdf(10, 0.3, 5) AS prob_at_most_5;
-
--- A single random draw
-SELECT dist_binomial_sample(10, 0.3) AS k;
-```
-
-## Generating Synthetic Data
-
-Sampling functions return one draw per call, so combine them with `range()` or any source table:
-
-```sql
-CREATE TABLE synthetic AS
-SELECT
-  i,
-  dist_normal_sample(100, 15)   AS height_cm,
-  dist_normal_sample(70, 10)    AS weight_kg,
-  dist_binomial_sample(1, 0.5)  AS gender_bit
-FROM range(1000) t(i);
-```
-
-## Survival Function (1 − CDF)
-
-For tail probabilities — far cleaner and more accurate than `1 - cdf` when the result is small:
-
-```sql
--- P(X > 99) for N(50, 10) — tail probability
-SELECT dist_normal_cdf_complement(50.0, 10.0, 99.0) AS prob_tail;
-```
-
-## Log Density / Log CDF
-
-Log-scale variants exist for every distribution. Useful inside likelihood computations and to avoid underflow:
-
-```sql
--- Log-likelihood of a single observation under N(0,1)
-SELECT dist_normal_log_pdf(0.0, 1.0, 4.5) AS log_density;
-
--- Log-survival for very small tail probabilities
-SELECT dist_normal_log_cdf_complement(0.0, 1.0, 6.0) AS log_tail;
-```
-
-## Hypothesis Testing
-
-```sql
 -- Two-sided p-value from a Z-statistic
 WITH z AS (SELECT 2.31 AS stat)
 SELECT 2 * dist_normal_cdf_complement(0.0, 1.0, ABS(stat)) AS p_value
 FROM z;
+```
 
--- One-sided p-value from a chi-squared statistic with df=4
+See [`dist_normal_pdf`](#dist_normal_pdf), [`dist_normal_cdf`](#dist_normal_cdf), [`dist_normal_quantile`](#dist_normal_quantile), [`dist_normal_sample`](#dist_normal_sample).
+
+## Discrete counts — Binomial and Poisson
+
+[Binomial](https://en.wikipedia.org/wiki/Binomial_distribution) for fixed-trial successes; [Poisson](https://en.wikipedia.org/wiki/Poisson_distribution) for events at a rate:
+
+```sql
+-- Binomial: P(X = 7), P(X ≤ 5), random k
+SELECT dist_binomial_pdf(10, 0.3, 7)  AS prob_exactly_7;
+SELECT dist_binomial_cdf(10, 0.3, 5)  AS prob_at_most_5;
+SELECT dist_binomial_sample(10, 0.3)  AS k;
+
+-- Poisson: probability of seeing >= 5 arrivals when λ=2.5
+SELECT dist_poisson_cdf_complement(2.5, 4) AS prob_5_or_more;
+
+-- Poisson sample for synthetic event-count columns
+SELECT i, dist_poisson_sample(2.5) AS arrivals
+FROM range(10) t(i);
+```
+
+See [`dist_binomial_pdf`](#dist_binomial_pdf), [`dist_binomial_cdf`](#dist_binomial_cdf), [`dist_poisson_cdf`](#dist_poisson_cdf), [`dist_poisson_sample`](#dist_poisson_sample).
+
+## Time-to-event — Exponential, Weibull, Gamma
+
+[Exponential](https://en.wikipedia.org/wiki/Exponential_distribution) for memoryless waiting times; [Weibull](https://en.wikipedia.org/wiki/Weibull_distribution) for time-to-failure with non-constant hazard; [Gamma](https://en.wikipedia.org/wiki/Gamma_distribution) for waiting times across multiple events:
+
+```sql
+-- Survival probability past t=2 for Exponential(rate=0.5)
+SELECT dist_exponential_cdf_complement(0.5, 2.0) AS surviving;
+
+-- Hazard rate at t=10 for Weibull(shape=1.5, scale=8)
+SELECT dist_weibull_hazard(1.5, 8.0, 10.0) AS instantaneous_hazard;
+
+-- Sample 1,000 service times from Gamma(2, 3)
+SELECT dist_gamma_sample(2.0, 3.0) AS service_secs
+FROM range(1000);
+```
+
+See [`dist_exponential_cdf_complement`](#dist_exponential_cdf_complement), [`dist_weibull_hazard`](#dist_weibull_hazard), [`dist_gamma_sample`](#dist_gamma_sample).
+
+## Bayesian conjugates — Beta and Gamma priors
+
+Closed-form [conjugate posteriors](https://en.wikipedia.org/wiki/Conjugate_prior) are one quantile call away. After observing 17 successes in 25 trials with a [Beta](https://en.wikipedia.org/wiki/Beta_distribution)(2, 2) prior, the posterior is Beta(19, 10):
+
+```sql
+-- Posterior mean and 95% credible interval
+SELECT
+  dist_beta_mean(19, 10)              AS posterior_mean,
+  dist_beta_quantile(19, 10, 0.025)   AS ci_lo,
+  dist_beta_quantile(19, 10, 0.975)   AS ci_hi;
+```
+
+See [`dist_beta_mean`](#dist_beta_mean), [`dist_beta_quantile`](#dist_beta_quantile).
+
+## Hypothesis testing — t, chi-squared, F
+
+```sql
+-- Two-sided t-test p-value, df=29
+WITH t AS (SELECT 2.045 AS stat, 29 AS df)
+SELECT 2 * dist_students_t_cdf_complement(df, ABS(stat)) AS p_value
+FROM t;
+
+-- Chi-squared goodness-of-fit p-value, df=4
 WITH chi AS (SELECT 9.488 AS stat)
 SELECT dist_chi_squared_cdf_complement(4, stat) AS p_value
 FROM chi;
 
--- t-distribution two-sided p-value with df=29
-WITH t AS (SELECT 2.045 AS stat, 29 AS df)
-SELECT 2 * dist_students_t_cdf_complement(df, ABS(stat)) AS p_value
-FROM t;
+-- F-test (ANOVA) p-value, df1=3 df2=20
+WITH f AS (SELECT 4.94 AS stat)
+SELECT dist_fisher_f_cdf_complement(3, 20, stat) AS p_value
+FROM f;
 ```
 
-## Monte Carlo: Estimate π
+See [`dist_students_t_cdf_complement`](#dist_students_t_cdf_complement), [`dist_chi_squared_cdf_complement`](#dist_chi_squared_cdf_complement), [`dist_fisher_f_cdf_complement`](#dist_fisher_f_cdf_complement).
 
-Classic example — sample uniform points in [-1,1]² and count those inside the unit circle:
+## Heavy-tailed families — Pareto, Cauchy, Log-normal
+
+Wealth, file sizes, internet traffic, financial returns. The tail dominates; reach for these when the Normal underestimates extremes:
 
 ```sql
+-- Probability a file exceeds 1 GB under Pareto(scale=10MB, shape=1.5)
+SELECT dist_pareto_cdf_complement(10.0, 1.5, 1024.0) AS prob_over_1gb;
+
+-- Median income under Log-normal(meanlog=10.5, sdlog=0.7)
+SELECT dist_lognormal_median(10.5, 0.7) AS median_income;
+```
+
+See [`dist_pareto_cdf_complement`](#dist_pareto_cdf_complement), [`dist_lognormal_median`](#dist_lognormal_median).
+
+## Synthetic data — combine families per column
+
+Sampling functions return one draw per call, so combine them with [`range()`](https://duckdb.org/docs/sql/functions/nested.html) over any source row count:
+
+```sql
+CREATE TABLE synthetic_users AS
+SELECT
+  i AS user_id,
+  dist_normal_sample(170, 8)        AS height_cm,
+  dist_lognormal_sample(10.5, 0.7)  AS annual_income,
+  dist_poisson_sample(3.5)          AS sessions_last_week,
+  dist_exponential_sample(0.1)      AS avg_session_minutes,
+  dist_bernoulli_sample(0.12)       AS converted
+FROM range(100000) t(i);
+```
+
+One query, 100k rows of realistic-looking fixture data — heights from a [Normal](https://en.wikipedia.org/wiki/Normal_distribution), incomes from a [Log-normal](https://en.wikipedia.org/wiki/Log-normal_distribution), session counts from a [Poisson](https://en.wikipedia.org/wiki/Poisson_distribution), conversions from a [Bernoulli](https://en.wikipedia.org/wiki/Bernoulli_distribution).
+
+## Monte Carlo — the canonical example
+
+```sql
+-- Estimate π by sampling uniform points in [-1,1]² and counting hits inside the unit circle
 WITH samples AS (
   SELECT dist_uniform_real_sample(-1.0, 1.0) AS x,
          dist_uniform_real_sample(-1.0, 1.0) AS y
@@ -116,6 +142,8 @@ WITH samples AS (
 SELECT 4.0 * COUNT(*) FILTER (WHERE x*x + y*y <= 1) / COUNT(*) AS pi_estimate
 FROM samples;
 ```
+
+The same pattern — generate, filter, aggregate — handles VaR, payoff integration, queueing simulation, A/B-test power calculations.
 
 ## Value at Risk
 
@@ -126,14 +154,30 @@ SELECT portfolio * (-dist_normal_quantile(mu, sigma, 0.01)) AS var_99
 FROM params;
 ```
 
-## Bayesian Posterior with a Beta-Binomial Conjugate
+For heavy-tailed [VaR](https://en.wikipedia.org/wiki/Value_at_risk), swap [`dist_normal_quantile`](#dist_normal_quantile) for [`dist_students_t_quantile`](#dist_students_t_quantile) with a low `df`.
 
-After observing 17 successes in 25 trials with a Beta(2, 2) prior, the posterior is Beta(19, 10):
+## Log-scale variants for likelihoods
+
+Every PDF / CDF / CDF-complement has a `_log_*` variant. Use them inside likelihood computations and to avoid underflow on tiny tails:
 
 ```sql
--- Posterior mean and 95% credible interval
-SELECT
-  dist_beta_mean(19, 10)              AS posterior_mean,
-  dist_beta_quantile(19, 10, 0.025)   AS ci_lo,
-  dist_beta_quantile(19, 10, 0.975)   AS ci_hi;
+-- Log-likelihood of one observation under N(0,1)
+SELECT dist_normal_log_pdf(0.0, 1.0, 4.5) AS log_density;
+
+-- Log-survival for very small tail probabilities
+SELECT dist_normal_log_cdf_complement(0.0, 1.0, 6.0) AS log_tail;
+```
+
+See [`dist_normal_log_pdf`](#dist_normal_log_pdf), [`dist_normal_log_cdf_complement`](#dist_normal_log_cdf_complement).
+
+## Reproducibility
+
+`_sample` functions don't take a seed parameter. For exactly-reproducible runs, materialize the draws once into a table and treat that table as the seed:
+
+```sql
+CREATE TABLE rng_pool AS
+SELECT i, dist_normal_sample(0, 1) AS z
+FROM range(1000000) t(i);
+
+-- Subsequent analyses read from rng_pool — fully reproducible
 ```

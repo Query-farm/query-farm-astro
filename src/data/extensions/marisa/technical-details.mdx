@@ -1,43 +1,80 @@
+import Callout from '../../../components/docs/Callout.astro';
+
+## What you can do with one query
+
+Pack a column of strings into a single, self-contained BLOB — then run membership, predictive, and longest-prefix-match lookups against it forever:
+
+```sql
+-- Build once at ingest time
+CREATE TABLE words_trie AS
+  SELECT marisa_trie(word) AS trie FROM dictionary;
+
+-- Three lookups against the same BLOB
+SELECT
+  marisa_lookup(trie, 'duckdb')                 AS exact,         -- BOOLEAN
+  marisa_predictive(trie, 'duck', 10)           AS completions,   -- VARCHAR[]
+  marisa_common_prefix(trie, 'duckdbtools', 10) AS prefixes_of    -- VARCHAR[]
+FROM words_trie;
+```
+
+[`marisa_trie`](#marisa_trie) is the only constructor — an aggregate that emits a single `BLOB`. The three query primitives ([`marisa_lookup`](#marisa_lookup), [`marisa_predictive`](#marisa_predictive), [`marisa_common_prefix`](#marisa_common_prefix)) read the BLOB directly. No decode step, no warm-up; the first query is as fast as the millionth.
+
+<Callout type="note" title="Static is the feature">
+A MARISA trie is **built once and queried many times**. There is no `marisa_insert` or `marisa_delete` — to add or remove keys, rebuild the trie from the updated source set. For a 470K-entry English wordlist that's milliseconds; for billions of keys, plan an offline rebuild step.
+
+The static design is what makes the structure [succinct](https://en.wikipedia.org/wiki/Succinct_data_structure): keys are packed near the information-theoretic minimum, the BLOB is mmap-ready on load, and lookups don't pay any synchronization cost. If your set churns continuously, a hash set or a [`bitfilters`](/products/extensions/bitfilters) Quotient filter is a better fit.
+</Callout>
+
 ## What is MARISA?
 
-MARISA — *Matching Algorithm with Recursively Implemented StorAge* — is a static, succinct trie data structure. "Static" means the trie is built once and queried many times (no incremental insert). "Succinct" means it stores a string set in roughly the information-theoretic minimum number of bits.
-
-The reference implementation is [github.com/s-yata/marisa-trie](https://github.com/s-yata/marisa-trie), maintained for over a decade in C++.
-
-## Why a trie?
+MARISA — *Matching Algorithm with Recursively Implemented StorAge* — is a static, succinct [Patricia / radix trie](https://en.wikipedia.org/wiki/Radix_tree). The reference C++ implementation is [`s-yata/marisa-trie`](https://github.com/s-yata/marisa-trie), maintained for over a decade. This extension is a thin DuckDB wrapper around that library.
 
 A trie is the right data structure when:
 
 - The strings have **shared prefixes** — URLs, paths, names, dictionary words. Prefix-rich data compresses dramatically.
-- You need **prefix queries** — autocomplete, longest-prefix match, IP routing — that hash-based sets can't answer at all.
-- You want **bounded lookup time** — O(|key|), independent of the dictionary size.
+- You need **prefix queries** — autocomplete, longest-prefix match, IP-CIDR routing — that hash sets and Bloom filters can't answer at all.
+- You want **bounded lookup time** — O(|key|), independent of dictionary size.
 
-For random unrelated strings without prefix structure, a hash set or Bloom filter ([`bitfilters`](/products/extensions/bitfilters)) is usually better.
+For random unrelated strings without prefix structure, a hash set or a Bloom / XOR / Binary Fuse filter from [`bitfilters`](/products/extensions/bitfilters) will be smaller and faster.
 
 ## Storage
 
-Each `marisa_trie(...)` aggregate produces one BLOB. The BLOB is self-contained and portable — write it to a column, persist in Parquet, ship to another DuckDB instance. Loading the trie is mmap-style fast: deserialization is essentially a pointer-walk, no parsing.
+Each [`marisa_trie`](#marisa_trie) call produces one `BLOB`. The BLOB is self-contained and portable — write it to a column, persist in Parquet, ship to another DuckDB instance. Loading is essentially a pointer-walk; there is no parsing or decompression step at query time.
 
-A typical English-word trie of ~470K entries weighs in around 800 KB — about a fifth the size of the same words as a flat sorted list.
+A typical English-word trie of ~470K entries weighs in around 800 KB — roughly a fifth the size of the same words as a flat sorted list, before any column compression.
 
 ## Lookup operations
 
 | Operation | Function | Returns |
 |---|---|---|
-| Exact membership | `marisa_lookup` | BOOLEAN |
-| Predictive (autocomplete) | `marisa_predictive` | LIST(VARCHAR) |
-| Longest-prefix-match | `marisa_common_prefix` | LIST(VARCHAR) |
+| Exact membership | [`marisa_lookup`](#marisa_lookup) | `BOOLEAN` |
+| Predictive (autocomplete) | [`marisa_predictive`](#marisa_predictive) | `VARCHAR[]` |
+| Longest-prefix-match | [`marisa_common_prefix`](#marisa_common_prefix) | `VARCHAR[]` |
 
-All three run against the BLOB directly — no decode step, no warm-up. The first query is as fast as the millionth.
+All three run against the BLOB directly. The first query is as fast as the millionth.
+
+## MARISA vs `bitfilters`
+
+Both extensions answer set-membership questions; they sit in the same **Indexing** sub-bucket on the catalog page for that reason. The mechanics are different in ways that matter:
+
+| | [`marisa`](/products/extensions/marisa) | [`bitfilters`](/products/extensions/bitfilters) |
+|---|---|---|
+| **Stores the strings?** | Yes — keys are recoverable | No — only a probabilistic fingerprint |
+| **False positives** | None — answers are exact | Bounded (e.g. ~0.4% for `xor8`) |
+| **Prefix / predictive queries** | Yes (`marisa_predictive`, `marisa_common_prefix`) | No |
+| **Best when** | Prefix-rich strings, autocomplete | Random keys, smallest possible memory |
+| **Mutation** | Static — rebuild to update | Static (XOR / Fuse / Bloom) or dynamic (Quotient) |
+
+Use MARISA when you need the strings back or you need prefix queries. Use [`bitfilters`](/products/extensions/bitfilters) when you only need a yes/no on uncorrelated keys and memory is the binding constraint.
 
 ## Pairings
 
-- **Build at ingest, query at runtime.** A common pattern is to materialize one trie per user / partition / day at write time, then query at read time. The static nature is a feature here — the trie won't change underneath you.
-- **Combine with [`fuzzycomplete`](/products/extensions/fuzzycomplete) or [`rapidfuzz`](/products/extensions/rapidfuzz)** for fuzzy + prefix lookup pipelines (exact prefix via marisa, fuzzy via the others).
+- **Build at ingest, query at runtime.** Materialize one trie per user / partition / day at write time, then query at read time. The static design is a feature here — the trie won't change underneath you.
+- **Pair with [`fuzzycomplete`](/products/extensions/fuzzycomplete) or [`rapidfuzz`](/products/extensions/rapidfuzz)** for fuzzy + prefix lookup pipelines: exact prefix via MARISA, fuzzy fallback via the others.
 - **Use as the dictionary side of a join** — much smaller wire size than transferring the underlying string list.
 
 ## Limitations
 
-- **Static** — no incremental insert. Rebuild the trie from the updated source set. For a 470K-entry dictionary that's milliseconds; for billions, plan accordingly.
+- **Static** — no incremental insert or delete. Rebuild the trie from the updated source set.
 - **String-only.** No numeric or composite keys.
-- **No order beyond lexicographic.** If you need different orderings, build separate tries.
+- **Lexicographic order only.** If you need a different ordering at query time, build separate tries.

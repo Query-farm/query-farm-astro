@@ -1,0 +1,103 @@
+import Callout from '../../../components/docs/Callout.astro';
+
+## What you can do with one query
+
+The shortest path from "I want this SQL to run every 5 minutes" to a live schedule:
+
+```sql
+SELECT cron(
+  'CREATE OR REPLACE TABLE hourly_rollup AS
+     SELECT bucket, SUM(amount) AS total
+     FROM events
+     WHERE ts >= now() - INTERVAL 1 HOUR
+     GROUP BY bucket',
+  '0 */5 * * * *'
+);
+-- → 'task_0'
+```
+
+[`cron`](#cron) registers the query against a six-field cron expression and returns a `job_id`. A background thread in this DuckDB process wakes on each tick, runs the query, and writes the outcome into [`cron_jobs`](#cron_jobs). No external scheduler, no shell wrapper.
+
+<Callout type="warning" title="Schedules die when the DuckDB process exits">
+Cronjob lives entirely **inside the running DuckDB process**. A graceful shutdown, a `kill`, a crash, an OOM, a deploy — any of these wipe every registered job. There is no on-disk registry, no WAL entry, no resume after restart.
+
+If the work needs to happen on wall-clock time regardless of process state, drive it from an external scheduler — system [`cron(8)`](https://man7.org/linux/man-pages/man8/cron.8.html), [`systemd` timers](https://www.freedesktop.org/software/systemd/man/systemd.timer.html), or [Kubernetes CronJob](https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/) — and have it invoke DuckDB. Use this extension when DuckDB is *already* a long-running service and you want SQL-defined scheduling inside that lifetime.
+</Callout>
+
+## Cron expression format
+
+Cronjob uses **six fields**, with `seconds` as the leading field — one more than POSIX [`cron(8)`](https://man7.org/linux/man-pages/man8/cron.8.html):
+
+```
+┌────────── second  (0–59)
+│ ┌──────── minute  (0–59)
+│ │ ┌────── hour    (0–23)
+│ │ │ ┌──── day of month (1–31)
+│ │ │ │ ┌── month   (1–12)
+│ │ │ │ │ ┌ day of week (0–6, Sun..Sat, or MON–SUN)
+* * * * * *
+```
+
+Operators: `*` (any), `?` (no specific value, used in day-of-month / day-of-week), `,` (list), `-` (range), `/` (step). [crontab.guru](https://crontab.guru/) is the standard sanity-check tool — note that crontab.guru parses the five-field POSIX form, so prepend a `0 ` (or `*/N `) to translate.
+
+A few common patterns:
+
+| Pattern | Meaning |
+|---|---|
+| `0 0 * * * *` | Top of every hour |
+| `0 */5 * * * *` | Every 5 minutes |
+| `*/15 * * * * *` | Every 15 seconds |
+| `0 0 0 * * *` | Daily at midnight |
+| `0 0 7 ? * MON-FRI` | Weekdays at 07:00 |
+| `0 0 0 1 * ?` | First of every month |
+
+## What runs, where
+
+[`cron`](#cron) registers the query against the **same database connection** the scheduler was loaded into. That has two consequences:
+
+- The scheduled query inherits the same access rights, attached databases, and secrets as the registering session.
+- If you load Cronjob in a session that targets an in-memory database, the schedule disappears with the database — even before process exit.
+
+Each job runs single-threaded against itself: if a tick's query takes longer than the schedule interval, the next tick waits its turn. No overlap, no parallel runs of the same registration.
+
+## Inspect and cancel
+
+[`cron_jobs`](#cron_jobs) is the introspection table — every registered job, its next scheduled run, the last run, and the last result (or error message):
+
+```sql
+SELECT job_id, schedule, next_run, status, last_run, last_result
+FROM cron_jobs()
+ORDER BY next_run;
+```
+
+[`cron_delete`](#cron_delete) un-registers a job by `job_id`. It returns `TRUE` if a matching job existed; restart wipes everything anyway, so this is for un-registration during a live process:
+
+```sql
+SELECT cron_delete('task_0');
+```
+
+## Pairing with other extensions
+
+Cronjob is one of two **"operate your DuckDB process"** extensions in this collection — pick by what you want to drive:
+
+- **Cronjob** schedules SQL queries on a wall-clock cadence inside the process.
+- **[Events](/products/extensions/events)** streams query / transaction / connection events out of the process to an external handler.
+
+Together they cover *push* (Events fires on internal activity) and *pull* (Cronjob fires on time). Both share the same fundamental scope: they only operate while the DuckDB process is alive.
+
+For the alerting and exporting recipes, Cronjob composes naturally with:
+
+- **[`http_client`](/products/extensions/http_client)** — schedule a query that POSTs to a webhook (Slack, PagerDuty, generic HTTP).
+- **[`webmacro`](/products/extensions/webmacro)** — wrap repeated HTTP integrations as named macros, then schedule the macro.
+- **[`httpfs`](https://duckdb.org/docs/extensions/httpfs/overview)** — schedule a [`COPY ... TO`](https://duckdb.org/docs/sql/statements/copy) that writes Parquet to S3 / GCS.
+
+## When to use system cron instead
+
+If any of the following are true, reach for system [`cron(8)`](https://man7.org/linux/man-pages/man8/cron.8.html) / `systemd` timers / Kubernetes CronJob and have *that* invoke `duckdb -c '...'`:
+
+- The DuckDB process is short-lived (a CLI invocation, a script, a query runner).
+- The schedule must survive deploys, restarts, or host moves.
+- You need delivery guarantees, retries, or observability the host scheduler already provides.
+- The work spans multiple databases or extends beyond what one DuckDB session can express.
+
+Cronjob is for the opposite case: DuckDB is already a long-running service, and the convenience of "schedule it from SQL" outweighs the cost of "schedule lifetime equals process lifetime."
