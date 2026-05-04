@@ -288,8 +288,20 @@ def collect_function_examples(slug: str, fns: list[dict]) -> list[Snippet]:
 # Match HTML comments like `<!-- check: skip needs-kafka -->` or
 # `<!-- check: setup -->` immediately before a ```sql fence.
 CHECK_COMMENT_RE = re.compile(
-    r"<!--\s*check:\s*(?P<dir>skip|setup)(?:\s+(?P<reason>.+?))?\s*-->",
-    re.IGNORECASE,
+    r"""
+        (?:
+            <!--\s*                          # HTML-style comment (rejected by MDX 3)
+            check:\s*(?P<dir>skip|setup)
+            (?:\s+(?P<reason>.+?))?
+            \s*-->
+          |
+            \{/\*\s*                         # JSX-style MDX comment
+            check:\s*(?P<dir2>skip|setup)
+            (?:\s+(?P<reason2>.+?))?
+            \s*\*/\}
+        )
+    """,
+    re.IGNORECASE | re.VERBOSE,
 )
 SQL_FENCE_RE = re.compile(r"^```sql\s*$", re.MULTILINE)
 
@@ -309,7 +321,9 @@ def collect_mdx_blocks(slug: str, mdx_path: Path) -> list[Snippet]:
         stripped = line.strip()
         m = CHECK_COMMENT_RE.search(stripped)
         if m and not stripped.startswith("```"):
-            pending_directive = (m.group("dir").lower(), (m.group("reason") or "").strip() or None)
+            kind = (m.group("dir") or m.group("dir2")).lower()
+            reason = (m.group("reason") or m.group("reason2") or "").strip() or None
+            pending_directive = (kind, reason)
             i += 1
             continue
         if stripped.startswith("```sql"):

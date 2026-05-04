@@ -256,7 +256,7 @@ export function mergeExtensionTree(tree: ExtensionTree): ExtensionData {
         parameters: [],
         examples: [],
         description: '',
-        categories: ['Uncategorized'],
+        categories: [],
       }) as Partial<FunctionDocData>,
     ));
   }

@@ -14,7 +14,7 @@
         },
         {
           "label": "Per-partition data skipping",
-          "description": "Materialize one filter per logical partition, store alongside metadata, and use [`*_filter_contains`](#xor8_filter_contains) at query time to skip whole partitions that can't possibly contain the key. For high-cardinality lookups against fact tables this routinely skips 99%+ of partitions."
+          "description": "Materialize one filter per logical partition, store alongside metadata, and probe at query time to skip whole partitions that can't possibly contain the key. For high-cardinality lookups against fact tables this routinely skips 99%+ of partitions."
         },
         {
           "label": "Compact set artifacts",
@@ -22,7 +22,7 @@
         },
         {
           "label": "DuckDB-native join filters",
-          "description": "[`bitfilters_duckdb_bloom_filter_create`](#bitfilters_duckdb_bloom_filter_create) emits filters in the *same internal format* DuckDB uses for its own runtime join filters — so you can persist a filter, then re-use it in custom data-skipping logic that the optimizer recognizes."
+          "description": "One family emits filters in the same internal format DuckDB uses for its own runtime join filters — persist a filter, then re-use it in custom data-skipping logic the optimizer recognizes."
         }
       ]
     },
@@ -33,19 +33,19 @@
       "bulletPoints": [
         {
           "label": "Quotient — dynamic sets",
-          "description": "[`quotient_filter`](#quotient_filter) is the only family here that supports **deletion and resize**. Pick this when the underlying set evolves at runtime. Tunable via `q` (slot count = 2^q) and `r` (remainder bits, FPR ≈ 2^(−r)). See [Quotient filter](https://en.wikipedia.org/wiki/Quotient_filter)."
+          "description": "The only family here that supports deletion and resize. Pick it when the underlying set evolves at runtime. Tunable slot count and FPR. See [Quotient filter](https://en.wikipedia.org/wiki/Quotient_filter)."
         },
         {
           "label": "XOR — static, cross-system compatible",
-          "description": "[`xor8_filter`](#xor8_filter) is ~9 bits per key at ~0.39% FPR; [`xor16_filter`](#xor16_filter) is ~18 bits per key at ~0.0015% FPR. ~20% smaller than a Bloom filter at the same FPR. Static — built once, queried many times. See the [Xor filters paper (Graf & Lemire, 2019)](https://arxiv.org/abs/1912.08258)."
+          "description": "~9 bits per key at ~0.39% FPR (8-bit) or ~18 bits per key at ~0.0015% FPR (16-bit) — about 20% smaller than a Bloom at the same FPR. Built once, queried many times. See the [Xor filters paper (Graf & Lemire, 2019)](https://arxiv.org/abs/1912.08258)."
         },
         {
           "label": "Binary Fuse — modern best-in-class",
-          "description": "[`binary_fuse8_filter`](#binary_fuse8_filter) typically lands **under 9 bits per key** with very fast construction and lookups — currently the most space-efficient static filter family. [`binary_fuse16_filter`](#binary_fuse16_filter) for very-low-FPR static workloads. Default choice for read-heavy, append-only sets."
+          "description": "Typically lands under 9 bits per key with very fast construction and lookups — currently the most space-efficient static filter family. Default choice for read-heavy, append-only sets."
         },
         {
           "label": "DuckDB Bloom — native compatibility",
-          "description": "[`bitfilters_duckdb_bloom_filter_create`](#bitfilters_duckdb_bloom_filter_create) and [`bitfilters_duckdb_bloom_filter_probe`](#bitfilters_duckdb_bloom_filter_probe) speak DuckDB's *internal* [Bloom filter](https://en.wikipedia.org/wiki/Bloom_filter) format. Pair with [`bitfilters_duckdb_hash`](#bitfilters_duckdb_hash) — the hash layout matches what DuckDB's optimizer expects."
+          "description": "Speaks DuckDB's internal [Bloom filter](https://en.wikipedia.org/wiki/Bloom_filter) format and hash layout, so a persisted filter slots into the engine's own data-skipping path."
         }
       ]
     },
@@ -64,7 +64,7 @@
         },
         {
           "label": "No false negatives, ever",
-          "description": "The filter never lies about absence: if [`xor8_filter_contains`](#xor8_filter_contains) returns `false`, the key is definitively not in the source set. False positives are bounded — count them empirically by probing known non-members and verify the rate matches the family."
+          "description": "The filter never lies about absence: a `false` from a probe means the key is definitively not in the source set. False positives are bounded — measure them by probing known non-members and confirm the rate matches the family."
         },
         {
           "label": "Set-membership only — not cardinality",
@@ -87,7 +87,7 @@
         },
         {
           "label": "Static families don't support updates",
-          "description": "XOR, Binary Fuse, and DuckDB-Bloom filters are built once and immutable. Adding a single key requires a full rebuild. Use [`quotient_filter`](#quotient_filter) when the set genuinely churns, or rebuild on a cadence that matches your write throughput."
+          "description": "XOR, Binary Fuse, and DuckDB-Bloom filters are built once and immutable. Adding a single key requires a full rebuild. Use `quotient_filter` when the set genuinely churns, or rebuild on a cadence that matches your write throughput."
         },
         {
           "label": "Tiny sets don't earn the filter",
@@ -106,7 +106,7 @@
         },
         {
           "title": "Per-partition data skipping",
-          "description": "Materialize one [`binary_fuse8_filter`](#binary_fuse8_filter) per partition at write time, store alongside partition metadata. At query time, [`binary_fuse8_filter_contains`](#binary_fuse8_filter_contains) tells the planner which partitions can possibly contain the key — skip the rest."
+          "description": "Materialize one Binary Fuse filter per partition at write time, store alongside partition metadata. At query time the probe tells the planner which partitions can possibly contain the key — skip the rest."
         },
         {
           "title": "Ship a set as a tiny artifact",

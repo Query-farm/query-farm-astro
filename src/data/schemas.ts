@@ -40,7 +40,7 @@ export const FunctionDocDataSchema = z.object({
   id: z.string(),
   name: z.string(),
   type: z.enum(['scalar', 'table', 'aggregate', 'copy']),
-  categories: z.array(z.string()).min(1).default(['Uncategorized']),
+  categories: z.array(z.string()).default([]),
   returnType: z.string().optional(),
   parameters: z.array(FunctionParameterSchema),
   returns: z.string().optional(),
@@ -234,6 +234,22 @@ export const ExtensionMetadataSchema = z.object({
   })).optional(),
   relatedExtensions: z.array(z.string()).optional(),
   image: z.string().optional(),
+  // Page-top notice banner — for deprecation, successor announcements,
+  // breaking-change advisories, etc. Renders directly under the Hero, before
+  // any other content. Body supports inline markdown (links, code, emphasis).
+  notice: z.object({
+    type: z.enum(['note', 'tip', 'warning', 'danger', 'info']).default('warning'),
+    title: z.string(),
+    body: z.string(),
+    // Optional Buttondown newsletter list ID. When set, the notice renders
+    // an inline subscribe form below the body, posting to Buttondown's
+    // embed-subscribe endpoint. Visitor enters their email; on submit it
+    // opens Buttondown's confirmation page in a popup.
+    buttondownList: z.string().optional(),
+    // Optional CTA-button label that wraps the form's "subscribe" action.
+    // Defaults to "Notify me on release" when buttondownList is set.
+    buttondownCta: z.string().optional(),
+  }).optional(),
 });
 
 // ---------- Pricing ----------
@@ -279,3 +295,17 @@ export const ExtensionDataSchema = z.object({
 
 // Convenience exported array forms
 export const FunctionsArraySchema = z.array(FunctionDocDataSchema);
+
+// ---------- Site-wide usage summary ----------
+
+// Written by extension-diff-tools/usage-snapshot.py from Cloudflare Analytics
+// Engine. Drives the proof-point band on the extensions index. The current
+// (partial) ISO week is excluded from `weeklyBuckets` upstream.
+export const UsageSummarySchema = z.object({
+  totalLast365Days: z.number().int().nonnegative(),
+  weeklyBuckets: z.array(z.object({
+    weekStarting: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    loads: z.number().int().nonnegative(),
+  })),
+  asOf: z.string(),
+});

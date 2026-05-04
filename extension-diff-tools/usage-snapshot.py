@@ -25,7 +25,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -49,11 +49,72 @@ def query(token: str, account_id: str, sql: str) -> dict:
         content=sql,
         timeout=30.0,
     )
-    r.raise_for_status()
+    if r.status_code >= 400:
+        raise RuntimeError(
+            f"AE query failed ({r.status_code}): {r.text}\n"
+            f"SQL: {sql}"
+        )
     body = r.json()
     if not body.get("success", True) and "errors" in body:
         raise RuntimeError(f"Analytics Engine error: {body['errors']}")
     return body
+
+
+def fetch_total_last_n_days(token: str, account_id: str, days: int) -> int:
+    """Site-wide total load count over the last `days` days."""
+    sql = (
+        "SELECT SUM(_sample_interval) AS loads "
+        "FROM query_farm_extension_loads "
+        f"WHERE timestamp > NOW() - INTERVAL '{days}' DAY "
+        "FORMAT JSON"
+    )
+    body = query(token, account_id, sql)
+    rows = body.get("data", [])
+    if not rows:
+        return 0
+    try:
+        return int(rows[0].get("loads", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def fetch_weekly_totals(token: str, account_id: str, weeks: int) -> list[dict]:
+    """Site-wide load count bucketed by ISO week (Monday-start) for the last
+    `weeks` weeks. Returned newest-first as a list of
+    {weekStarting: 'YYYY-MM-DD', loads: int}.
+
+    NOTE: the caller is responsible for dropping the current (partial) week.
+    """
+    # AE's DateTime arithmetic is restricted, so query daily and bucket into
+    # weeks here. Pull a few extra days so the oldest reported week is whole.
+    days = weeks * 7 + 6
+    sql = (
+        "SELECT toDate(timestamp) AS day, SUM(_sample_interval) AS loads "
+        "FROM query_farm_extension_loads "
+        f"WHERE timestamp > NOW() - INTERVAL '{days}' DAY "
+        "GROUP BY day "
+        "ORDER BY day "
+        "FORMAT JSON"
+    )
+    body = query(token, account_id, sql)
+    # Aggregate daily rows into Monday-start weeks.
+    weekly: dict[str, int] = {}
+    for row in body.get("data", []):
+        d = row.get("day")
+        if not d:
+            continue
+        try:
+            day = datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+            loads = int(row.get("loads", 0))
+        except (TypeError, ValueError):
+            continue
+        week_start = (day - timedelta(days=day.weekday())).isoformat()
+        weekly[week_start] = weekly.get(week_start, 0) + loads
+    # Newest first.
+    return [
+        {"weekStarting": k, "loads": v}
+        for k, v in sorted(weekly.items(), reverse=True)
+    ]
 
 
 def fetch_loads(token: str, account_id: str, days: int) -> dict[str, int]:
@@ -125,6 +186,30 @@ def main() -> None:
         written += 1
 
     print(f"\nWrote {written} usage.json files.")
+
+    # Site-wide summary used by the extensions index hero.
+    print("\nFetching site-wide 365-day total and weekly buckets...")
+    total_365d = fetch_total_last_n_days(token, account_id, 365)
+    weekly = fetch_weekly_totals(token, account_id, 13)
+
+    # Drop the current (partial) week so the chart only shows complete weeks.
+    today = datetime.now(timezone.utc).date()
+    current_week_start = (today - timedelta(days=today.weekday())).isoformat()
+    weekly = [w for w in weekly if w["weekStarting"] < current_week_start]
+    # Keep the most recent 12 complete weeks, oldest first (chart-friendly).
+    weekly = list(reversed(weekly[:12]))
+
+    summary_path = args.site / "src/data/generated/usage-summary.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps({
+        "totalLast365Days": total_365d,
+        "weeklyBuckets": weekly,
+        "asOf": as_of,
+    }, indent=2) + "\n")
+    print(f"  365d total: {total_365d:,} loads")
+    for b in weekly:
+        print(f"  week of {b['weekStarting']}: {b['loads']:,}")
+    print(f"Wrote {summary_path.relative_to(args.site)}")
 
 
 if __name__ == "__main__":

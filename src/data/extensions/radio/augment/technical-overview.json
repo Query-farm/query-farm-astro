@@ -1,47 +1,47 @@
 {
   "eyebrow": "Technical Overview",
   "title": "Why Use Radio?",
-  "description": "Subscribe to [WebSocket](https://datatracker.ietf.org/doc/html/rfc6455) and [Redis Pub/Sub](https://redis.io/docs/latest/develop/interact/pubsub/) channels from inside DuckDB SQL. Incoming messages buffer into queryable tables; outgoing messages queue with status tracking. The whole thing lives in one process — no separate consumer service, no message-queue runtime to operate.",
+  "description": "Subscribe to [WebSocket](https://datatracker.ietf.org/doc/html/rfc6455) and [Redis Pub/Sub](https://redis.io/docs/latest/develop/interact/pubsub/) channels from inside DuckDB SQL. Incoming messages buffer into queryable tables; outgoing messages queue with delivery status — all in one process, with no separate consumer service to operate.",
   "sections": [
     {
       "icon": "📡",
       "title": "What this extension is for",
-      "description": "Radio collapses the ceremony around real-time messaging into SQL. The path from \"events arriving on a WebSocket\" to \"rows you can `JOIN` and `WHERE` against\" is one [`CALL`](https://duckdb.org/docs/sql/statements/call) plus a [`SELECT`](https://duckdb.org/docs/sql/statements/select).",
+      "description": "Real-time messaging without leaving SQL. The path from \"events arriving on a WebSocket\" to \"rows you can `JOIN` and `WHERE` against\" collapses to a subscribe call plus a `SELECT`.",
       "bulletPoints": [
         {
-          "label": "Listen and drain",
-          "description": "[`radio_subscribe`](#radio_subscribe) opens a connection; messages flow into an in-memory buffer that [`radio_received_messages`](#radio_received_messages) and [`radio_subscription_received_messages`](#radio_subscription_received_messages) expose as ordinary tables. Each message has a `seen_count` so you can drain incrementally."
+          "label": "Listen and drain incrementally",
+          "description": "Subscribe to a channel and incoming messages flow into an in-memory buffer exposed as ordinary DuckDB tables. Each row tracks how many times it has been seen, so re-querying drains only what's new."
         },
         {
-          "label": "Queue and broadcast",
-          "description": "[`radio_transmit_message`](#radio_transmit_message) queues outbound messages. [`radio_subscription_transmit_messages`](#radio_subscription_transmit_messages) is the queue's view — pending, transmitted, or failed — so you can poll for delivery and retry from SQL."
+          "label": "Queue and broadcast outbound",
+          "description": "Hand a message to the extension and it delivers asynchronously, with per-message status visible as a table. Poll for delivery, retry, or audit failures from SQL."
         },
         {
           "label": "Inspect what's connected",
-          "description": "[`radio_subscriptions`](#radio_subscriptions) lists every active subscription with its endpoint and state. Useful for dashboards and `radio_*` debug queries."
+          "description": "Every active subscription shows up as a row with its endpoint, state, and delivery counters — useful for dashboards and runtime debugging."
         },
         {
-          "label": "Test without the wire",
-          "description": "[`radio_subscription_received_message_add`](#radio_subscription_received_message_add) injects messages straight into a subscription's inbox. Lets you unit-test SQL pipelines that consume `radio_*` tables without standing up a real upstream."
+          "label": "Test pipelines without the wire",
+          "description": "Inject canned messages straight into a subscription's inbox and exercise downstream SQL exactly as it would behave on the real channel."
         }
       ]
     },
     {
       "icon": "🔌",
       "title": "Supported transports",
-      "description": "Radio currently supports two transports. Additional ones are on the roadmap; the table function surface stays the same regardless of which protocol a subscription uses.",
+      "description": "Two transports today; the table-function surface stays identical regardless of protocol.",
       "bulletPoints": [
         {
           "label": "WebSocket",
-          "description": "Standard [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455) WebSocket client. Subscribe with a `ws://` or `wss://` URL — ideal for browser-style real-time feeds, Slack-style event streams, and custom server-sent event APIs that speak WS."
+          "description": "Standard [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455) client. `ws://` or `wss://` URLs — fits browser-style real-time feeds, Slack-style event streams, and any custom server-sent API that speaks WS."
         },
         {
           "label": "Redis Pub/Sub",
-          "description": "Subscribe to one or more [Redis channels](https://redis.io/docs/latest/develop/interact/pubsub/) by passing a Redis URL plus channel name. For application data flows that already use Redis as the bus."
+          "description": "Subscribe to one or more [Redis channels](https://redis.io/docs/latest/develop/interact/pubsub/) by passing a Redis URL plus channel name. Fits application data flows that already use Redis as the bus."
         },
         {
           "label": "Roadmap",
-          "description": "Per the [extension docs](https://query.farm/duckdb_extension_radio.html), planned protocols include Google Pub/Sub, Azure Service Bus, MQTT, and subprocess pipes. Today's transports are WebSocket and Redis Pub/Sub only."
+          "description": "Google Pub/Sub, Azure Service Bus, MQTT, and subprocess pipes are planned. Today's transports are WebSocket and Redis Pub/Sub only."
         }
       ]
     },
@@ -52,46 +52,46 @@
       "bulletPoints": [
         {
           "label": "In-memory, process-scoped buffers",
-          "description": "Received messages live in an in-process buffer. When the DuckDB process exits, all subscriptions are torn down and unread messages are lost. For at-least-once semantics across restarts, persist drained messages to a real durable store before processing."
+          "description": "Received messages live in-process. When DuckDB exits, subscriptions tear down and unread messages are lost. For at-least-once across restarts, drain to a durable store before processing."
         },
         {
           "label": "Buffers are size-limited",
-          "description": "The received-message queue has a fixed capacity — older messages are evicted as new ones arrive. Drain with [`radio_received_messages`](#radio_received_messages) frequently enough to keep up with the inbound rate, or gate the upstream so it doesn't out-pace your reads."
+          "description": "The receive queue has a fixed capacity — older messages are evicted as new ones arrive. Drain frequently enough to keep up with the inbound rate."
         },
         {
-          "label": "Best-effort delivery for outbound",
-          "description": "[`radio_transmit_message`](#radio_transmit_message) queues a message; the extension delivers it asynchronously. The per-subscription `transmit_successes`, `transmit_failures`, `transmit_last_success_time`, and `transmit_last_failure_time` columns on [`radio_subscriptions`](#radio_subscriptions) report delivery progress; [`radio_subscription_transmit_messages`](#radio_subscription_transmit_messages) shows individual queued messages."
+          "label": "Best-effort outbound delivery",
+          "description": "Messages are queued and delivered asynchronously. Per-subscription success/failure counters and per-message status tables expose progress so you can build retry logic in SQL."
         },
         {
           "label": "Single connection per subscription",
-          "description": "Multiple DuckDB connections in the same process don't share subscription state. Open subscriptions on the connection that will be draining them."
+          "description": "Multiple DuckDB connections in the same process don't share subscription state. Open a subscription on the same connection that will drain it."
         },
         {
           "label": "Experimental status",
-          "description": "Function surface and parameter shapes may change. Pin a known-good extension version in production."
+          "description": "Function shapes may change. Pin a known-good extension version in production."
         }
       ]
     },
     {
       "icon": "🎯",
-      "title": "Common Use Cases",
+      "title": "Common use cases",
       "description": "",
       "useCases": [
         {
           "title": "Live dashboards in DuckDB",
-          "description": "Subscribe to a market-data or activity-event WebSocket and refresh a dashboard tile by re-querying [`radio_received_messages`](#radio_received_messages) on a timer. No separate consumer, no message broker."
+          "description": "Subscribe to a market-data or activity-event WebSocket and refresh a tile by re-querying on a timer. No separate consumer, no message broker."
         },
         {
           "title": "SQL-driven event responders",
-          "description": "Pull events with [`radio_subscription_received_messages`](#radio_subscription_received_messages), do the SQL logic, then [`radio_transmit_message`](#radio_transmit_message) the response back to a Redis Pub/Sub fanout — entirely in one query loop."
+          "description": "Pull events, run the SQL logic, then publish a response back to a Pub/Sub fanout — all in one query loop."
         },
         {
           "title": "Ad-hoc traffic inspection",
-          "description": "Point a subscription at a channel you don't yet understand, drain the inbox into a `CREATE TABLE AS`, and `GROUP BY` to discover the message shape. Faster than wiring up a custom consumer."
+          "description": "Point at a channel you don't yet understand, drain into a `CREATE TABLE AS`, and `GROUP BY` to discover the message shape. Faster than wiring up a custom consumer."
         },
         {
           "title": "Pipeline testing",
-          "description": "Use [`radio_subscription_received_message_add`](#radio_subscription_received_message_add) to inject canned messages and exercise downstream SQL exactly as it would behave on the real channel."
+          "description": "Inject canned messages and exercise downstream SQL exactly as it would behave on the real channel."
         }
       ]
     }

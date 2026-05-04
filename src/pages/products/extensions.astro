@@ -6,6 +6,7 @@ import ExtensionCard from '../../components/products/ExtensionCard.astro';
 import Button from '../../components/ui/Button.astro';
 import Card from '../../components/ui/Card.astro';
 import { publicExtensions } from '../../data/extensions';
+import { usageSummary } from '../../data/usage-summary';
 
 interface SubBucket { title?: string; slugs: string[] }
 interface Bucket {
@@ -80,7 +81,6 @@ const TAXONOMY: Bucket[] = [
 // Lookup helpers
 const bySlug = Object.fromEntries(publicExtensions.map(e => [e.id, e]));
 const totalExtensions = publicExtensions.length;
-const categoryCount = TAXONOMY.length;
 
 // Coverage check — fail loudly if a slug is misspelled or an extension was
 // added without being placed in the taxonomy.
@@ -94,6 +94,31 @@ if (missingFromTaxonomy.length || slugsNotFound.length) {
     (slugsNotFound.length ? `  unknown slug: ${slugsNotFound.join(', ')}\n` : '')
   );
 }
+
+// Compact-format large counts: 1,234,567 → "1.2M".
+function compactCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}K`;
+  return String(n);
+}
+
+// Short week-start label, e.g. "2026-04-20" → "Apr 20".
+function weekLabel(ymd: string): string {
+  const [, mm, dd] = ymd.split('-');
+  const month = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(mm) - 1] ?? '';
+  return `${month} ${Number(dd)}`;
+}
+
+// Bar-chart geometry — viewBox-driven so the SVG scales fluidly.
+const CHART_VW = 600;
+const CHART_VH = 200;
+const CHART_PAD = { top: 24, right: 8, bottom: 32, left: 8 };
+const buckets = usageSummary?.weeklyBuckets ?? [];
+const maxLoads = buckets.reduce((m, b) => Math.max(m, b.loads), 0);
+const innerW = CHART_VW - CHART_PAD.left - CHART_PAD.right;
+const innerH = CHART_VH - CHART_PAD.top - CHART_PAD.bottom;
+const barGap = 6;
+const barW = buckets.length > 0 ? (innerW - barGap * (buckets.length - 1)) / buckets.length : 0;
 ---
 
 <PageLayout
@@ -110,24 +135,77 @@ if (missingFromTaxonomy.length || slugsNotFound.length) {
     title="DuckDB Extensions"
     subtitle={`${totalExtensions} specialized extensions, organized by what you're trying to do.`}
     primaryCTA={{ text: "Browse by intent ↓", href: "#connect" }}
-    secondaryCTA={{ text: "View on GitHub", href: "https://github.com/queryfarm" }}
+    secondaryCTA={{ text: "Commission a custom extension", href: "/consulting" }}
   />
 
-  <!-- Stats Section — only the two real numbers -->
-  <section class="py-12 bg-white border-b border-soil-200">
-    <div class="section-container">
-      <div class="grid grid-cols-2 gap-8 text-center max-w-2xl mx-auto">
-        <div>
-          <div class="text-5xl font-bold text-harvest-600 mb-2">{totalExtensions}</div>
-          <div class="text-sm text-soil-600 uppercase tracking-wide">Extensions</div>
-        </div>
-        <div>
-          <div class="text-5xl font-bold text-harvest-600 mb-2">{categoryCount}</div>
-          <div class="text-sm text-soil-600 uppercase tracking-wide">Categories</div>
+  {usageSummary && buckets.length > 0 && (
+    <section class="py-12 lg:py-16 bg-white border-b border-soil-200">
+      <div class="section-container">
+        <div class="max-w-5xl mx-auto grid md:grid-cols-[auto_1fr] gap-8 md:gap-12 items-center">
+          <div class="text-center md:text-left">
+            <div class="text-5xl lg:text-6xl font-bold text-harvest-600 leading-none">
+              {compactCount(usageSummary.totalLast365Days)}+
+            </div>
+            <div class="mt-2 text-sm uppercase tracking-wide text-soil-600 font-medium">
+              extension loads in the last year
+            </div>
+            <div class="mt-1 text-xs text-soil-500">
+              Across {totalExtensions} Query.Farm extensions
+            </div>
+          </div>
+
+          <div>
+            <div class="text-xs uppercase tracking-wide text-soil-600 font-medium mb-2">
+              Weekly loads · last {buckets.length} complete weeks
+            </div>
+            <svg
+              viewBox={`0 0 ${CHART_VW} ${CHART_VH}`}
+              role="img"
+              aria-label={`Bar chart of weekly extension loads over the last ${buckets.length} complete weeks`}
+              class="w-full h-auto"
+              preserveAspectRatio="xMidYMid meet"
+            >
+              {buckets.map((b, i) => {
+                const h = maxLoads === 0 ? 0 : (b.loads / maxLoads) * innerH;
+                const x = CHART_PAD.left + i * (barW + barGap);
+                const y = CHART_PAD.top + (innerH - h);
+                return (
+                  <g>
+                    <text
+                      x={x + barW / 2}
+                      y={y - 6}
+                      text-anchor="middle"
+                      class="fill-soil-700"
+                      style="font-size: 11px; font-weight: 600;"
+                    >
+                      {compactCount(b.loads)}
+                    </text>
+                    <rect
+                      x={x}
+                      y={y}
+                      width={barW}
+                      height={h}
+                      rx="3"
+                      class="fill-harvest-500"
+                    />
+                    <text
+                      x={x + barW / 2}
+                      y={CHART_PAD.top + innerH + 18}
+                      text-anchor="middle"
+                      class="fill-soil-600"
+                      style="font-size: 10px;"
+                    >
+                      {weekLabel(b.weekStarting)}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
+  )}
 
   <!-- Bucket sections -->
   <section class="py-16 lg:py-24 bg-soil-50">
