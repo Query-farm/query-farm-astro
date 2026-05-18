@@ -24,13 +24,11 @@ We've developed over 20 specialized DuckDB extensions covering:
 - **Developer Tools** - Debugging, validation, and profiling
 - **Data Quality** - Profiling and deduplication
 
-### 2. Managed Services
+### 2. VGI — Vector Gateway Interface
 
-Our flagship products simplify data infrastructure:
+Our protocol for extending DuckDB in any language. VGI is an Apache Arrow-based bridge that lets you write DuckDB functions in Python, TypeScript, Go, or C++ — and run them as remote workers attached to DuckDB at query time. No FFI. No compilation. No version locking against a specific DuckDB build.
 
-**Flightplan** - Unified data ecosystem orchestration that coordinates pipelines across your entire infrastructure. Build, monitor, and scale data workflows with visual tools and intelligent automation.
-
-**Airport as a Service** - Fully-managed DuckDB infrastructure in the cloud. Deploy production-ready instances in minutes with automatic scaling, backups, and expert support.
+VGI ships as three pieces: a [DuckDB extension](/products/extensions/vgi), a [Python worker framework](/vgi), and language SDKs for Python, TypeScript, Go, and C++.
 
 ### 3. Consulting & Support
 
@@ -59,7 +57,7 @@ We believe every company should have the power to build sophisticated data syste
 Ready to explore what Query.Farm can do for your data infrastructure?
 
 - Browse our [DuckDB Extensions](/products/extensions)
-- Learn about [Flightplan](/products/services) and [Airport](/products/services)
+- Learn about [VGI](/vgi), our language-agnostic extension protocol
 - [Schedule a consultation](/company/schedule) with our team
 - [Subscribe to our newsletter](/company/newsletter) for updates
 

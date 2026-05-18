@@ -1,0 +1,216 @@
+---
+import PageLayout from '../../layouts/PageLayout.astro';
+import Hero from '../../components/sections/Hero.astro';
+import SectionHeader from '../../components/ui/SectionHeader.astro';
+import Card from '../../components/ui/Card.astro';
+import Button from '../../components/ui/Button.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+
+const transports = [
+  {
+    name: 'Pipes',
+    icon: '🔗',
+    detail: 'OS pipes between processes on the same machine. Lowest setup cost. Default for the spawned-subprocess case.'
+  },
+  {
+    name: 'Unix sockets',
+    icon: '🧦',
+    detail: 'Local domain sockets when the worker is already running. Same performance envelope as pipes; survives independently of the DuckDB process.'
+  },
+  {
+    name: 'Shared memory',
+    icon: '🧠',
+    detail: 'Zero-copy Arrow IPC over a memory region. Highest throughput for very large batches on the same host.'
+  },
+  {
+    name: 'HTTP',
+    icon: '🌍',
+    detail: 'Workers anywhere on the network. Trades latency for reach — useful for shared inference services and remote teams.'
+  }
+];
+
+const lifecycle = [
+  {
+    phase: 'bind',
+    description: 'DuckDB asks the worker what types it returns and validates argument types. Type bounds (`type_bound=...`) are enforced here, before any data moves. Errors at this stage are reported as SQL plan errors.'
+  },
+  {
+    phase: 'process',
+    description: 'For each Arrow record batch DuckDB hands the worker, the worker runs `compute()` and returns the result batch. The vectorized engine on both sides keeps this loop tight.'
+  },
+  {
+    phase: 'finalize',
+    description: 'Aggregates and table-in/out functions get a final call to flush state — emit the running aggregate, close the cursor, release resources.'
+  }
+];
+
+const pyExample = `class RowCount(AggregateFunction):
+    @classmethod
+    def initialize(cls) -> int:
+        return 0
+
+    @classmethod
+    def update(cls, state: int, batch: pa.RecordBatch) -> int:
+        return state + batch.num_rows
+
+    @classmethod
+    def finalize(cls, state: int) -> int:
+        return state`;
+---
+
+<PageLayout
+  title="VGI — Architecture"
+  description="How VGI works: transports, the Arrow IPC wire format, and the bind / process / finalize lifecycle that connects DuckDB to remote workers."
+>
+  <Hero
+    title="VGI Architecture"
+    subtitle="Apache Arrow over a pluggable transport, with a bind / process / finalize lifecycle that maps cleanly onto DuckDB's vectorized engine."
+    secondaryCTA={{ text: "Wire protocol spec →", href: "https://vgi-rpc.query.farm/wire-protocol" }}
+  />
+
+  <!-- The pieces -->
+  <section class="py-16 lg:py-24 bg-white">
+    <div class="section-container">
+      <div class="max-w-4xl mx-auto">
+        <SectionHeader
+          eyebrow="Big picture"
+          title="Three boxes, one wire"
+          description="The DuckDB-side extension, your worker, and the transport between them. Everything else is implementation detail."
+          align="center"
+          class="mb-12"
+        />
+
+        <figure class="bg-soil-50 rounded-xl border border-soil-200 p-6 lg:p-10">
+          <img
+            src="/vgi/transport-overview.svg"
+            alt="Sequence diagram showing client (typed proxy) communicating with server (implementation) through the RPC transport using Arrow IPC."
+            class="w-full h-auto"
+          />
+          <figcaption class="text-center text-sm text-soil-600 mt-4">
+            DuckDB issues an Arrow IPC request through the transport; the worker dispatches to the matching method and returns an Arrow IPC response.
+          </figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- Transports -->
+  <section class="py-16 lg:py-24 bg-soil-50">
+    <div class="section-container">
+      <SectionHeader
+        eyebrow="The transport layer"
+        title="Same protocol, your choice of pipe"
+        description="vgi-rpc abstracts the wire so you can switch transports without changing your worker."
+        align="center"
+        class="mb-12"
+      />
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
+        {transports.map(t => (
+          <Card padding="lg">
+            <div class="text-3xl mb-3">{t.icon}</div>
+            <h3 class="text-lg font-bold text-soil-900 mb-2">{t.name}</h3>
+            <p class="text-sm text-soil-700 leading-relaxed">{t.detail}</p>
+          </Card>
+        ))}
+      </div>
+
+      <p class="text-center text-sm text-soil-600 mt-8 max-w-2xl mx-auto">
+        Benchmarks and a comparison matrix live on the dedicated RPC site.
+        <a href="https://vgi-rpc.query.farm" class="text-harvest-700 underline ml-1">vgi-rpc.query.farm →</a>
+      </p>
+    </div>
+  </section>
+
+  <!-- Lifecycle -->
+  <section class="py-16 lg:py-24 bg-white">
+    <div class="section-container">
+      <div class="max-w-4xl mx-auto">
+        <SectionHeader
+          eyebrow="Function lifecycle"
+          title="bind → process → finalize"
+          description="Every VGI function (scalar, table, aggregate) follows the same lifecycle, just with different hooks."
+          align="center"
+          class="mb-12"
+        />
+
+        <div class="space-y-6">
+          {lifecycle.map((step, i) => (
+            <Card padding="lg" class="relative">
+              <div class="flex items-start gap-4">
+                <div class="flex-shrink-0 w-12 h-12 rounded-full bg-harvest-600 text-white flex items-center justify-center font-bold text-lg shadow-md">
+                  {i + 1}
+                </div>
+                <div class="flex-1">
+                  <h3 class="text-xl font-bold text-soil-900 mb-2 font-mono">{step.phase}</h3>
+                  <p class="text-soil-700 leading-relaxed">{step.description}</p>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+
+        <div class="mt-10">
+          <p class="text-soil-700 leading-relaxed mb-4">
+            For aggregates this maps to <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">initialize</code> / <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">update</code> / <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">finalize</code> on the Python class:
+          </p>
+          <CodeBlock code={pyExample} lang="python" title="row_count.py" />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Wire format -->
+  <section class="py-16 lg:py-24 bg-soil-50">
+    <div class="section-container">
+      <div class="max-w-3xl mx-auto">
+        <SectionHeader
+          eyebrow="Wire format"
+          title="Apache Arrow IPC, all the way down"
+          align="center"
+          class="mb-8"
+        />
+        <p class="text-soil-700 leading-relaxed mb-4">
+          Every request and response is an Arrow IPC stream — a self-describing schema followed by record batches. That's it. There's no bespoke serialization, no JSON envelope, no language-specific wire types. If you can read Arrow, you can implement a worker.
+        </p>
+        <p class="text-soil-700 leading-relaxed mb-6">
+          The full byte-level specification — opcodes, framing, error handling — is published on the RPC site:
+        </p>
+        <div class="text-center">
+          <Button href="https://vgi-rpc.query.farm/wire-protocol" variant="primary" size="lg">
+            Read the Wire Protocol Spec →
+          </Button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Next -->
+  <section class="py-16 lg:py-24 bg-white">
+    <div class="section-container">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
+        <a href="/vgi/getting-started" class="block">
+          <Card padding="lg" class="h-full hover:shadow-xl transition-shadow">
+            <div class="text-3xl mb-3">🚀</div>
+            <h3 class="text-lg font-bold text-soil-900 mb-2">Getting Started</h3>
+            <p class="text-sm text-soil-700">Hands-on walkthrough.</p>
+          </Card>
+        </a>
+        <a href="/vgi/languages" class="block">
+          <Card padding="lg" class="h-full hover:shadow-xl transition-shadow">
+            <div class="text-3xl mb-3">🌍</div>
+            <h3 class="text-lg font-bold text-soil-900 mb-2">Languages</h3>
+            <p class="text-sm text-soil-700">SDKs in your language.</p>
+          </Card>
+        </a>
+        <a href="https://vgi-rpc.query.farm" class="block" target="_blank" rel="noopener noreferrer">
+          <Card padding="lg" class="h-full hover:shadow-xl transition-shadow">
+            <div class="text-3xl mb-3">📡</div>
+            <h3 class="text-lg font-bold text-soil-900 mb-2">vgi-rpc</h3>
+            <p class="text-sm text-soil-700">RPC site with benchmarks and the full spec.</p>
+          </Card>
+        </a>
+      </div>
+    </div>
+  </section>
+</PageLayout>

@@ -1,0 +1,214 @@
+---
+import PageLayout from '../../layouts/PageLayout.astro';
+import Hero from '../../components/sections/Hero.astro';
+import SectionHeader from '../../components/ui/SectionHeader.astro';
+import Card from '../../components/ui/Card.astro';
+import Button from '../../components/ui/Button.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import Callout from '../../components/docs/Callout.astro';
+
+const installExtension = `INSTALL vgi FROM COMMUNITY;
+LOAD vgi;`;
+
+const installPython = `pip install vgi
+# or
+uv add vgi`;
+
+const workerSource = `# my_worker.py
+from typing import Annotated
+import pyarrow as pa
+import pyarrow.compute as pc
+from vgi import ScalarFunction, Param, Returns, Worker
+
+
+class Greeting(ScalarFunction):
+    """Generate a greeting for each name."""
+
+    @classmethod
+    def compute(
+        cls,
+        name: Annotated[pa.StringArray, Param(doc="Column containing names")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        return pc.binary_join_element_wise("Hello, ", name, "!")
+
+
+class MyWorker(Worker):
+    functions = [Greeting]
+
+
+if __name__ == "__main__":
+    MyWorker().run()`;
+
+const attachAndQuery = `-- Attach the worker as a catalog
+ATTACH 'my_worker' (TYPE 'vgi', LOCATION './my_worker.py');
+
+-- Call the function on a column
+SELECT greeting(name) FROM users;
+-- "Hello, Alice!"
+-- "Hello, Bob!"`;
+
+const oneShotCli = `# Launch DuckDB with the worker pre-attached
+duckdb vgi:./my_worker.py`;
+
+const typedExample = `class AddValues(ScalarFunction):
+    """Add two integer values together."""
+
+    @classmethod
+    def compute(
+        cls,
+        left: Annotated[pa.Int64Array, Param(type_bound=pa.types.is_integer)],
+        right: Annotated[pa.Int64Array, Param(type_bound=pa.types.is_integer)],
+    ) -> Annotated[pa.Int64Array, Returns()]:
+        return pc.add(left, right)`;
+---
+
+<PageLayout
+  title="VGI — Getting Started"
+  description="Install the vgi DuckDB extension, write a Python worker, and query it from SQL — end to end in five minutes."
+>
+  <Hero
+    title="Getting Started with VGI"
+    subtitle="Install the extension, write a worker, run it. Five minutes from zero to remote function."
+    primaryCTA={{ text: "GitHub", href: "https://github.com/Query-farm/vgi" }}
+    secondaryCTA={{ text: "Architecture →", href: "/vgi/architecture" }}
+  />
+
+  <!-- Step 1 — Install the extension -->
+  <section class="py-16 lg:py-20 bg-white">
+    <div class="section-container">
+      <div class="max-w-3xl mx-auto">
+        <div class="flex items-baseline gap-4 mb-4">
+          <span class="text-5xl font-bold text-harvest-600">1</span>
+          <h2 class="text-2xl lg:text-3xl font-bold text-soil-900">Install the DuckDB extension</h2>
+        </div>
+        <p class="text-soil-700 leading-relaxed mb-6">
+          The <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">vgi</code> extension ships through the DuckDB Community Extensions repository. Install it once, load it whenever you need it.
+        </p>
+        <CodeBlock code={installExtension} lang="sql" title="DuckDB shell" />
+      </div>
+    </div>
+  </section>
+
+  <!-- Step 2 — Install the Python framework -->
+  <section class="py-16 lg:py-20 bg-soil-50">
+    <div class="section-container">
+      <div class="max-w-3xl mx-auto">
+        <div class="flex items-baseline gap-4 mb-4">
+          <span class="text-5xl font-bold text-harvest-600">2</span>
+          <h2 class="text-2xl lg:text-3xl font-bold text-soil-900">Install the Python worker framework</h2>
+        </div>
+        <p class="text-soil-700 leading-relaxed mb-6">
+          Workers run in their own Python process. The <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">vgi</code> Python package gives you the base classes (<code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">ScalarFunction</code>, <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">Worker</code>, etc.) and the runtime that speaks the wire protocol.
+        </p>
+        <CodeBlock code={installPython} lang="bash" title="terminal" />
+        <p class="mt-4 text-sm text-soil-600">
+          Prefer a different language? See <a href="/vgi/languages" class="text-harvest-700 underline">Languages</a> for the TypeScript, Go, Rust, Java, and C++ SDKs.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Step 3 — Write a worker -->
+  <section class="py-16 lg:py-20 bg-white">
+    <div class="section-container">
+      <div class="max-w-3xl mx-auto">
+        <div class="flex items-baseline gap-4 mb-4">
+          <span class="text-5xl font-bold text-harvest-600">3</span>
+          <h2 class="text-2xl lg:text-3xl font-bold text-soil-900">Write a worker</h2>
+        </div>
+        <p class="text-soil-700 leading-relaxed mb-6">
+          A worker is a Python file. Declare your functions as classes with a <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">compute</code> method, list them on a <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">Worker</code>, and add a <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">__main__</code> guard so the worker can run as a subprocess.
+        </p>
+        <CodeBlock code={workerSource} lang="python" title="my_worker.py" />
+      </div>
+    </div>
+  </section>
+
+  <!-- Step 4 — Use it from SQL -->
+  <section class="py-16 lg:py-20 bg-soil-50">
+    <div class="section-container">
+      <div class="max-w-3xl mx-auto">
+        <div class="flex items-baseline gap-4 mb-4">
+          <span class="text-5xl font-bold text-harvest-600">4</span>
+          <h2 class="text-2xl lg:text-3xl font-bold text-soil-900">Attach the worker and query it</h2>
+        </div>
+        <p class="text-soil-700 leading-relaxed mb-6">
+          Inside DuckDB, attach the worker as a catalog. Its functions become first-class SQL functions — you can use them in <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">SELECT</code>, <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">WHERE</code>, joins, anywhere.
+        </p>
+        <CodeBlock code={attachAndQuery} lang="sql" title="DuckDB shell" />
+
+        <Callout type="tip" title="One-shot launch">
+          <p>If you just want to try a worker without an interactive session, point the DuckDB CLI at it directly:</p>
+        </Callout>
+        <div class="mt-4">
+          <CodeBlock code={oneShotCli} lang="bash" />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Step 5 — Type-safe arguments -->
+  <section class="py-16 lg:py-20 bg-white">
+    <div class="section-container">
+      <div class="max-w-3xl mx-auto">
+        <div class="flex items-baseline gap-4 mb-4">
+          <span class="text-5xl font-bold text-harvest-600">5</span>
+          <h2 class="text-2xl lg:text-3xl font-bold text-soil-900">Add type bounds</h2>
+        </div>
+        <p class="text-soil-700 leading-relaxed mb-6">
+          For production use you'll want bind-time validation. Add <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">type_bound</code> on a <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">Param</code> and DuckDB will reject mismatched columns before any data moves.
+        </p>
+        <CodeBlock code={typedExample} lang="python" title="add_values.py" />
+        <p class="mt-4 text-sm text-soil-600 leading-relaxed">
+          VGI also supports <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">TableFunctionGenerator</code>, <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">TableInOutFunction</code>, and aggregates with bind / process / finalize hooks. See <a href="/vgi/architecture" class="text-harvest-700 underline">Architecture</a> for the full lifecycle.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Next steps -->
+  <section class="py-16 lg:py-24 bg-soil-50">
+    <div class="section-container">
+      <SectionHeader
+        align="center"
+        eyebrow="Next steps"
+        title="Where to from here"
+        class="mb-12"
+      />
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
+        <a href="/vgi/architecture" class="block">
+          <Card padding="lg" class="h-full hover:shadow-xl transition-shadow">
+            <div class="text-3xl mb-3">🏗️</div>
+            <h3 class="text-lg font-bold text-soil-900 mb-2">Architecture</h3>
+            <p class="text-sm text-soil-700">Transports, lifecycle, wire format.</p>
+          </Card>
+        </a>
+        <a href="/vgi/languages" class="block">
+          <Card padding="lg" class="h-full hover:shadow-xl transition-shadow">
+            <div class="text-3xl mb-3">🌍</div>
+            <h3 class="text-lg font-bold text-soil-900 mb-2">Other languages</h3>
+            <p class="text-sm text-soil-700">TypeScript, Go, Rust, Java, C++ SDKs.</p>
+          </Card>
+        </a>
+        <a href="https://github.com/Query-farm/vgi-python" class="block" target="_blank" rel="noopener noreferrer">
+          <Card padding="lg" class="h-full hover:shadow-xl transition-shadow">
+            <div class="text-3xl mb-3">📖</div>
+            <h3 class="text-lg font-bold text-soil-900 mb-2">Full Python docs</h3>
+            <p class="text-sm text-soil-700">README, examples, fixtures on GitHub.</p>
+          </Card>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="py-16 lg:py-20 bg-gradient-to-br from-harvest-600 to-grain-600 text-white">
+    <div class="section-container text-center max-w-3xl mx-auto">
+      <h2 class="text-3xl md:text-4xl font-bold mb-4">Stuck or want a hand?</h2>
+      <p class="text-lg md:text-xl text-harvest-50 mb-6">
+        We help teams design and ship VGI-based extensions.
+      </p>
+      <Button href="/consulting" variant="secondary" size="lg">Talk to us</Button>
+    </div>
+  </section>
+</PageLayout>
