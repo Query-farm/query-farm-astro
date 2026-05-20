@@ -1,0 +1,623 @@
+---
+import PageLayout from '../../../layouts/PageLayout.astro';
+import SectionHeader from '../../../components/ui/SectionHeader.astro';
+import Card from '../../../components/ui/Card.astro';
+import Button from '../../../components/ui/Button.astro';
+import HaybarnSubNav from '../../../components/sections/HaybarnSubNav.astro';
+import { Icon } from 'astro-icon/components';
+
+import { HAYBARN_VERSION_TAGS, LATEST_HAYBARN_VERSION } from '../../../data/haybarn-versions';
+
+export function getStaticPaths() {
+  return Object.keys(HAYBARN_VERSION_TAGS).map(v => ({ params: { version: v } }));
+}
+
+const versionParam = Astro.params.version as string;
+const HAYBARN_TAG = HAYBARN_VERSION_TAGS[versionParam] ?? HAYBARN_VERSION_TAGS[LATEST_HAYBARN_VERSION];
+const DUCKDB_VERSION = versionParam.replace(/^v/, '');
+const STATUS_API = `https://haybarn-status.query.farm/api/r/${HAYBARN_TAG}`;
+const STATUS_PAGE = `https://haybarn-status.query.farm/r/${HAYBARN_TAG}`;
+// Encoded into Haybarn extension package names. Mirrors repos.js in the
+// status service: `haybarn-ext-<name>-h1-5-2`, `@haybarn/ext-<name>-h1-5-2`.
+const HAYBARN_VERSION_SUFFIX = `h${DUCKDB_VERSION.replace(/\./g, '-')}`;
+function defaultNpmName(extName: string): string  { return `@haybarn/ext-${extName}-${HAYBARN_VERSION_SUFFIX}`; }
+function defaultPypiName(extName: string): string { return `haybarn-ext-${extName}-${HAYBARN_VERSION_SUFFIX}`; }
+function npmUrl(name: string):  string { return `https://www.npmjs.com/package/${name}`; }
+function pypiUrl(name: string): string { return `https://pypi.org/project/${name}/`; }
+
+// Platforms the Haybarn engine builds for. This is the static list — when the
+// status service grows per-platform engine job data, swap to derived.
+const ENGINE_PLATFORMS = [
+  'linux_amd64',
+  'linux_arm64',
+  'linux_amd64_musl',
+  'linux_arm64_musl',
+  'osx_universal',
+  'osx_arm64',
+  'osx_amd64',
+  'windows_amd64'
+];
+
+// Pretty labels for the per-extension layer that comes back in `sidePanel.core`.
+const LAYER_LABEL: Record<string, string> = {
+  in_tree: 'in-tree',
+  fork:    'build-fork',
+  rebuilt: 'rebuilt',
+};
+
+type Run = {
+  workflowName?: string;
+  status?: string;
+  conclusion?: string | null;
+  createdAt?: string;
+  htmlUrl?: string;
+};
+
+type Repo = { repo: string; label: string; runs?: Run[]; error?: string | null };
+type ForkSummary = { repo: string; label: string; run?: Run | null };
+type RegistryInfo = { exists?: boolean; latest?: string | null; url?: string | null; error?: string };
+type R2Info = { exists?: boolean; url?: string | null; platform?: string; lastModified?: string | null; contentLength?: string | null; error?: string };
+type Extension = {
+  name: string;
+  layer?: string;                // core only: 'in_tree' | 'fork' | 'rebuilt'
+  version?: string | null;       // descriptor's extension.version (semver or author's own)
+  commitSha?: string | null;     // upstream commit pin
+  description?: string | null;
+  repo?: { github?: string; ref?: string | null } | null;
+  run?: Run | null;
+  registries?: { npm?: RegistryInfo | null; pypi?: RegistryInfo | null } | null;
+  r2?: R2Info | null;            // does the .duckdb_extension.gz exist on Haybarn's R2 bucket
+  upstream?: R2Info | null;      // does the same binary exist on upstream DuckDB's CDN
+};
+
+type StatusData = {
+  tag: string;
+  fetchedAt: string;
+  repos: Repo[];
+  sidePanel: {
+    forks: ForkSummary[];
+    community: { fetchedAt?: string; extensions: Extension[]; catalogSize?: number };
+    core?: { fetchedAt?: string; extensions: Extension[]; catalogSize?: number } | null;
+  };
+} | null;
+
+async function fetchStatus(): Promise<{ data: StatusData; error: string | null }> {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 15_000);
+    const res = await fetch(STATUS_API, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!res.ok) return { data: null, error: `${res.status} ${res.statusText}` };
+    return { data: (await res.json()) as StatusData, error: null };
+  } catch (e: any) {
+    return { data: null, error: e?.message ?? 'fetch failed' };
+  }
+}
+
+const { data, error } = await fetchStatus();
+
+// Engine / fork / connector rows still classify on the CI run — those repos
+// have reliable per-tag run state and there's no "binary on R2" notion to
+// substitute. The CI shape stays for them.
+type RunCls = 'success' | 'failure' | 'in_progress' | 'unknown';
+function classifyRun(run?: Run | null): RunCls {
+  if (!run) return 'unknown';
+  if (run.status === 'in_progress' || run.status === 'queued') return 'in_progress';
+  if (run.conclusion === 'success') return 'success';
+  if (run.conclusion === 'failure' || run.conclusion === 'cancelled' || run.conclusion === 'timed_out') return 'failure';
+  return 'unknown';
+}
+function runBadgeClasses(s: RunCls): string {
+  switch (s) {
+    case 'success':     return 'bg-green-100 text-green-800 border-green-300';
+    case 'failure':     return 'bg-red-100 text-red-800 border-red-300';
+    case 'in_progress': return 'bg-amber-100 text-amber-800 border-amber-300';
+    default:            return 'bg-soil-100 text-soil-700 border-soil-300';
+  }
+}
+function runBadgeLabel(s: RunCls): string {
+  switch (s) {
+    case 'success':     return 'ready';
+    case 'failure':     return 'failing';
+    case 'in_progress': return 'building';
+    default:            return '—';
+  }
+}
+
+// Community extensions classify on **artifact availability** first, and fall
+// back to the latest CI run state when R2 / registries don't have the binary
+// yet. The point is to be honest about *why* something isn't available — a
+// build that failed should say "failed", not the vague "pending."
+type AvailCls = 'available' | 'building' | 'failed' | 'pending' | 'unknown';
+function classifyAvailability(ext: Extension): AvailCls {
+  if (ext.r2?.exists || ext.registries?.npm?.exists || ext.registries?.pypi?.exists) {
+    return 'available';
+  }
+  const run = ext.run;
+  if (run?.status === 'in_progress' || run?.status === 'queued') return 'building';
+  if (run?.conclusion === 'failure' || run?.conclusion === 'cancelled' || run?.conclusion === 'timed_out') {
+    return 'failed';
+  }
+  if (ext.r2 == null && ext.registries == null && !run) return 'unknown';
+  return 'pending';
+}
+function availBadgeClasses(s: AvailCls): string {
+  switch (s) {
+    case 'available': return 'bg-green-100 text-green-800 border-green-300';
+    case 'building':  return 'bg-amber-100 text-amber-800 border-amber-300';
+    case 'failed':    return 'bg-red-100 text-red-800 border-red-300';
+    case 'pending':   return 'bg-soil-100 text-soil-600 border-soil-200';
+    default:          return 'bg-soil-50 text-soil-400 border-soil-200';
+  }
+}
+function availBadgeLabel(s: AvailCls): string {
+  switch (s) {
+    case 'available': return 'available';
+    case 'building':  return 'building';
+    case 'failed':    return 'build failed';
+    case 'pending':   return 'pending';
+    default:          return '—';
+  }
+}
+
+// Tiny side-by-side comparison pill — shows whether upstream DuckDB's CDN has
+// the same binary. When upstream is also missing, the row's Haybarn pending /
+// failed isn't really a Haybarn problem.
+function upstreamBadge(up?: R2Info | null): { cls: string; label: string; title: string } {
+  if (up == null)        return { cls: 'bg-soil-50 text-soil-400 border-soil-200', label: '—',         title: 'upstream availability not yet probed' };
+  if (up.exists === true) return { cls: 'bg-green-100 text-green-800 border-green-300', label: 'available', title: 'upstream DuckDB ships this for the same version' };
+  return                          { cls: 'bg-soil-100 text-soil-600 border-soil-200',  label: 'not shipped', title: 'upstream DuckDB has not shipped this for the same version either' };
+}
+
+function formatRelative(iso?: string): string {
+  if (!iso) return '—';
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60)    return `${Math.round(diff)}s ago`;
+  if (diff < 3600)  return `${Math.round(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.round(diff / 3600)}h ago`;
+  return `${Math.round(diff / 86400)}d ago`;
+}
+
+const engineRepo = data?.repos.find(r => r.label === 'Engine');
+const engineLatest = engineRepo?.runs?.[0] ?? null;
+const engineCls = classifyRun(engineLatest);
+
+const coreExts = (data?.sidePanel?.core?.extensions ?? []).slice();
+coreExts.sort((a, b) => a.name.localeCompare(b.name));
+const coreAvailable = coreExts.filter(e => classifyAvailability(e) === 'available').length;
+const coreUpstreamAvailable = coreExts.filter(e => e.upstream?.exists === true).length;
+
+const exts = (data?.sidePanel?.community?.extensions ?? []).slice();
+exts.sort((a, b) => a.name.localeCompare(b.name));
+
+const extCount     = data?.sidePanel?.community?.catalogSize ?? exts.length;
+const extAvailable = exts.filter(e => classifyAvailability(e) === 'available').length;
+const extUpstreamAvailable = exts.filter(e => e.upstream?.exists === true).length;
+
+const SITE_ORIGIN = 'https://query.farm';
+const description = `Build status for Haybarn v${DUCKDB_VERSION} (${HAYBARN_TAG}) — engine, core extensions, connectors, and the community catalog, snapshotted from haybarn-status.query.farm at site-build time.`;
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'WebPage',
+    name: `Haybarn build status — v${DUCKDB_VERSION}`,
+    description,
+    url: `${SITE_ORIGIN}/haybarn/status/${versionParam}`,
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Home', item: SITE_ORIGIN + '/' },
+      { '@type': 'ListItem', position: 2, name: 'Haybarn', item: SITE_ORIGIN + '/haybarn' },
+      { '@type': 'ListItem', position: 3, name: 'Status', item: `${SITE_ORIGIN}/haybarn/status/${versionParam}` },
+    ],
+  },
+];
+---
+
+<PageLayout
+  title={`Haybarn build status — v${DUCKDB_VERSION}`}
+  description={description}
+  jsonLd={jsonLd}
+>
+  <HaybarnSubNav />
+
+  <!-- Header -->
+  <section class="bg-gradient-to-br from-soil-50 via-earth-50 to-soil-100 py-12 lg:py-16">
+    <div class="section-container">
+      <div class="max-w-5xl mx-auto">
+        <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+          <div>
+            <p class="text-xs font-semibold text-soil-500 uppercase tracking-wider mb-2">Build status</p>
+            <h1 class="text-3xl md:text-4xl font-bold text-soil-900">
+              Haybarn for DuckDB <span class="font-mono text-earth-700">v{DUCKDB_VERSION}</span>
+            </h1>
+            <p class="text-soil-600 text-sm mt-2">
+              {data ? <>Snapshot fetched <strong>{formatRelative(data.fetchedAt)}</strong> · tag <code class="font-mono">{HAYBARN_TAG}</code></> : <>Snapshot unavailable</>}
+            </p>
+          </div>
+          <div class="flex items-center gap-3">
+            <a href={STATUS_PAGE} class="text-sm text-earth-700 underline hover:text-earth-800">Live dashboard →</a>
+          </div>
+        </div>
+
+        {data && (
+          <div class="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-3xl">
+            <div class="bg-white border border-soil-200 rounded-xl px-5 py-4">
+              <div class="text-xs text-soil-500 uppercase tracking-wider">Community extensions available</div>
+              <div class="text-3xl font-bold text-green-700 mt-1">
+                {extAvailable} <span class="text-base text-soil-500 font-normal">of {extCount}</span>
+                <span class="text-base text-soil-400 font-normal"> · upstream {extUpstreamAvailable}</span>
+              </div>
+              <div class="text-xs text-soil-500 mt-1">
+                shipped binary on Haybarn vs upstream DuckDB. <a href="#community" class="text-earth-700 hover:text-earth-800 underline">See the table →</a>
+              </div>
+            </div>
+            <div class="bg-white border border-soil-200 rounded-xl px-5 py-4">
+              <div class="text-xs text-soil-500 uppercase tracking-wider">Engine</div>
+              <div class="mt-1">
+                <span class={`inline-block px-3 py-1 rounded-full border text-sm font-mono ${runBadgeClasses(engineCls)}`}>{runBadgeLabel(engineCls)}</span>
+              </div>
+              <div class="text-xs text-soil-500 mt-2">
+                latest CI run on <code class="font-mono">{HAYBARN_TAG}</code>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  </section>
+
+  {error && (
+    <section class="py-8 bg-white">
+      <div class="section-container">
+        <div class="max-w-3xl mx-auto bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
+          Live snapshot unavailable at build time ({error}). The live dashboard at
+          <a href={STATUS_PAGE} class="underline">{STATUS_PAGE}</a> is always authoritative.
+        </div>
+      </div>
+    </section>
+  )}
+
+  {data && (
+    <>
+      <!-- 1. Engine, by platform -->
+      <section class="py-12 lg:py-16 bg-white">
+        <div class="section-container">
+          <div class="max-w-5xl mx-auto">
+            <SectionHeader
+              eyebrow="1. Engine"
+              title="Engine builds, by platform"
+              description="Haybarn ships the engine for each supported OS and architecture. The latest engine workflow run is reflected below — per-platform breakdown is coming with a status-service update."
+              class="mb-6"
+            />
+
+            <div class="overflow-hidden rounded-xl border border-soil-200">
+              <table class="w-full text-sm">
+                <thead class="bg-soil-100 text-soil-900 text-left">
+                  <tr>
+                    <th class="px-4 py-3 font-semibold">Platform</th>
+                    <th class="px-4 py-3 font-semibold">Engine build</th>
+                    <th class="px-4 py-3 font-semibold">Last build</th>
+                    <th class="px-4 py-3 font-semibold text-right">Run</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-soil-200 bg-white">
+                  {ENGINE_PLATFORMS.map(p => (
+                    <tr>
+                      <td class="px-4 py-2 font-mono text-soil-900">{p}</td>
+                      <td class="px-4 py-2">
+                        <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${runBadgeClasses(engineCls)}`}>{runBadgeLabel(engineCls)}</span>
+                      </td>
+                      <td class="px-4 py-2 text-soil-600 text-xs">{formatRelative(engineLatest?.createdAt)}</td>
+                      <td class="px-4 py-2 text-right">
+                        {engineLatest?.htmlUrl ? (
+                          <a href={engineLatest.htmlUrl} class="text-earth-700 hover:text-earth-800 text-xs underline">GitHub →</a>
+                        ) : (
+                          <span class="text-xs text-soil-400">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Core extensions — unified table, mirrors community shape -->
+      <section class="py-12 lg:py-16 bg-soil-50">
+        <div class="section-container">
+          <div class="max-w-5xl mx-auto">
+            <SectionHeader
+              eyebrow="2. Core extensions"
+              title="Shipped on Haybarn's core channel"
+              description="The extensions Haybarn builds and serves from haybarn-extensions.query.farm/core. Layer notes whether each ships in-tree with the engine, carries a Haybarn build-fork patch, or is rebuilt from upstream unchanged. PyPI and npm packaging is community-first today — those columns will fill in as the core rollout lands."
+              class="mb-4"
+            />
+            <p class="text-xs text-soil-500 mb-4">
+              <span class="font-semibold text-soil-700">{coreAvailable} of {coreExts.length}</span> on Haybarn · <span class="font-semibold text-soil-700">{coreUpstreamAvailable} of {coreExts.length}</span> on upstream for v{DUCKDB_VERSION}.
+            </p>
+
+            <div class="overflow-hidden rounded-xl border border-soil-200">
+              <table class="w-full text-sm">
+                <thead class="bg-soil-100 text-soil-900 text-left">
+                  <tr>
+                    <th class="px-4 py-3 font-semibold">Extension</th>
+                    <th class="px-4 py-3 font-semibold">Layer</th>
+                    <th class="px-4 py-3 font-semibold">Version</th>
+                    <th class="px-4 py-3 font-semibold">Haybarn</th>
+                    <th class="px-4 py-3 font-semibold">Upstream</th>
+                    <th class="px-4 py-3 font-semibold">Last update</th>
+                    <th class="px-4 py-3 font-semibold text-right">Links</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-soil-200 bg-white">
+                  {coreExts.map(e => {
+                    const avail = classifyAvailability(e);
+                    const npmInfo  = e.registries?.npm  ?? null;
+                    const pypiInfo = e.registries?.pypi ?? null;
+                    const npmHref  = npmInfo?.url  || npmUrl(defaultNpmName(e.name));
+                    const pypiHref = pypiInfo?.url || pypiUrl(defaultPypiName(e.name));
+                    const npmLive  = npmInfo?.exists === true;
+                    const pypiLive = pypiInfo?.exists === true;
+                    const updatedAt = e.r2?.lastModified || e.run?.createdAt;
+
+                    // Display version: prefer published registry version,
+                    // fall back to short commit sha (engine sha for in-tree
+                    // & rebuilt extensions, fork sha for build-forks).
+                    const shaShort = e.commitSha ? e.commitSha.slice(0, 7) : null;
+                    const displayVersion = npmInfo?.latest || pypiInfo?.latest || shaShort;
+                    const versionSource = npmInfo?.latest
+                      ? `npm: ${npmInfo.latest}`
+                      : pypiInfo?.latest
+                        ? `PyPI: ${pypiInfo.latest}`
+                        : (e.layer === 'fork'
+                          ? `build-fork commit: ${e.commitSha}`
+                          : (e.commitSha ? `engine commit: ${e.commitSha}` : ''));
+                    return (
+                      <tr>
+                        <td class="px-4 py-2 font-mono text-soil-900 align-top">{e.name}</td>
+                        <td class="px-4 py-2 align-top">
+                          <span class="inline-block text-xs text-soil-600 font-mono">{e.layer ? (LAYER_LABEL[e.layer] || e.layer) : '—'}</span>
+                        </td>
+                        <td class="px-4 py-2 align-top" title={versionSource}>
+                          {displayVersion ? (
+                            <code class="font-mono text-xs text-earth-700 bg-soil-50 border border-soil-200 rounded px-1.5 py-0.5">{displayVersion}</code>
+                          ) : (
+                            <span class="text-xs text-soil-400">—</span>
+                          )}
+                        </td>
+                        <td class="px-4 py-2 align-top">
+                          <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${availBadgeClasses(avail)}`}>{availBadgeLabel(avail)}</span>
+                        </td>
+                        <td class="px-4 py-2 align-top">
+                          {(() => { const b = upstreamBadge(e.upstream); return (
+                            <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${b.cls}`} title={b.title}>{b.label}</span>
+                          ); })()}
+                        </td>
+                        <td class="px-4 py-2 text-soil-600 text-xs align-top">{formatRelative(updatedAt)}</td>
+                        <td class="px-4 py-2 text-right align-top">
+                          <div class="inline-flex items-center gap-2">
+                            <a
+                              href={npmHref}
+                              class:list={['inline-flex p-1 rounded hover:bg-soil-100 transition-colors', npmLive ? 'text-soil-700' : 'text-soil-300']}
+                              title={npmLive ? `npm: ${defaultNpmName(e.name)} @ ${npmInfo?.latest}` : 'npm package — not yet published'}
+                              aria-label={`npm package for ${e.name}`}
+                              target="_blank"
+                              rel="noopener"
+                            >
+                              <Icon name="simple-icons:npm" class="w-4 h-4" />
+                            </a>
+                            <a
+                              href={pypiHref}
+                              class:list={['inline-flex p-1 rounded hover:bg-soil-100 transition-colors', pypiLive ? 'text-soil-700' : 'text-soil-300']}
+                              title={pypiLive ? `PyPI: ${defaultPypiName(e.name)} @ ${pypiInfo?.latest}` : 'PyPI package — not yet published'}
+                              aria-label={`PyPI package for ${e.name}`}
+                              target="_blank"
+                              rel="noopener"
+                            >
+                              <Icon name="simple-icons:pypi" class="w-4 h-4" />
+                            </a>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Community extensions -->
+      <section id="community" class="py-12 lg:py-16 bg-white">
+        <div class="section-container">
+          <div class="max-w-5xl mx-auto">
+            <SectionHeader
+              eyebrow="3. Community extensions"
+              title="Mirrored from duckdb/community-extensions"
+              description="Haybarn rebuilds every extension upstream lists. Each row shows whether the binary is currently available on Haybarn and on upstream DuckDB's CDN — if both are unavailable for an extension, it's usually waiting on an upstream change for the new DuckDB version, the same situation those users face on DuckDB itself."
+              class="mb-6"
+            />
+
+            <p class="text-sm text-soil-600 mb-6">
+              Haybarn's catalog has <span class="font-semibold text-soil-900">{extCount}</span> extensions — the same set as <a href="https://github.com/duckdb/community-extensions" class="text-earth-700 underline hover:text-earth-800"><code class="font-mono">duckdb/community-extensions</code></a>. <span class="font-semibold text-soil-900">{extAvailable}</span> built and signed for Haybarn · <span class="font-semibold text-soil-900">{extUpstreamAvailable}</span> shipped by upstream for v{DUCKDB_VERSION}.
+            </p>
+
+            <div class="flex items-center justify-between gap-4 mb-4 flex-wrap">
+              <p class="text-sm text-soil-600">
+                Showing <span id="community-visible-count" class="font-semibold text-soil-900">—</span> of <span class="font-semibold text-soil-900">{extCount}</span> extensions
+                <span id="community-filter-label" class="text-soil-500"></span>
+              </p>
+              <label class="inline-flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  id="community-only-divergent"
+                  type="checkbox"
+                  class="w-4 h-4 rounded border-soil-300 text-earth-600 focus:ring-earth-500"
+                />
+                <span class="text-sm text-soil-700">Only show where Haybarn and upstream differ</span>
+              </label>
+            </div>
+
+            <div class="overflow-hidden rounded-xl border border-soil-200">
+              <table class="w-full text-sm">
+                <thead class="bg-soil-100 text-soil-900 text-left">
+                  <tr>
+                    <th class="px-4 py-3 font-semibold">Extension</th>
+                    <th class="px-4 py-3 font-semibold">Version</th>
+                    <th class="px-4 py-3 font-semibold">Haybarn</th>
+                    <th class="px-4 py-3 font-semibold">Upstream</th>
+                    <th class="px-4 py-3 font-semibold">Last update</th>
+                    <th class="px-4 py-3 font-semibold text-right">Links</th>
+                  </tr>
+                </thead>
+                <tbody id="community-tbody" class="divide-y divide-soil-200 bg-white">
+                  {exts.map(e => {
+                    const avail = classifyAvailability(e);
+                    const npmInfo  = e.registries?.npm  ?? null;
+                    const pypiInfo = e.registries?.pypi ?? null;
+                    const r2Info   = e.r2 ?? null;
+                    const npmHref  = npmInfo?.url  || npmUrl(defaultNpmName(e.name));
+                    const pypiHref = pypiInfo?.url || pypiUrl(defaultPypiName(e.name));
+                    const npmLive  = npmInfo?.exists === true;
+                    const pypiLive = pypiInfo?.exists === true;
+
+                    // Visible version: the Haybarn-published version (CalVer or
+                    // descriptor semver, whichever the build pipeline stamped on
+                    // the package). Tooltip carries the upstream sha + the
+                    // descriptor's own version, both useful for supply-chain
+                    // review.
+                    const haybarnVersion = npmInfo?.latest || pypiInfo?.latest || null;
+                    const tooltipParts: string[] = [];
+                    if (e.commitSha) tooltipParts.push(`upstream commit ${e.commitSha}`);
+                    if (e.version)   tooltipParts.push(`descriptor version ${e.version}`);
+                    if (e.repo?.github) tooltipParts.push(e.repo.github);
+                    const titleAttr = tooltipParts.join('  ·  ');
+
+                    // "Last update" prefers R2's lastModified (when the binary
+                    // was actually published) and falls back to the latest CI
+                    // run timestamp.
+                    const updatedAt = r2Info?.lastModified || e.run?.createdAt;
+
+                    // Divergence: Haybarn and upstream disagree on availability.
+                    // Convergent rows (both ✓ or both ✗) are the boring ones —
+                    // we filter them out by default so the actionable list pops.
+                    const haybarnAvail  = avail === 'available';
+                    const upstreamAvail = e.upstream?.exists === true;
+                    const upstreamKnown = e.upstream != null;
+                    const divergent = upstreamKnown && (haybarnAvail !== upstreamAvail);
+
+                    return (
+                      <tr data-avail={avail} data-divergent={divergent ? 'true' : 'false'}>
+                        <td class="px-4 py-2 font-mono text-soil-900 align-top" title={titleAttr}>
+                          <span>{e.name}</span>
+                        </td>
+                        <td class="px-4 py-2 align-top" title={titleAttr}>
+                          {haybarnVersion ? (
+                            <code class="font-mono text-xs text-earth-700 bg-soil-50 border border-soil-200 rounded px-1.5 py-0.5">{haybarnVersion}</code>
+                          ) : (
+                            <span class="text-xs text-soil-400">—</span>
+                          )}
+                        </td>
+                        <td class="px-4 py-2 align-top">
+                          <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${availBadgeClasses(avail)}`}>{availBadgeLabel(avail)}</span>
+                        </td>
+                        <td class="px-4 py-2 align-top">
+                          {(() => { const b = upstreamBadge(e.upstream); return (
+                            <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${b.cls}`} title={b.title}>{b.label}</span>
+                          ); })()}
+                        </td>
+                        <td class="px-4 py-2 text-soil-600 text-xs align-top">{formatRelative(updatedAt)}</td>
+                        <td class="px-4 py-2 text-right align-top">
+                          <div class="inline-flex items-center gap-2">
+                            <a
+                              href={npmHref}
+                              class:list={['inline-flex p-1 rounded hover:bg-soil-100 transition-colors', npmLive ? 'text-soil-700' : 'text-soil-300']}
+                              title={npmLive ? `npm: ${defaultNpmName(e.name)} @ ${npmInfo?.latest}` : 'npm package — not yet published'}
+                              aria-label={`npm package for ${e.name}`}
+                              target="_blank"
+                              rel="noopener"
+                            >
+                              <Icon name="simple-icons:npm" class="w-4 h-4" />
+                            </a>
+                            <a
+                              href={pypiHref}
+                              class:list={['inline-flex p-1 rounded hover:bg-soil-100 transition-colors', pypiLive ? 'text-soil-700' : 'text-soil-300']}
+                              title={pypiLive ? `PyPI: ${defaultPypiName(e.name)} @ ${pypiInfo?.latest}` : 'PyPI package — not yet published'}
+                              aria-label={`PyPI package for ${e.name}`}
+                              target="_blank"
+                              rel="noopener"
+                            >
+                              <Icon name="simple-icons:pypi" class="w-4 h-4" />
+                            </a>
+                            {e.repo?.github ? (
+                              <a
+                                href={`https://github.com/${e.repo.github}`}
+                                class="inline-flex p-1 rounded hover:bg-soil-100 transition-colors text-soil-700"
+                                title={`upstream repo: ${e.repo.github}`}
+                                aria-label={`upstream repo for ${e.name}`}
+                                target="_blank"
+                                rel="noopener"
+                              >
+                                <Icon name="simple-icons:github" class="w-4 h-4" />
+                              </a>
+                            ) : (
+                              <span class="inline-flex p-1 text-soil-300"><Icon name="simple-icons:github" class="w-4 h-4" /></span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <p class="text-center text-xs text-soil-500 mt-6 max-w-3xl mx-auto leading-relaxed">
+              A failing build usually means the upstream community extension hasn't yet been adapted for DuckDB v{DUCKDB_VERSION} or has a build-system issue the Haybarn CI exposes. Click through to the GitHub run for per-platform job detail.
+            </p>
+          </div>
+        </div>
+      </section>
+    </>
+  )}
+</PageLayout>
+
+<script>
+  function setupCommunityFilter() {
+    const cb = document.getElementById('community-only-divergent') as HTMLInputElement | null;
+    const tbody = document.getElementById('community-tbody');
+    const countEl = document.getElementById('community-visible-count');
+    const labelEl = document.getElementById('community-filter-label');
+    if (!cb || !tbody) return;
+
+    const rows = Array.from(tbody.querySelectorAll<HTMLTableRowElement>('tr[data-avail]'));
+
+    function update() {
+      const onlyDivergent = cb!.checked;
+      let visible = 0;
+      for (const row of rows) {
+        // Default: show every row so the breadth of success is visible.
+        // Toggle on to narrow down to the rows where Haybarn ≠ upstream.
+        const divergent = row.dataset.divergent === 'true';
+        const hide = onlyDivergent && !divergent;
+        row.style.display = hide ? 'none' : '';
+        if (!hide) visible++;
+      }
+      if (countEl) countEl.textContent = String(visible);
+      if (labelEl) labelEl.textContent = onlyDivergent
+        ? ' — rows where Haybarn and upstream differ'
+        : '';
+    }
+
+    cb.addEventListener('change', update);
+    update();
+  }
+
+  setupCommunityFilter();
+  document.addEventListener('astro:after-swap', setupCommunityFilter);
+</script>

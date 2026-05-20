@@ -1,0 +1,305 @@
+---
+import PageLayout from '../../layouts/PageLayout.astro';
+import SectionHeader from '../../components/ui/SectionHeader.astro';
+import Card from '../../components/ui/Card.astro';
+import Button from '../../components/ui/Button.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import HaybarnSubNav from '../../components/sections/HaybarnSubNav.astro';
+
+const pythonSnippet = `# Drop-in:
+import haybarn as duckdb
+duckdb.sql("SELECT 42").show()
+
+# Or, for third-party code that hard-imports duckdb:
+import haybarn.compat   # registers haybarn as the duckdb module
+import duckdb           # now resolves to Haybarn`;
+
+const nodeSnippet = `- import { DuckDBInstance } from '@duckdb/node-api';
++ import { DuckDBInstance } from '@haybarn/node-api';`;
+
+const jdbcSnippet = `- import org.duckdb.DuckDBDriver;
++ import farm.query.haybarn.HaybarnDriver;
+
+- jdbc:duckdb::memory:
++ jdbc:haybarn::memory:`;
+
+// Grouped Q/A pairs. The render shows each question with its answer visible
+// (no accordion clicking). The JSON-LD generator below flattens to the
+// schema.org FAQPage shape search engines expect.
+const faqGroups = [
+  {
+    title: 'About Haybarn',
+    slug: 'about',
+    items: [
+      {
+        q: 'Is Haybarn a fork?',
+        a: 'No — it\'s a derived distribution, the same relationship Ubuntu has to Debian. The engine source tracks upstream DuckDB and Haybarn ships on DuckDB\'s release cadence. What Haybarn adds around the engine (coordination with the extension catalog at release time, signing pipeline, package formats, extension distribution channels) is independent and tuned for the audience running it in production. Another precedent for the same shape: OpenSSH-portable to OpenBSD\'s OpenSSH.',
+      },
+      {
+        q: 'Why does Haybarn exist?',
+        a: 'A few production-oriented additions on top of the same engine. (1) A curated extension catalog: the open-source set DuckDB CI builds, with third-party vendor extensions left out of the default install path. (2) Extensions ready alongside the release — when we cut a Haybarn release we work to make sure common and popular community extensions are built and available, and we reach out to extension maintainers when a previously-working build starts failing. (3) Mirrored extension distribution across R2, PyPI, and npm, so teams can pick the path that fits their supply chain. (4) Extension version pinning, coming with the PyPI / npm rollout so extensions can live in lockfiles. (5) Strict API and file-format stability across RCs, so an upgrade is never a surprise.',
+      },
+      {
+        q: 'How is Haybarn different from upstream DuckDB?',
+        a: 'Same engine source, same SQL, same on-disk format, same C/C++ API, same release cadence (Haybarn ships when upstream ships). What differs is artifact names, package formats (CLI via npm/PyPI/GitHub Releases; extensions also via PyPI/npm — planned), extension trust root, extension cache directory (~/.haybarn/extensions/), the supply-chain signing pipeline (SLSA provenance, GPG-signed releases, immutable R2 hosting), and a focus on having common community extensions built and ready when we ship.',
+      },
+      {
+        q: 'What is the licensing?',
+        a: 'MIT — the same license as DuckDB. The upstream license is preserved verbatim in the LICENSE file. The NOTICE file documents Haybarn\'s modifications.',
+      },
+      {
+        q: 'When will Haybarn 1.5.2 ship final?',
+        a: 'Once the extension catalog has stabilised — track readiness on the Haybarn status page. APIs and on-disk formats are inherited from upstream DuckDB v1.5.2 and will not change between release candidates.',
+      },
+    ],
+  },
+  {
+    title: 'Compatibility & migration',
+    slug: 'compatibility',
+    items: [
+      {
+        q: 'Can I open my existing DuckDB databases with Haybarn?',
+        a: 'Yes. On-disk database format is unchanged. A database file written by DuckDB v1.5.2 opens cleanly in Haybarn v1.5.2, and vice versa.',
+      },
+      {
+        q: 'Can I load DuckDB-signed extensions on Haybarn?',
+        a: 'No — because the signing key is different. Haybarn rebuilds the DuckDB community extension catalog against the Haybarn engine and re-signs every binary with the Haybarn key. That coverage is what makes the disjointness practical: the extensions you want still load, just from the Haybarn channel.',
+      },
+      {
+        q: 'Is the Haybarn extension security model "more secure" than DuckDB\'s?',
+        a: 'Not today. Both use the same model — RSA-signed binaries verified against a trust root baked into the engine. The Haybarn key is a different key, not a stronger one. The benefit is option value: Haybarn can evolve the model on its own timeline (revocation, multi-signer, customer trust roots, hash-pinned allowlists) when users need it.',
+      },
+    ],
+  },
+  {
+    title: 'Extensions & the catalog',
+    slug: 'extensions',
+    items: [
+      {
+        q: 'Why doesn\'t Haybarn ship vortex, lance, or motherduck?',
+        a: 'Those are good projects from companies with their own commercial interests. Haybarn\'s default catalog is the set DuckDB\'s own CI builds minus third-party vendor extensions, so a Haybarn session won\'t autoload or autoinstall vendor code without you opting in. Nothing prevents you from configuring those extensions yourself — they\'re just not in the default install path, and motherduck is explicitly removed from the engine\'s autoloadable list with that rationale documented in source.',
+      },
+      {
+        q: 'What is Haybarn\'s extension autoload policy?',
+        a: 'Narrow and explicit. Autoload — the engine automatically loading an extension when a query references it — is a convenience that can become a surprise: a query you wrote ends up pulling in third-party vendor code you didn\'t intend to depend on. Haybarn\'s default autoloadable list excludes third-party vendor extensions. The full autoloadable list lives in extension_entries.hpp.',
+      },
+      {
+        q: 'Can I pin a specific version of an extension?',
+        a: 'Yes via npm or PyPI, not yet via INSTALL. Haybarn publishes every community extension as an npm package and a PyPI wheel — pin those in package.json or requirements.txt, mirror them to your internal registry, and your lockfile records the exact version. The engine\'s own INSTALL command in Haybarn doesn\'t carry pinning syntax today; it still resolves to whatever\'s currently on R2, same as upstream DuckDB. Engine-side pinning (per-build immutable artifacts keyed by extension commit sha) is on the roadmap — until then, npm and PyPI are the lockfile-pinning path.',
+      },
+      {
+        q: 'Can I pin Haybarn extensions in requirements.txt or package.json?',
+        a: 'That is the plan, targeted for the 1.5.2 GA window. Every Haybarn-built extension will be published as a per-platform PyPI wheel and an npm package, pinnable in lockfiles, mirrorable to internal registries. This combines with Haybarn\'s immutable commit-pinned artifact layout (see the extension version pinning question) so the binary you pin is the exact one the manifest says it is. The existing INSTALL / LOAD network channel keeps working in parallel — additive, not a migration.',
+      },
+      {
+        q: 'How does Haybarn coordinate engine releases with community extensions?',
+        a: 'Haybarn ships on DuckDB\'s release cadence — same version numbers, same upstream timing. What we add is care around extension readiness: when we cut a release, we work to make sure common and popular community extensions are built and available alongside it. When an extension that built before starts failing on a new release, we reach out to the maintainer directly to help land a fix — we want them to ship right alongside us. The status page shows the current matrix in flight.',
+      },
+      {
+        q: 'How does mirrored extension distribution help?',
+        a: 'Haybarn is publishing every extension through three channels — R2 (the default the engine reaches at INSTALL time), PyPI, and npm. Teams can pick the path that fits their supply chain — registry pin for reproducibility, R2 for the standard INSTALL flow, internal mirror for air-gapped environments. PyPI and npm packages are pinnable in lockfiles, so once installed they don\'t need to reach the network at runtime.',
+      },
+      {
+        q: 'How does an extension get into Haybarn\'s community catalog?',
+        a: 'If it lands in duckdb/community-extensions upstream, Haybarn rebuilds it automatically. The Haybarn community-extensions repo is a CI mirror of the upstream catalog — when upstream merges a new extension or updates an existing one, the next Haybarn build picks it up, rebuilds against the Haybarn engine, signs with the Haybarn key, and publishes. See the community-extensions page for the full pipeline.',
+      },
+    ],
+  },
+  {
+    title: 'Relationship with DuckDB',
+    slug: 'relationship',
+    items: [
+      {
+        q: 'Is Haybarn affiliated with DuckDB Labs or the DuckDB Foundation?',
+        a: 'No. Haybarn is published by Query Farm LLC and is not affiliated with, sponsored by, or endorsed by the DuckDB Foundation or DuckDB Labs. DuckDB is a trademark of the DuckDB Foundation.',
+      },
+      {
+        q: 'How does Haybarn coordinate with the DuckDB project?',
+        a: 'Informally. The Query.Farm team behind Haybarn has been part of the DuckDB community for years — we\'ve shipped 30+ community extensions and landed changes in DuckDB core. We follow DuckDB\'s trademark guidelines and we work hard to make Haybarn a good citizen in the ecosystem. We haven\'t asked DuckDB Labs for any formal blessing because they\'re busy building the engine and we\'re focused on the distribution layer around it — both roles matter, and they\'re separate by design. Where our work benefits upstream we contribute it back; where DuckDB Labs ships improvements we pull them in.',
+      },
+      {
+        q: 'Where do I file a bug? Against Haybarn or DuckDB?',
+        a: 'A simple rule that helps everyone: if you can reproduce the bug on upstream DuckDB, please file it with the DuckDB project — that\'s where engine-level bugs get the best attention and the fix benefits the whole ecosystem. If the bug only reproduces on Haybarn (one of our build-fork patches, the signing pipeline, the community-extensions catalog, our duckdb-wasm build), open an issue on the relevant Query-farm-haybarn repo and we\'ll take it from there. Query.Farm also offers commercial support if you\'d prefer a single point of contact for both sides.',
+      },
+    ],
+  },
+];
+
+// Flat list for the schema.org FAQPage JSON-LD (search engines).
+const faqs = faqGroups.flatMap(g => g.items);
+
+function slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+
+const SITE_ORIGIN = 'https://query.farm';
+const description = 'Haybarn is ABI- and file-format-compatible with upstream DuckDB v1.5.2. Migrating from DuckDB to Haybarn is mostly a package-name swap.';
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: faqs.map(f => ({
+      '@type': 'Question',
+      name: f.q,
+      acceptedAnswer: { '@type': 'Answer', text: f.a },
+    })),
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Home', item: SITE_ORIGIN + '/' },
+      { '@type': 'ListItem', position: 2, name: 'Haybarn', item: SITE_ORIGIN + '/haybarn' },
+      { '@type': 'ListItem', position: 3, name: 'Compatibility & FAQ', item: SITE_ORIGIN + '/haybarn/compatibility' },
+    ],
+  },
+];
+---
+
+<PageLayout
+  title="Haybarn compatibility & FAQ"
+  description={description}
+  jsonLd={jsonLd}
+>
+  <HaybarnSubNav />
+
+  <!-- Hero -->
+  <section class="bg-gradient-to-br from-soil-50 via-earth-50 to-soil-100 py-12 lg:py-20">
+    <div class="section-container">
+      <div class="max-w-3xl mx-auto text-center">
+        <SectionHeader
+          align="center"
+          eyebrow="Compatibility & FAQ"
+          title="Same engine, different distribution"
+          description="Haybarn is ABI- and file-format-compatible with upstream DuckDB. In most cases, migrating is a package-name swap."
+        />
+      </div>
+    </div>
+  </section>
+
+  <!-- What is unchanged / what differs -->
+  <section class="py-16 lg:py-24 bg-white">
+    <div class="section-container">
+      <div class="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto">
+        <Card padding="lg">
+          <h3 class="text-xl font-bold text-soil-900 mb-4">Unchanged from upstream</h3>
+          <ul class="space-y-2 text-soil-700 text-sm">
+            <li>• C/C++ API and <code class="font-mono text-earth-700">duckdb::</code> namespace</li>
+            <li>• Public headers (<code class="font-mono text-earth-700">duckdb.h</code> / <code class="font-mono text-earth-700">.hpp</code>)</li>
+            <li>• <code class="font-mono text-earth-700">DUCKDB_VERSION</code> macro</li>
+            <li>• Extension platform string and <code class="font-mono text-earth-700">.duckdb_extension</code> suffix</li>
+            <li>• On-disk database format</li>
+            <li>• SQL dialect and execution semantics</li>
+          </ul>
+        </Card>
+        <Card padding="lg">
+          <h3 class="text-xl font-bold text-soil-900 mb-4">What differs</h3>
+          <ul class="space-y-2 text-soil-700 text-sm">
+            <li>• Branding and artifact names (<code class="font-mono text-earth-700">libhaybarn.*</code>)</li>
+            <li>• Extension trust root (Haybarn RSA key)</li>
+            <li>• Extension cache (<code class="font-mono text-earth-700">~/.haybarn/extensions/</code>)</li>
+            <li>• Release / distribution pipeline and versioning</li>
+            <li>• Python / Node / JDBC package names</li>
+            <li>• JDBC URL prefix (<code class="font-mono text-earth-700">jdbc:haybarn:</code>)</li>
+          </ul>
+        </Card>
+      </div>
+    </div>
+  </section>
+
+  <!-- Migration snippets -->
+  <section class="py-16 lg:py-24 bg-soil-50">
+    <div class="section-container">
+      <SectionHeader
+        align="center"
+        eyebrow="Migration"
+        title="Swap the package, keep the code"
+        class="mb-10"
+      />
+
+      <div class="max-w-3xl mx-auto space-y-10">
+        <div>
+          <h3 class="text-lg font-bold text-soil-900 mb-3">Python</h3>
+          <CodeBlock code={pythonSnippet} lang="python" title="migration.py" />
+        </div>
+        <div>
+          <h3 class="text-lg font-bold text-soil-900 mb-3">Node.js</h3>
+          <CodeBlock code={nodeSnippet} lang="diff" title="migration.ts" />
+        </div>
+        <div>
+          <h3 class="text-lg font-bold text-soil-900 mb-3">JDBC</h3>
+          <CodeBlock code={jdbcSnippet} lang="diff" title="migration.java" />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="py-16 lg:py-24 bg-white">
+    <div class="section-container">
+      <SectionHeader
+        align="center"
+        eyebrow="FAQ"
+        title="Common questions"
+        class="mb-12"
+      />
+
+      <div class="max-w-5xl mx-auto grid lg:grid-cols-[14rem_1fr] gap-8 lg:gap-12">
+        <!-- Sticky in-page nav (desktop) -->
+        <nav aria-label="FAQ categories" class="hidden lg:block">
+          <div class="sticky top-24 space-y-1 text-sm">
+            <p class="text-xs font-semibold text-soil-500 uppercase tracking-wider mb-3">Jump to</p>
+            {faqGroups.map(g => (
+              <a
+                href={`#faq-${g.slug}`}
+                class="block px-3 py-1.5 rounded-md text-soil-600 hover:text-earth-700 hover:bg-soil-50 transition-colors"
+              >
+                {g.title}
+              </a>
+            ))}
+          </div>
+        </nav>
+
+        <div class="space-y-14">
+          {faqGroups.map(g => (
+            <section id={`faq-${g.slug}`} aria-labelledby={`faq-heading-${g.slug}`} class="scroll-mt-24">
+              <h3 id={`faq-heading-${g.slug}`} class="text-sm font-semibold text-soil-500 uppercase tracking-wider border-b border-soil-200 pb-2 mb-6">
+                {g.title}
+              </h3>
+              <div class="space-y-8">
+                {g.items.map(f => (
+                  <article id={`faq-${slug(f.q)}`} class="scroll-mt-24">
+                    <h4 class="text-lg font-semibold text-soil-900 mb-2 leading-snug">
+                      {f.q}
+                    </h4>
+                    <p class="text-soil-700 leading-relaxed">{f.a}</p>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Consulting CTA -->
+  <section class="py-16 lg:py-24 bg-gradient-to-br from-harvest-600 to-grain-600 text-white">
+    <div class="section-container text-center">
+      <h2 class="text-3xl md:text-4xl lg:text-5xl font-bold mb-6">
+        Planning a migration?
+      </h2>
+      <p class="text-xl md:text-2xl text-harvest-50 mb-8 max-w-3xl mx-auto">
+        We help teams evaluate Haybarn against their compliance and supply-chain needs, and roll it out alongside (or instead of) upstream DuckDB.
+      </p>
+      <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
+        <Button href="/consulting" variant="secondary" size="lg">
+          Consulting
+        </Button>
+        <Button href="/company/schedule" variant="ghost" size="lg" class="bg-white/10 hover:bg-white/20 text-white border-white/30">
+          Schedule a Call
+        </Button>
+      </div>
+    </div>
+  </section>
+</PageLayout>
