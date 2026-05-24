@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite';
 import icon from 'astro-icon';
 import mdx from '@astrojs/mdx';
 import sitemap from '@astrojs/sitemap';
+import react from '@astrojs/react';
 
 // Custom farm theme for Shiki syntax highlighting
 const farmTheme = {
@@ -58,7 +59,7 @@ const farmTheme = {
 export default defineConfig({
   site: 'https://query.farm',
   output: 'static',
-  integrations: [icon(), mdx(), sitemap()],
+  integrations: [icon(), mdx(), sitemap(), react()],
   markdown: {
     shikiConfig: {
       theme: farmTheme
