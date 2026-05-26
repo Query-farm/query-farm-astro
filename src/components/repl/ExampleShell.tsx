@@ -112,6 +112,16 @@ function splitStatements(sql: string): string[] {
   return out;
 }
 
+/** True if a split fragment is only SQL comments / whitespace — e.g. a trailing
+ *  explanatory line after the example's last statement. Nothing to run. */
+function isCommentOnly(sql: string): boolean {
+  const stripped = sql
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/--[^\n]*/g, "")
+    .trim();
+  return stripped === "";
+}
+
 /** Parse a DuckDB error string into a message + optional 1-based position. */
 function parseError(err: string): { message: string; position: number } {
   try {
@@ -263,7 +273,9 @@ async function runRepl(
   // is already loaded engine-wide by ensureExtension().
   if (opts.seedSql) {
     const stmts = splitStatements(opts.seedSql).filter(
-      (s) => !/^\s*(INSTALL|LOAD)\s/i.test(s),
+      // Drop INSTALL/LOAD (already done engine-wide) and comment-only fragments
+      // such as a trailing explanatory line after the example's last statement.
+      (s) => !/^\s*(INSTALL|LOAD)\s/i.test(s) && !isCommentOnly(s),
     );
     for (const stmt of stmts) {
       await exec(stmt, true);
