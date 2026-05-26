@@ -1,24 +1,30 @@
 /**
- * In-browser DuckDB REPL for extension pages.
+ * Per-example in-browser DuckDB shell.
  *
- * Runs Haybarn-Wasm (DuckDB) entirely in the browser — no link-out to an
- * external shell. xterm.js + addons are loaded from jsDelivr (kept out of the
- * bundle); the engine is booted lazily on first launch so pages stay light.
+ * Mounted on demand beneath a SQL example when the user clicks "Try" (see
+ * scripts/example-shells.ts). Each instance:
+ *   - shares the one Haybarn-Wasm engine (booted once across the whole page),
+ *   - installs/loads the extension once, engine-wide,
+ *   - runs in its own isolated session (private in-memory database), so state
+ *     never leaks between examples,
+ *   - auto-runs the example it was seeded with, then stays interactive.
  *
- * Scope is deliberately the "core terminal": query editor + Arrow result
- * rendering + a handful of dot-commands. No AI mode, perspective, or map.
+ * xterm.js + addons load from jsDelivr (kept out of the bundle). Scope is the
+ * "core terminal": query editor + Arrow result rendering + a few dot-commands.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   printBoxTable,
   printLineTable,
   type TerminalOutput,
 } from "../../lib/repl/shell-table-renderer";
-import { ensureDuckDB, type DuckDBHandle } from "../../lib/repl/duckdb-boot";
+import {
+  ensureEngine,
+  ensureExtension,
+  createSession,
+  type Session,
+} from "../../lib/repl/duckdb-boot";
 
-// xterm and its addons are classic <script> globals (no ESM build we want to
-// bundle). apache-arrow and xterm-readline load as ESM. Versions match the
-// proven set used by the VGI web shell.
 const CDN_SCRIPTS = [
   "https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js",
   "https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js",
@@ -61,13 +67,6 @@ function loadScripts(): Promise<void> {
     }
   })();
   return scriptsLoading;
-}
-
-/** Build the `INSTALL <name> FROM ...` clause from the extension's install source. */
-function installFromClause(source: string): string {
-  if (source === "community") return "FROM community";
-  if (source.toLowerCase().startsWith("from ")) return source;
-  return `FROM '${source}'`;
 }
 
 /** Split a SQL snippet into individual statements on top-level semicolons,
@@ -135,17 +134,18 @@ const fmtMs = (ms: number) =>
 interface ReplDeps {
   term: any;
   rl: any;
-  db: DuckDBHandle;
+  session: Session;
   tableFromIPC: (buf: ArrayBuffer) => any;
 }
 
-/** Run the interactive read-eval-print loop. Never resolves (loops forever)
- *  until the terminal is disposed, which rejects the pending rl.read(). */
+/** Run the interactive read-eval-print loop on an isolated session. Auto-runs
+ *  the seeded example first, then loops on user input until the terminal is
+ *  disposed (which rejects the pending rl.read()). */
 async function runRepl(
   deps: ReplDeps,
-  opts: { extensionName: string; installSource: string; initialSql?: string },
+  opts: { seedSql?: string; extError?: string },
 ): Promise<void> {
-  const { term, rl, db, tableFromIPC } = deps;
+  const { term, rl, session, tableFromIPC } = deps;
   let maxDisplayRows = 40;
   let outputMode: "box" | "line" = "box";
 
@@ -162,13 +162,10 @@ async function runRepl(
   async function exec(sql: string, echo = false): Promise<boolean> {
     if (echo) writeln(`\x1b[32mD\x1b[0m > \x1b[2m${sql};\x1b[0m`);
     const t0 = performance.now();
-    const r = await db.runQuery(sql);
+    const r = await session.runQuery(sql);
     const elapsed = performance.now() - t0;
     if (!r.ok) {
       const { message, position } = parseError(r.error || "unknown");
-      // Some extension functions hit an internal error when executed in this
-      // wasm build (surfaces as an opaque "... is not a function" from the
-      // engine worker). It's engine-side, not a query mistake — translate it.
       if (/is not a function/.test(message)) {
         writeln(
           "This hit an internal error in the in-browser engine — this " +
@@ -192,7 +189,6 @@ async function runRepl(
     try {
       const table = tableFromIPC(r.buffer);
       const names = table.schema.fields.map((f: any) => f.name);
-      // DDL (CREATE/DROP/...) returns a single "Count" column — just show OK.
       if (names.length === 1 && names[0] === "Count" && table.numRows <= 1) {
         writeln(`OK (${fmtMs(elapsed)})`, "32");
       } else if (
@@ -229,7 +225,7 @@ async function runRepl(
         writeln("  .maxrows N         max rows to display (current: " + maxDisplayRows + ")");
         writeln("  .clear             clear the screen");
         writeln("  .help              this message");
-        writeln("Anything else is run as SQL. Try: SELECT 'hello' AS greeting;");
+        writeln("Anything else is run as SQL.");
         return true;
       case "mode":
         if (rest[0] === "box" || rest[0] === "line") {
@@ -258,46 +254,25 @@ async function runRepl(
     }
   }
 
-  /** Run a setup statement quietly: echo it, but report a one-line status
-   *  rather than rendering its (boolean "Success") result table. */
-  async function runSetup(sql: string): Promise<boolean> {
-    writeln(`\x1b[32mD\x1b[0m > \x1b[2m${sql};\x1b[0m`);
-    const r = await db.runQuery(sql);
-    if (!r.ok) {
-      writeln(`  ✗ ${parseError(r.error || "unknown").message}`, "31");
-      return false;
-    }
-    writeln("  ✓ ok", "32");
-    return true;
+  if (opts.extError) {
+    writeln(`Note: ${opts.extError}`, "33");
+    rl.println("");
   }
 
-  // Install + load the extension explicitly from the Haybarn community channel
-  // so the shell is ready for the extension's own SQL.
-  const fromClause = installFromClause(opts.installSource);
-  const installOk = await runSetup(`INSTALL ${opts.extensionName} ${fromClause}`);
-  const loadOk = installOk && (await runSetup(`LOAD ${opts.extensionName}`));
-  if (!installOk || !loadOk) {
-    writeln(
-      `Note: ${opts.extensionName} may not have a WebAssembly build yet — ` +
-        `the SQL below may not work in-browser.`,
-      "33",
+  // Auto-run the seeded example. Skip any leading INSTALL/LOAD — the extension
+  // is already loaded engine-wide by ensureExtension().
+  if (opts.seedSql) {
+    const stmts = splitStatements(opts.seedSql).filter(
+      (s) => !/^\s*(INSTALL|LOAD)\s/i.test(s),
     );
-  }
-  rl.println("");
-
-  // Auto-run the quick-start snippet as a live demo, then hand off to the user.
-  if (opts.initialSql) {
-    for (const stmt of splitStatements(opts.initialSql)) {
-      // Skip a redundant INSTALL/LOAD already handled above.
-      if (/^\s*(INSTALL|LOAD)\s/i.test(stmt)) continue;
+    for (const stmt of stmts) {
       await exec(stmt, true);
       rl.println("");
     }
   }
 
-  writeln("Ready. Type SQL and press Enter — or .help for commands.", "2");
+  writeln("Ready — edit and press Enter, or .help for commands.", "2");
 
-  // Interactive loop.
   for (;;) {
     const sql = (await rl.read("\x1b[32mD\x1b[0m > ")).trim();
     if (!sql) {
@@ -314,28 +289,26 @@ async function runRepl(
 interface Props {
   extensionName: string;
   installSource: string;
-  /** Quick-start SQL snippet auto-run after INSTALL/LOAD. */
-  initialSql?: string;
+  /** The example SQL this shell was opened from; auto-run on start. */
+  sql: string;
+  /** Called when the user closes the shell (host unmounts + removes it). */
+  onClose?: () => void;
 }
 
-export default function ExtensionShell({ extensionName, installSource, initialSql }: Props) {
+export default function ExampleShell({ extensionName, installSource, sql, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [launched, setLaunched] = useState(false);
-  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const startedRef = useRef(false);
 
-  const launch = useCallback(() => setLaunched(true), []);
-
   useEffect(() => {
-    if (!launched || startedRef.current) return;
+    if (startedRef.current) return;
     startedRef.current = true;
     let disposed = false;
     let cleanup = () => {};
 
     (async () => {
       try {
-        setStatus("loading");
         await loadScripts();
         const [arrowModule, readlineModule] = await Promise.all([
           import(/* @vite-ignore */ ARROW_CDN),
@@ -425,19 +398,31 @@ export default function ExtensionShell({ extensionName, installSource, initialSq
         };
 
         rl.println("\x1b[2mBooting Haybarn (DuckDB) WebAssembly…\x1b[0m");
-        const db = await ensureDuckDB();
+        const engine = await ensureEngine();
         if (disposed) return;
+
+        // Load the extension once, engine-wide; open an isolated session.
+        const [ext, session] = await Promise.all([
+          ensureExtension(extensionName, installSource),
+          createSession(),
+        ]);
+        if (disposed) return;
+
         setStatus("ready");
         rl.println(
-          `\x1b[2mHaybarn ${db.version} — running in your browser, single-threaded.\x1b[0m`,
+          `\x1b[2mHaybarn ${engine.version} — in-browser, single-threaded · isolated session\x1b[0m`,
         );
         rl.println("");
 
-        await runRepl({ term, rl, db, tableFromIPC }, {
-          extensionName,
-          installSource,
-          initialSql,
-        });
+        await runRepl(
+          { term, rl, session, tableFromIPC },
+          {
+            seedSql: sql,
+            extError: ext.ok
+              ? undefined
+              : `${extensionName} may not have a WebAssembly build yet — the SQL below may not run in-browser.`,
+          },
+        );
       } catch (e: unknown) {
         if (disposed) return;
         setStatus("error");
@@ -449,50 +434,36 @@ export default function ExtensionShell({ extensionName, installSource, initialSq
       disposed = true;
       cleanup();
     };
-  }, [launched, extensionName, installSource, initialSql]);
+  }, [extensionName, installSource, sql]);
 
   return (
-    <div className="rounded-lg border border-soil-700/40 bg-[#0d2818] overflow-hidden shadow-sm">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-soil-700/40 bg-[#0a1f12]">
-        <div className="flex items-center gap-2 text-[#86efac] text-sm font-mono">
-          <span className="flex gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f56]/70" />
-            <span className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]/70" />
-            <span className="w-2.5 h-2.5 rounded-full bg-[#27c93f]/70" />
+    <div className="mt-2 rounded-lg border border-[#66bb6a]/30 bg-[#0d2818] overflow-hidden shadow-sm">
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#66bb6a]/20 bg-[#0a1f12]">
+        <div className="flex items-center gap-2 text-[#86efac] text-xs font-mono">
+          <span className="flex gap-1">
+            <span className="w-2 h-2 rounded-full bg-[#ff5f56]/70" />
+            <span className="w-2 h-2 rounded-full bg-[#ffbd2e]/70" />
+            <span className="w-2 h-2 rounded-full bg-[#27c93f]/70" />
           </span>
-          <span className="ml-2">Haybarn shell</span>
-          {status === "ready" && (
-            <span className="text-[#86efac]/60">· {extensionName}</span>
+          <span className="ml-1">Haybarn shell · {extensionName}</span>
+          {status === "loading" && (
+            <span className="text-[#86efac]/60 animate-pulse">· booting…</span>
           )}
         </div>
-        {status === "loading" && (
-          <span className="text-[#86efac]/70 text-xs font-mono animate-pulse">
-            loading…
-          </span>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close shell"
+            className="text-[#86efac]/60 hover:text-[#dcfce7] text-xs font-mono px-1.5 cursor-pointer"
+          >
+            ✕
+          </button>
         )}
       </div>
 
-      {!launched ? (
-        <div className="px-6 py-10 text-center">
-          <p className="text-[#c8e6c9] text-sm mb-1">
-            Run <span className="font-mono">{extensionName}</span> right here, in your browser.
-          </p>
-          <p className="text-[#86efac]/60 text-xs mb-5">
-            Powered by Haybarn-Wasm — nothing leaves your machine. Downloads ~30&nbsp;MB on first launch.
-          </p>
-          <button
-            type="button"
-            onClick={launch}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[#1b4d2e] text-[#dcfce7] text-sm font-medium border border-[#66bb6a]/40 hover:bg-[#236339] hover:border-[#66bb6a]/70 transition-colors cursor-pointer"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <polygon points="5 3 19 12 5 21 5 3" />
-            </svg>
-            Launch in-browser shell
-          </button>
-        </div>
-      ) : status === "error" ? (
-        <div className="px-6 py-8 text-center">
+      {status === "error" ? (
+        <div className="px-4 py-6 text-center">
           <p className="text-[#fca5a5] text-sm font-mono">Failed to start the shell.</p>
           {errorMsg && (
             <p className="mt-2 text-[#86efac]/60 text-xs font-mono break-words">{errorMsg}</p>
@@ -500,11 +471,10 @@ export default function ExtensionShell({ extensionName, installSource, initialSq
         </div>
       ) : null}
 
-      {/* Terminal host — kept mounted whenever launched. */}
       <div
         ref={containerRef}
-        className={launched && status !== "error" ? "block" : "hidden"}
-        style={{ height: "420px", padding: "0.5rem 0.75rem" }}
+        className={status !== "error" ? "block" : "hidden"}
+        style={{ height: "300px", padding: "0.5rem 0.75rem" }}
       />
     </div>
   );

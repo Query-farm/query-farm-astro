@@ -12,6 +12,12 @@
 // or committed (they are ~32 MB each). createWorker() fetches the cross-origin
 // worker script and wraps it in a same-origin blob URL so `new Worker(...)` is
 // allowed; the wasm module is fetched with permissive CORS.
+//
+// One engine, many shells: the engine boots once (singleton). Each on-page
+// example mounts its own terminal and gets an isolated *session* — a private
+// connection on its own `ATTACH ':memory:'` database — so tables/state created
+// in one example never leak into another. Extensions are installed once,
+// engine-wide, and are visible to every session.
 
 import * as duckdb from "@haybarn/haybarn-wasm";
 
@@ -27,27 +33,35 @@ export interface QueryResult {
   error?: string;
 }
 
-export interface DuckDBHandle {
-  runQuery: (sql: string) => Promise<QueryResult>;
-  /** Haybarn/DuckDB engine version string. */
+interface Engine {
+  db: duckdb.AsyncDuckDB;
   version: string;
+  /** A connection id used for engine-wide control statements (LOAD, INSTALL). */
+  controlConnId: number;
 }
 
-let bootPromise: Promise<DuckDBHandle> | null = null;
+/** Build the `INSTALL <name> FROM ...` clause from an extension's install source. */
+export function installFromClause(source: string): string {
+  if (source === "community") return "FROM community";
+  if (source.toLowerCase().startsWith("from ")) return source;
+  return `FROM '${source}'`;
+}
 
-/** Idempotent boot. Resolves once AsyncDuckDB is instantiated and a connection
- *  is open. Safe to await from multiple shells on the same page. */
-export function ensureDuckDB(onProgress?: (pct: number) => void): Promise<DuckDBHandle> {
-  if (!bootPromise) {
-    bootPromise = boot(onProgress).catch((e) => {
-      bootPromise = null; // allow retry after a failed boot
+let enginePromise: Promise<Engine> | null = null;
+
+/** Idempotent engine boot. Resolves once AsyncDuckDB is instantiated and the
+ *  control connection is open. Safe to await from many shells on one page. */
+export function ensureEngine(): Promise<Engine> {
+  if (!enginePromise) {
+    enginePromise = boot().catch((e) => {
+      enginePromise = null; // allow retry after a failed boot
       throw e;
     });
   }
-  return bootPromise;
+  return enginePromise;
 }
 
-async function boot(onProgress?: (pct: number) => void): Promise<DuckDBHandle> {
+async function boot(): Promise<Engine> {
   const BUNDLES: duckdb.DuckDBBundles = {
     mvp: {
       mainModule: `${CDN}/duckdb-mvp.wasm`,
@@ -66,47 +80,84 @@ async function boot(onProgress?: (pct: number) => void): Promise<DuckDBHandle> {
   const worker = await duckdb.createWorker(bundle.mainWorker!);
   const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
   const db = new duckdb.AsyncDuckDB(logger, worker);
-
-  await db.instantiate(bundle.mainModule, bundle.pthreadWorker, (p) => {
-    const pct = Number((p as { percentage?: number }).percentage);
-    if (Number.isFinite(pct)) onProgress?.(pct);
-  });
+  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
 
   const conn = await db.connect();
-  const connId = conn.useUnsafe((_db: unknown, id: number) => id);
+  const controlConnId = conn.useUnsafe((_db: unknown, id: number) => id);
 
-  // Turn off implicit extension resolution. Without this, referencing a
-  // function from an unloaded extension makes the engine try to autoinstall it
-  // from the default repository (and, in this wasm build, an autoload during
-  // result serialization can throw an opaque "c is not a function"). We instead
-  // install every extension explicitly with `INSTALL <name> FROM community`, so
-  // the Haybarn community channel is always the source.
-  // Eagerly load `json`: many extensions return JSON-typed columns
-  // (e.g. UNION(ok JSON, ...)), whose Arrow serialization needs the json
-  // extension registered.
+  // Eagerly load `json`: many extensions return JSON-typed columns, whose
+  // Arrow serialization needs the json extension registered.
   try {
-    await db.runQuery(connId, "LOAD json");
+    await db.runQuery(controlConnId, "LOAD json");
   } catch {
     try {
-      await db.runQuery(connId, "INSTALL json; LOAD json");
+      await db.runQuery(controlConnId, "INSTALL json; LOAD json");
     } catch {
       /* json unavailable — JSON results will surface a friendly note */
     }
   }
 
   const version = await db.getVersion();
+  return { db, version, controlConnId };
+}
 
-  const runQuery = async (sql: string): Promise<QueryResult> => {
-    try {
-      const bytes = await db.runQuery(connId, sql);
-      // Copy out the result range so the returned ArrayBuffer is independent of
-      // any larger arena the worker may have handed back.
-      const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-      return { ok: true, buffer: ab };
-    } catch (e: unknown) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
-    }
+const extensionLoads = new Map<string, Promise<{ ok: boolean; error?: string }>>();
+
+/** Install + load an extension once, engine-wide. Subsequent calls for the same
+ *  name return the cached result. Extension functions become visible to every
+ *  session (connection) on the engine. */
+export function ensureExtension(
+  name: string,
+  source: string,
+): Promise<{ ok: boolean; error?: string }> {
+  let pending = extensionLoads.get(name);
+  if (!pending) {
+    pending = (async () => {
+      const { db, controlConnId } = await ensureEngine();
+      try {
+        await db.runQuery(controlConnId, `INSTALL ${name} ${installFromClause(source)}`);
+        await db.runQuery(controlConnId, `LOAD ${name}`);
+        return { ok: true };
+      } catch (e: unknown) {
+        const error = e instanceof Error ? e.message : String(e);
+        return { ok: false, error };
+      }
+    })();
+    extensionLoads.set(name, pending);
+  }
+  return pending;
+}
+
+export interface Session {
+  runQuery: (sql: string) => Promise<QueryResult>;
+}
+
+let sessionCounter = 0;
+
+/** Open an isolated session: its own connection bound to a private in-memory
+ *  database (`ATTACH ':memory:'` + `USE`), so DDL/state in one example shell
+ *  does not bleed into another. Shares the engine and its loaded extensions. */
+export async function createSession(): Promise<Session> {
+  const { db } = await ensureEngine();
+  const conn = await db.connect();
+  const connId = conn.useUnsafe((_db: unknown, id: number) => id);
+  const sandbox = `sandbox_${++sessionCounter}`;
+  try {
+    await db.runQuery(connId, `ATTACH ':memory:' AS ${sandbox}`);
+    await db.runQuery(connId, `USE ${sandbox}`);
+  } catch {
+    /* fall back to the shared default catalog if ATTACH/USE is unavailable */
+  }
+
+  return {
+    async runQuery(sql: string): Promise<QueryResult> {
+      try {
+        const bytes = await db.runQuery(connId, sql);
+        const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        return { ok: true, buffer: ab };
+      } catch (e: unknown) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    },
   };
-
-  return { runQuery, version };
 }
