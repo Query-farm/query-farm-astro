@@ -17,7 +17,7 @@ import * as duckdb from "@haybarn/haybarn-wasm";
 
 // Pin to the installed @haybarn/haybarn-wasm version so the JS API surface and
 // the CDN-hosted wasm/worker artifacts stay in lockstep. Bump both together.
-const HAYBARN_WASM_VERSION = "1.5.3-rc7";
+const HAYBARN_WASM_VERSION = "1.5.3-rc9";
 const CDN = `https://cdn.jsdelivr.net/npm/@haybarn/haybarn-wasm@${HAYBARN_WASM_VERSION}/dist`;
 
 export interface QueryResult {
