@@ -34,11 +34,6 @@ const verifyVgiOutput = `┌────────────────┬�
 │ vgi            │ true      │ true    │
 └────────────────┴───────────┴─────────┘`;
 
-const installPython = `# This will work once the VGI Python package is public.
-pip install vgi
-# or
-uv add vgi`;
-
 const attachHostedWorker = `-- Attach a hosted VGI worker.
 ATTACH 'volcanos' AS volcanos (
   TYPE vgi,
@@ -87,61 +82,135 @@ LIMIT 10
 for row in rows:
     print(row)`;
 
-const workerSource = `#!/usr/bin/env python3
+const cloneVgiPython = `git clone https://github.com/Query-farm/vgi-python.git
+cd vgi-python`;
 
-from typing import Annotated
+const agentPrompt = `Look at this vgi-python repository and make me a new VGI worker that exposes
+the NYC Department of Finance "Summary of Neighborhood Sales by Neighborhood"
+dataset to DuckDB consumers:
 
-import pyarrow as pa
-import pyarrow.compute as pc
-from vgi import Param, Returns, ScalarFunction, Worker
-from vgi.catalog import Catalog, Schema
+https://data.cityofnewyork.us/City-Government/DOF-Summary-of-Neighborhood-Sales-by-Neighborhood-/5ebm-myj7/about_data
 
+Follow the examples and test fixtures in vgi-python.
 
-class UpperCaseFunction(ScalarFunction):
-    """Converts string values to uppercase."""
+Requirements:
+- Expose the data as a SQL table named nyc_dof_sales.main.neighborhood_sales.
+- Add useful column names and types for neighborhood housing analysis.
+- Include comments in the SQL/catalog metadata so a future agent understands the dataset.
+- Add tests that prove Haybarn/DuckDB consumers can query the worker.
+- Deploy the worker to Fly.io and give me the hosted VGI URL and ATTACH statement.
+- Configure Fly Machines to scale to zero when idle.`;
 
-    class Meta:
-        name = "upper_case"
-        description = "Converts string values to uppercase"
+const localAgentPrompt = `Change this worker so I can run it locally with uv run instead of deploying it.
+Give me the Haybarn ATTACH statement for the local process.`;
 
-    @classmethod
-    def compute(
-        cls,
-        value: Annotated[pa.StringArray, Param(doc="String to uppercase")],
-    ) -> Annotated[pa.StringArray, Returns()]:
-        return pc.utf8_upper(value)
-
-
-class MyWorker(Worker):
-    catalog = Catalog(
-        name="my_worker",
-        default_schema="main",
-        schemas=[
-            Schema(name="main", functions=[UpperCaseFunction]),
-        ],
-    )
-
-
-if __name__ == "__main__":
-    MyWorker().run()`;
-
-const localWorkerHaybarn = `# From the same directory as my_worker.py, start the latest Haybarn.
-pipx run haybarn-cli`;
-
-const attachLocalWorker = `-- Attach your local worker as a catalog.
-ATTACH 'my_worker' AS my_worker (
+const attachNycWorker = `-- Replace the LOCATION with the Fly.io URL your agent gives you.
+ATTACH 'nyc_dof_sales' AS nyc_dof_sales (
   TYPE vgi,
-  LOCATION 'python3 ./my_worker.py',
-  pool false
+  LOCATION 'https://your-nyc-dof-sales-worker.fly.dev/'
 );
 
--- Confirm the worker registered its SQL function.
-SELECT database_name, schema_name, function_name, function_type
-FROM duckdb_functions()
-WHERE database_name = 'my_worker';
+-- Confirm the worker exposes the expected table.
+SELECT table_schema, table_name, table_type
+FROM information_schema.tables
+WHERE table_catalog = 'nyc_dof_sales'
+ORDER BY table_schema, table_name;`;
 
--- Call it from SQL.
-SELECT my_worker.upper_case('hello');`;
+const nycGrowthQuery = `-- Find neighborhoods that are still relatively cheap but growing fast.
+-- In other words: candidates for the next "Williamsburg" style growth story.
+WITH recent_growth AS (
+  SELECT
+    borough_name,
+    neighborhood,
+    type_of_home,
+    year,
+    median_sale_price,
+    LAG(median_sale_price, 5) OVER (
+      PARTITION BY borough_name, neighborhood, type_of_home
+      ORDER BY year
+    ) AS price_5y_ago
+  FROM nyc_dof_sales.main.neighborhood_sales
+)
+
+SELECT
+  borough_name,
+  neighborhood,
+  type_of_home,
+  median_sale_price,
+  ROUND(
+    100.0 * (median_sale_price - price_5y_ago)
+    / NULLIF(price_5y_ago, 0),
+    1
+  ) AS growth_5y_pct
+FROM recent_growth
+WHERE price_5y_ago IS NOT NULL
+  AND median_sale_price < 1000000
+ORDER BY growth_5y_pct DESC
+LIMIT 3;`;
+
+const nycGrowthResult = `┌──────────────┬───────────────┬───────────────────────────┬───────────────────┬───────────────┐
+│ borough_name │ neighborhood  │       type_of_home        │ median_sale_price │ growth_5y_pct │
+│   varchar    │    varchar    │          varchar          │       int64       │    double     │
+├──────────────┼───────────────┼───────────────────────────┼───────────────────┼───────────────┤
+│ Queens       │ Kew Gardens   │ 03 THREE FAMILY DWELLINGS │            915000 │         357.5 │
+│ Queens       │ Rockaway Park │ 03 THREE FAMILY DWELLINGS │            929000 │         298.3 │
+│ Queens       │ Holliswood    │ 02 TWO FAMILY DWELLINGS   │            879400 │         265.0 │
+└──────────────┴───────────────┴───────────────────────────┴───────────────────┴───────────────┘`;
+
+const attachSecondWorker = `-- Attach another hosted VGI worker in the same Haybarn session.
+ATTACH 'volcanos' AS volcanos (
+  TYPE vgi,
+  LOCATION 'https://vgi-volcanos.fly.dev/'
+);`;
+
+const crossCatalogQuery = `-- Black Swan Years vs. NYC housing:
+-- Did NYC home prices behave differently in years with unusually large volcanic activity?
+WITH eruption_years AS (
+  SELECT
+    last_eruption_year AS year,
+    COUNT(*) AS volcano_count
+  FROM volcanos.smithsonian.holocene_volcanoes
+  WHERE last_eruption_year BETWEEN 2010 AND 2024
+  GROUP BY 1
+),
+
+nyc_growth AS (
+  SELECT
+    borough_name,
+    neighborhood,
+    type_of_home,
+    year,
+    median_sale_price,
+    LAG(median_sale_price) OVER (
+      PARTITION BY borough_name, neighborhood, type_of_home
+      ORDER BY year
+    ) AS prev_price
+  FROM nyc_dof_sales.main.neighborhood_sales
+  WHERE median_sale_price > 0
+)
+
+SELECT
+  n.year,
+  n.borough_name,
+  n.neighborhood,
+  n.type_of_home,
+  n.median_sale_price,
+  ROUND(100.0 * (n.median_sale_price - n.prev_price) / NULLIF(n.prev_price, 0), 1) AS yoy_growth_pct,
+  COALESCE(e.volcano_count, 0) AS volcano_count
+FROM nyc_growth n
+LEFT JOIN eruption_years e USING (year)
+WHERE n.prev_price IS NOT NULL
+ORDER BY volcano_count DESC, yoy_growth_pct DESC
+LIMIT 3;`;
+
+const crossCatalogResult = `┌───────┬───────────────┬──────────────────────────┬───────────────────────────┬───────────────────┬────────────────┬───────────────┐
+│ year  │ borough_name  │       neighborhood       │       type_of_home        │ median_sale_price │ yoy_growth_pct │ volcano_count │
+│ int64 │    varchar    │         varchar          │          varchar          │       int64       │     double     │     int64     │
+├───────┼───────────────┼──────────────────────────┼───────────────────────────┼───────────────────┼────────────────┼───────────────┤
+│  2023 │ Manhattan     │ Kips Bay                 │ 01 ONE FAMILY DWELLINGS   │           6850000 │          930.1 │            14 │
+│  2023 │ Manhattan     │ Tribeca                  │ 01 ONE FAMILY DWELLINGS   │          23500000 │          180.7 │            14 │
+│  2023 │ Staten Island │ Rossville-Port Mobil     │ 01 ONE FAMILY DWELLINGS   │           1999900 │          166.7 │            14 │
+└───────┴───────────────┴──────────────────────────┴───────────────────────────┴───────────────────┴────────────────┴───────────────┘`;
 ---
 
 <PageLayout
@@ -248,38 +317,86 @@ SELECT my_worker.upper_case('hello');`;
       <div class="max-w-3xl mx-auto">
         <p class="text-sm font-semibold uppercase tracking-wide text-harvest-700 mb-3">Path 2</p>
         <h2 class="text-3xl lg:text-4xl font-bold text-soil-900 mb-4">Make your own worker</h2>
-        <div class="mb-6 rounded-lg border border-harvest-200 bg-harvest-50 p-4 text-sm text-soil-700 leading-relaxed">
-          This local-worker example assumes the VGI Python package is available from the public Python package index. That release is not public yet, so this section is a preview and will be updated when the package is published.
-        </div>
         <p class="text-soil-700 leading-relaxed mb-6">
-          To make your own VGI worker, install the Python framework. The package gives you the base classes (<code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">ScalarFunction</code>, <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">Worker</code>, etc.) and the runtime that speaks the wire protocol.
+          Start with a dataset, API, model, or internal service you want to make queryable. In this example, we will expose the NYC Department of Finance <a href="https://data.cityofnewyork.us/City-Government/DOF-Summary-of-Neighborhood-Sales-by-Neighborhood-/5ebm-myj7/about_data" class="text-harvest-700 underline" target="_blank" rel="noopener noreferrer">Summary of Neighborhood Sales by Neighborhood</a> dataset as a hosted VGI worker.
         </p>
-        <CodeBlock code={installPython} lang="bash" title="terminal" />
-        <p class="mt-8 text-soil-700 leading-relaxed mb-6">
-          Then create a worker file. Declare functions as classes with a <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">compute</code> method, list them on a <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">Worker</code>, and add a <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">__main__</code> guard so the worker can run as a subprocess.
+        <p class="text-soil-700 leading-relaxed mb-6">
+          You will need an AI coding agent such as Claude Code or Codex, plus a Fly.io account. The agent reads the VGI Python examples, builds the worker, deploys it to Fly.io, and gives you a URL that Haybarn can attach as a SQL catalog.
         </p>
-        <CodeBlock code={workerSource} lang="python" title="my_worker.py" />
-        <p class="mt-4 text-sm text-soil-600">
-          Prefer a different language? See <a href="/vgi/languages" class="text-harvest-700 underline">Languages</a> for the TypeScript, Go, Rust, Java, and C++ SDKs.
-        </p>
+        <div class="mb-8 rounded-lg border border-harvest-200 bg-harvest-50 p-4 text-sm text-soil-700 leading-relaxed">
+          Fly.io is only needed to host the worker as a public URL. You most likely will not be charged for this demo because the Fly Machines can scale to zero when idle. If you do not want to sign up for Fly.io, change the prompt and ask the agent to make the worker run locally with <code class="text-sm bg-white px-1.5 py-0.5 rounded">uv run</code> instead.
+        </div>
 
-        <h3 class="text-xl font-bold text-soil-900 mt-10 mb-3">Attach your local worker</h3>
-        <div class="mb-6 rounded-lg border border-harvest-200 bg-harvest-50 p-4 text-sm text-soil-700 leading-relaxed">
-          This command assumes <code class="text-sm bg-white px-1.5 py-0.5 rounded">pip install vgi</code> works in the Python environment that runs <code class="text-sm bg-white px-1.5 py-0.5 rounded">my_worker.py</code>. Until the package is public, use the hosted worker example above.
-        </div>
+        <h3 class="text-xl font-bold text-soil-900 mt-10 mb-3">Clone the VGI Python repo</h3>
         <p class="text-soil-700 leading-relaxed mb-6">
-          Once you have a local worker file, attach it as a catalog from Haybarn. Its functions become first-class SQL functions you can use in <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">SELECT</code>, <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">WHERE</code>, joins, and pipelines.
+          For now, clone the repository and give your agent the local path. In the future, VGI Python will be installable as a package, so this setup step will be simpler.
         </p>
-        <CodeBlock code={localWorkerHaybarn} lang="bash" title="terminal" />
-        <div class="mt-6">
-        <CodeBlock code={attachLocalWorker} lang="sql" title="Haybarn shell" />
+        <CodeBlock code={cloneVgiPython} lang="bash" title="terminal" />
+
+        <h3 class="text-xl font-bold text-soil-900 mt-10 mb-3">Ask an agent to build and deploy the worker</h3>
+        <p class="text-soil-700 leading-relaxed mb-6">
+          Use a prompt like this. Replace the repository path with the actual path on your machine if needed.
+        </p>
+        <CodeBlock code={agentPrompt} lang="text" title="agent prompt" />
+        <p class="mt-4 text-sm text-soil-600 leading-relaxed">
+          If you want to skip Fly.io, add this follow-up instruction:
+        </p>
+        <div class="mt-4">
+          <CodeBlock code={localAgentPrompt} lang="text" title="local prompt" />
+        </div>
+
+        <h3 class="text-xl font-bold text-soil-900 mt-10 mb-3">Attach the deployed worker</h3>
+        <p class="text-soil-700 leading-relaxed mb-6">
+          When the agent finishes, the generated project should give you the hosted Fly.io URL and the exact <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">ATTACH</code> statement. Open Haybarn, install and load VGI if you have not already, then run that attach statement.
+        </p>
+        <CodeBlock code={attachNycWorker} lang="sql" title="Haybarn shell" />
+
+        <h3 class="text-xl font-bold text-soil-900 mt-10 mb-3">Ask a useful question</h3>
+        <p class="text-soil-700 leading-relaxed mb-6">
+          Now the DOF dataset behaves like a SQL table. This query looks for neighborhoods that are still under $1M median sale price but have grown quickly over five years.
+        </p>
+        <CodeBlock code={nycGrowthResult} lang="text" title="result" />
+        <p class="mt-4 text-soil-700 leading-relaxed">
+          In plain English: among homes under $1M in this result, Kew Gardens is growing the fastest, followed by Rockaway Park and Holliswood.
+        </p>
+        <details class="mt-6 rounded-lg border border-soil-200 bg-white p-4">
+          <summary class="cursor-pointer font-semibold text-soil-900">Show the SQL</summary>
+          <div class="mt-4">
+            <CodeBlock code={nycGrowthQuery} lang="sql" title="Haybarn shell" />
+          </div>
+        </details>
+
+        <h3 class="text-xl font-bold text-soil-900 mt-10 mb-3">Join it with another VGI worker</h3>
+        <p class="text-soil-700 leading-relaxed mb-6">
+          The important part is that workers compose. You can attach another worker in the same session, whether you wrote it or someone else published it, and query across both catalogs with SQL.
+        </p>
+        <CodeBlock code={attachSecondWorker} lang="sql" title="Haybarn shell" />
+        <p class="mt-8 text-soil-700 leading-relaxed mb-6">
+          This example joins NYC housing growth with global volcanic eruption counts by year. It is intentionally exploratory: the value is that both external services are now queryable together without building a bespoke data platform first.
+        </p>
+        <CodeBlock code={crossCatalogResult} lang="text" title="result" />
+        <p class="mt-4 text-soil-700 leading-relaxed">
+          In plain English: for this sample, 2023 had the highest volcano count in the joined range, and Kips Bay had the largest year-over-year housing jump among the returned rows.
+        </p>
+        <details class="mt-6 rounded-lg border border-soil-200 bg-white p-4">
+          <summary class="cursor-pointer font-semibold text-soil-900">Show the SQL</summary>
+          <div class="mt-4">
+            <CodeBlock code={crossCatalogQuery} lang="sql" title="Haybarn shell" />
+          </div>
+        </details>
+
+        <div class="mt-8 rounded-lg border border-duck-200 bg-white p-5 text-soil-700 leading-relaxed">
+          <h3 class="text-lg font-bold text-soil-900 mb-2">What is unique here?</h3>
+          <p>
+            VGI is not unique because it can fetch a public dataset or deploy code to Fly.io. The distinctive part is how quickly those pieces become usable SQL: a worker can wrap an API, dataset, service, or model; Haybarn can discover its schemas and attach it as a catalog; and DuckDB users can query and join multiple remote workers without hand-building connector plumbing, schema registration, or a full data platform first.
+          </p>
         </div>
       </div>
     </div>
   </section>
 
   <!-- Next steps -->
-  <section class="py-16 lg:py-24 bg-soil-50">
+  <section class="py-16 lg:py-24 bg-white">
     <div class="section-container">
       <SectionHeader
         align="center"
