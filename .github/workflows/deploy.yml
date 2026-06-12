@@ -1,0 +1,45 @@
+name: Deploy to Cloudflare Pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=query-farm-website --branch=${{ github.head_ref || github.ref_name }}
+
+      - name: Add deployment URL to summary
+        run: |
+          {
+            echo "### Cloudflare Pages deployment"
+            echo "- URL: ${{ steps.deploy.outputs.deployment-url }}"
+            echo "- Alias: ${{ steps.deploy.outputs.pages-deployment-alias-url }}"
+          } >> "$GITHUB_STEP_SUMMARY"
