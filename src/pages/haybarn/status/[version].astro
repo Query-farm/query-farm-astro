@@ -180,7 +180,13 @@ function formatRelative(iso?: string): string {
 }
 
 const engineRepo = data?.repos.find(r => r.label === 'Engine');
-const engineLatest = engineRepo?.runs?.[0] ?? null;
+// Prefer the engine Release build for the engine's status; fall back to the
+// most recent run. (`runs[0]` is just "most recent by start time", which can be
+// the extensions workflow rather than the engine build itself.)
+const engineLatest =
+  engineRepo?.runs?.find(r => /release/i.test(r.workflowName ?? '')) ??
+  engineRepo?.runs?.[0] ??
+  null;
 const engineCls = classifyRun(engineLatest);
 
 const coreExts = (data?.sidePanel?.core?.extensions ?? []).slice();
@@ -194,6 +200,25 @@ exts.sort((a, b) => a.name.localeCompare(b.name));
 const extCount     = data?.sidePanel?.community?.catalogSize ?? exts.length;
 const extAvailable = exts.filter(e => classifyAvailability(e) === 'available').length;
 const extUpstreamAvailable = exts.filter(e => e.upstream?.exists === true).length;
+
+// Upstream comparison is only meaningful when the status service actually
+// probed upstream DuckDB's CDN. Until that field is populated, hide the
+// upstream column / stats / divergence filter entirely rather than render
+// misleading zeros. When the service starts returning `upstream`, this flips
+// back on automatically.
+const anyUpstreamKnown = [...coreExts, ...exts].some(e => e.upstream != null);
+
+// Non-engine CI pipelines: language bindings/connectors (from `repos`) and the
+// core-extension build-forks (from `sidePanel.forks`). The Engine repo has its
+// own section, so it's excluded here.
+type PipelineRow = { label: string; slug: string; kind: 'binding' | 'build-fork'; run: Run | null };
+const pipelineRows: PipelineRow[] = [
+  ...(data?.repos ?? [])
+    .filter(r => r.label !== 'Engine')
+    .map(r => ({ label: r.label, slug: r.repo, kind: 'binding' as const, run: r.runs?.[0] ?? null })),
+  ...(data?.sidePanel?.forks ?? [])
+    .map(f => ({ label: f.label, slug: f.repo, kind: 'build-fork' as const, run: f.run ?? null })),
+];
 
 const SITE_ORIGIN = 'https://query.farm';
 const description = `Build status for Haybarn v${DUCKDB_VERSION} (${HAYBARN_TAG}) — engine, core extensions, connectors, and the community catalog, snapshotted from haybarn-status.query.farm at site-build time.`;
@@ -225,7 +250,7 @@ const jsonLd = [
   <HaybarnSubNav />
 
   <!-- Header -->
-  <section class="bg-gradient-to-br from-soil-50 via-earth-50 to-soil-100 py-12 lg:py-16">
+  <section class="bg-gradient-to-br from-harvest-100 via-harvest-50 to-white py-12 font-display lg:py-16">
     <div class="section-container">
       <div class="max-w-5xl mx-auto">
         <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
@@ -249,10 +274,12 @@ const jsonLd = [
               <div class="text-xs text-soil-500 uppercase tracking-wider">Community extensions available</div>
               <div class="text-3xl font-bold text-green-700 mt-1">
                 {extAvailable} <span class="text-base text-soil-500 font-normal">of {extCount}</span>
-                <span class="text-base text-soil-400 font-normal"> · upstream {extUpstreamAvailable}</span>
+                {anyUpstreamKnown && (
+                  <span class="text-base text-soil-400 font-normal"> · upstream {extUpstreamAvailable}</span>
+                )}
               </div>
               <div class="text-xs text-soil-500 mt-1">
-                shipped binary on Haybarn vs upstream DuckDB. <a href="#community" class="text-earth-700 hover:text-earth-800 underline">See the table →</a>
+                {anyUpstreamKnown ? 'shipped binary on Haybarn vs upstream DuckDB.' : 'signed binaries shipped on Haybarn’s community channel.'} <a href="#community" class="text-earth-700 hover:text-earth-800 underline">See the table →</a>
               </div>
             </div>
             <div class="bg-white border border-soil-200 rounded-xl px-5 py-4">
@@ -283,63 +310,113 @@ const jsonLd = [
 
   {data && (
     <>
-      <!-- 1. Engine, by platform -->
+      <!-- 1. Engine -->
       <section class="py-12 lg:py-16 bg-white">
         <div class="section-container">
           <div class="max-w-5xl mx-auto">
             <SectionHeader
               eyebrow="1. Engine"
-              title="Engine builds, by platform"
-              description="Haybarn ships the engine for each supported OS and architecture. The latest engine workflow run is reflected below — per-platform breakdown is coming with a status-service update."
+              title="Engine build"
+              description="Haybarn builds the DuckDB engine into its own branded CLI and libraries. The status below is the latest engine release workflow; the status service doesn't report per-platform job results yet, so the target platforms are listed separately rather than each given a (would-be identical) badge."
               class="mb-6"
             />
 
-            <div class="overflow-hidden rounded-xl border border-soil-200">
-              <table class="w-full text-sm">
-                <thead class="bg-soil-100 text-soil-900 text-left">
-                  <tr>
-                    <th class="px-4 py-3 font-semibold">Platform</th>
-                    <th class="px-4 py-3 font-semibold">Engine build</th>
-                    <th class="px-4 py-3 font-semibold">Last build</th>
-                    <th class="px-4 py-3 font-semibold text-right">Run</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-soil-200 bg-white">
-                  {ENGINE_PLATFORMS.map(p => (
-                    <tr>
-                      <td class="px-4 py-2 font-mono text-soil-900">{p}</td>
-                      <td class="px-4 py-2">
-                        <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${runBadgeClasses(engineCls)}`}>{runBadgeLabel(engineCls)}</span>
-                      </td>
-                      <td class="px-4 py-2 text-soil-600 text-xs">{formatRelative(engineLatest?.createdAt)}</td>
-                      <td class="px-4 py-2 text-right">
-                        {engineLatest?.htmlUrl ? (
-                          <a href={engineLatest.htmlUrl} class="text-earth-700 hover:text-earth-800 text-xs underline">GitHub →</a>
-                        ) : (
-                          <span class="text-xs text-soil-400">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div class="rounded-xl border border-soil-200 bg-white p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div class="flex items-center gap-3">
+                <span class={`inline-block px-3 py-1 rounded-full border text-sm font-mono ${runBadgeClasses(engineCls)}`}>{runBadgeLabel(engineCls)}</span>
+                <div class="text-sm text-soil-600">
+                  {engineLatest?.workflowName ? <><code class="font-mono">{engineLatest.workflowName}</code> · </> : null}
+                  last build {formatRelative(engineLatest?.createdAt)}
+                </div>
+              </div>
+              {engineLatest?.htmlUrl ? (
+                <a href={engineLatest.htmlUrl} class="text-earth-700 hover:text-earth-800 text-sm underline">View run on GitHub →</a>
+              ) : (
+                <span class="text-sm text-soil-400">no run recorded</span>
+              )}
+            </div>
+
+            <div class="mt-5">
+              <div class="text-xs text-soil-500 uppercase tracking-wider mb-2">Target platforms</div>
+              <div class="flex flex-wrap gap-2">
+                {ENGINE_PLATFORMS.map(p => (
+                  <span class="inline-block px-2.5 py-1 rounded-full border border-soil-200 bg-soil-50 text-xs font-mono text-soil-700">{p}</span>
+                ))}
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- 2. Core extensions — unified table, mirrors community shape -->
+      <!-- 2. Bindings, connectors & build-forks -->
       <section class="py-12 lg:py-16 bg-soil-50">
         <div class="section-container">
           <div class="max-w-5xl mx-auto">
             <SectionHeader
-              eyebrow="2. Core extensions"
+              eyebrow="2. Build pipelines"
+              title="Bindings, connectors & build-forks"
+              description="CI status for the language bindings and connectors Haybarn ships, plus the core-extension build-forks that feed the release. Components with no recorded run are repos that haven't started building yet."
+              class="mb-6"
+            />
+
+            {pipelineRows.length > 0 ? (
+              <div class="overflow-hidden rounded-xl border border-soil-200">
+                <table class="w-full text-sm">
+                  <thead class="bg-soil-100 text-soil-900 text-left">
+                    <tr>
+                      <th class="px-4 py-3 font-semibold">Component</th>
+                      <th class="px-4 py-3 font-semibold">Type</th>
+                      <th class="px-4 py-3 font-semibold">Build</th>
+                      <th class="px-4 py-3 font-semibold">Last build</th>
+                      <th class="px-4 py-3 font-semibold text-right">Run</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-soil-200 bg-white">
+                    {pipelineRows.map(row => {
+                      const cls = classifyRun(row.run);
+                      return (
+                        <tr>
+                          <td class="px-4 py-2 align-top">
+                            <div class="font-semibold text-soil-900">{row.label}</div>
+                            <div class="text-xs text-soil-500 font-mono">{row.slug}</div>
+                          </td>
+                          <td class="px-4 py-2 align-top text-xs text-soil-600 font-mono">{row.kind}</td>
+                          <td class="px-4 py-2 align-top">
+                            <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${runBadgeClasses(cls)}`}>{runBadgeLabel(cls)}</span>
+                          </td>
+                          <td class="px-4 py-2 text-soil-600 text-xs align-top">{formatRelative(row.run?.createdAt)}</td>
+                          <td class="px-4 py-2 text-right align-top">
+                            {row.run?.htmlUrl ? (
+                              <a href={row.run.htmlUrl} class="text-earth-700 hover:text-earth-800 text-xs underline">GitHub →</a>
+                            ) : (
+                              <span class="text-xs text-soil-400">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p class="text-sm text-soil-500">No binding or connector pipelines reported for this tag.</p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Core extensions — unified table, mirrors community shape -->
+      <section class="py-12 lg:py-16 bg-white">
+        <div class="section-container">
+          <div class="max-w-5xl mx-auto">
+            <SectionHeader
+              eyebrow="3. Core extensions"
               title="Shipped on Haybarn's core channel"
-              description="The extensions Haybarn builds and serves from haybarn-extensions.query.farm/core. Layer notes whether each ships in-tree with the engine, carries a Haybarn build-fork patch, or is rebuilt from upstream unchanged. PyPI and npm packaging is community-first today — those columns will fill in as the core rollout lands."
+              description="The extensions Haybarn builds and serves from haybarn-extensions.query.farm/core. Layer notes whether each ships in-tree with the engine, carries a Haybarn build-fork patch, or is rebuilt from upstream unchanged. Each is published as a signed npm package; PyPI packaging is still rolling out."
               class="mb-4"
             />
             <p class="text-xs text-soil-500 mb-4">
-              <span class="font-semibold text-soil-700">{coreAvailable} of {coreExts.length}</span> on Haybarn · <span class="font-semibold text-soil-700">{coreUpstreamAvailable} of {coreExts.length}</span> on upstream for v{DUCKDB_VERSION}.
+              <span class="font-semibold text-soil-700">{coreAvailable} of {coreExts.length}</span> on Haybarn{anyUpstreamKnown && <> · <span class="font-semibold text-soil-700">{coreUpstreamAvailable} of {coreExts.length}</span> on upstream for v{DUCKDB_VERSION}</>}.
             </p>
 
             <div class="overflow-hidden rounded-xl border border-soil-200">
@@ -350,7 +427,7 @@ const jsonLd = [
                     <th class="px-4 py-3 font-semibold">Layer</th>
                     <th class="px-4 py-3 font-semibold">Version</th>
                     <th class="px-4 py-3 font-semibold">Haybarn</th>
-                    <th class="px-4 py-3 font-semibold">Upstream</th>
+                    {anyUpstreamKnown && <th class="px-4 py-3 font-semibold">Upstream</th>}
                     <th class="px-4 py-3 font-semibold">Last update</th>
                     <th class="px-4 py-3 font-semibold text-right">Links</th>
                   </tr>
@@ -394,11 +471,13 @@ const jsonLd = [
                         <td class="px-4 py-2 align-top">
                           <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${availBadgeClasses(avail)}`}>{availBadgeLabel(avail)}</span>
                         </td>
-                        <td class="px-4 py-2 align-top">
-                          {(() => { const b = upstreamBadge(e.upstream); return (
-                            <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${b.cls}`} title={b.title}>{b.label}</span>
-                          ); })()}
-                        </td>
+                        {anyUpstreamKnown && (
+                          <td class="px-4 py-2 align-top">
+                            {(() => { const b = upstreamBadge(e.upstream); return (
+                              <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${b.cls}`} title={b.title}>{b.label}</span>
+                            ); })()}
+                          </td>
+                        )}
                         <td class="px-4 py-2 text-soil-600 text-xs align-top">{formatRelative(updatedAt)}</td>
                         <td class="px-4 py-2 text-right align-top">
                           <div class="inline-flex items-center gap-2">
@@ -434,19 +513,21 @@ const jsonLd = [
         </div>
       </section>
 
-      <!-- 3. Community extensions -->
-      <section id="community" class="py-12 lg:py-16 bg-white">
+      <!-- 4. Community extensions -->
+      <section id="community" class="py-12 lg:py-16 bg-soil-50">
         <div class="section-container">
           <div class="max-w-5xl mx-auto">
             <SectionHeader
-              eyebrow="3. Community extensions"
+              eyebrow="4. Community extensions"
               title="Mirrored from duckdb/community-extensions"
-              description="Haybarn rebuilds every extension upstream lists. Each row shows whether the binary is currently available on Haybarn and on upstream DuckDB's CDN — if both are unavailable for an extension, it's usually waiting on an upstream change for the new DuckDB version, the same situation those users face on DuckDB itself."
+              description={anyUpstreamKnown
+                ? "Haybarn rebuilds every extension upstream lists. Each row shows whether the binary is currently available on Haybarn and on upstream DuckDB's CDN — if both are unavailable for an extension, it's usually waiting on an upstream change for the new DuckDB version, the same situation those users face on DuckDB itself."
+                : "Haybarn rebuilds every extension upstream lists and signs the result for the Haybarn engine. Each row shows whether the binary is currently available on Haybarn's community channel for this version."}
               class="mb-6"
             />
 
             <p class="text-sm text-soil-600 mb-6">
-              Haybarn's catalog has <span class="font-semibold text-soil-900">{extCount}</span> extensions — the same set as <a href="https://github.com/duckdb/community-extensions" class="text-earth-700 underline hover:text-earth-800"><code class="font-mono">duckdb/community-extensions</code></a>. <span class="font-semibold text-soil-900">{extAvailable}</span> built and signed for Haybarn · <span class="font-semibold text-soil-900">{extUpstreamAvailable}</span> shipped by upstream for v{DUCKDB_VERSION}.
+              Haybarn's catalog has <span class="font-semibold text-soil-900">{extCount}</span> extensions — the same set as <a href="https://github.com/duckdb/community-extensions" class="text-earth-700 underline hover:text-earth-800"><code class="font-mono">duckdb/community-extensions</code></a>. <span class="font-semibold text-soil-900">{extAvailable}</span> built and signed for Haybarn{anyUpstreamKnown && <> · <span class="font-semibold text-soil-900">{extUpstreamAvailable}</span> shipped by upstream for v{DUCKDB_VERSION}</>}.
             </p>
 
             <div class="flex items-center justify-between gap-4 mb-4 flex-wrap">
@@ -454,14 +535,16 @@ const jsonLd = [
                 Showing <span id="community-visible-count" class="font-semibold text-soil-900">—</span> of <span class="font-semibold text-soil-900">{extCount}</span> extensions
                 <span id="community-filter-label" class="text-soil-500"></span>
               </p>
-              <label class="inline-flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  id="community-only-divergent"
-                  type="checkbox"
-                  class="w-4 h-4 rounded border-soil-300 text-earth-600 focus:ring-earth-500"
-                />
-                <span class="text-sm text-soil-700">Only show where Haybarn and upstream differ</span>
-              </label>
+              {anyUpstreamKnown && (
+                <label class="inline-flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    id="community-only-divergent"
+                    type="checkbox"
+                    class="w-4 h-4 rounded border-soil-300 text-earth-600 focus:ring-earth-500"
+                  />
+                  <span class="text-sm text-soil-700">Only show where Haybarn and upstream differ</span>
+                </label>
+              )}
             </div>
 
             <div class="overflow-hidden rounded-xl border border-soil-200">
@@ -471,7 +554,7 @@ const jsonLd = [
                     <th class="px-4 py-3 font-semibold">Extension</th>
                     <th class="px-4 py-3 font-semibold">Version</th>
                     <th class="px-4 py-3 font-semibold">Haybarn</th>
-                    <th class="px-4 py-3 font-semibold">Upstream</th>
+                    {anyUpstreamKnown && <th class="px-4 py-3 font-semibold">Upstream</th>}
                     <th class="px-4 py-3 font-semibold">Last update</th>
                     <th class="px-4 py-3 font-semibold text-right">Links</th>
                   </tr>
@@ -527,11 +610,13 @@ const jsonLd = [
                         <td class="px-4 py-2 align-top">
                           <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${availBadgeClasses(avail)}`}>{availBadgeLabel(avail)}</span>
                         </td>
-                        <td class="px-4 py-2 align-top">
-                          {(() => { const b = upstreamBadge(e.upstream); return (
-                            <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${b.cls}`} title={b.title}>{b.label}</span>
-                          ); })()}
-                        </td>
+                        {anyUpstreamKnown && (
+                          <td class="px-4 py-2 align-top">
+                            {(() => { const b = upstreamBadge(e.upstream); return (
+                              <span class={`inline-block px-2 py-0.5 rounded-full border text-xs font-mono ${b.cls}`} title={b.title}>{b.label}</span>
+                            ); })()}
+                          </td>
+                        )}
                         <td class="px-4 py-2 text-soil-600 text-xs align-top">{formatRelative(updatedAt)}</td>
                         <td class="px-4 py-2 text-right align-top">
                           <div class="inline-flex items-center gap-2">
@@ -590,16 +675,18 @@ const jsonLd = [
 
 <script>
   function setupCommunityFilter() {
-    const cb = document.getElementById('community-only-divergent') as HTMLInputElement | null;
     const tbody = document.getElementById('community-tbody');
+    if (!tbody) return;
+    // The divergence checkbox only exists when upstream data is available.
+    // Without it, we still populate the visible count (showing every row).
+    const cb = document.getElementById('community-only-divergent') as HTMLInputElement | null;
     const countEl = document.getElementById('community-visible-count');
     const labelEl = document.getElementById('community-filter-label');
-    if (!cb || !tbody) return;
 
     const rows = Array.from(tbody.querySelectorAll<HTMLTableRowElement>('tr[data-avail]'));
 
     function update() {
-      const onlyDivergent = cb!.checked;
+      const onlyDivergent = cb?.checked ?? false;
       let visible = 0;
       for (const row of rows) {
         // Default: show every row so the breadth of success is visible.
@@ -615,7 +702,7 @@ const jsonLd = [
         : '';
     }
 
-    cb.addEventListener('change', update);
+    cb?.addEventListener('change', update);
     update();
   }
 
