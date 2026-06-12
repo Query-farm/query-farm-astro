@@ -1,0 +1,269 @@
+---
+import PageLayout from '../../layouts/PageLayout.astro';
+import SectionHeader from '../../components/ui/SectionHeader.astro';
+import Button from '../../components/ui/Button.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import HaybarnSubNav from '../../components/sections/HaybarnSubNav.astro';
+import { LATEST_STATUS_URL } from '../../data/haybarn-versions';
+
+const HAYBARN_REPO = 'https://github.com/Query-farm-haybarn/haybarn';
+const RELEASES_URL = `${HAYBARN_REPO}/releases`;
+const RELEASE_KEY_URL = `${HAYBARN_REPO}/blob/main/HAYBARN/haybarn_release_signing.pub`;
+const RELEASE_FINGERPRINT = 'AC21 147B 0BAB F694 1225  ECBE C415 9506 8F3F 6537';
+
+const attestCmd = `# Verify GitHub's SLSA build-provenance for any release artifact
+gh attestation verify haybarn_cli-linux-amd64.zip \\
+  --repo Query-farm-haybarn/haybarn`;
+
+const gpgCmd = `# Import Haybarn's release signing key (GPG, RSA-4096)
+#   fingerprint AC21 147B 0BAB F694 1225  ECBE C415 9506 8F3F 6537
+gpg --import haybarn_release_signing.pub
+
+# Confirm the checksums file is signed by that key
+gpg --verify SHA256SUMS.asc SHA256SUMS
+
+# Then check your download against the checksums
+sha256sum -c SHA256SUMS`;
+
+const SITE_ORIGIN = 'https://query.farm';
+const description = 'Every Haybarn release artifact ships with checksums, a detached GPG signature, and SLSA build-provenance attestations, hosted as immutable per-version artifacts. Extensions are signed with a single Haybarn key and the default catalog leaves third-party vendor code opt-in.';
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'TechArticle',
+    headline: 'Haybarn security & supply chain',
+    description,
+    url: `${SITE_ORIGIN}/haybarn/security`,
+    author: { '@type': 'Organization', name: 'Query.Farm', url: SITE_ORIGIN },
+    publisher: { '@type': 'Organization', name: 'Query.Farm', url: SITE_ORIGIN },
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Home', item: SITE_ORIGIN + '/' },
+      { '@type': 'ListItem', position: 2, name: 'Haybarn', item: SITE_ORIGIN + '/haybarn' },
+      { '@type': 'ListItem', position: 3, name: 'Security & supply chain', item: SITE_ORIGIN + '/haybarn/security' },
+    ],
+  },
+];
+
+const integrity = [
+  {
+    title: 'SLSA build provenance',
+    body: 'Every release artifact carries a GitHub-signed provenance attestation that binds the binary to the exact workflow, repo, and commit that produced it. Verify it with one command — no Haybarn-side trust required.',
+  },
+  {
+    title: 'Checksums + detached signature',
+    body: 'Each release ships SHA256SUMS listing every artifact, plus SHA256SUMS.asc — a detached GPG signature of that file from the Haybarn release key.',
+  },
+  {
+    title: 'Registry provenance',
+    body: 'npm packages are published with provenance, and PyPI publishes carry PEP 740 attestations — so the same supply-chain trail follows the package channels, not just GitHub Releases.',
+  },
+  {
+    title: 'Immutable hosting',
+    body: 'Extensions are served from Cloudflare R2, where every deployed artifact lives at an immutable URL keyed by version and git sha. Nothing is overwritten in place.',
+  },
+];
+---
+
+<PageLayout
+  title="Haybarn security & supply chain"
+  description={description}
+  jsonLd={jsonLd}
+>
+  <HaybarnSubNav />
+
+  <!-- Hero -->
+  <section class="bg-gradient-to-br from-harvest-100 via-harvest-50 to-white py-12 font-display lg:py-20">
+    <div class="section-container">
+      <div class="max-w-3xl mx-auto text-center">
+        <div class="mb-5 inline-flex items-center gap-2 rounded-full border-2 border-soil-900 bg-white px-4 py-2 text-sm font-bold text-soil-900 shadow-sm">
+          <span class="h-2 w-2 rounded-full bg-grain-500"></span>
+          Signed · attested · reproducible
+        </div>
+        <SectionHeader
+          align="center"
+          eyebrow="Security & supply chain"
+          title="Artifacts your team can verify"
+          description="This is why Haybarn exists. Every binary ships with checksums, a signature, and build provenance, hosted immutably — so a security team has something concrete to review before DuckDB goes into production."
+        />
+      </div>
+    </div>
+  </section>
+
+  <!-- Trust model: two keys -->
+  <section class="py-16 lg:py-24 bg-white font-display">
+    <div class="section-container">
+      <div class="max-w-5xl mx-auto">
+        <SectionHeader
+          eyebrow="Trust model"
+          title="Two signing keys, both Haybarn's"
+          description="Haybarn controls its own trust roots end to end — one key for releases, one for extensions. Neither is shared with upstream DuckDB."
+          class="mb-8"
+        />
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="rounded-2xl border-2 border-soil-900 bg-grain-50 p-6 shadow-sm">
+            <h3 class="text-lg font-bold text-soil-900 mb-2">Release signing key</h3>
+            <p class="text-sm leading-relaxed text-soil-700 mb-4">
+              A GPG RSA-4096 key signs the <code class="font-mono text-earth-700">SHA256SUMS</code> file on every GitHub Release. Import it once and you can verify every artifact you download.
+            </p>
+            <div class="rounded-lg border border-soil-200 bg-white px-3 py-2">
+              <p class="text-[10px] font-bold uppercase tracking-wider text-soil-500">Fingerprint</p>
+              <p class="font-mono text-xs text-earth-700 break-all">{RELEASE_FINGERPRINT}</p>
+            </div>
+            <a href={RELEASE_KEY_URL} target="_blank" rel="noopener" class="mt-3 inline-block text-sm text-earth-700 underline hover:text-earth-800">Public key →</a>
+          </div>
+          <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
+            <h3 class="text-lg font-bold text-soil-900 mb-2">Extension signing key</h3>
+            <p class="text-sm leading-relaxed text-soil-700 mb-4">
+              A single Haybarn RSA key is embedded in the engine and signs every <code class="font-mono text-earth-700">.duckdb_extension</code> binary. The trust root is deliberately disjoint from DuckDB's.
+            </p>
+            <ul class="space-y-2 text-sm text-soil-700">
+              <li>• Only Haybarn-signed extensions load on the Haybarn engine.</li>
+              <li>• DuckDB-signed extensions will not load — and vice versa.</li>
+              <li>• Haybarn rebuilds and re-signs the whole community catalog with this key.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Provenance & integrity -->
+  <section class="py-16 lg:py-24 bg-soil-50 font-display">
+    <div class="section-container">
+      <div class="max-w-5xl mx-auto">
+        <SectionHeader
+          eyebrow="Provenance & integrity"
+          title="Four ways to confirm a binary is what it claims"
+          class="mb-8"
+        />
+        <div class="grid gap-4 md:grid-cols-2">
+          {integrity.map(item => (
+            <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
+              <h3 class="text-base font-bold text-soil-900 mb-2">{item.title}</h3>
+              <p class="text-sm leading-relaxed text-soil-700">{item.body}</p>
+            </div>
+          ))}
+        </div>
+
+        <div class="mt-6 rounded-xl border-2 border-soil-900 bg-grain-100 p-5">
+          <p class="text-sm font-bold uppercase tracking-wider text-harvest-700">Not yet</p>
+          <p class="mt-2 text-sm text-soil-800 leading-relaxed">
+            OS-native code signing (Apple Developer ID, Windows Authenticode) is not yet wired up. Integrity today comes from checksums, the GPG signature, and the build-provenance attestations above.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Verify it yourself -->
+  <section class="py-16 lg:py-24 bg-white font-display">
+    <div class="section-container">
+      <div class="max-w-3xl mx-auto">
+        <SectionHeader
+          eyebrow="Verify it yourself"
+          title="Two commands, end to end"
+          description="Nothing here trusts query.farm at runtime — you check GitHub's provenance and a GPG signature you import once."
+          class="mb-8"
+        />
+        <div class="space-y-8">
+          <div>
+            <h3 class="text-sm font-semibold text-soil-900 uppercase tracking-wider mb-3">Build provenance</h3>
+            <CodeBlock code={attestCmd} lang="bash" title="verify-provenance.sh" />
+          </div>
+          <div>
+            <h3 class="text-sm font-semibold text-soil-900 uppercase tracking-wider mb-3">Checksums + signature</h3>
+            <CodeBlock code={gpgCmd} lang="bash" title="verify-release.sh" />
+          </div>
+        </div>
+        <p class="text-sm text-soil-600 mt-6 leading-relaxed">
+          Download artifacts from <a href={RELEASES_URL} target="_blank" rel="noopener" class="text-earth-700 underline hover:text-earth-800">GitHub Releases</a>, and see which extensions are built and signed for the current engine on the <a href={LATEST_STATUS_URL} class="text-earth-700 underline hover:text-earth-800">status page</a>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Curated catalog -->
+  <section class="py-16 lg:py-24 bg-soil-50 font-display">
+    <div class="section-container">
+      <div class="max-w-5xl mx-auto">
+        <SectionHeader
+          eyebrow="Safer defaults"
+          title="A curated catalog, vendor code opt-in"
+          description="Supply-chain risk isn't only about signatures — it's about what runs without you asking. Haybarn's default catalog is the open-source set DuckDB's own CI builds, with third-party vendor extensions left out of the default install and autoload path."
+          class="mb-8"
+        />
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
+            <h3 class="text-base font-bold text-soil-900 mb-2">Autoload stays narrow</h3>
+            <p class="text-sm leading-relaxed text-soil-700">
+              A query referencing an extension won't silently pull in third-party vendor code — Haybarn's autoloadable list excludes it (motherduck is explicitly removed, with the rationale documented in source). You can still configure any extension yourself; it's just not on the default path.
+            </p>
+          </div>
+          <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
+            <h3 class="text-base font-bold text-soil-900 mb-2">Everything re-signed</h3>
+            <p class="text-sm leading-relaxed text-soil-700">
+              The community catalog is rebuilt against the Haybarn engine and re-signed with the Haybarn key — the disjoint trust root is what makes the curation enforceable, not just advisory.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Reproducible by construction -->
+  <section class="py-16 lg:py-24 bg-white font-display">
+    <div class="section-container">
+      <div class="max-w-5xl mx-auto">
+        <SectionHeader
+          eyebrow="Auditable by construction"
+          title="A small, reviewable delta from DuckDB"
+          description="Haybarn is a hard fork kept as a small, curated commit stack on top of an upstream DuckDB release tag — so the difference from the engine you already trust is easy to read."
+          class="mb-8"
+        />
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="rounded-2xl border-2 border-soil-900 bg-grain-50 p-6 shadow-sm">
+            <h3 class="text-base font-bold text-soil-900 mb-2">Curated commit stack</h3>
+            <p class="text-sm leading-relaxed text-soil-700">
+              Haybarn's changes are branding, signing keys, repository URLs, and CI — a short stack on top of the upstream tag, not scattered edits. The engine source, SQL, and file format are unchanged.
+            </p>
+          </div>
+          <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
+            <h3 class="text-base font-bold text-soil-900 mb-2">SHA-pinned builds</h3>
+            <p class="text-sm leading-relaxed text-soil-700">
+              Extension build-forks are pinned by 40-character commit SHA, not a moving branch — every build is explicit about exactly what source went into it.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Consulting CTA -->
+  <section class="py-16 lg:py-24 bg-white font-display">
+    <div class="section-container">
+      <div class="mx-auto grid max-w-6xl grid-cols-1 gap-8 rounded-2xl border-2 border-soil-900 bg-grain-50 p-6 shadow-lg md:p-8 lg:grid-cols-[1fr_auto] lg:items-center">
+        <div>
+          <p class="mb-3 text-sm font-semibold uppercase tracking-wider text-harvest-700">Expert help</p>
+          <h2 class="mb-4 text-3xl font-bold text-soil-900 md:text-4xl">
+            Reviewing Haybarn for production?
+          </h2>
+          <p class="text-lg leading-relaxed text-soil-700">
+            We help security and platform teams with supply-chain review, private signing keys, internal mirrors, and custom trust roots.
+          </p>
+        </div>
+        <div class="flex flex-col gap-3 sm:flex-row lg:flex-col">
+          <Button href="/consulting" variant="primary" size="md">
+            Consulting
+          </Button>
+          <Button href="/company/schedule" variant="secondary" size="md">
+            Schedule a call
+          </Button>
+        </div>
+      </div>
+    </div>
+  </section>
+</PageLayout>
