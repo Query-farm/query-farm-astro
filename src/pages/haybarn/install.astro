@@ -1,11 +1,9 @@
 ---
 import PageLayout from '../../layouts/PageLayout.astro';
 import SectionHeader from '../../components/ui/SectionHeader.astro';
-import Card from '../../components/ui/Card.astro';
 import Button from '../../components/ui/Button.astro';
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 import HaybarnSubNav from '../../components/sections/HaybarnSubNav.astro';
-import { Icon } from 'astro-icon/components';
 import { LATEST_STATUS_URL, LATEST_RC, LATEST_RC_PYPI, LATEST_DUCKDB_VERSION } from '../../data/haybarn-versions';
 
 const HAYBARN_RC = LATEST_RC;
@@ -13,17 +11,61 @@ const HAYBARN_RC_PYPI = LATEST_RC_PYPI;
 const RELEASES_URL = 'https://github.com/Query-farm-haybarn/haybarn/releases';
 const STATUS_URL = 'https://haybarn-status.query.farm';
 
-const platforms = [
-  { os: 'Linux',   icon: 'simple-icons:linux',        archs: ['amd64 (glibc)', 'arm64 (glibc)', 'amd64 (musl)', 'arm64 (musl)'] },
-  { os: 'macOS',   icon: 'simple-icons:apple',        archs: ['universal (arm64 + x86_64)', 'arm64', 'amd64'] },
-  { os: 'Windows', icon: 'simple-icons:windows',      archs: ['amd64'] }
-];
-
 const verifyCmd = `gh attestation verify haybarn_cli-linux-amd64.zip \\
   --repo Query-farm-haybarn/haybarn`;
 
+const npmStart = `# Start Haybarn
+npx haybarn@rc
+
+# Or run one query and exit
+npx haybarn@rc -c "SELECT version();"`;
+
+const pypiStart = `# Start Haybarn
+uvx haybarn-cli==${HAYBARN_RC_PYPI}
+
+# Or run one query and exit
+uvx haybarn-cli==${HAYBARN_RC_PYPI} -c "SELECT version();"`;
+
+const haybarnShell = `-- Run this after Haybarn opens at the memory H prompt.
+SELECT 42 AS answer;
+
+-- Try h3, a community extension for H3 geospatial indexing.
+INSTALL h3 FROM community;
+LOAD h3;
+
+SELECT h3_latlng_to_cell(37.7887, -122.3931, 9);`;
+
+// What Haybarn produces and where to get it. Status reflects current
+// availability — "in progress" / "planned" items are wired in CI but not yet
+// published for general install.
+const ships = [
+  { artifact: 'CLI', name: 'haybarn', channel: 'npm · PyPI · GitHub Releases', status: 'Available' },
+  { artifact: 'Shared library', name: 'libhaybarn.{so,dylib,dll}', channel: 'GitHub Releases', status: 'Available' },
+  { artifact: 'Static library', name: 'libhaybarn_static.a', channel: 'GitHub Releases', status: 'Available' },
+  { artifact: 'Core extensions', name: 'Haybarn-signed', channel: 'Haybarn channel · npm', status: 'Available' },
+  { artifact: 'Community extensions', name: 'rebuilt & signed', channel: 'Haybarn channel · npm', status: 'Available' },
+  { artifact: 'Python library', name: 'haybarn', channel: 'PyPI', status: 'In progress' },
+  { artifact: 'Node bindings', name: '@haybarn/node-neo', channel: 'npm', status: 'Planned' },
+  { artifact: 'JDBC driver', name: 'haybarn-jdbc', channel: 'Maven', status: 'Planned' },
+  { artifact: 'WebAssembly', name: 'haybarn-wasm', channel: 'tracked on status', status: 'In development' },
+];
+function shipStatusClass(s: string): string {
+  switch (s) {
+    case 'Available': return 'bg-green-100 text-green-800 ring-green-300';
+    case 'Planned':   return 'bg-soil-100 text-soil-700 ring-soil-300';
+    default:          return 'bg-amber-100 text-amber-800 ring-amber-300';
+  }
+}
+
+// Engine / CLI build targets. Signed extensions additionally build for Wasm.
+const platforms = [
+  { os: 'Linux', arches: ['x86-64 · glibc', 'ARM64 · glibc', 'x86-64 · musl', 'ARM64 · musl'] },
+  { os: 'macOS', arches: ['Apple Silicon', 'Intel', 'Universal'] },
+  { os: 'Windows', arches: ['x86-64'] },
+];
+
 const SITE_ORIGIN = 'https://query.farm';
-const description = 'Install Haybarn via npx, uvx, pip, or direct GitHub Releases. Builds available for Linux, macOS, and Windows with SLSA build provenance.';
+const description = 'Install Haybarn through npm, PyPI, or GitHub Releases. Run the DuckDB-compatible CLI with reviewable release artifacts for Linux, macOS, and Windows.';
 const jsonLd = [
   {
     '@context': 'https://schema.org',
@@ -54,144 +96,166 @@ const jsonLd = [
   <HaybarnSubNav />
 
   <!-- Hero -->
-  <section class="bg-gradient-to-br from-soil-50 via-earth-50 to-soil-100 py-12 lg:py-20">
+  <section class="bg-gradient-to-br from-harvest-100 via-harvest-50 to-white py-12 font-display lg:py-20">
     <div class="section-container">
       <div class="max-w-3xl mx-auto text-center">
         <SectionHeader
           align="center"
           eyebrow="Install"
-          title="Get Haybarn running"
-          description={`Haybarn ${LATEST_DUCKDB_VERSION} is in release-candidate phase (current tag: v${HAYBARN_RC}). APIs and on-disk formats inherit from upstream DuckDB v${LATEST_DUCKDB_VERSION} and will not change between RCs.`}
+          title="Install Haybarn"
+          description={`Run the DuckDB-compatible CLI through npm, PyPI, or GitHub Releases. Same SQL and database files, with release artifacts your team can review.`}
         />
+        <div class="mt-6 inline-flex items-center gap-2 rounded-full border-2 border-soil-900 bg-white px-4 py-2 text-sm font-bold text-soil-900 shadow-sm">
+          <span class="h-2 w-2 rounded-full bg-grain-500"></span>
+          Haybarn v{HAYBARN_RC} · release candidate for DuckDB v{LATEST_DUCKDB_VERSION}
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- Install channels -->
+  <!-- Quickstart -->
   <section class="py-16 lg:py-24 bg-white">
     <div class="section-container">
-      <div class="max-w-4xl mx-auto space-y-12">
-
-        <!-- npm / npx -->
-        <div>
+      <div class="max-w-5xl mx-auto">
+        <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-lg md:p-8">
           <SectionHeader
-            eyebrow="Channel 1"
-            title="npm / npx — no install required"
-            description="The fastest way to try Haybarn. npx fetches and runs the CLI in one step."
+            eyebrow="Quickstart"
+            title="Run Haybarn without a global install"
+            description="Use npx or uvx to fetch and run the CLI temporarily, then try normal DuckDB SQL plus a rebuilt community extension."
             class="mb-6"
           />
-          <CodeBlock code="npx haybarn@rc" lang="bash" title="terminal" />
-          <p class="text-sm text-soil-600 mt-3">
-            Once <code class="font-mono text-earth-700">{LATEST_DUCKDB_VERSION}</code> ships final, drop the <code class="font-mono text-earth-700">@rc</code> tag and use <code class="font-mono text-earth-700">npx haybarn</code>.
-          </p>
-        </div>
-
-        <!-- uvx / pipx -->
-        <div>
-          <SectionHeader
-            eyebrow="Channel 2"
-            title="uvx / pipx — no install required"
-            description="If your team is on the Python toolchain, run the CLI directly with uv or pipx."
-            class="mb-6"
-          />
-          <CodeBlock code={`uvx haybarn-cli==${HAYBARN_RC_PYPI}\n# or\npipx run haybarn-cli==${HAYBARN_RC_PYPI}`} lang="bash" title="terminal" />
-          <p class="text-sm text-soil-600 mt-3">
-            <code class="font-mono text-earth-700">haybarn-cli</code> is published on PyPI on every RC release.
-          </p>
-        </div>
-
-        <!-- pip -->
-        <div>
-          <div class="flex items-center gap-3 mb-3">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-md bg-grain-100 text-grain-800 text-xs font-mono uppercase tracking-wider">Coming with {LATEST_DUCKDB_VERSION} final</span>
+          <div class="grid gap-6">
+            <CodeBlock code={npmStart} lang="bash" title="terminal · npm" />
+            <CodeBlock code={pypiStart} lang="bash" title="terminal · PyPI" />
+            <CodeBlock code={haybarnShell} lang="sql" title="Haybarn shell" />
           </div>
-          <SectionHeader
-            eyebrow="Channel 3"
-            title="pip — the Python library"
-            description="Drop-in compatible with the DuckDB Python API: import haybarn as duckdb. The library wheels are built on a 20-leg matrix and finishing their publish pipeline."
-            class="mb-6"
-          />
-          <CodeBlock code={`# Once published:\npip install haybarn\n\n# then in Python:\nimport haybarn as duckdb\nduckdb.sql("SELECT 42").show()`} lang="bash" title="terminal" />
-          <p class="text-sm text-soil-600 mt-3">
-            The CLI (<code class="font-mono text-earth-700">haybarn-cli</code>) is live on PyPI today — use Channel 2 (<code class="font-mono text-earth-700">uvx</code>) until the library wheel lands.
+          <p class="mt-4 text-sm leading-relaxed text-soil-600">
+            On the first <code class="font-mono text-earth-700">npx</code> run, npm may ask for permission to fetch <code class="font-mono text-earth-700">haybarn@rc</code>. After Haybarn starts, run SQL at the <code class="font-mono text-earth-700">memory H</code> prompt.
+          </p>
+          <p class="mt-5 text-sm leading-relaxed text-soil-600">
+            Once <code class="font-mono text-earth-700">{LATEST_DUCKDB_VERSION}</code> ships final, drop the <code class="font-mono text-earth-700">@rc</code> and pinned RC suffixes.
           </p>
         </div>
 
-        <!-- GitHub Releases -->
-        <div>
+        <div class="mt-10">
           <SectionHeader
-            eyebrow="Channel 4"
-            title="GitHub Releases — direct download"
-            description="Grab the CLI, shared library, or static library for your platform from GitHub. Every artifact ships with SHA256 checksums, a GPG signature, and SLSA build provenance."
-            class="mb-6"
+            align="center"
+            eyebrow="Install paths"
+            title="Choose the path that fits your workflow"
+            class="mb-8"
           />
-          <div class="space-y-3">
-            <Button href={RELEASES_URL} variant="primary" size="md">
-              Browse Haybarn Releases on GitHub →
-            </Button>
+          <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {[
+              ['npm / npx', '', 'Best for Node-oriented teams and quick CLI trials.', 'npx haybarn@rc', 'code'],
+              ['uvx', '', 'Best for Python-oriented teams that want a temporary CLI runner.', `uvx haybarn-cli==${HAYBARN_RC_PYPI}`, 'code'],
+              ['Direct downloads', '', 'Download the CLI, shared library, or static library for your platform from GitHub Releases.', RELEASES_URL, 'link'],
+              ['Python library', 'Coming soon', 'Drop-in compatible with the DuckDB Python API once the library publish pipeline is live.', 'import haybarn as duckdb', 'code'],
+            ].map(([title, badge, copy, value, kind]) => (
+              <div class="rounded-xl border-2 border-soil-900 bg-grain-50 p-5 shadow-sm">
+                <div class="flex items-center gap-2">
+                  <h3 class="font-bold text-soil-900">{title}</h3>
+                  {badge && (
+                    <span class="rounded-md bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-harvest-700 ring-1 ring-soil-200">
+                      {badge}
+                    </span>
+                  )}
+                </div>
+                <p class="mt-2 text-sm leading-relaxed text-soil-700">{copy}</p>
+                {kind === 'link' ? (
+                  <div class="group relative mt-4 inline-flex">
+                    <a href={value} class="inline-flex rounded-lg border border-soil-900 bg-white px-3 py-2 text-xs font-bold text-soil-900 transition-colors hover:bg-grain-100">
+                      Open GitHub Releases
+                    </a>
+                    <div class="pointer-events-none absolute left-0 top-full z-20 mt-2 w-64 rounded-lg border border-soil-900 bg-white p-3 text-xs leading-relaxed text-soil-700 opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                      Download the artifact for your platform, unzip it, then run the <code class="font-mono text-earth-700">haybarn</code> binary.
+                    </div>
+                  </div>
+                ) : (
+                  <p class="mt-4 rounded-lg border border-soil-200 bg-white px-3 py-2 font-mono text-xs text-earth-700">{value}</p>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Platform matrix -->
-  <section class="py-16 lg:py-24 bg-soil-50">
+  <!-- What Haybarn ships -->
+  <section class="py-16 lg:py-24 bg-soil-50 font-display">
     <div class="section-container">
-      <SectionHeader
-        align="center"
-        eyebrow="Supported platforms"
-        title="Where Haybarn runs"
-        class="mb-10"
-      />
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
-        {platforms.map(p => (
-          <Card padding="lg" class="text-center">
-            <div class="flex items-center justify-center w-16 h-16 mx-auto mb-4 rounded-2xl bg-soil-100 text-soil-800">
-              <Icon name={p.icon} class="w-9 h-9" />
-            </div>
-            <h3 class="text-lg font-bold text-soil-900 mb-3">{p.os}</h3>
-            <ul class="space-y-1.5 text-sm text-soil-700">
-              {p.archs.map(a => (
-                <li class="font-mono text-xs bg-white border border-soil-200 rounded px-2 py-0.5 inline-block mx-0.5">{a}</li>
+      <div class="max-w-5xl mx-auto">
+        <SectionHeader
+          align="center"
+          eyebrow="What you get"
+          title="Everything Haybarn ships"
+          description="The CLI, libraries, and signed extensions are available today. Language bindings are rolling out — track them on the status page."
+          class="mb-8"
+        />
+        <div class="overflow-hidden rounded-2xl border-2 border-soil-900 shadow-sm">
+          <table class="w-full text-sm bg-white">
+            <thead class="bg-soil-100 text-soil-900 text-left">
+              <tr>
+                <th class="px-4 py-3 font-semibold">Artifact</th>
+                <th class="px-4 py-3 font-semibold">Name</th>
+                <th class="px-4 py-3 font-semibold">Where</th>
+                <th class="px-4 py-3 font-semibold text-right">Status</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-soil-200">
+              {ships.map(s => (
+                <tr>
+                  <td class="px-4 py-2.5 font-bold text-soil-900">{s.artifact}</td>
+                  <td class="px-4 py-2.5"><code class="font-mono text-xs text-earth-700">{s.name}</code></td>
+                  <td class="px-4 py-2.5 text-soil-600 text-xs">{s.channel}</td>
+                  <td class="px-4 py-2.5 text-right">
+                    <span class={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ${shipStatusClass(s.status)}`}>{s.status}</span>
+                  </td>
+                </tr>
               ))}
-            </ul>
-          </Card>
-        ))}
-      </div>
-      <div class="mt-10 max-w-4xl mx-auto grid sm:grid-cols-2 gap-4">
-        <Card padding="md" class="flex items-center gap-4">
-          <Icon name="simple-icons:python" class="w-8 h-8 text-soil-700 flex-shrink-0" />
-          <div>
-            <h4 class="text-sm font-semibold text-soil-900">Python wheels</h4>
-            <p class="text-xs text-soil-600 leading-snug">20-leg matrix · Python 3.10–3.14 across Linux (incl. ARM, musl), macOS, Windows.</p>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="mt-10">
+          <h3 class="text-sm font-bold uppercase tracking-wider text-soil-900 mb-4 text-center">Supported platforms</h3>
+          <div class="grid gap-4 sm:grid-cols-3 max-w-3xl mx-auto">
+            {platforms.map(p => (
+              <div class="rounded-xl border-2 border-soil-900 bg-white p-4 shadow-sm">
+                <p class="font-bold text-soil-900 mb-2">{p.os}</p>
+                <ul class="space-y-1">
+                  {p.arches.map(a => <li class="font-mono text-xs text-soil-700">{a}</li>)}
+                </ul>
+              </div>
+            ))}
           </div>
-        </Card>
-        <Card padding="md" class="flex items-center gap-4">
-          <Icon name="simple-icons:nodedotjs" class="w-8 h-8 text-soil-700 flex-shrink-0" />
-          <div>
-            <h4 class="text-sm font-semibold text-soil-900">Node bindings</h4>
-            <p class="text-xs text-soil-600 leading-snug">macOS (arm64 / x64), Linux (arm64 / x64, glibc + musl), Windows (arm64 / x64).</p>
-          </div>
-        </Card>
+          <p class="text-xs text-soil-500 text-center mt-4">
+            Signed extensions additionally build for WebAssembly. Per-platform build status is on the <a href={LATEST_STATUS_URL} class="text-earth-700 underline hover:text-earth-800">status page</a>.
+          </p>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- Provenance verification -->
-  <section class="py-16 lg:py-24 bg-white">
+  <!-- Verify -->
+  <section class="py-16 lg:py-20 bg-white">
     <div class="section-container">
       <div class="max-w-3xl mx-auto">
         <SectionHeader
           align="center"
-          eyebrow="Supply-chain transparency"
-          title="Verify a build with SLSA provenance"
-          description="Every release artifact has a build provenance attestation signed by GitHub. Verify any download in one command with the GitHub CLI."
+          eyebrow="Optional for teams"
+          title="Verify release artifacts"
+          description="For casual local use, you can skip this. For production rollouts, Haybarn release artifacts include checksums, signatures, and GitHub build attestations so teams can review where a binary came from."
           class="mb-6"
         />
         <CodeBlock code={verifyCmd} lang="bash" title="verify-release.sh" />
+        <p class="mt-3 text-center text-sm text-soil-600">
+          Full signing keys and verification steps on the <a href="/haybarn/security" class="text-earth-700 underline hover:text-earth-800">security page</a>.
+        </p>
+        <p class="mt-3 text-center text-xs text-soil-500">
+          Replace the filename with the artifact you downloaded.
+        </p>
         <p class="text-sm text-soil-600 mt-4 text-center">
-          Releases are hosted on Cloudflare R2 with immutable, version-keyed URLs.
           <a href={LATEST_STATUS_URL} class="text-earth-700 underline hover:text-earth-800">Build status</a> ·
           <a href={STATUS_URL} class="text-earth-700 underline hover:text-earth-800">Live dashboard</a>
         </p>
@@ -199,42 +263,27 @@ const jsonLd = [
     </div>
   </section>
 
-  <!-- Extensions teaser -->
-  <section class="py-12 lg:py-16 bg-soil-50">
-    <div class="section-container">
-      <div class="max-w-4xl mx-auto">
-        <Card padding="lg">
-          <div class="flex items-center gap-3 mb-3">
-            <span class="inline-flex items-center px-2 py-0.5 rounded-md bg-grain-100 text-grain-800 text-xs font-mono uppercase tracking-wider">Roadmap</span>
-          </div>
-          <h3 class="text-xl font-bold text-soil-900 mb-2">Extensions are getting the same treatment</h3>
-          <p class="text-soil-700 text-sm leading-relaxed mb-4">
-            Every Haybarn-built extension is on its way to PyPI and npm — pinnable in <code class="font-mono text-earth-700">requirements.txt</code> and <code class="font-mono text-earth-700">package.json</code>, mirrorable to your internal registry, reviewable through the supply-chain process you already have.
-          </p>
-          <Button href="/haybarn/extensions" variant="primary" size="md">
-            Read the extensions plan →
-          </Button>
-        </Card>
-      </div>
-    </div>
-  </section>
-
   <!-- Consulting CTA -->
-  <section class="py-16 lg:py-24 bg-gradient-to-br from-harvest-600 to-grain-600 text-white">
-    <div class="section-container text-center">
-      <h2 class="text-3xl md:text-4xl lg:text-5xl font-bold mb-6">
-        Need help rolling Haybarn out?
-      </h2>
-      <p class="text-xl md:text-2xl text-harvest-50 mb-8 max-w-3xl mx-auto">
-        Pinning versions, mirroring extensions internally, or wiring up a private signing chain — we've done it.
-      </p>
-      <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
-        <Button href="/consulting" variant="secondary" size="lg">
-          Consulting
-        </Button>
-        <Button href="/company/schedule" variant="ghost" size="lg" class="bg-white/10 hover:bg-white/20 text-white border-white/30">
-          Schedule a Call
-        </Button>
+  <section class="py-16 lg:py-24 bg-white font-display">
+    <div class="section-container">
+      <div class="mx-auto grid max-w-6xl grid-cols-1 gap-8 rounded-2xl border-2 border-soil-900 bg-grain-50 p-6 shadow-lg md:p-8 lg:grid-cols-[1fr_auto] lg:items-center">
+        <div>
+          <p class="mb-3 text-sm font-semibold uppercase tracking-wider text-harvest-700">Expert help</p>
+          <h2 class="mb-4 text-3xl font-bold text-soil-900 md:text-4xl">
+            Need help rolling Haybarn out?
+          </h2>
+          <p class="text-lg leading-relaxed text-soil-700">
+            We help teams with version pinning, internal mirrors, private extension channels, and production rollout.
+          </p>
+        </div>
+        <div class="flex flex-col gap-3 sm:flex-row lg:flex-col">
+          <Button href="/consulting" variant="primary" size="md">
+            Consulting
+          </Button>
+          <Button href="/company/schedule" variant="secondary" size="md">
+            Schedule a call
+          </Button>
+        </div>
       </div>
     </div>
   </section>
