@@ -173,7 +173,7 @@ async function runRepl(
 
   /** Execute one statement and render its result. Returns false on error. */
   async function exec(sql: string, echo = false): Promise<boolean> {
-    if (echo) writeln(`\x1b[32mD\x1b[0m > \x1b[2m${sql};\x1b[0m`);
+    if (echo) writeln(`\x1b[32mH\x1b[0m > \x1b[2m${sql};\x1b[0m`);
     const t0 = performance.now();
     const r = await session.runQuery(sql);
     const elapsed = performance.now() - t0;
@@ -299,7 +299,7 @@ async function runRepl(
   }
 
   for (;;) {
-    const sql = (await rl.read("\x1b[32mD\x1b[0m > ")).trim();
+    const sql = (await rl.read("\x1b[32mH\x1b[0m > ")).trim();
     if (!sql) {
       if (rl.history?.length) rl.history.pop();
       continue;
