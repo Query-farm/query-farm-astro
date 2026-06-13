@@ -1,85 +1,47 @@
 {
   "eyebrow": "Technical Overview",
   "title": "Why use DataSketches in DuckDB?",
-  "description": "Bring [Apache DataSketches](https://datasketches.apache.org/) — the production-grade C++ library for streaming approximate aggregates — into DuckDB SQL. Every sketch serializes to a portable BLOB you can store in a column, ship between processes, and merge later without rescanning the source data. The value prop is *billion-row aggregates with bounded memory and merge-friendly state*, not exact answers.",
+  "description": "Bring [Apache DataSketches](https://datasketches.apache.org/) — the production-grade C++ library for streaming approximate aggregates — into DuckDB SQL. The value proposition is *billion-row aggregates with bounded memory and merge-friendly state*: every sketch serializes to a portable BLOB you can store in a column, ship between processes, and merge later without rescanning the source data. The trade is approximate answers, not exact ones.",
   "sections": [
     {
-      "icon": "🎯",
-      "title": "Cardinality — distinct counts that merge",
-      "description": "Three sketch families estimate `COUNT(DISTINCT x)` in fixed memory and let you union per-partition / per-day sketches together later. Pick one based on whether you optimize for serialization speed, on-disk size, or set algebra.",
+      "icon": "🧠",
+      "title": "How sketches work",
+      "description": "A sketch is a small, fixed-size summary of a stream. Instead of keeping every value (or every distinct value) the way an exact `COUNT(DISTINCT)` or a full sort does, a sketch maintains a bounded amount of probabilistic state in a single pass and answers a specific statistical question — distinct count, quantile, or heavy-hitter frequency — from that state alone. This extension is a thin DuckDB wrapper around the [Apache DataSketches C++ library](https://github.com/apache/datasketches-cpp): each family registers a one-pass aggregate that builds the sketch, a typed BLOB column type that carries the serialized state, and reader scalars that decode it.",
       "bulletPoints": [
         {
-          "label": "HLL — speed and interop",
-          "description": "[HyperLogLog](https://datasketches.apache.org/docs/HLL/HllSketches.html) is the industry-standard distinct-count sketch. Build with `datasketch_hll`, estimate with `datasketch_hll_estimate`, merge with `datasketch_hll_union`. Default choice when you need cross-system compatibility (Druid, Pinot, BigQuery, Spark) or fastest read paths."
+          "label": "Bounded memory, single pass",
+          "description": "A sketch's footprint is fixed up front — it does not grow with the number of input rows. A billion-row distinct count that would otherwise need a sort plus a large hash table becomes a constant-memory aggregate computed in one scan, with mathematically grounded error bounds rather than ad-hoc approximation."
         },
         {
-          "label": "CPC — same accuracy, ~40% less storage",
-          "description": "[Compressed Probability Counting](https://datasketches.apache.org/docs/CPC/CpcSketches.html) trades slower serialization for smaller sketches at the same accuracy. Build with `datasketch_cpc`, merge with `datasketch_cpc_union`. Reach for this when you store millions of per-partition sketches at rest."
+          "label": "The size ↔ accuracy knob",
+          "description": "Each family takes a sizing parameter — `lg_k` for the cardinality sketches (HLL/CPC/Theta), `K` for the quantile sketches (KLL/TDigest/REQ/classic), `lg_max_map_size` for Frequent Items. Larger means tighter error and a bigger sketch; smaller means a cheaper sketch and looser bounds. For example, an HLL at `lg_k = 12` is roughly 4 KB at about ±1.6% standard error. You pick the point on that curve that matches your accuracy budget."
         },
         {
-          "label": "Theta — union, intersect, A-not-B",
-          "description": "[Theta sketches](https://datasketches.apache.org/docs/Theta/ThetaSketches.html) are the only family that supports set operations beyond merge. `datasketch_theta_union`, `datasketch_theta_intersect`, and `datasketch_theta_a_not_b` compute approximate `|A ∪ B|`, `|A ∩ B|`, and `|A \\ B|` directly from sketch state — funnel analysis, retention cohorts, churn — without touching the underlying rows."
-        }
-      ]
-    },
-    {
-      "icon": "📈",
-      "title": "Quantiles — p50 / p95 / p99 in fixed memory",
-      "description": "Four mergeable quantile sketches. They differ in error behavior and input-type support; the right pick depends on whether you care about the median, the tail, or skewed distributions.",
-      "bulletPoints": [
-        {
-          "label": "KLL — modern default",
-          "description": "[KLL](https://datasketches.apache.org/docs/KLL/KLLSketch.html) gives the best balance of accuracy, speed, and size. Build with `datasketch_kll`; read percentiles with `datasketch_kll_quantile`, the inverse with `datasketch_kll_rank`, full distribution with `datasketch_kll_cdf` / `datasketch_kll_pmf`. Start here unless you have a specific reason to pick something else."
+          "label": "State is mergeable without rescanning",
+          "description": "The serialized sketch is the durable, composable unit. Build one sketch per partition or per day, persist it as a typed BLOB column, then union those sketches into any rolling window (per-day → 7d/30d, per-shard → global) without ever touching the original rows again. Theta sketches go further, supporting approximate union, intersection, and A-not-B set algebra over sketch state alone — the basis for funnel, retention, and churn analysis."
         },
         {
-          "label": "TDigest — tail-accurate",
-          "description": "[t-digest](https://datasketches.apache.org/docs/tdigest/tdigest.html) is most accurate at the tails (p99, p999) — exactly where SLOs live. FLOAT/DOUBLE input only. Build with `datasketch_tdigest`, read with `datasketch_tdigest_quantile`."
-        },
-        {
-          "label": "REQ — relative-error guarantees",
-          "description": "[Relative-error quantiles](https://datasketches.apache.org/docs/REQ/ReqSketch.html) — error scales with rank rather than being fixed. Predictable accuracy on highly skewed data. Build with `datasketch_req`, read with `datasketch_req_quantile`."
-        },
-        {
-          "label": "Quantiles — classic, broadly compatible",
-          "description": "The [original mergeable quantile sketch](https://datasketches.apache.org/docs/Quantiles/ClassicQuantilesSketch.html). Solid and well-tested; KLL supersedes it for new work. Build with `datasketch_quantiles`."
-        }
-      ]
-    },
-    {
-      "icon": "🔝",
-      "title": "Frequency — top-K heavy hitters",
-      "description": "[Frequent Items](https://datasketches.apache.org/docs/Frequency/FrequentItemsOverview.html) finds the most-frequent items in a stream and returns each candidate with a lower-bound, upper-bound, and estimate. Use for top-N over high-cardinality streams where exact `GROUP BY count() ORDER BY` is too expensive — error-page sources, abuse detection, top searches, hot keys.",
-      "bulletPoints": [
-        {
-          "label": "Build the sketch",
-          "description": "`datasketch_frequent_items(map_size, value)` — `map_size` is a power of two; bigger sketches keep more candidates."
-        },
-        {
-          "label": "Pull the top-K",
-          "description": "`datasketch_frequent_items_get_frequent` with `'NO_FALSE_POSITIVES'` for items that are *definitely* heavy, or `'NO_FALSE_NEGATIVES'` for the union of all candidates that *might* be."
-        },
-        {
-          "label": "Inspect bounds",
-          "description": "Per-item `datasketch_frequent_items_estimate`, `datasketch_frequent_items_lower_bound`, and `datasketch_frequent_items_upper_bound` give the confidence interval around each frequency."
+          "label": "Portable across systems",
+          "description": "The serialization format matches the [Java reference implementation](https://github.com/apache/datasketches-java) — the same format consumed by Druid, Pinot, BigQuery, and Spark integrations. A sketch built in DuckDB and written to Parquet can be merged inside another DataSketches-aware system, and vice versa, with no re-aggregation across the boundary."
         }
       ]
     },
     {
       "icon": "🧭",
       "title": "When to reach for sketches vs. exact aggregates",
-      "description": "Sketches are approximate by design. The trade-off is bounded memory, mergeable state, and order-of-magnitude faster aggregation against a small, predictable error. They are not a replacement for `COUNT(DISTINCT)` when you need exact answers.",
+      "description": "Sketches are approximate by design. The trade-off is bounded memory, mergeable state, and order-of-magnitude faster aggregation against a small, predictable error. They are not a replacement for exact answers when policy demands them.",
       "useCases": [
         {
           "title": "Reach for sketches when",
-          "description": "Input is too large for exact aggregation, you want to persist state and merge it later (per-day → rolling 7d/30d, per-shard → global), or you need cross-system interop (Druid, Pinot, Spark, BigQuery) on the same sketch BLOB."
+          "description": "Input is too large for comfortable exact aggregation, you want to persist state and merge it later (per-day → rolling windows, per-shard → global), or you need cross-system interop (Druid, Pinot, Spark, BigQuery) on the same sketch BLOB. Anything that must survive a process restart or roll up across shards is a natural fit."
         },
         {
           "title": "Stick with exact aggregates when",
-          "description": "Your data fits and exact answers are policy (billing, audits, reconciliation). DuckDB's built-in `COUNT(DISTINCT)` and `quantile_cont` are vectorized and very fast — measure before reaching for a sketch."
+          "description": "Your data fits and exact answers are policy (billing, audits, reconciliation). DuckDB's built-in `COUNT(DISTINCT)` and `quantile_cont` are vectorized and fast at most analytical scales — measure before reaching for a sketch."
         },
         {
-          "title": "Reach for this extension over DuckDB's built-ins when",
-          "description": "DuckDB ships with [`approx_count_distinct`](https://duckdb.org/docs/stable/sql/functions/aggregates) (HLL) and [`approx_quantile`](https://duckdb.org/docs/stable/sql/functions/aggregates) (TDigest), but those expose only the final estimate — not the sketch state. Use this extension when you need to *persist* the sketch as a column, *merge* sketches later, *tune* sketch parameters (`lg_k`, `K`, `map_size`), or *interop* with the wider Apache DataSketches ecosystem."
+          "title": "Reach for this extension over DuckDB's approx built-ins when",
+          "description": "DuckDB ships [`approx_count_distinct`](https://duckdb.org/docs/stable/sql/functions/aggregates) (HLL) and [`approx_quantile`](https://duckdb.org/docs/stable/sql/functions/aggregates) (TDigest), but those expose only the final estimate — the sketch state is discarded. Use this extension when you need the sketch *as reusable state*: to persist it as a column, merge sketches later, tune the size parameters, or interoperate with the wider Apache DataSketches ecosystem."
         }
       ]
     }

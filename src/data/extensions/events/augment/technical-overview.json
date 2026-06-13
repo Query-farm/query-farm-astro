@@ -1,51 +1,33 @@
 {
   "eyebrow": "Technical Overview",
   "title": "Why Use Events?",
-  "description": "Capture DuckDB's internal lifecycle — queries executed, transactions opened and closed, errors raised, connections churning — and stream the timeline as JSON lines into any external program. In-process telemetry, audit trails, cost tracking, and SIEM feeds, all wired up with PRAGMAs.",
+  "description": "Capture DuckDB's internal lifecycle — queries executed, transactions opened and closed, errors raised, connections churning — and stream the timeline as JSON lines into any external program. In-process telemetry, audit trails, cost tracking, and SIEM feeds, all wired up with PRAGMAs and no application code.",
   "sections": [
     {
       "icon": "📡",
-      "title": "What this extension is for",
-      "description": "Events makes the otherwise-opaque inside of a DuckDB process observable. You get a structured event line for every query, transaction, and connection — without instrumenting your application code or scraping logs after the fact.",
-      "bulletPoints": [
-        {
-          "label": "Audit trails",
-          "description": "Capture `query_begin` / `query_end` for every statement and ship the JSON to a tamper-resistant log store. Every query, with timestamps, error status, and the originating session name."
-        },
-        {
-          "label": "Error alerting",
-          "description": "`query_end` carries `has_error`, `error_message`, and `error_type` when a query fails — pipe the stream into a handler that pages on regressions or unexpected error types."
-        },
-        {
-          "label": "Cost and usage tracking",
-          "description": "Pair `query_begin` and `query_end` by `query_id` to get per-query latency and per-session volume. Use `events_session_name` to attribute events to tenants, jobs, or replicas."
-        },
-        {
-          "label": "Transaction lifecycle observability",
-          "description": "`transaction_begin` / `transaction_commit` / `transaction_rollback` each carry the same `transaction_id` and `is_read_only` flag — so you can reconstruct exactly which statements ran inside which transaction."
-        }
-      ]
+      "title": "What it is",
+      "description": "Events makes the otherwise-opaque inside of a DuckDB process observable. Instead of instrumenting application code or scraping logs after the fact, you get a structured JSON line for every query, transaction, and connection the process handles. That stream is the raw material for audit trails (every statement with timestamps and error status), error alerting (page on `has_error`), per-session cost attribution, and transaction forensics — but the extension itself is deliberately small: it emits events, and what you do with them lives entirely in the handler you point it at."
     },
     {
       "icon": "⚙️",
       "title": "How it works",
-      "description": "The extension hooks DuckDB's internal event surface and pipes one JSON object per event into the **stdin of an external program**. There is no SQL function to call — configuration is entirely PRAGMA-driven, so wiring up event capture is four `SET` statements.",
+      "description": "The extension hooks DuckDB's internal event surface, launches the program at `events_destination` as a long-lived child process, and writes one JSON object per event to its **stdin**. There is no SQL function to call — configuration is entirely PRAGMA-driven, so wiring up event capture is a few `SET` statements.",
       "bulletPoints": [
         {
           "label": "Configure with PRAGMAs",
-          "description": "Set `events_destination` to a fully-qualified executable path. Pick the event types to capture with `events_types`. Optional: `events_session_name` tags every event, and `events_async` switches between synchronous and fire-and-forget delivery."
+          "description": "`events_destination` is a fully-qualified executable path (invoked directly, not via a shell — `python3 handler.py` won't work; point at a shebang script or the interpreter binary). `events_types` picks which events to capture, `events_session_name` tags every event, and `events_async` switches delivery mode."
         },
         {
           "label": "Seven event types",
-          "description": "`connection_opened`, `connection_closed`, `query_begin`, `query_end`, `transaction_begin`, `transaction_commit`, and `transaction_rollback`. Default capture is `['query_begin', 'query_end']` — the smallest set that still gives you query-level audit visibility."
+          "description": "`connection_opened`, `connection_closed`, `query_begin`, `query_end`, `transaction_begin`, `transaction_commit`, and `transaction_rollback`. The default capture is `['query_begin', 'query_end']` — the smallest set that still gives query-level audit visibility, two events per statement."
         },
         {
           "label": "JSON lines on stdin",
-          "description": "Every event becomes one line of JSON on the handler's stdin. Common fields are `event`, `timestamp` (ISO 8601), `database_path`, `session_name`, `connection_id`, and `process_id`. Type-specific fields layer on top — `query_id`, `transaction_id`, `error_message`, etc."
+          "description": "Every event is one line of JSON. A common envelope (`event`, `timestamp` in ISO 8601, `database_path`, `session_name`, `connection_id`, `process_id`) carries per-type fields on top — `query_id` (pairs `query_begin`/`query_end`), `transaction_id`, `has_error`, `error_message`, `error_type`, and `attached_databases[]`. The handler can be a shell script, a Python service, a Go binary — anything that reads stdin a line at a time."
         },
         {
-          "label": "Sync or fire-and-forget",
-          "description": "Default delivery is synchronous: DuckDB writes the event and waits for the handler to read it before returning from the originating query. Reliable, but each event adds latency. `SET events_async = TRUE` switches to fire-and-forget — no blocking, but events can be dropped if the handler is slow or dies."
+          "label": "Sync or fire-and-forget delivery",
+          "description": "Synchronous (the default) writes the event and waits for the handler to consume it before the originating query returns — reliable, but adds latency to every query. `SET events_async = TRUE` is fire-and-forget: no blocking, but events are dropped silently if the handler stalls, dies, or can't keep up. There's no in-between mode; pick one per session."
         }
       ]
     },
@@ -56,42 +38,19 @@
       "bulletPoints": [
         {
           "label": "Process-scoped, not durable",
-          "description": "Configuration lives in the running DuckDB process — restart and it's gone. Set the PRAGMAs at session start (or wrap them in a startup script). Same caveat as the [`cronjob`](/products/extensions/cronjob) extension: events are observable while the process is up, not durable across restarts."
+          "description": "Configuration lives in the running DuckDB process — restart and it's gone. Set the PRAGMAs at session start or wrap them in a startup script. The *destination* can be durable (file, S3, Kafka, syslog); the *configuration* is not. Same caveat as the sibling [`cronjob`](/products/extensions/cronjob) extension — both are operate-your-DuckDB-process tools, observable only while the process is up."
         },
         {
           "label": "One handler per session",
-          "description": "Only one destination at a time. If you need fan-out — file plus Kafka plus alerting — point `events_destination` at a small dispatcher that reads stdin and forks the stream itself (`tee`, a Python script, `vector`, etc.)."
+          "description": "Only one destination at a time. For fan-out — file plus Kafka plus alerting — point `events_destination` at a small dispatcher that reads stdin and forks the stream itself (`tee`, a Python script, `vector`, etc.). There's also no per-query filter at the extension layer; every event of an enabled type is emitted, so filter downstream in the handler."
         },
         {
           "label": "Sync mode blocks queries",
-          "description": "In synchronous mode (the default) a slow or hung handler will hold up every query. Add timeouts in the handler, or switch to `events_async = TRUE` for high-throughput workloads where the occasional dropped event is acceptable."
+          "description": "In the default synchronous mode the handler is on the critical path — a 50 ms-per-event handler adds 50 ms to every query, and a hung handler holds up everything. Add timeouts and a fast path, or accept the trade-off and switch to `events_async = TRUE`."
         },
         {
-          "label": "Handler runs as DuckDB",
-          "description": "The destination program is launched by the DuckDB process and inherits its privileges. Treat the `events_destination` path as security-sensitive — point it at a fully-qualified, read-only-by-others script."
-        }
-      ]
-    },
-    {
-      "icon": "🎯",
-      "title": "Common Use Cases",
-      "description": "",
-      "useCases": [
-        {
-          "title": "In-process audit log",
-          "description": "Capture `query_begin` / `query_end` and append the JSON lines to a daily file or a tamper-evident store. Every statement that touched the database, with timestamps and error status."
-        },
-        {
-          "title": "Real-time error alerting",
-          "description": "Filter `query_end` events for `has_error = true` and post the payload to PagerDuty, OpsGenie, Slack, or your SIEM. No log scraping, no polling — events arrive as they happen."
-        },
-        {
-          "title": "Per-session cost attribution",
-          "description": "Tag each DuckDB process with `events_session_name` (tenant id, job id, replica name) and emit `query_begin`/`query_end` pairs. Aggregate downstream for query latency, count, and error rate per attribution key."
-        },
-        {
-          "title": "Transaction replay and forensics",
-          "description": "Capture all three transaction events plus query events. Group by `transaction_id` to reconstruct exactly which statements ran inside each commit or rollback — useful for incident postmortems."
+          "label": "Handler runs with DuckDB's privileges",
+          "description": "The destination program is launched by the DuckDB process and inherits its privileges and environment. Treat the `events_destination` path as security-sensitive — point it at a fully-qualified file that's write-protected from the database user."
         }
       ]
     }

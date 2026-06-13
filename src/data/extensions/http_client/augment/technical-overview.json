@@ -1,101 +1,51 @@
 {
   "eyebrow": "Technical Overview",
   "title": "Why Make HTTP Requests from DuckDB?",
-  "description": "Issue [HTTP](https://datatracker.ietf.org/doc/html/rfc9110) requests directly from a SQL query — no app-layer Python or Node.js between DuckDB and the API. Best fit: ad-hoc REST calls, low-volume per-row enrichment, and one-off integrations. For high-throughput or streaming workloads, keep a real HTTP client.",
+  "description": "HTTP Client closes the smallest possible gap between a [REST API](https://datatracker.ietf.org/doc/html/rfc9110) and a DuckDB row: instead of standing up a Python or Node.js sidecar to fetch a payload and load it back in, you call a scalar function inside a `SELECT` and get the response as a [`JSON`](https://duckdb.org/docs/data/json/json_functions) value you can extract, cast, and join on the spot. That tight coupling is its whole reason to exist — and also the source of every caveat below. It is built for ad-hoc API calls and low-volume per-row enrichment, not for high-throughput or streaming integrations.",
   "sections": [
-    {
-      "icon": "📕",
-      "title": "What this extension is for",
-      "description": "Three scalar functions — `http_get`, `http_post`, and `http_post_form` — that issue a synchronous HTTP request and return the response as a JSON object you can extract with DuckDB's [JSON operators](https://duckdb.org/docs/data/json/json_functions).",
-      "bulletPoints": [
-        {
-          "label": "Per-row API enrichment",
-          "description": "Join a column against a remote REST endpoint with `http_get` — one HTTP call per row, response parsed inline as JSON. Practical for tens or hundreds of rows; impractical at scale because each call is synchronous."
-        },
-        {
-          "label": "Ad-hoc API queries",
-          "description": "Hit a JSON API from a one-off `SELECT` without writing a script. Combine with [`->>`](https://duckdb.org/docs/data/json/json_functions) to pull specific fields out of the response body."
-        },
-        {
-          "label": "Form-encoded POSTs",
-          "description": "`http_post_form` sends parameters as [`application/x-www-form-urlencoded`](https://datatracker.ietf.org/doc/html/rfc1866) — the body shape OAuth token endpoints, older REST APIs, and HTML form handlers expect."
-        },
-        {
-          "label": "JSON POSTs",
-          "description": "`http_post` JSON-encodes the `params` [`MAP`](https://duckdb.org/docs/sql/data_types/map) into the request body. Pair with `headers => MAP{'content-type': 'application/json'}` for REST APIs that consume JSON."
-        }
-      ]
-    },
     {
       "icon": "🔌",
       "title": "How it works",
-      "description": "Each call opens a TCP connection, sends the request, blocks until the response arrives, and returns a JSON struct. There is no `ATTACH`, no secrets type, no connection pool, no retry logic — the extension is intentionally a thin SQL surface over a synchronous HTTP request.",
+      "description": "The extension is a deliberately thin SQL surface over a single synchronous HTTP request — there is no `ATTACH`, no secrets type, no connection pool, no background fetcher, and no retry machinery. Each function call opens a connection, issues the request, blocks until the full response is in memory, and returns it as a JSON struct. Because the function shape is stable and side-effect-free at the SQL layer, the result composes cleanly into CTEs, lateral joins, and `CREATE TABLE AS` — anywhere a scalar JSON value is acceptable.",
       "bulletPoints": [
         {
-          "label": "Response shape",
-          "description": "Every function returns a JSON object with `status` (the HTTP status code as a number), `reason` (the [HTTP reason phrase](https://datatracker.ietf.org/doc/html/rfc9110#name-status-codes) — `\"OK\"`, `\"Not Found\"`, etc.), and `body` (the response body as a string). Extract fields with `->>` and cast as needed."
+          "label": "Synchronous and blocking",
+          "description": "DuckDB stalls on each call until the response arrives or the underlying request fails — there is no per-row timeout knob and no async dispatch. A slow endpoint slows the whole query, and rows are processed in whatever order DuckDB chooses to evaluate the scalar."
+        },
+        {
+          "label": "One call per row",
+          "description": "Per-row enrichment issues exactly one HTTP request per input row, sequentially, with no connection reuse exposed at the SQL layer. Fine for tens or hundreds of rows; for tens of thousands it is slow and very likely to get rate-limited upstream. Pre-aggregate to distinct keys or cache responses into a table with [`CREATE TABLE AS`](https://duckdb.org/docs/sql/statements/create_table) before joining at scale."
+        },
+        {
+          "label": "JSON response struct",
+          "description": "Every call returns a JSON object shaped `{status, reason, body}` — `status` is the numeric HTTP code, `reason` is the [HTTP reason phrase](https://datatracker.ietf.org/doc/html/rfc9110#name-status-codes) (`\"OK\"`, `\"Not Found\"`), and `body` is always a string. Pull fields out with [`->>`](https://duckdb.org/docs/data/json/json_functions); to drill into a JSON response body, cast it first: `((res->>'body')::JSON)->>'$.field'`."
         },
         {
           "label": "Headers and params are MAPs",
-          "description": "Both `http_post` and `http_post_form` take `headers` and `params` as [DuckDB `MAP` literals](https://duckdb.org/docs/sql/data_types/map) — `MAP{'key': 'value', ...}`. Headers go on the wire as-is; the `params` map is encoded according to which POST function you called."
-        },
-        {
-          "label": "Synchronous and blocking",
-          "description": "DuckDB blocks until the response arrives or the underlying TCP call fails. Slow endpoints stall the query; there is no per-row timeout knob exposed. Use small `LIMIT` clauses or pre-aggregate keys before calling out."
-        },
-        {
-          "label": "JSON-typed return value",
-          "description": "The result is a `JSON` value, so you can chain [`->`](https://duckdb.org/docs/data/json/json_functions) and `->>` directly. Cast `(http_get(...)->>'body')::JSON` to dive further into a JSON response body."
+          "description": "Headers and POST parameters are passed as DuckDB [`MAP`](https://duckdb.org/docs/sql/data_types/map) literals — `MAP{'key': 'value', ...}`. Headers go on the wire as-is; how the params map is encoded into the body (JSON vs. URL-encoded form) depends on which POST function you call."
         }
       ]
     },
     {
       "icon": "🛡️",
       "title": "Scope and caveats",
-      "description": "The extension is honest-by-design about what it doesn't do. Read this before pointing it at production traffic.",
+      "description": "The extension is honest-by-design about what it does not do. Read this before pointing it at production traffic — for anything it lacks (streaming, complex auth, retries, parallelism), keep a real HTTP client or shell out to `curl` via [shellfs](/products/extensions/shellfs).",
       "bulletPoints": [
         {
           "label": "Experimental status",
-          "description": "Marked **experimental** by the [upstream README](https://github.com/Query-farm/duckdb-extension-httpclient) — \"USE AT YOUR OWN RISK!\". Pin a known-good extension version if you depend on it in pipelines."
+          "description": "Marked **experimental** by the [upstream README](https://github.com/Query-farm/duckdb-extension-httpclient) — \"USE AT YOUR OWN RISK!\". Pin a known-good extension version in any pipeline that depends on it."
         },
         {
           "label": "GET and POST only",
-          "description": "No `PUT` / `PATCH` / `DELETE` in the documented surface. For other [HTTP methods](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods), shell out to `curl` via [shellfs](/products/extensions/shellfs)."
+          "description": "The documented surface covers `GET` and `POST` (JSON or form-encoded) — no `PUT`, `PATCH`, or `DELETE`. For other [HTTP methods](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods), shell out to `curl` via [shellfs](/products/extensions/shellfs)."
         },
         {
-          "label": "No retries, no backoff, no streaming",
-          "description": "The request is issued once and the entire response body is buffered into memory. Build retry / backoff in your application layer, or wrap the call in a CTE that you re-run on failure."
+          "label": "No retries, backoff, or streaming",
+          "description": "The request is issued once and the entire response body is buffered into memory — there is no automatic retry, no backoff, and no streaming read of large responses. Build retry/backoff in your application layer, and prefer shellfs + `curl` piped through [`read_csv`](https://duckdb.org/docs/data/csv/overview) / [`read_json`](https://duckdb.org/docs/data/json/loading_json.html) when a response is too big to hold in memory."
         },
         {
-          "label": "Credentials live in SQL",
-          "description": "Bearer tokens and other secrets are passed as plain SQL values in the `headers` map — anything inlined appears in the cached query plan and `EXPLAIN` output. Source from the environment with [`getenv`](https://duckdb.org/docs/sql/functions/utility#getenv) and bind via [`SET VARIABLE`](https://duckdb.org/docs/sql/statements/set), as covered in Securing credentials."
-        },
-        {
-          "label": "One call per row",
-          "description": "Per-row enrichment patterns issue one HTTP request per input row. Ten thousand rows means ten thousand sequential calls — slow, and the remote server will likely rate-limit you. Pre-aggregate or cache before joining."
-        }
-      ]
-    },
-    {
-      "icon": "🎯",
-      "title": "Common Use Cases",
-      "description": "",
-      "useCases": [
-        {
-          "title": "Enrich a small DuckDB result with a REST API",
-          "description": "Join a few hundred rows against an external endpoint with `http_get` — geocoding, score lookups, slow-changing reference data. Cache the JSON response into a DuckDB table so repeat queries don't re-hit the API."
-        },
-        {
-          "title": "Trigger a webhook from a SQL pipeline",
-          "description": "End-of-pipeline `http_post` to a webhook URL with a JSON body summarizing what just ran. Synchronous, so the webhook either succeeds or the SQL transaction sees the error."
-        },
-        {
-          "title": "Exchange OAuth credentials",
-          "description": "`http_post_form` against a token endpoint with `grant_type` and credential fields — the [`application/x-www-form-urlencoded`](https://datatracker.ietf.org/doc/html/rfc1866) shape OAuth's [Bearer Token spec](https://datatracker.ietf.org/doc/html/rfc6750) requires."
-        },
-        {
-          "title": "One-off API exploration",
-          "description": "Replace `curl` + `jq` with one SQL statement: hit the endpoint, cast the body to JSON, project the fields you want. Keeps the whole investigation inside a single DuckDB session."
+          "label": "Credentials are visible in the query plan",
+          "description": "Any token or secret inlined into a `headers` or `params` map appears in the cached query plan and `EXPLAIN` output. Source credentials from the environment with [`getenv`](https://duckdb.org/docs/sql/functions/utility#getenv) and bind them through [`SET VARIABLE`](https://duckdb.org/docs/sql/statements/set) — `getenv` resolves at parse time, so the literal value never lands in a cached plan or session log."
         }
       ]
     }

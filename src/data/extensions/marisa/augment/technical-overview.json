@@ -1,47 +1,29 @@
 {
   "eyebrow": "Technical Overview",
   "title": "Why Use a MARISA Trie from DuckDB?",
-  "description": "Pack a column of strings into a single BLOB and answer membership, autocomplete, and longest-prefix questions against it — in time proportional to the search key, not the dictionary size. Pairs well with [`bitfilters`](/products/extensions/bitfilters): both answer set-membership questions, but a [MARISA trie](https://en.wikipedia.org/wiki/Trie) keeps the strings and supports prefix queries.",
+  "description": "Pack a column of strings into a single BLOB and answer membership, autocomplete, and longest-prefix questions against it — in time proportional to the search key, not the dictionary size. Pairs naturally with [`bitfilters`](/products/extensions/bitfilters): both answer set-membership questions, but a [MARISA trie](https://en.wikipedia.org/wiki/Trie) keeps the strings and supports prefix queries.",
   "sections": [
     {
       "icon": "🌳",
-      "title": "What this extension is for",
-      "description": "Big static string sets — wordlists, place names, route prefixes, autocomplete dictionaries — compiled into one self-contained BLOB you can store in any DuckDB column, persist to Parquet, and ship anywhere DuckDB runs.",
-      "bulletPoints": [
-        {
-          "label": "Autocomplete and type-ahead",
-          "description": "Microsecond \"starts with\" lookups against a single BLOB. Drop a search box on a static corpus without standing up Elasticsearch."
-        },
-        {
-          "label": "Spell-check and dictionary membership",
-          "description": "Exact \"is this string in the set?\" tests, smaller than a hash set and prefix-aware in a way [`bitfilters`](/products/extensions/bitfilters) can't be."
-        },
-        {
-          "label": "Longest-prefix-match routing",
-          "description": "Find every dictionary string that is itself a prefix of the input — the primitive behind URL routers, CIDR label tables, and rule-matching lookups."
-        },
-        {
-          "label": "A compact join side",
-          "description": "One trie per partition / day / tenant ships dramatically smaller than the equivalent string list, and serves membership and prefix queries from the same blob."
-        }
-      ]
+      "title": "Why a trie answers both questions at the same cost",
+      "description": "A [trie](https://en.wikipedia.org/wiki/Trie) stores strings by their shared structure: each edge is a character (or, in a Patricia/radix trie, a shared run of characters), so a key is a *path* from the root rather than an entry in a flat list. Walking a string down that path touches one node per character, which is why a lookup costs O(length-of-the-key) and is utterly independent of how many strings the structure holds — the first query is as fast as the millionth, whether the trie has a thousand entries or ten million. The same path-walking machinery is what makes prefix questions cheap: a membership test simply asks whether the path ends on a real key, autocomplete continues walking past the prefix node and enumerates the subtree below it, and longest-prefix matching collects every key-marked node passed along the way. Those are different read patterns over one structure, not three separate indexes — and they're operations a hash set or Bloom filter cannot answer at all, because both throw away the ordering that makes prefixes meaningful."
     },
     {
       "icon": "⚙️",
       "title": "How it works",
-      "description": "MARISA is a [succinct](https://en.wikipedia.org/wiki/Succinct_data_structure) static [Patricia trie](https://en.wikipedia.org/wiki/Radix_tree) maintained as [`s-yata/marisa-trie`](https://github.com/s-yata/marisa-trie); this extension is a thin DuckDB wrapper.",
+      "description": "MARISA — *Matching Algorithm with Recursively Implemented StorAge* — is a [succinct](https://en.wikipedia.org/wiki/Succinct_data_structure), static [Patricia/radix trie](https://en.wikipedia.org/wiki/Radix_tree). The reference C++ implementation is [`s-yata/marisa-trie`](https://github.com/s-yata/marisa-trie), maintained for over a decade; this extension is a thin DuckDB wrapper around it.",
       "bulletPoints": [
         {
-          "label": "One aggregate produces one BLOB",
-          "description": "Aggregate a `VARCHAR` column once at write time and you get a single immutable BLOB. Store it anywhere DuckDB stores BLOBs — table column, Parquet file, S3 object."
+          "label": "Built once into a self-contained BLOB",
+          "description": "An aggregate consumes a `VARCHAR` column at write time and emits one immutable BLOB. Store it wherever DuckDB stores BLOBs — a table column, a Parquet file, an S3 object — and ship it anywhere DuckDB runs. Loading is essentially a pointer-walk; there is no parse or decompression step at query time, and lookups pay no synchronization cost because nothing mutates."
         },
         {
-          "label": "Lookup cost scales with the key, not the dictionary",
-          "description": "The first query is as fast as the millionth, whether the trie holds a thousand strings or ten million."
+          "label": "Succinct: packed near the information-theoretic minimum",
+          "description": "The static design is what lets the structure encode itself close to the theoretical lower bound for the key set. Prefix-rich data — URLs, file paths, names, dictionary words — compresses sharply because shared prefixes are stored once. A ~470K-entry English wordlist lands around 800 KB, roughly a fifth the size of the same words as a flat sorted list, before any column compression."
         },
         {
-          "label": "Prefix-rich data compresses sharply",
-          "description": "URLs, paths, and dictionary words share heavy prefix structure — a 470K-entry English wordlist fits in roughly 800 KB, about a fifth the size of the same words as a flat sorted list."
+          "label": "Cost scales with the key, not the dictionary",
+          "description": "Because lookup is a path walk of length O(|key|), query latency stays flat as the dictionary grows. Bigger sets buy you a bigger BLOB, not slower queries."
         }
       ]
     },
@@ -52,38 +34,15 @@
       "bulletPoints": [
         {
           "label": "Static — no incremental insert or delete",
-          "description": "Once built, the trie is immutable. Updates mean rebuilding from the source set."
+          "description": "The immutability that makes the trie succinct also means it can't be edited in place. To add or remove keys, rebuild from the updated source set — milliseconds for a daily wordlist, but an offline build step for billions of keys. A set that churns continuously wants a hash set or a [`bitfilters`](/products/extensions/bitfilters) Quotient filter instead."
         },
         {
-          "label": "String keys only",
-          "description": "`VARCHAR` in, `VARCHAR` out. Numeric keys need to be encoded as text upstream or stored in a different index."
+          "label": "VARCHAR keys only",
+          "description": "Strings in, strings out, in lexicographic order. Numeric or composite keys must be encoded as text upstream, and a different query-time ordering means building a separate trie."
         },
         {
-          "label": "Unrelated random strings: pick a Bloom",
-          "description": "Without shared prefixes, the compression edge disappears. For pure membership on uncorrelated keys, [`bitfilters`](/products/extensions/bitfilters) is smaller and just as fast — but it can't return the strings or answer prefix queries."
-        }
-      ]
-    },
-    {
-      "icon": "🎯",
-      "title": "Common use cases",
-      "description": "",
-      "useCases": [
-        {
-          "title": "Autocomplete backend in SQL",
-          "description": "Build the trie once at ingest time, store the BLOB, and serve type-ahead requests directly from DuckDB. No separate search service for static dictionaries."
-        },
-        {
-          "title": "Spell-check shipped inside a Parquet file",
-          "description": "A wordlist or term list compiled into a single BLOB column. Pair with [`fuzzycomplete`](/products/extensions/fuzzycomplete) or [`rapidfuzz`](/products/extensions/rapidfuzz) for fuzzy fallbacks when exact lookup misses."
-        },
-        {
-          "title": "Routing and longest-prefix-match tables",
-          "description": "URL paths, feature-flag rules, geo / CIDR labels — anywhere you ask \"which rules match this input?\""
-        },
-        {
-          "title": "Compact join dictionary",
-          "description": "One trie per partition or per day. The BLOB ships smaller than the underlying string list and serves prefix and membership queries from the same blob."
+          "label": "Uncorrelated keys: pick a Bloom",
+          "description": "The compression and the prefix queries both depend on shared prefix structure. For pure yes/no membership on random, unrelated strings, a Bloom / XOR / Binary Fuse filter from [`bitfilters`](/products/extensions/bitfilters) is smaller and just as fast — at the cost of bounded false positives and an inability to return the strings or answer prefix queries. Reach for MARISA when you need the keys back or you need prefixes; reach for `bitfilters` when memory is the only constraint."
         }
       ]
     }

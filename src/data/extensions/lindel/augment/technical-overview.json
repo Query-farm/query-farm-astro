@@ -1,93 +1,52 @@
 {
   "eyebrow": "Technical Overview",
   "title": "Why Use Lindel?",
-  "description": "Lindel — *linearization with delight* — encodes multi-dimensional integer points to a single integer along a [Hilbert](https://en.wikipedia.org/wiki/Hilbert_curve) or [Morton (Z-order)](https://en.wikipedia.org/wiki/Z-order_curve) space-filling curve. Use it as the `ORDER BY` key when writing Parquet: multi-column range queries start skipping row groups, and bit-locality lets the file compress better.",
+  "description": "Lindel — *linearization with delight* — maps multi-dimensional points onto a single integer that follows a [Hilbert](https://en.wikipedia.org/wiki/Hilbert_curve) or [Morton (Z-order)](https://en.wikipedia.org/wiki/Z-order_curve) space-filling curve. Used as the `ORDER BY` key when writing Parquet, it's the same [Z-Order / liquid-clustering](https://docs.databricks.com/aws/en/delta/clustering) optimization Databricks pioneered for Delta Lake.",
   "sections": [
     {
       "icon": "🧭",
-      "title": "What this extension is for",
-      "description": "Sorting Parquet by a single column gives the reader tight per-row-group statistics on that one column — every other column ends up scattered. A space-filling curve gives you a single sort key that keeps neighbours close in *every* input dimension at once.",
-      "bulletPoints": [
-        {
-          "label": "Locality-sensitive sort keys",
-          "description": "`hilbert_encode` / `morton_encode` take an array of unsigned integers and return one sortable integer. Sort by it and points that were close in N dimensions are close in the file."
-        },
-        {
-          "label": "Better Parquet block skipping",
-          "description": "Parquet stores per-row-group min/max statistics. With a Hilbert / Morton sort, every input column gets tight per-row-group bounds, so multi-column predicates each contribute to skipping instead of just the first sort column."
-        },
-        {
-          "label": "Better compression",
-          "description": "Adjacent rows have adjacent coordinates, so RLE / dictionary / delta encodings inside each row group find more runs and shorter deltas. Files shrink, scans get faster."
-        },
-        {
-          "label": "Round-trippable",
-          "description": "`hilbert_decode` / `morton_decode` recover the original array — useful for sanity checks and for storing the encoded value as a single-column index."
-        }
-      ]
+      "title": "One sort key for every dimension at once",
+      "description": "Parquet readers prune work using per-row-group min/max statistics — but sorting a file by a single column gives you tight bounds on *that* column only; every other column ends up scattered across row groups, so a predicate on it can't skip anything. A space-filling curve sidesteps this: it collapses N dimensions into one ordering where points that were close in the original space stay close in the file. Sort by that one key and a multi-column predicate gets meaningful per-row-group bounds on *all* of its columns simultaneously, not just the first sort column. The same coordinate-locality also helps the encoders — adjacent rows have adjacent values, so RLE, dictionary, and delta encodings inside each row group find more runs and shorter deltas, and files shrink."
     },
     {
       "icon": "🌀",
       "title": "Hilbert vs Morton",
-      "description": "Both curves are *locality-preserving* but they trade differently. Pick Hilbert by default; pick Morton when encoding throughput is the bottleneck.",
+      "description": "Both curves are *locality-preserving* and both reduce to bit manipulation over the input dimensions, but they trade locality against throughput. Pick Hilbert by default; pick Morton when encoding speed is the bottleneck.",
       "bulletPoints": [
         {
           "label": "Hilbert — better locality",
-          "description": "The [Hilbert curve](https://en.wikipedia.org/wiki/Hilbert_curve) never makes long jumps in input space — neighbours along the curve are always neighbours in N-D. Tighter row-group bounding boxes, slightly more CPU to compute. The geometry indexing systems [S2](https://s2geometry.io/) (Google) and [H3](https://h3geo.org/) (Uber) use Hilbert-style ordering for the same reason."
+          "description": "The [Hilbert curve](https://en.wikipedia.org/wiki/Hilbert_curve) never makes long jumps in input space: consecutive positions along the curve are always neighbours in N-D. That yields tighter row-group bounding boxes at the cost of slightly more CPU per encode. The geometry indexing systems [S2](https://s2geometry.io/) (Google) and [H3](https://h3geo.org/) (Uber) use Hilbert-style ordering for the same reason, and Delta Lake's [liquid clustering](https://docs.databricks.com/aws/en/delta/clustering) moved to it."
         },
         {
           "label": "Morton — faster, simpler",
-          "description": "The [Morton / Z-order curve](https://en.wikipedia.org/wiki/Z-order_curve) is just bit-interleaving the input dimensions. Trivially cheap to compute, with occasional long jumps at quadrant boundaries. The [Bing Maps Tile System](https://learn.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system) uses Morton-style quadkeys, and Delta Lake's original `ZORDER BY` was Morton before it moved to Hilbert-based [liquid clustering](https://docs.databricks.com/aws/en/delta/clustering)."
+          "description": "The [Morton / Z-order curve](https://en.wikipedia.org/wiki/Z-order_curve) is plain bit-interleaving of the input dimensions — trivially cheap to compute, but with occasional long jumps at quadrant boundaries that loosen the bounding boxes. The [Bing Maps Tile System](https://learn.microsoft.com/en-us/bingmaps/articles/bing-maps-tile-system) uses Morton-style quadkeys, and Delta Lake's original `ZORDER BY` was Morton."
         },
         {
-          "label": "Type coverage",
-          "description": "Both encoders are polymorphic over `UTINYINT` through `UHUGEINT`. Output is the smallest unsigned integer that fits *bit-width × dimensions* — e.g. `[UINTEGER, UINTEGER]` (32 × 2 = 64 bits) returns `UBIGINT`."
+          "label": "Output width follows the inputs",
+          "description": "Both encoders are polymorphic over `UTINYINT` through `UHUGEINT`. The result is the smallest unsigned integer that fits *bit-width × dimensions* — e.g. two 32-bit dimensions (64 bits total) return a `UBIGINT`, three return a `UHUGEINT`."
         }
       ]
     },
     {
       "icon": "🛡️",
       "title": "What to know before you sort by it",
-      "description": "A few honest caveats so you pick the right tool and the right inputs.",
+      "description": "A few honest caveats so you give the curve the right inputs and reach for it in the right situation.",
       "bulletPoints": [
         {
           "label": "Inputs are unsigned integers",
-          "description": "Encode floats by quantizing first (`(lat * 1e6)::UINTEGER`) or by mapping signed ranges to unsigned. The curves only carry the bits they're given — pre-scale so meaningful precision lands in the high bits."
+          "description": "The curves only carry the bits they're handed, and locality is driven by the high bits of each dimension. Quantize floats first (`(lat * 1e6)::UINTEGER` gives ~10 cm resolution worldwide) and map signed ranges to unsigned, pre-scaling so the precision you care about lands in those high bits."
         },
         {
-          "label": "Skewed dimensions",
-          "description": "If one input column has much higher cardinality than the others, the encoded ordering is dominated by it. Either rescale the dimensions to comparable ranges before encoding, or drop the dominant column from the curve and add it as a secondary sort key."
+          "label": "Skew can dominate the ordering",
+          "description": "If one input column has far higher cardinality or a far wider range than the others, it dominates the encoded key and the locality benefit on the other columns collapses. Rescale the dimensions to comparable ranges before encoding, or drop the dominant column from the curve and add it as a secondary `ORDER BY` term."
         },
         {
           "label": "Decoding doesn't carry types",
-          "description": "`hilbert_decode` / `morton_decode` need `num_elements`, `return_float`, and `return_unsigned` to reconstruct the original array — those aren't stored in the encoded integer."
+          "description": "Reconstructing the original array needs the dimension count, float-ness, and signed-ness passed explicitly — none of that is stored in the encoded integer, so the decode call has to be told the shape the value originally had."
         },
         {
-          "label": "It's a write-time sort, not a magic index",
-          "description": "Lindel improves Parquet block skipping when files are written in encoded order. Updating Parquet later means rewriting; for streaming inserts, batch and re-sort on a cadence rather than hoping one row at a time will help."
-        }
-      ]
-    },
-    {
-      "icon": "🎯",
-      "title": "Common Use Cases",
-      "description": "",
-      "useCases": [
-        {
-          "title": "Spatial Parquet — `(lat, lon)` or `(x, y, z)`",
-          "description": "Hilbert-order points before writing. Bounding-box queries (`WHERE lat BETWEEN ... AND lon BETWEEN ...`) skip whole row groups they don't intersect. The same shape works for any geometry workload that lands in Parquet."
-        },
-        {
-          "title": "Time-series with categorical fanout — `(ts, symbol_id)` / `(ts, user_id)`",
-          "description": "Sorting by `ts` alone scatters per-symbol rows. A Morton or Hilbert encoding of `(ts, key)` keeps both predicates skip-friendly."
-        },
-        {
-          "title": "Multi-column dashboards on a wide fact table",
-          "description": "Pick the 2-4 columns that show up in `WHERE` together most often, encode them with `hilbert_encode`, and rewrite the Parquet ordered by that key. Same data, much better tail latency on filtered scans."
-        },
-        {
-          "title": "Compress better, transfer less",
-          "description": "Bit-locality in the sort order means RLE / dictionary / delta encodings find more runs inside each row group. Smaller files at rest and on the wire."
+          "label": "It's a write-time ordering, not an index",
+          "description": "The gain comes entirely from how rows are laid out in the Parquet file, so it only helps data written in encoded order. There is no live index to maintain: updating means rewriting the affected files, and for streaming inserts you batch and re-sort on a cadence rather than expecting one row at a time to improve skipping. Real-world speedups depend on data shape and filter selectivity — the regime [Delta Lake liquid clustering](https://docs.databricks.com/aws/en/delta/clustering) targets."
         }
       ]
     }

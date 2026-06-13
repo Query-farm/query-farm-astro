@@ -23,8 +23,10 @@ import * as duckdb from "@haybarn/haybarn-wasm";
 
 // Pin to the installed @haybarn/haybarn-wasm version so the JS API surface and
 // the CDN-hosted wasm/worker artifacts stay in lockstep. Bump both together.
-const HAYBARN_WASM_VERSION = "1.5.3-rc9";
-const CDN = `https://cdn.jsdelivr.net/npm/@haybarn/haybarn-wasm@${HAYBARN_WASM_VERSION}/dist`;
+const HAYBARN_WASM_VERSION = "1.5.3-rc14";
+// unpkg, not jsDelivr: the package's unpacked size (168 MB as of rc13) exceeds
+// jsDelivr's 150 MB limit, which makes it 403 every file in the package.
+const CDN = `https://unpkg.com/@haybarn/haybarn-wasm@${HAYBARN_WASM_VERSION}/dist`;
 
 export interface QueryResult {
   ok: boolean;
@@ -81,6 +83,13 @@ async function boot(): Promise<Engine> {
   const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
   const db = new duckdb.AsyncDuckDB(logger, worker);
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+
+  if (import.meta.env.DEV) {
+    // Dev-only: permit LOADing locally built, unsigned extension artifacts
+    // (e.g. `INSTALL x FROM 'http://localhost:8787'` against a local build).
+    // Production stays signed-only.
+    await db.open({ allowUnsignedExtensions: true } as duckdb.DuckDBConfig);
+  }
 
   const conn = await db.connect();
   const controlConnId = conn.useUnsafe((_db: unknown, id: number) => id);

@@ -1,35 +1,54 @@
 {
   "eyebrow": "Technical Overview",
   "title": "Why Use A5?",
-  "description": "A5 is a [pentagonal discrete global grid system](https://a5geo.org/docs/technical/dggs) — an alternative to Uber's [H3](https://h3geo.org/) (hexagonal) and Google's [S2](https://s2geometry.io/) (square). Use it to convert `(lon, lat)` points into integer cell IDs that you can `GROUP BY`, `JOIN`, and index, when the area-uniformity of pentagonal cells matters for your bucketing.",
+  "description": "A5 is a [pentagonal discrete global grid system](https://a5geo.org/docs/technical/dggs) — an alternative to Uber's [H3](https://h3geo.org/) (hexagonal) and Google's [S2](https://s2geometry.io/) (square). It collapses a `(lon, lat)` point to a single 64-bit integer cell ID you can `GROUP BY`, `JOIN`, and index — the same role H3 / S2 IDs play — with the distinguishing property that every cell at a given resolution covers the same area on the globe.",
   "sections": [
     {
       "icon": "⬟",
-      "title": "What this extension is for",
-      "description": "Any spatial analysis that benefits from collapsing `(lon, lat)` to a fixed-cardinality integer key. The output of `a5_lonlat_to_cell` is a `UBIGINT` you can put in a `GROUP BY`, an index, or a join key — same shape you'd use H3 or S2 IDs in.",
+      "title": "Why pentagons, and why equal area",
+      "description": "A discrete global grid system answers one question: how do you tile a sphere with cells that are roughly the same size everywhere, so that counting points per cell is meaningful? Every system makes a different trade. A5's choice is to keep cell area as uniform as possible across the entire globe, accepting pentagonal cells to get it.",
       "bulletPoints": [
         {
-          "label": "Spatial aggregation",
-          "description": "`a5_lonlat_to_cell` returns a single integer per point. `GROUP BY` it for heatmap-style density queries — counts, sums, percentiles per cell — without touching the [`spatial`](https://duckdb.org/docs/extensions/spatial) extension."
+          "label": "The problem A5 solves",
+          "description": "When you bucket `(lon, lat)` points into grid cells and compare counts, the comparison is only honest if the cells are the same size. Grids built on lat/lon rectangles or projected squares stretch badly toward the poles, so a count of 100 near the equator and 100 near a pole describe very different densities. A5 cells are equal-area at each resolution by construction, so cross-latitude density comparisons need no per-cell normalization."
         },
         {
-          "label": "Spatial joins via shared cell ID",
-          "description": "Encode both sides of a join at the same resolution and join on the cell ID. Faster than polygon-on-polygon `ST_Intersects` for the common \"are these points in the same neighborhood\" question."
+          "label": "Pentagons are the cost of that uniformity",
+          "description": "You cannot tile a sphere with regular hexagons alone — H3 pays for its hexagons with [12 unavoidable pentagon exceptions](https://h3geo.org/docs/core-library/coordsystems) at the icosahedral vertices that traversal code must special-case. A5 instead derives its cells from a [dodecahedral subdivision](https://a5geo.org/examples/teohedron-dodecahedron), giving pentagons *everywhere* — uniform shape, uniform area, and no exceptional cells to handle. The geometric argument is laid out on the [A5 motivation page](https://a5geo.org/docs/motivation)."
         },
         {
-          "label": "Hierarchical roll-up",
-          "description": "`a5_cell_to_parent` walks a fine-grained cell up to a coarser resolution. The 31-level hierarchy means one encode at the finest resolution you'll need lets you re-aggregate at every coarser zoom without re-reading the source rows."
+          "label": "It's a thin binding over the reference library",
+          "description": "The DuckDB functions wrap the upstream [A5 Rust library](https://github.com/felixpalmer/a5), so cell IDs are identical to what the reference implementation produces — a DuckDB-computed ID round-trips through the JS/TypeScript library and back unchanged."
+        }
+      ]
+    },
+    {
+      "icon": "🧭",
+      "title": "How a point becomes a cell ID",
+      "description": "Encoding a coordinate is a deterministic geometric pipeline, and the resulting 64-bit unsigned integer (`UBIGINT`) is self-describing — it carries its own resolution, which is why you never need a separate level column alongside it.",
+      "bulletPoints": [
+        {
+          "label": "From sphere to cell",
+          "description": "A point is located on the globe, mapped onto the face of the dodecahedron it falls in, and then placed within that face's recursive pentagonal subdivision down to the requested resolution. Resolution 0 is the small set of base cells covering the whole globe; each finer level subdivides every cell, so cell count grows by a fixed branching factor per level and resolution 30 reaches sub-square-meter precision."
         },
         {
-          "label": "Bounding-region search",
-          "description": "`a5_grid_disk`, `a5_grid_disk_vertex`, and `a5_spherical_cap` generate a set of cell IDs covering a neighborhood — turn \"all points within k cells / X meters\" into an `IN (...)` predicate against an indexed cell column."
+          "label": "Resolution is packed into the ID",
+          "description": "The cell's position in the subdivision hierarchy *and* its resolution level are encoded together into the single `UBIGINT`. Because the level lives inside the integer, the resolution can be recovered from a bare cell ID with no side table — and a cell at one resolution maps deterministically to its ancestor at any coarser level, which is what makes hierarchical roll-up a pure integer operation rather than a re-encode of the raw points."
+        },
+        {
+          "label": "Pick the coarsest resolution that still separates your data",
+          "description": "Each finer level multiplies the number of distinct cells (and therefore `GROUP BY` cardinality) by the branching factor. Encode once at the finest resolution you'll ever need; roll up to coarser views in-query for free. The [Cookbook](#cookbook) and the resolution guide in the details below show the area-per-level trade-off."
+        },
+        {
+          "label": "Cells are integers first, geometry on demand",
+          "description": "Storage and joins use the compact integer. When you need to *draw* a cell, the boundary is materialized as `[lon, lat]` vertex pairs that pair with the [`spatial`](https://duckdb.org/docs/extensions/spatial) extension's polygon builders for GeoJSON output — the exact pattern is in the Cookbook."
         }
       ]
     },
     {
       "icon": "⬢",
       "title": "A5 vs H3 vs S2",
-      "description": "All three are global cell-based spatial indices that produce integer IDs. The shape of the cell, and how uniform its area is across the globe, is what differs.",
+      "description": "All three are global cell-based spatial indices that produce integer IDs. The shape of the cell, and how uniform its area is across the globe, is what differs — and that difference, plus ecosystem maturity, is the whole decision.",
       "bulletPoints": [
         {
           "label": "Cell shape",
@@ -46,52 +65,6 @@
         {
           "label": "Ecosystem maturity",
           "description": "H3 is older and has a much larger ecosystem (Postgres, BigQuery, Snowflake, Spark, plus Uber's first-party libraries). S2 is widely deployed inside Google. A5 is newer — the upstream library and specification are at [github.com/felixpalmer/a5](https://github.com/felixpalmer/a5). If you need the broadest tool support today, H3 is still the safest pick. Reach for A5 specifically when uniform cell area matters."
-        }
-      ]
-    },
-    {
-      "icon": "🧭",
-      "title": "How it works",
-      "description": "The extension is a thin DuckDB binding around the upstream [A5 Rust library](https://github.com/felixpalmer/a5). Cell IDs are 64-bit unsigned integers (`UBIGINT`); the resolution level is encoded in the ID itself, so `a5_get_resolution` recovers it without a separate column.",
-      "bulletPoints": [
-        {
-          "label": "Cell IDs are UBIGINTs",
-          "description": "Every function returns or accepts `UBIGINT` cell IDs. Use `a5_u64_to_hex` / `a5_hex_to_u64` when you need to round-trip them through systems that prefer the canonical hex string form (matching the [A5 reference library](https://github.com/felixpalmer/a5))."
-        },
-        {
-          "label": "31 resolution levels",
-          "description": "Resolution 0 is the 12 base cells covering the globe (`a5_get_res0_cells`); resolution 30 is sub-square-meter. `a5_cell_area` returns the equal-area cell size for any level. Pick the coarsest resolution that still distinguishes your phenomena — every level finer is roughly a 4× row count."
-        },
-        {
-          "label": "Boundary as a polygon",
-          "description": "`a5_cell_to_boundary` returns the cell's vertices as `[lon, lat]` pairs. Pair with the [`spatial`](https://duckdb.org/docs/extensions/spatial) extension's `ST_MakePolygon` / `ST_AsGeoJSON` to render cells on a map (the Cookbook shows the exact pattern)."
-        },
-        {
-          "label": "Compaction",
-          "description": "`a5_compact` replaces complete groups of sibling cells with their parent — useful for shrinking a coverage set before storing or transmitting it. `a5_uncompact` is the inverse, expanding to a target resolution."
-        }
-      ]
-    },
-    {
-      "icon": "🎯",
-      "title": "Common Use Cases",
-      "description": "",
-      "useCases": [
-        {
-          "title": "Heatmap-style density aggregation",
-          "description": "`GROUP BY a5_lonlat_to_cell(lon, lat, 10)` to count points per cell, then join with `a5_cell_to_boundary` for rendering. Because cells are equal-area, the resulting counts are directly comparable across latitudes — no per-cell area normalization needed."
-        },
-        {
-          "title": "Pre-indexed proximity search",
-          "description": "Encode all points into A5 cells at ingest time. For \"events near `(lon, lat)`\", expand to a `a5_spherical_cap` of cell IDs and filter via `WHERE cell_id IN (...)` — pushed down to whatever index you have on the cell column."
-        },
-        {
-          "title": "Multi-zoom rollup",
-          "description": "Store the finest resolution you'll need; use `a5_cell_to_parent` to roll up to coarser views in the same query. One source table powers every zoom level without re-reading raw points."
-        },
-        {
-          "title": "Coverage set compression",
-          "description": "Combine `a5_compact` with `a5_uncompact` when storing or shipping a region-of-interest as a set of cells — fewer rows to ship, expandable on the consumer side."
         }
       ]
     }
