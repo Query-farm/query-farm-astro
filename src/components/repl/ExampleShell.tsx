@@ -36,10 +36,13 @@ const ARROW_CDN = "https://cdn.jsdelivr.net/npm/apache-arrow@18.1.0/+esm";
 const READLINE_CDN = "https://cdn.jsdelivr.net/npm/xterm-readline@1.1.2/+esm";
 
 const TERM_THEME = {
-  background: "#0d2818",
+  // Distinct from the static example blocks' green gradient: a darker, flatter
+  // "device screen" with an amber cursor — the live shell reads as its own
+  // interactive surface (see header chrome below).
+  background: "#0f1714",
   foreground: "#e8f5e9",
-  cursor: "#66bb6a",
-  selectionBackground: "rgba(102, 187, 106, 0.35)",
+  cursor: "#fbbf24",
+  selectionBackground: "rgba(251, 191, 36, 0.30)",
 };
 
 let scriptsLoading: Promise<void> | null = null;
@@ -270,29 +273,11 @@ async function runRepl(
   }
 
   // Seed sample tables the examples query (e.g. `contacts`). Run silently in
-  // this session before the example; print a dim summary so the user knows the
-  // tables exist and can keep querying them interactively.
+  // this session before the example — no announcement; just make them exist.
   if (opts.fixtures) {
     const fixtureStmts = splitStatements(opts.fixtures).filter((s) => !isCommentOnly(s));
-    let seeded = 0;
     for (const stmt of fixtureStmts) {
-      const r = await session.runQuery(stmt);
-      if (r.ok) seeded++;
-    }
-    if (seeded > 0) {
-      const tables = [
-        ...opts.fixtures.matchAll(
-          /CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP\s+|TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["']?(\w+)/gi,
-        ),
-      ].map((m) => m[1]);
-      const unique = [...new Set(tables)];
-      writeln(
-        unique.length
-          ? `Sample tables ready: ${unique.join(", ")}`
-          : "Sample data loaded.",
-        "2",
-      );
-      rl.println("");
+      await session.runQuery(stmt);
     }
   }
 
@@ -306,11 +291,12 @@ async function runRepl(
     );
     for (const stmt of stmts) {
       await exec(stmt, true);
+      // Seed the readline history so the user can press ↑ to recall and edit
+      // the example, just as if they had typed it.
+      rl.appendHistory(stmt);
       rl.println("");
     }
   }
-
-  writeln("Ready — edit and press Enter, or .help for commands.", "2");
 
   for (;;) {
     const sql = (await rl.read("\x1b[32mD\x1b[0m > ")).trim();
@@ -439,8 +425,12 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
           }
         };
 
-        rl.println("\x1b[2mBooting Haybarn (DuckDB) WebAssembly…\x1b[0m");
-        const engine = await ensureEngine();
+        // Transient boot line (no trailing newline) — erased once ready below,
+        // so it doesn't linger above the example output.
+        rl.write(
+          "\x1b[2mBooting Haybarn (DuckDB) WebAssembly… (first load can take a few seconds)\x1b[0m",
+        );
+        await ensureEngine();
         if (disposed) return;
 
         // Load the extension once, engine-wide; open an isolated session.
@@ -451,10 +441,9 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
         if (disposed) return;
 
         setStatus("ready");
-        rl.println(
-          `\x1b[2mHaybarn ${engine.version} — in-browser, single-threaded · isolated session\x1b[0m`,
-        );
-        rl.println("");
+        // Clear the booting line (carriage return + erase line) now that the
+        // engine, extension, and session are ready.
+        rl.write("\r\x1b[2K");
 
         await runRepl(
           { term, rl, session, tableFromIPC },
@@ -480,17 +469,30 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
   }, [extensionName, installSource, sql, fixtures]);
 
   return (
-    <div className="mt-2 rounded-lg border border-[#66bb6a]/30 bg-[#0d2818] overflow-hidden shadow-sm">
-      <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#66bb6a]/20 bg-[#0a1f12]">
-        <div className="flex items-center gap-2 text-[#86efac] text-xs font-mono">
-          <span className="flex gap-1">
-            <span className="w-2 h-2 rounded-full bg-[#ff5f56]/70" />
-            <span className="w-2 h-2 rounded-full bg-[#ffbd2e]/70" />
-            <span className="w-2 h-2 rounded-full bg-[#27c93f]/70" />
-          </span>
-          <span className="ml-1">Haybarn shell · {extensionName}</span>
+    <div
+      className="mt-2 rounded-lg overflow-hidden"
+      style={{
+        background: "#0f1714",
+        border: "1.5px solid rgba(251, 191, 36, 0.45)",
+        boxShadow:
+          "0 0 0 1px rgba(245, 158, 11, 0.15), 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 20px rgba(251, 191, 36, 0.08)",
+      }}
+    >
+      <div
+        className="flex items-center justify-between px-3 py-1.5 border-b border-[#fbbf24]/20"
+        style={{ background: "#1a1410" }}
+      >
+        <div className="flex items-center gap-2 text-[#fcd34d] text-xs font-mono">
+          {/* Live-status dot (green = online), replacing the OS-specific
+              traffic-light chrome; amber elsewhere signals the live surface. */}
+          <span
+            className="w-2 h-2 rounded-full animate-pulse"
+            style={{ background: "#4ade80", boxShadow: "0 0 6px rgba(74, 222, 128, 0.7)" }}
+            aria-hidden="true"
+          />
+          <span>Haybarn shell · {extensionName}</span>
           {status === "loading" && (
-            <span className="text-[#86efac]/60 animate-pulse">· booting…</span>
+            <span className="text-[#fcd34d]/60 animate-pulse">· booting…</span>
           )}
         </div>
         {onClose && (
@@ -498,7 +500,7 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
             type="button"
             onClick={onClose}
             aria-label="Close shell"
-            className="text-[#86efac]/60 hover:text-[#dcfce7] text-xs font-mono px-1.5 cursor-pointer"
+            className="text-[#fbbf24] hover:text-[#fcd34d] text-xs font-mono px-1.5 cursor-pointer"
           >
             ✕
           </button>
