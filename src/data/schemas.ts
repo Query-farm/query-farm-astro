@@ -191,6 +191,15 @@ export const ExtensionCategorySchema = z.enum([
 
 export const ExtensionStatusSchema = z.enum(['stable', 'beta', 'experimental']);
 
+// A single quick-start example: an explicit title plus its SQL body. The title
+// is data (not a comment parsed out of the SQL), and the sql is opaque — it may
+// contain its own `--` comments without ambiguity. Each renders as its own cell
+// with its own "Try" button.
+export const QuickStartExampleSchema = z.object({
+  title: z.string().optional(),
+  sql: z.string(),
+});
+
 export const ExtensionMetadataSchema = z.object({
   name: z.string(),
   displayName: z.string(),
@@ -208,8 +217,10 @@ export const ExtensionMetadataSchema = z.object({
   // 'community' (DuckDB Community Extensions) or 'query.farm' or a literal
   // INSTALL clause like "FROM 'github://owner/repo'". Defaults to 'community'.
   installSource: z.string().default('community'),
-  // Optional SQL snippet shown after INSTALL/LOAD on the extension page.
-  quickStart: z.string().optional(),
+  // Quick-start examples shown below Install. Preferred form is an array of
+  // {title, sql} examples (each rendered as its own Try-able cell). A bare
+  // string is the legacy single-block form, still accepted during migration.
+  quickStart: z.union([z.string(), z.array(QuickStartExampleSchema)]).optional(),
   license: z.string().optional(),
   pricing: z.enum(['free', 'paid']).optional(),
   firstRelease: z.string().optional(),

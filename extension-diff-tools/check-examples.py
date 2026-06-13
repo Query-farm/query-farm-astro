@@ -260,6 +260,21 @@ def collect_quickstart(slug: str, meta: dict) -> list[Snippet]:
     qs = meta.get("quickStart")
     if not qs:
         return []
+    # Preferred form: a list of {title, sql} examples — one snippet each.
+    if isinstance(qs, list):
+        out: list[Snippet] = []
+        for i, ex in enumerate(qs):
+            if not isinstance(ex, dict):
+                continue
+            sql = ex.get("sql")
+            if not sql:
+                continue
+            label = ex.get("title") or f"#{i + 1}"
+            out.append(
+                Snippet(extension=slug, source=f"metadata.json:quickStart[{label}]", code=sql)
+            )
+        return out
+    # Legacy form: a single SQL string.
     return [Snippet(extension=slug, source="metadata.json:quickStart", code=qs)]
 
 
