@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   printBoxTable,
   printLineTable,
+  cellWidth,
   type TerminalOutput,
 } from "../../lib/repl/shell-table-renderer";
 import {
@@ -44,47 +45,6 @@ const TERM_THEME = {
   cursor: "#fbbf24",
   selectionBackground: "rgba(251, 191, 36, 0.30)",
 };
-
-/**
- * Per-codepoint display width that mirrors `string-width` — the function
- * cli-table3 uses to lay out the result box. xterm's default provider sizes
- * many emoji wrong (e.g. ❤️ renders 1 col while cli-table3 reserves 2), which
- * misaligns the box border. Registering this as xterm's width provider makes
- * both sides agree. Wide ranges follow `is-fullwidth-code-point`; emoji ranges
- * cover the common blocks. Variation selectors / combining marks are width 0,
- * so a base emoji (2) + VS16 (0) totals 2, matching string-width's grapheme.
- */
-function cellWidth(cp: number): number {
-  if (cp < 32 || (cp >= 0x7f && cp < 0xa0)) return 0; // C0/C1 controls
-  if (
-    (cp >= 0x300 && cp <= 0x36f) ||   // combining marks
-    (cp >= 0x200b && cp <= 0x200f) || // zero-width spaces, ZWJ, marks
-    (cp >= 0xfe00 && cp <= 0xfe0f) || // variation selectors (incl. VS16)
-    cp === 0xfeff
-  ) return 0;
-  const wide =
-    cp === 0x3000 ||
-    (cp >= 0x1100 && cp <= 0x115f) ||
-    (cp >= 0x2e80 && cp <= 0x303e) ||
-    (cp >= 0x3041 && cp <= 0x33ff) ||
-    (cp >= 0x3400 && cp <= 0x4dbf) ||
-    (cp >= 0x4e00 && cp <= 0x9fff) ||
-    (cp >= 0xa000 && cp <= 0xa4cf) ||
-    (cp >= 0xac00 && cp <= 0xd7a3) ||
-    (cp >= 0xf900 && cp <= 0xfaff) ||
-    (cp >= 0xfe10 && cp <= 0xfe19) ||
-    (cp >= 0xfe30 && cp <= 0xfe6f) ||
-    (cp >= 0xff00 && cp <= 0xff60) ||
-    (cp >= 0xffe0 && cp <= 0xffe6) ||
-    (cp >= 0x1f200 && cp <= 0x1f251) ||
-    (cp >= 0x20000 && cp <= 0x3fffd);
-  const emoji =
-    cp === 0x2122 || cp === 0x2139 || cp === 0x2764 ||
-    (cp >= 0x2600 && cp <= 0x27bf) || // misc symbols + dingbats
-    (cp >= 0x2b00 && cp <= 0x2bff) || // misc symbols & arrows
-    (cp >= 0x1f000 && cp <= 0x1faff); // supplementary emoji
-  return wide || emoji ? 2 : 1;
-}
 
 let scriptsLoading: Promise<void> | null = null;
 

@@ -37,10 +37,67 @@ function formatVal(val: unknown, field: Field): string {
   return escapeControl(formatCellValue(val, field?.name, field));
 }
 
-/** Truncate a string to maxLen, appending … if needed. */
+/**
+ * Per-codepoint terminal display width, mirroring `string-width` (which
+ * cli-table3 uses to lay out the box) and used as xterm's width provider too,
+ * so column sizing, the box border, and the rendered glyphs all agree. Wide
+ * ranges follow `is-fullwidth-code-point`; emoji ranges cover the common
+ * blocks. Variation selectors / combining marks are 0, so base-emoji (2) +
+ * VS16 (0) totals 2. NOTE: JS String.length counts UTF-16 units and is wrong
+ * here (a supplementary emoji is len 2, a BMP wide char len 1) — always use
+ * displayWidth() for column math.
+ */
+export function cellWidth(cp: number): number {
+  if (cp < 32 || (cp >= 0x7f && cp < 0xa0)) return 0; // C0/C1 controls
+  if (
+    (cp >= 0x300 && cp <= 0x36f) ||   // combining marks
+    (cp >= 0x200b && cp <= 0x200f) || // zero-width spaces, ZWJ, marks
+    (cp >= 0xfe00 && cp <= 0xfe0f) || // variation selectors (incl. VS16)
+    cp === 0xfeff
+  ) return 0;
+  const wide =
+    cp === 0x3000 ||
+    (cp >= 0x1100 && cp <= 0x115f) ||
+    (cp >= 0x2e80 && cp <= 0x303e) ||
+    (cp >= 0x3041 && cp <= 0x33ff) ||
+    (cp >= 0x3400 && cp <= 0x4dbf) ||
+    (cp >= 0x4e00 && cp <= 0x9fff) ||
+    (cp >= 0xa000 && cp <= 0xa4cf) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe10 && cp <= 0xfe19) ||
+    (cp >= 0xfe30 && cp <= 0xfe6f) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x1f200 && cp <= 0x1f251) ||
+    (cp >= 0x20000 && cp <= 0x3fffd);
+  const emoji =
+    cp === 0x2122 || cp === 0x2139 || cp === 0x2764 ||
+    (cp >= 0x2600 && cp <= 0x27bf) || // misc symbols + dingbats
+    (cp >= 0x2b00 && cp <= 0x2bff) || // misc symbols & arrows (⬜ etc.)
+    (cp >= 0x1f000 && cp <= 0x1faff); // supplementary emoji
+  return wide || emoji ? 2 : 1;
+}
+
+/** Terminal display width of a string (sum of cellWidth over code points). */
+export function displayWidth(s: string): number {
+  let w = 0;
+  for (const ch of s) w += cellWidth(ch.codePointAt(0) as number);
+  return w;
+}
+
+/** Truncate to a display width of maxLen, appending … if needed. */
 export function truncStr(s: string, maxLen: number): string {
-  if (s.length <= maxLen) return s;
-  return s.slice(0, maxLen - 1) + "…";
+  if (displayWidth(s) <= maxLen) return s;
+  let out = "";
+  let w = 0;
+  for (const ch of s) {
+    const cw = cellWidth(ch.codePointAt(0) as number);
+    if (w + cw > maxLen - 1) break;
+    out += ch;
+    w += cw;
+  }
+  return out + "…";
 }
 
 /** Check if an Arrow field represents a numeric type. */
@@ -132,8 +189,8 @@ const MAX_COL_WIDTH = 20;
 function computeIdealWidths(names: string[], types: string[], grid: string[][], totalCols: number): number[] {
   const widths: number[] = [];
   for (let c = 0; c < totalCols; c++) {
-    let w = Math.max(names[c].length, types[c].length);
-    for (const row of grid) w = Math.max(w, row[c].length);
+    let w = Math.max(displayWidth(names[c]), displayWidth(types[c]));
+    for (const row of grid) w = Math.max(w, displayWidth(row[c]));
     widths.push(Math.min(w, MAX_COL_WIDTH));
   }
   return widths;
@@ -192,8 +249,8 @@ function distributeSlack(
   if (slack <= 0) return;
 
   const naturalWidths = visibleIndices.map(ci => {
-    let w = Math.max(names[ci].length);
-    for (const row of grid) w = Math.max(w, row[ci].length);
+    let w = displayWidth(names[ci]);
+    for (const row of grid) w = Math.max(w, displayWidth(row[ci]));
     return w;
   });
   const expandable = visibleIndices
