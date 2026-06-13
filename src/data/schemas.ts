@@ -170,6 +170,11 @@ export const TechnicalOverviewSectionSchema = z.object({
   icon: z.string(),
   title: z.string(),
   description: z.string(),
+  // Optional figure rendered under the section description (e.g. an explanatory
+  // diagram or SVG in /public). Breaks up text-heavy overviews.
+  image: z.string().optional(),
+  imageAlt: z.string().optional(),
+  imageCaption: z.string().optional(),
   bulletPoints: z.array(BulletPointSchema).optional(),
   useCases: z.array(UseCaseSchema).optional(),
 });
