@@ -3,6 +3,7 @@ import Card from '../ui/Card.astro';
 import Badge from '../ui/Badge.astro';
 import SectionHeader from '../ui/SectionHeader.astro';
 import ExtensionSection from './ExtensionSection.astro';
+import { parseInline } from 'marked';
 
 interface ExtensionContent {
   id: string;
@@ -31,24 +32,14 @@ const {
   description = "Quick reference to all available functions and settings organized by category."
 } = Astro.props;
 
-// Render the small subset of markdown people actually use in category
-// descriptions: **bold**, *italic*, `code`, and [text](url) links. HTML
-// is escaped before substitution so authored values can't inject markup.
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+// Render inline markdown (bold, italic, `code`, [text](url), and links whose
+// text is itself code like [`fn`](#fn)) via the same parser the rest of the
+// site uses. The previous hand-rolled regex renderer broke on code-in-link
+// because it injected a class containing `]` before the link regex ran.
+// Styling of the resulting <code>/<a> is applied by the [&_code]/[&_a] wrapper
+// classes at each call site.
 function renderInline(s: string): string {
-  let out = escapeHtml(s);
-  out = out.replace(/`([^`]+)`/g, (_m, t) => `<code class="font-mono text-[11px] bg-soil-100 px-1 py-0.5 rounded">${t}</code>`);
-  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g,
-    (_m, text, url) => `<a href="${url}" class="text-harvest-700 hover:text-harvest-800 underline">${text}</a>`);
-  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong class="text-soil-900">$1</strong>');
-  out = out.replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>');
-  return out;
+  return parseInline(s ?? '', { async: false }) as string;
 }
 
 // Group contents by category
@@ -124,7 +115,7 @@ const sortedContentCategories = [
                         <div class="font-bold text-soil-900">{categoryName}</div>
                         {categoryDescriptions[categoryName] && (
                           <p
-                            class="text-xs text-soil-700 font-normal mt-1 leading-snug max-w-3xl"
+                            class="text-xs text-soil-700 font-normal mt-1 leading-snug max-w-3xl [&_code]:font-mono [&_code]:text-[11px] [&_code]:bg-soil-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_a]:text-harvest-700 [&_a]:underline hover:[&_a]:text-harvest-800"
                             set:html={renderInline(categoryDescriptions[categoryName])}
                           />
                         )}
