@@ -15,10 +15,10 @@ const STYLE_ID = "example-shell-style";
 const ATTACHED = "exampleShellAttached";
 
 const PLAY_ICON =
-  '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>';
+  '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="13 2 3 14 11 14 11 22 21 10 13 10 13 2"></polygon></svg>';
 const HIDE_ICON =
   '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
-const TRY_LABEL = `${PLAY_ICON}<span>Try</span>`;
+const TRY_LABEL = `${PLAY_ICON}<span>Try using WASM</span>`;
 const HIDE_LABEL = `${HIDE_ICON}<span>Hide</span>`;
 
 const STYLE = `
@@ -33,18 +33,23 @@ const STYLE = `
   font-size: 0.75rem;
   font-weight: 500;
   font-family: inherit;
-  color: rgb(134, 239, 172);
-  background: rgba(13, 40, 24, 0.9);
-  border: 1px solid rgba(102, 187, 106, 0.3);
+  /* Amber "preview chip" of the live shell it opens — borrows the shell's dark
+     surface (#0f1714) and duck-amber accent so it stands out from the green
+     code block and signals "this opens the interactive thing". */
+  color: rgb(252, 211, 77);
+  background: rgba(15, 23, 20, 0.85);
+  border: 1px solid rgba(251, 191, 36, 0.35);
   border-radius: 0.25rem;
   backdrop-filter: blur(4px);
   cursor: pointer;
   z-index: 10;
-  transition: color 120ms ease, border-color 120ms ease;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 .example-try-button:hover {
-  color: rgb(220, 252, 231);
-  border-color: rgba(102, 187, 106, 0.6);
+  color: rgb(253, 230, 138);
+  background: rgba(15, 23, 20, 0.95);
+  border-color: rgba(251, 191, 36, 0.6);
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.15);
 }
 .example-try-button[data-offset-copy="true"] { right: 5.75rem; }
 `;
