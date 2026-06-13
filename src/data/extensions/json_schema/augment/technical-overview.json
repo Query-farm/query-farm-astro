@@ -1,97 +1,51 @@
 {
   "eyebrow": "Technical Overview",
   "title": "Why Use JSON Schema from DuckDB?",
-  "description": "Validate JSON columns against a [JSON Schema](https://json-schema.org/) contract directly in SQL — no Pydantic / ajv / jsonschema-Python in a sidecar. Best fit: ingest-time data-quality gates, ETL contract checks, and one-query enrichment that fills in declared `default` values. Built on the [pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator) C++ library; the validator's primary target is [JSON Schema draft-07](https://json-schema.org/draft-07/json-schema-release-notes).",
+  "description": "[JSON Schema](https://json-schema.org/) is the de facto contract language for JSON payloads — a declarative way to say what a document must look like. This extension makes those contracts *executable* from inside DuckDB, so a data-quality gate, an ETL contract check, or a default-value fill-in can live in SQL instead of a Pydantic / ajv / jsonschema sidecar. It is built on the [pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator) C++ library, whose primary target is [JSON Schema draft-07](https://json-schema.org/draft-07/json-schema-release-notes).",
   "sections": [
     {
       "icon": "📐",
-      "title": "What this extension is for",
-      "description": "JSON Schema is the de facto contract language for JSON payloads. This extension makes those contracts executable from inside DuckDB so you don't need a separate Python or Node.js step to enforce them.",
+      "title": "JSON Schema as an in-SQL contract",
+      "description": "The idea is to treat a schema as a contract that a column of JSON must satisfy, and to enforce that contract where the data already lives. Validation answers a single question — does this value conform? — which makes it a `BOOLEAN` predicate that drops straight into `WHERE`, `CASE`, and aggregate `FILTER` clauses. Beyond pure validation, the schema's declared `default` values can also be projected onto incomplete documents to bring them into conformance.",
       "bulletPoints": [
         {
-          "label": "Ingest-time data quality",
-          "description": "Filter rows that don't satisfy the schema before they reach a clean table — `json_schema_validate` returns `BOOLEAN`, so it drops straight into a `WHERE` clause."
+          "label": "Draft-07 is the target",
+          "description": "The underlying validator primarily targets [draft-07](https://json-schema.org/draft-07/json-schema-release-notes). The `$schema` keyword in your document is honored where the validator supports it; for newer drafts ([2019-09](https://json-schema.org/specification-links#2019-09), [2020-12](https://json-schema.org/draft/2020-12/schema)), test the specific keywords you use rather than assuming full coverage."
         },
         {
-          "label": "Lint your contracts",
-          "description": "Run `json_schema_validate_schema` against the schema itself before deploying. Catches typos in the schema before they cause every row to fail validation."
+          "label": "What the validator covers",
+          "description": "Coverage matches what draft-07 specifies: type checks (`string`, `number`, `integer`, `boolean`, `array`, `object`, `null`), `required`, `properties`, numeric `minimum` / `maximum` / `multipleOf`, string `minLength` / `maxLength` / `pattern` / `format`, array `minItems` / `maxItems` / `uniqueItems`, and the `default` keyword that powers default-value enrichment."
         },
         {
-          "label": "Default-value enrichment",
-          "description": "Use `json_schema_patch` to compute the [JSON Patch (RFC 6902)](https://datatracker.ietf.org/doc/html/rfc6902) operations that bring an incomplete document into conformance with the schema's declared `default` values, or `json_schema_update` to apply them inline."
+          "label": "Schema and data are both JSON",
+          "description": "Both the schema and the value under test are passed as DuckDB [`JSON`](https://duckdb.org/docs/data/json/overview) values — a column, a struct literal, or a string cast with `::JSON`. There's no preregistration step, no `ATTACH`, no secret type, and no network: validation runs locally against the in-query schema string."
         },
         {
-          "label": "Audits and dashboards",
-          "description": "Aggregate `valid` / `invalid` counts over a column of JSON in one query — much simpler than pulling rows out to a Python validator and back."
-        }
-      ]
-    },
-    {
-      "icon": "⚙️",
-      "title": "How it works",
-      "description": "Internally, this is a thin DuckDB scalar-function wrapper around [pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator) and [nlohmann/json](https://github.com/nlohmann/json). Both schema and data are passed as DuckDB `JSON` values. There's no `ATTACH`, no secret type, no network — pure local validation against an in-query schema string.",
-      "bulletPoints": [
-        {
-          "label": "Four scalar functions",
-          "description": "`json_schema_validate` and `json_schema_validate_schema` return `BOOLEAN`; `json_schema_patch` and `json_schema_update` return `JSON`. All four take their schema and data inline — no preregistration step."
-        },
-        {
-          "label": "Draft compatibility",
-          "description": "Primary target is [JSON Schema draft-07](https://json-schema.org/draft-07/json-schema-release-notes). The `$schema` keyword in your document is honored where the underlying validator supports it; for newer drafts ([2019-09](https://json-schema.org/specification-links#2019-09) / [2020-12](https://json-schema.org/draft/2020-12/schema)), test the keywords you actually use rather than assuming full coverage."
-        },
-        {
-          "label": "Schema features in scope",
-          "description": "Type validation (`string`, `number`, `integer`, `boolean`, `array`, `object`, `null`), `required`, `properties`, numeric `minimum` / `maximum` / `multipleOf`, string `minLength` / `maxLength` / `pattern` / `format`, array `minItems` / `maxItems` / `uniqueItems`, and the `default` keyword used by `json_schema_patch` / `json_schema_update`."
-        },
-        {
-          "label": "Pairs with DuckDB JSON",
-          "description": "Combine with [DuckDB's JSON support](https://duckdb.org/docs/data/json/overview) — `read_json_auto`, `JSON` type, [`json_extract_*`](https://duckdb.org/docs/data/json/loading_json.html) — so the validator slots into the existing JSON pipeline rather than replacing it."
+          "label": "Default-value enrichment, not just validation",
+          "description": "The non-obvious capability: turn the schema's declared `default` values into actual data. One function computes the [JSON Patch (RFC 6902)](https://datatracker.ietf.org/doc/html/rfc6902) diff of `add` operations (useful for an audit log); another applies them inline — taking an incomplete payload to a fully populated record in one expression, with no `COALESCE` cascade."
         }
       ]
     },
     {
       "icon": "🛡️",
       "title": "What to know before relying on it",
-      "description": "Honest scoping for production use. The extension is small and focused; it doesn't try to be every JSON-Schema validator out there.",
+      "description": "The extension is small and focused; it doesn't try to be every JSON-Schema validator out there. Knowing its boundaries keeps it in the role it's good at — a coarse SQL-side gate — rather than where a richer tool belongs.",
       "bulletPoints": [
         {
-          "label": "Boolean validation, not error reports",
-          "description": "`json_schema_validate` returns `TRUE` / `FALSE`. It does not return a structured list of which keywords or paths failed — for that level of diagnostic detail, validate at the application layer with [ajv](https://ajv.js.org/) / [Pydantic](https://docs.pydantic.dev/latest/concepts/json_schema/) / [jsonschema](https://python-jsonschema.readthedocs.io/) and use this extension as a coarse SQL gate."
+          "label": "Boolean result, not an error report",
+          "description": "Validation returns `TRUE` / `FALSE`, not a structured list of which keywords or paths failed. For per-keyword diagnostics, validate at the application layer with [ajv](https://ajv.js.org/), [Pydantic](https://docs.pydantic.dev/latest/concepts/json_schema/), or [jsonschema](https://python-jsonschema.readthedocs.io/), and use this extension as the coarse SQL gate at ingest, in CI, or in an audit."
         },
         {
-          "label": "No `$ref` resolution across files",
-          "description": "Schemas are passed as a single `JSON` value per call — there is no filesystem or HTTP `$ref` resolver. Inline any `$ref` targets into the same schema document before validating."
+          "label": "No cross-file `$ref` resolution",
+          "description": "Each call takes a single `JSON` schema value — there is no filesystem or HTTP `$ref` resolver. Inline any `$ref` targets into the same schema document before validating."
         },
         {
-          "label": "Not a replacement for typed columns",
-          "description": "If your data has a fixed shape, modeling it with proper DuckDB columns plus [`CHECK` constraints](https://duckdb.org/docs/sql/constraints) is cheaper and clearer. JSON Schema validation is for the genuinely-JSON case where the shape is contract-defined but the storage stays opaque."
+          "label": "Prefer typed columns where you can",
+          "description": "If the data has a fixed shape, modeling it as proper DuckDB columns plus [`CHECK` constraints](https://duckdb.org/docs/sql/constraints) is cheaper, clearer, and gives better error messages. JSON Schema validation is for the genuinely-JSON case where the shape is contract-defined but the storage stays opaque."
         },
         {
-          "label": "Performance scales with schema complexity",
-          "description": "Deeply-nested schemas with many keywords run the full validator per row. For very large tables, validate on ingest into a staging table rather than re-running the check on every read."
-        }
-      ]
-    },
-    {
-      "icon": "🎯",
-      "title": "Common Use Cases",
-      "description": "",
-      "useCases": [
-        {
-          "title": "Quality gate on ingest",
-          "description": "`INSERT INTO events_clean SELECT * FROM events_raw WHERE json_schema_validate(:schema, payload)` — non-conforming rows can be tee'd into a quarantine table for manual review."
-        },
-        {
-          "title": "Audit a JSON column",
-          "description": "Aggregate `valid` and `invalid` counts with `json_schema_validate` inside `COUNT(*) FILTER (...)`. Useful for retroactively checking historical data against a freshly-tightened contract."
-        },
-        {
-          "title": "Fill in missing defaults",
-          "description": "Declare `default` in the schema, then use `json_schema_update` to produce the enriched JSON in one expression — or `json_schema_patch` when you need the diff for an audit log."
-        },
-        {
-          "title": "Lint schemas before deploying",
-          "description": "`json_schema_validate_schema` over a table of candidate schemas in CI. Catches typos before they reject every production row."
+          "label": "Per-row cost scales with schema complexity",
+          "description": "Deeply-nested schemas with many keywords run the full validator on every row. For very large tables, validate once on ingest into a staging table rather than re-running the check on every read."
         }
       ]
     }

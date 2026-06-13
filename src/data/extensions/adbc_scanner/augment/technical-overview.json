@@ -14,7 +14,7 @@
         },
         {
           "label": "No row-format intermediate",
-          "description": "Result batches arrive as Arrow [record batches](https://arrow.apache.org/docs/format/Columnar.html#format-record-batches) and feed straight into DuckDB's [vectorized executor](https://duckdb.org/2021/06/25/querying-parquet.html#vectorized-execution) without transposition or per-row allocation."
+          "description": "Result batches arrive as Arrow [record batches](https://arrow.apache.org/docs/format/Columnar.html#format-record-batches) and feed straight into DuckDB's [vectorized executor](https://duckdb.org/2021/06/25/querying-parquet.html#vectorized-execution) without transposition or per-row allocation. A batch is a contiguous block of columns the driver hands DuckDB by pointer; DuckDB reads it in place."
         },
         {
           "label": "Pluggable driver model",
@@ -24,27 +24,27 @@
     },
     {
       "icon": "🔌",
-      "title": "Two ways to use it",
-      "description": "The extension exposes the same underlying ADBC machinery through two surfaces — pick by what you're trying to do. Both can be loaded simultaneously and target the same remote database.",
+      "title": "Two execution models",
+      "description": "The same ADBC machinery is reachable two ways, and the choice is architectural, not cosmetic. Both can be loaded at once against the same database.",
       "bulletPoints": [
         {
-          "label": "Catalog mode — `ATTACH ... (TYPE adbc, driver '…')`",
-          "description": "Mounts the remote database as a DuckDB catalog. Schemas and tables show up under the alias you give `ATTACH`; projection and filter pushdown happen automatically; the driver streams Arrow batches into DuckDB's executor. Read-only — DDL and DML aren't supported through the catalog interface."
+          "label": "Catalog mode — declarative, read-only",
+          "description": "An [`ATTACH`](https://duckdb.org/docs/sql/statements/attach) mounts the remote database as a DuckDB catalog: its schemas and tables appear under an alias, and the optimizer pushes projections and filters down into the driver while streaming Arrow batches into the vectorized executor. A join against local Parquet plans as one query — `LIMIT` can short-circuit the upstream scan, exactly like reading a Parquet file. The tradeoff is that the catalog interface is **read-only** — no DDL or DML flows through it."
         },
         {
-          "label": "Function mode — `adbc_connect` + scan / execute / insert",
-          "description": "Returns a `BIGINT` connection handle you stash in a [SQL variable](https://duckdb.org/docs/sql/statements/set_variable). Pass it to `adbc_scan` / `adbc_scan_table` for arbitrary SELECTs, `adbc_execute` for DDL/DML, `adbc_insert` for Arrow-native bulk inserts, and `adbc_commit` / `adbc_rollback` (after `adbc_set_autocommit`) for explicit transactions. Close with `adbc_disconnect`."
+          "label": "Function mode — imperative, full control",
+          "description": "A connection handle lets you script the session explicitly: run server-side DDL/DML, set your own transaction boundaries, and perform Arrow-native bulk inserts that hand the driver columnar batches with no row-format detour. You trade automatic pushdown (here it only reaches as far as the SQL string you send) for the ability to write and to control transactions yourself."
         },
         {
-          "label": "Schema introspection",
-          "description": "`adbc_tables`, `adbc_columns`, and `adbc_schema` expose the remote catalog without running data queries. Useful for dashboards and schema-driven ETL that need to adapt as the upstream changes — and works whether you're in catalog mode, function mode, or both."
+          "label": "How to choose",
+          "description": "Reach for catalog mode whenever the work is read-only analytics — it's less code and the optimizer does the pushdown for you. Drop into function mode the moment you need to mutate the remote, manage transactions explicitly, or bulk-load Arrow batches in. Because both target the same driver, a common pattern is catalog mode for the queries and function mode for the occasional write, in the same session."
         }
       ]
     },
     {
       "icon": "📦",
       "title": "Driver Setup",
-      "description": "ADBC drivers ship as shared libraries (`libadbc_driver_*.dylib` / `.so` / `.dll`) plus an optional [`manifest.toml`](https://arrow.apache.org/adbc/current/driver/installation.html#manifests) that names the symbol to load. The extension resolves them in two ways depending on how you reference them in `adbc_connect`.",
+      "description": "ADBC drivers ship as shared libraries (`libadbc_driver_*.dylib` / `.so` / `.dll`) plus an optional [`manifest.toml`](https://arrow.apache.org/adbc/current/driver/installation.html#manifests) that names the symbol to load. The extension resolves them two ways depending on how you reference the driver.",
       "bulletPoints": [
         {
           "label": "By name (manifest-resolved)",
@@ -57,6 +57,10 @@
         {
           "label": "Custom search paths",
           "description": "Pass `'search_paths': '/opt/adbc/drivers'` inside the connect options to add manifest directories without changing OS-level config."
+        },
+        {
+          "label": "Drivers run as trusted native code",
+          "description": "However it's resolved, a driver loads into DuckDB's address space and runs with the user's privileges — treat it like `LOAD`. In multi-tenant or hosted DuckDB, restrict ADBC access to roles that already have arbitrary-code-execution authority, and load only [vetted upstream drivers](https://arrow.apache.org/adbc/current/driver/)."
         }
       ]
     },
@@ -74,31 +78,8 @@
           "description": "When the system on the other end speaks [Arrow Flight](https://arrow.apache.org/docs/format/Flight.html) directly — typically custom services or Flight-native systems like [Dremio](https://www.dremio.com/). Flight is an *RPC protocol*, not a client API. See the [`airport`](/products/extensions/airport) extension."
         },
         {
-          "label": "Both can coexist",
-          "description": "Nothing stops you from loading both: ADBC Scanner for traditional databases, [`airport`](/products/extensions/airport) for Flight-native services, all queryable from the same DuckDB session."
-        }
-      ]
-    },
-    {
-      "icon": "🎯",
-      "title": "Common Use Cases",
-      "description": "",
-      "useCases": [
-        {
-          "title": "Federate live OLTP databases",
-          "description": "Run cross-database analytics by pulling tables from PostgreSQL, MySQL, or SQLite into DuckDB on demand — no ETL machinery, no scheduled syncs. Use `adbc_scan_table` for whole tables or `adbc_scan` for filtered queries."
-        },
-        {
-          "title": "Bulk-load from cloud warehouses",
-          "description": "Scan [Snowflake](https://arrow.apache.org/adbc/current/driver/snowflake.html) or [BigQuery](https://arrow.apache.org/adbc/current/driver/bigquery.html) query results directly into DuckDB for local analysis, joining against Parquet, CSV, or other DuckDB-native sources."
-        },
-        {
-          "title": "Schema-driven dashboards and ETL",
-          "description": "Use `adbc_tables` / `adbc_columns` / `adbc_schema` to introspect remote catalogs and generate dashboards or pipelines that adapt to schema changes without code edits."
-        },
-        {
-          "title": "Arrow-native bulk export",
-          "description": "Push DuckDB query results into a remote ADBC database with `adbc_insert` — columnar end-to-end, no row-format detour."
+          "label": "vs purpose-built scanners",
+          "description": "DuckDB's [`postgres_scanner`](https://duckdb.org/docs/extensions/postgres) / [`mysql_scanner`](https://duckdb.org/docs/extensions/mysql) / [`sqlite_scanner`](https://duckdb.org/docs/extensions/sqlite) are often faster for the one database they target. Reach for ADBC Scanner when no purpose-built extension exists, when you want a single client surface across many backends, or when you specifically want Arrow end-to-end (Snowflake, BigQuery)."
         }
       ]
     }

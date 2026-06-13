@@ -1,97 +1,70 @@
 {
   "eyebrow": "Technical Overview",
-  "title": "Why Use JSONata from DuckDB?",
-  "description": "[JSONata](https://jsonata.org/) is an [open query and transformation language for JSON](https://docs.jsonata.org/overview), modelled on XPath. This extension exposes a single scalar function — `jsonata` — that evaluates JSONata expressions against DuckDB `JSON` values. Reach for it when DuckDB's native [`json_extract`](https://duckdb.org/docs/data/json/json_functions.html) chain gets verbose: array predicates, object reshaping, and conditional projections collapse into one expression.",
+  "title": "When to Reach for JSONata over json_extract",
+  "description": "[JSONata](https://jsonata.org/) is an [open query and transformation language for JSON](https://docs.jsonata.org/overview), modelled on XPath. This extension exposes it as a single scalar function that evaluates a JSONata expression against a DuckDB [`JSON`](https://duckdb.org/docs/data/json/json_functions.html) value. The real question isn't *what* it can do — it's *when* it earns its keep over DuckDB's native JSON functions, which are the better call for simple access. JSONata wins precisely where a [`json_extract`](https://duckdb.org/docs/data/json/json_functions.html) chain stops being concise.",
   "sections": [
     {
-      "icon": "📕",
-      "title": "What this extension is for",
-      "description": "DuckDB's built-in [JSON functions](https://duckdb.org/docs/data/json/json_functions.html) are great for one-field-one-path access. JSONata's strength is everything beyond that — filtering arrays by predicate, building a new object shape, traversing wildcards, and chaining transforms in a single string.",
+      "icon": "🔀",
+      "title": "JSONata vs. chains of json_extract",
+      "description": "DuckDB ships a [rich, vectorized JSON function library](https://duckdb.org/docs/data/json/json_functions.html) — [`json_extract`](https://duckdb.org/docs/data/json/json_functions.html), [`json_extract_string`](https://duckdb.org/docs/data/json/json_functions.html), the [`->`/`->>` operators](https://duckdb.org/docs/data/json/json_functions.html), and the `JSON` type. For one-field-one-path access, those are the right tool and you should not reach for this extension at all. JSONata becomes the better fit once the expression starts to fan out — its single string collapses what native JSON would express as `unnest` plus a subquery.",
       "bulletPoints": [
         {
-          "label": "Concise nested paths",
-          "description": "Walk dotted [paths](https://docs.jsonata.org/path-operators) like `Account.Order.Product.Price` directly. No quoting per segment, no intermediate `json_extract` calls."
-        },
-        {
-          "label": "Predicate filters on arrays",
-          "description": "`Phone[type=\"mobile\"].number` selects matching elements and projects in one step. See [JSONata predicates](https://docs.jsonata.org/predicate)."
+          "label": "Array predicate filters",
+          "description": "`Phone[type=\"mobile\"].number` selects matching elements *and* projects in one step. The native equivalent extracts the array, `unnest`s it, filters with a `WHERE`, and projects in a correlated subquery."
         },
         {
           "label": "Object reshaping",
-          "description": "[Object construction](https://docs.jsonata.org/construction) lets you build a fresh JSON object literal — pull only the fields you need, rename them, compute new ones — inside a single `jsonata` call."
+          "description": "An [object-construction](https://docs.jsonata.org/construction) literal builds a fresh JSON object — pulling, renaming, and computing fields together. Natively that's one `json_extract_string` per output field, which gets unwieldy past two or three fields."
         },
         {
-          "label": "Higher-order array operations",
-          "description": "[`$map`, `$filter`, `$reduce`, `$sort`](https://docs.jsonata.org/higher-order-functions) and friends operate on arrays inside the JSON value. Transformations that would need `unnest` + subquery in plain SQL stay inline."
+          "label": "Embedded aggregation and higher-order ops",
+          "description": "[`$sum`, `$count`, `$max`](https://docs.jsonata.org/aggregation-functions) and [`$map`, `$filter`, `$reduce`](https://docs.jsonata.org/higher-order-functions) operate on arrays *inside* the document, keeping per-row roll-ups inline instead of leaving the JSON value to unnest and re-aggregate."
+        },
+        {
+          "label": "The break-even",
+          "description": "Roughly: any array predicate, any reshape, or more than two output fields tilts toward JSONata. A single field at a fixed path stays simpler in native DuckDB JSON — don't add an extension for it."
         }
       ]
     },
     {
       "icon": "🔌",
       "title": "How it works",
-      "description": "The extension is a pure scalar UDF — no `ATTACH`, no secrets, no network. `jsonata(expression, json_data)` parses the expression, evaluates it against the supplied [`JSON`](https://duckdb.org/docs/data/json/json_functions.html) value, and returns a `JSON` result. A 3-arg form passes a `bindings` object so the expression can reference `$variable` names.",
+      "description": "The extension is a scalar UDF — no `ATTACH`, no secrets, no I/O. A call parses the JSONata expression into a program, evaluates it against the supplied [`JSON`](https://duckdb.org/docs/data/json/json_functions.html) value, and returns a `JSON` result. The detail that matters most for performance isn't obvious from the signature.",
       "bulletPoints": [
         {
-          "label": "One function, two arities",
-          "description": "`jsonata(expr, json)` for the common case; `jsonata(expr, json, bindings)` when the expression needs external `$variables` — typically thresholds, ids, or per-row context lifted from other columns."
-        },
-        {
-          "label": "Constant-expression optimization",
-          "description": "When the `expression` argument is a constant SQL literal — the usual case — the parser runs once and the compiled program is reused for every row. Per-row cost is JSON walk + apply, not parse-and-compile."
+          "label": "Constant expressions are parsed once",
+          "description": "When the expression argument is a SQL constant — by far the common case — the parser runs a single time and the compiled program is reused for every row. Per-row cost is then just the JSON walk plus operator application, not a parse-and-compile on each row, so a static expression over a million rows still parses exactly once."
         },
         {
           "label": "JSON in, JSON out",
-          "description": "The return type is always [`JSON`](https://duckdb.org/docs/data/json/json_functions.html). Cast or unnest downstream — `result::VARCHAR`, `result->>'$'`, or `unnest(result::JSON[])` for arrays — exactly like any other DuckDB JSON expression."
+          "description": "Both the input value and the return type are [`JSON`](https://duckdb.org/docs/data/json/json_functions.html). Cast or unnest downstream depending on what the expression yields — `result::VARCHAR`, `result->>'$'`, or `unnest(result::JSON[])` for arrays — exactly like any other DuckDB JSON expression."
         },
         {
-          "label": "Try expressions interactively",
-          "description": "The official [JSONata exerciser](https://try.jsonata.org/) is the fastest way to iterate on an expression before pasting it into a SQL string. Same evaluator semantics."
+          "label": "Two arities, parse cache intact",
+          "description": "The 3-arg form takes a `bindings` JSON object whose keys become `$variable` names inside the expression. This is how you pass per-query values — thresholds, ids, dates — into an otherwise static expression *without* breaking the parse-once optimization, since the expression text stays constant."
         }
       ]
     },
     {
       "icon": "🛡️",
       "title": "Scope and caveats",
-      "description": "The extension wraps the JSONata language faithfully but lives inside SQL — the surrounding context is DuckDB, not Node.js. A few things are worth knowing up front.",
+      "description": "The extension wraps the JSONata language faithfully, but it lives inside SQL — the surrounding context is DuckDB, not Node.js. A few things are worth knowing up front.",
       "bulletPoints": [
         {
-          "label": "Single function surface",
-          "description": "Everything is reached through `jsonata`. There are no helper UDFs for individual JSONata operators — the expression string carries the whole computation."
+          "label": "Single scalar function surface",
+          "description": "Everything is reached through one function — there are no helper UDFs for individual JSONata operators. The expression string carries the whole computation. (It is not a JSON loader either; use DuckDB's [`read_json`](https://duckdb.org/docs/data/json/loading_json.html) for that.)"
         },
         {
           "label": "Expressions are SQL strings",
-          "description": "JSONata expressions live inside a SQL `VARCHAR` literal. Embedded double quotes need SQL escaping; for long expressions, store them in a CTE or a SQL variable and reference by name."
+          "description": "JSONata expressions live inside a SQL `VARCHAR` literal, so embedded double quotes need SQL escaping. For long or fiddly expressions, store them in a CTE or a SQL variable and reference by name — and iterate in the official [JSONata exerciser](https://try.jsonata.org/), whose evaluator matches what the extension runs."
         },
         {
-          "label": "No DuckDB function callbacks",
-          "description": "JSONata's JavaScript-binding feature isn't wired up — you can't register a DuckDB UDF as a callable inside the expression. Stick to [JSONata's built-in function library](https://docs.jsonata.org/string-functions)."
+          "label": "No DuckDB-UDF callbacks",
+          "description": "JSONata's JavaScript-binding feature isn't wired up — you can't register a DuckDB function as a callable inside the expression. Stick to [JSONata's built-in function library](https://docs.jsonata.org/string-functions)."
         },
         {
-          "label": "Performance scales with expression and document size",
-          "description": "Deeply-nested documents and complex expressions both cost. For very wide rows, materialize the JSONata projection once into a column instead of re-evaluating it in every downstream query."
-        }
-      ]
-    },
-    {
-      "icon": "🎯",
-      "title": "Common Use Cases",
-      "description": "",
-      "useCases": [
-        {
-          "title": "Reshape an API payload into table columns",
-          "description": "One `jsonata` call with an [object-construction](https://docs.jsonata.org/construction) expression replaces a stack of `json_extract_string` projections — and stays readable when nested fields move."
-        },
-        {
-          "title": "Filter and project nested arrays",
-          "description": "`items[status=\"open\" and amount > 100].id` returns only the matching ids. The same logic in DuckDB native JSON functions needs `unnest` plus a subquery."
-        },
-        {
-          "title": "Aggregate inside a JSON document",
-          "description": "[`$sum`, `$count`, `$max`](https://docs.jsonata.org/aggregation-functions) operate on arrays-in-JSON without leaving the expression — useful for per-row roll-ups of an embedded line-item list."
-        },
-        {
-          "title": "Parameterize an expression at query time",
-          "description": "Use the 3-arg `jsonata(expr, json, bindings)` form to pass thresholds, user ids, or date cutoffs through `$variables` so a single expression handles many runtime values."
+          "label": "Per-row cost scales with document and expression size",
+          "description": "Deeply-nested documents and complex expressions both cost, and they scale linearly with the data they touch. For very wide rows, materialize the JSONata projection once into a column instead of re-evaluating it in every downstream query."
         }
       ]
     }

@@ -1,30 +1,12 @@
 {
   "eyebrow": "Technical Overview",
   "title": "Why Use Hashfuncs?",
-  "description": "Industry-standard, non-cryptographic hashes inside DuckDB SQL — [xxHash](https://cyan4973.github.io/xxHash/), [MurmurHash3](https://github.com/aappleby/smhasher), and [RapidHash](https://github.com/Nicoshev/rapidhash). Use them for partitioning, sharding, cache keys, and probabilistic-filter inputs where speed wins and adversarial collisions don't matter. For digests, signatures, or HMAC, use the [crypto](/products/extensions/crypto) extension instead.",
+  "description": "Industry-standard, non-cryptographic hashes inside DuckDB SQL — [xxHash](https://cyan4973.github.io/xxHash/), [MurmurHash3](https://github.com/aappleby/smhasher), and [RapidHash](https://github.com/Nicoshev/rapidhash). These are speed-first hashes: fast and well-distributed against random input, where the only \"adversary\" is randomness, not a person who controls the bytes. For digests, signatures, or HMAC, use the [crypto](/products/extensions/crypto) extension instead.",
   "sections": [
     {
       "icon": "⚡",
-      "title": "What this extension is for",
-      "description": "Hashfuncs gives you fast, deterministic 32-, 64-, and 128-bit hashes — the kind you reach for when DuckDB's built-in [`hash()`](https://duckdb.org/docs/sql/functions/utility) isn't enough and a cryptographic hash is overkill.",
-      "bulletPoints": [
-        {
-          "label": "Hash partitioning and sharding",
-          "description": "Modulo a hash by the partition count to bucket rows. `xxh3_64` is a sensible default; `murmurhash3_x64_128` is the right pick if you need to interoperate with [Cassandra](https://cassandra.apache.org/_/index.html) or [Spark](https://spark.apache.org/) hash routing."
-        },
-        {
-          "label": "Probabilistic-filter inputs",
-          "description": "[Bloom](https://en.wikipedia.org/wiki/Bloom_filter), XOR, and Cuckoo filters need a fast `UBIGINT` hash per element. `xxh3_64` and `rapidhash` feed straight into the [bitfilters](/products/extensions/bitfilters) extension."
-        },
-        {
-          "label": "Stable cache and content keys",
-          "description": "`xxh3_128_hex` emits the canonical 32-character hex digest used by [Python xxhash](https://pypi.org/project/xxhash/) and [xxhash-rust](https://docs.rs/xxhash-rust/latest/xxhash_rust/) — useful as a cross-language fingerprint for cache keys, dedup, and content-addressed lookups."
-        },
-        {
-          "label": "Cheap deduplication",
-          "description": "`SELECT DISTINCT xxh3_64(...)` collapses duplicate payloads at near-RAM bandwidth. The 128-bit variants (`xxh3_128`, `murmurhash3_x64_128`) cut accidental-collision risk for very large keyspaces."
-        }
-      ]
+      "title": "What it is",
+      "description": "Hashfuncs gives you fast, deterministic 32-, 64-, and 128-bit hashes — the slot between DuckDB's built-in [`hash()`](https://duckdb.org/docs/sql/functions/utility) (great for join/group-by internals, but implementation-defined and unsafe to persist or reproduce elsewhere) and a cryptographic hash (an order of magnitude slower, and unnecessary when nothing adversarial is at stake). The natural workloads are partitioning, sharding, deduplication, cache keys, and probabilistic-filter inputs — anywhere you want a stable, well-distributed value derived from data at near-RAM bandwidth."
     },
     {
       "icon": "🧭",
@@ -41,7 +23,7 @@
         },
         {
           "label": "Don't substitute one for the other",
-          "description": "These hashes are explicitly **not** collision-resistant against a motivated adversary. Treating an `xxh3_128` like a SHA-256 digest is a security bug, not a performance optimization. Inverse: spending SHA-256 on partition routing is wasted CPU."
+          "description": "These hashes are explicitly **not** collision-resistant against a motivated adversary. Treating an `xxh3_128` like a SHA-256 digest is a security bug, not a performance optimization. The inverse is also wrong: spending SHA-256 on partition routing is wasted CPU. (For password storage, neither family is the answer — use a real password hash like bcrypt or argon2 outside DuckDB.)"
         },
         {
           "label": "They compose",
@@ -52,46 +34,23 @@
     {
       "icon": "🔧",
       "title": "How it works",
-      "description": "Every function is a scalar SQL function with one or two arguments — the value, and an optional seed. All families ship as upstream-faithful C/C++ implementations linked into the extension binary.",
+      "description": "Every function is a scalar SQL function with one or two arguments — the value, and an optional seed. Each family is an upstream-faithful C/C++ implementation linked into the extension binary: no catalog, no secrets, no network, every call pure CPU.",
       "bulletPoints": [
         {
           "label": "Three families, one interface",
-          "description": "[xxHash](https://github.com/Cyan4973/xxHash) (32 / 64 / 128-bit, including a hex digest), [MurmurHash3](https://github.com/aappleby/smhasher) (32 / 128-bit), and [RapidHash](https://github.com/Nicoshev/rapidhash). Every function takes any DuckDB scalar value as input."
+          "description": "[xxHash](https://github.com/Cyan4973/xxHash) (32 / 64 / 128-bit, including a hex digest; XXH3 variants are tuned for SSE2 / AVX2 / NEON), [MurmurHash3](https://github.com/aappleby/smhasher) (32-bit plus x86 and x64 128-bit forms), and [RapidHash](https://github.com/Nicoshev/rapidhash), a newer 64-bit hash that often wins published throughput benchmarks. Every function accepts any DuckDB scalar value as input."
         },
         {
           "label": "Optional seeds for independent hash spaces",
-          "description": "Every function has a seeded overload. Two different seeds give two uncorrelated hash spaces from the same column — useful for double-hashing in [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter) or running parallel shardings without correlation."
+          "description": "Every function has a seeded overload. Two different seeds give two *uncorrelated* hash spaces from the same column — exactly what you need for double-hashing in [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter) or running two parallel shardings whose bucket assignments must not correlate."
         },
         {
-          "label": "Canonical 128-bit hex digest",
-          "description": "The 128-bit xxHash variant emits the lowercase 32-character canonical hex form defined in the [xxHash specification](https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md), matching the [Python xxhash](https://pypi.org/project/xxhash/) and other bindings — so digests round-trip across languages."
+          "label": "Canonical hex digest for cross-language reproducibility",
+          "description": "The 128-bit xxHash variant can emit the lowercase 32-character canonical hex form defined in the [xxHash specification](https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md), in `low64 || high64` byte order. That digest matches what [Python xxhash](https://pypi.org/project/xxhash/), [xxhash-rust](https://docs.rs/xxhash-rust/latest/xxhash_rust/), and `XXH128_canonicalFromHash` in C produce over the same bytes — so a fingerprint round-trips across SQL and application code."
         },
         {
-          "label": "Installs from the community repository",
-          "description": "Available via DuckDB's [community extensions](https://duckdb.org/docs/extensions/community_extensions) channel — `INSTALL hashfuncs FROM community; LOAD hashfuncs;`. No external services or secrets required."
-        }
-      ]
-    },
-    {
-      "icon": "🎯",
-      "title": "Common Use Cases",
-      "description": "",
-      "useCases": [
-        {
-          "title": "Partition rows for parallel processing",
-          "description": "`SELECT user_id, xxh3_64(user_id) % 16 AS partition FROM users` gives you a stable, well-distributed bucket assignment. Pair with [`CREATE TABLE AS`](https://duckdb.org/docs/sql/statements/create_table) and [Parquet partitioning](https://duckdb.org/docs/data/parquet/overview) for shardable output."
-        },
-        {
-          "title": "Build Bloom / XOR filters at SQL speed",
-          "description": "Feed `xxh3_64` into the [bitfilters](/products/extensions/bitfilters) extension to construct probabilistic set-membership filters in a single query — millions of keys per second on commodity hardware."
-        },
-        {
-          "title": "Cross-language content fingerprints",
-          "description": "Use `xxh3_128_hex` to produce digests that match what [Python xxhash](https://pypi.org/project/xxhash/) or [xxhash-rust](https://docs.rs/xxhash-rust/latest/xxhash_rust/) compute over the same bytes — handy for cache keys shared between SQL and application code."
-        },
-        {
-          "title": "Interoperate with Cassandra / Spark hash routing",
-          "description": "`murmurhash3_x64_128` matches the variant used by [Apache Cassandra](https://cassandra.apache.org/_/index.html)'s `Murmur3Partitioner` and [Apache Spark](https://spark.apache.org/)'s default hash partitioner — useful when DuckDB is downstream of a system that already routes by MurmurHash3."
+          "label": "Feeds the bitfilters extension directly",
+          "description": "The 64-bit `UBIGINT`-returning hashes (`xxh3_64`, `rapidhash`) are the natural input to the [bitfilters](/products/extensions/bitfilters) extension's Bloom, XOR, Quotient, and Binary Fuse filters — sub-microsecond probabilistic set-membership built entirely in one DuckDB session."
         }
       ]
     }

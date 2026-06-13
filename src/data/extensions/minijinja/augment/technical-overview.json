@@ -1,93 +1,48 @@
 {
   "eyebrow": "Technical Overview",
   "title": "Why Use MiniJinja from DuckDB?",
-  "description": "Render [MiniJinja](https://github.com/mitsuhiko/minijinja) templates inside SQL with a JSON context. MiniJinja is Armin Ronacher's Rust port of [Jinja2](https://jinja.palletsprojects.com/) — strict Python-Jinja2 semantics in a small, fast core. This extension exposes it as a scalar function, so each query row can produce its own rendered string — emails, config blocks, dynamic SQL, webhook payloads — without leaving DuckDB.",
+  "description": "Render [MiniJinja](https://github.com/mitsuhiko/minijinja) templates inside SQL with a JSON context. MiniJinja is Armin Ronacher's Rust port of [Jinja2](https://jinja.palletsprojects.com/) — strict Python-Jinja2 semantics in a small, fast core. Exposed here as a scalar function, so each query row can produce its own rendered string — emails, config blocks, dynamic SQL, webhook payloads — without leaving DuckDB.",
   "sections": [
     {
       "icon": "📝",
-      "title": "What this extension is for",
-      "description": "Anywhere you'd otherwise pull rows out of DuckDB to feed into a Jinja loop in Python, `minijinja_render` collapses that loop into a single SQL projection. The template stays declarative; the data stays in the query.",
-      "bulletPoints": [
-        {
-          "label": "Per-row HTML / email",
-          "description": "Build the body of a transactional email per row: pass the row's columns as a JSON object via [`json_object`](https://duckdb.org/docs/sql/functions/json) and render against a template literal."
-        },
-        {
-          "label": "Config-file generation",
-          "description": "Materialize one nginx / systemd / Kubernetes manifest per row of a configuration table. Disable autoescape with `autoescape := false` for non-HTML output."
-        },
-        {
-          "label": "Dynamic SQL",
-          "description": "Use MiniJinja as a meta-SQL preprocessor — render `SELECT ... FROM {{ table }} WHERE {{ pred }}` against context columns, then execute the result. Treat templates as **trusted**; Jinja interpolation is not parameter-safe."
-        },
-        {
-          "label": "Notifications and webhook payloads",
-          "description": "Render Slack / PagerDuty / generic webhook JSON bodies straight from query results so a single SQL pipeline takes you from event to delivered message."
-        }
-      ]
+      "title": "A template loop, collapsed into a SQL projection",
+      "description": "The usual shape is: pull rows out of DuckDB, loop over them in Python or Node feeding each into a Jinja `render()`, then push the results back. That's an extra hop and a serializer round-trip per template. This extension turns the whole loop into a single SQL projection — the template stays declarative, the data stays in the query, and rendering happens inline in DuckDB's vectorized executor. Anywhere SQL hands you a string column, MiniJinja can render it: per-recipient email bodies, one config file per row of a configuration table, dynamic SQL driven from a metadata table, or webhook/Slack JSON payloads built straight from the query that produced the event."
     },
     {
       "icon": "⚙️",
       "title": "How it works",
-      "description": "A scalar function backed by the [`minijinja`](https://docs.rs/minijinja/) Rust crate. Each call compiles the template, binds the JSON context, and returns the rendered text. There is no `ATTACH`, no secrets, no template registry — one function name and a couple of optional named arguments.",
+      "description": "A single scalar function backed by the [`minijinja`](https://docs.rs/minijinja/) Rust crate. The first argument is the template (a `VARCHAR` literal or column); the second, when present, is any DuckDB `JSON` value — a literal, [`json_object(...)`](https://duckdb.org/docs/sql/functions/json), or a JSON column. There is no `ATTACH`, no secrets, and no template registry: just one function name and a couple of optional named arguments like `autoescape`.",
       "bulletPoints": [
         {
-          "label": "Template + context",
-          "description": "First argument is the template (a `VARCHAR` literal or column). Second argument, when present, is a DuckDB `JSON` value — a literal string, [`json_object(...)`](https://duckdb.org/docs/sql/functions/json), or a column. Templates without variables work without any context at all."
+          "label": "Compiled per call, against the row's context",
+          "description": "Each invocation compiles the template, binds the JSON context, and returns the rendered text. Because compilation happens per call, a template column is rendered row by row with each row's own context — there's no precompiled-template handle to manage and nothing persists between rows."
         },
         {
           "label": "Strict Jinja2 semantics",
-          "description": "MiniJinja deliberately tracks Python-Jinja2 behavior — undefined-variable handling, filter naming, scoping, autoescape rules. If a template renders correctly under Python's [Jinja2](https://jinja.palletsprojects.com/) for these basic features, it should render the same here."
+          "description": "MiniJinja deliberately tracks Python-[Jinja2](https://jinja.palletsprojects.com/) behavior — undefined-variable handling, filter naming, scoping, autoescape rules. A template that renders correctly under Python's Jinja2 for these features should render the same here."
         },
         {
-          "label": "Standard vocabulary",
-          "description": "Filters (`upper`, `lower`, `length`, `default`, `join`, `replace`, etc.), control flow (`if` / `elif` / `else`, `for` with `loop.index` / `loop.first` / `loop.last`), tests (`is defined`, `is none`), and string concatenation. See the [MiniJinja crate docs](https://docs.rs/minijinja/) for the full surface."
+          "label": "Trusted templates, not parameter-safe",
+          "description": "Jinja interpolation is string substitution, not SQL parameter binding — it is *not* injection-safe. When you template SQL (the dynamic-SQL pattern), the template body and the values flowing through `{{ ... }}` must come from a source you trust. For untrusted input, render the SQL *shape* with MiniJinja and bind the values through prepared-statement parameters."
         },
         {
           "label": "Autoescape on by default",
-          "description": "HTML special characters in context values are escaped — safe default for HTML / email output. Pass `autoescape := false` when generating raw text (configs, SQL, JSON payloads)."
+          "description": "HTML special characters in context values are escaped (`B&O` becomes `B&amp;O`) — the safe default for HTML and email. Pass `autoescape := false` when generating raw text such as configs, SQL, or JSON payloads."
         }
       ]
     },
     {
       "icon": "🤝",
       "title": "MiniJinja vs Tera",
-      "description": "This catalog ships two Jinja-style template engines as DuckDB extensions: MiniJinja and [`tera`](/products/extensions/tera). They overlap heavily — both render `{{ var }}` / `{% for %}` / `{% if %}` against JSON context. The differences are real but narrow.",
+      "description": "This catalog ships two Jinja-style template engines as DuckDB extensions: MiniJinja and [`tera`](/products/extensions/tera). They overlap heavily — both render `{{ var }}` / `{% for %}` / `{% if %}` against JSON context, and for everyday substitution both produce identical output. The differences are real but narrow.",
       "bulletPoints": [
         {
           "label": "Pick MiniJinja for Jinja2 fidelity",
-          "description": "MiniJinja deliberately tracks [Python Jinja2](https://jinja.palletsprojects.com/) semantics — naming, scoping, filter behavior. Choose it when you have an existing Python-Jinja codebase and want your DuckDB templates to behave the same way, or when you're already fluent in Jinja2."
+          "description": "MiniJinja deliberately tracks [Python Jinja2](https://jinja.palletsprojects.com/) semantics — naming, scoping, filter behavior. Choose it when you have an existing Python-Jinja codebase you want your DuckDB templates to match, or when you're already fluent in Jinja2."
         },
         {
           "label": "Pick Tera for the larger feature surface",
           "description": "[`tera`](/products/extensions/tera) ships a wider [built-in filter and tester library](https://keats.github.io/tera/docs/#built-ins), template inheritance via a `template_path` glob, and Tera-specific extensions to the Jinja syntax. Choose it when your templates lean on those features or when you already maintain a Tera template library."
-        },
-        {
-          "label": "Either is fine for everyday substitution",
-          "description": "For `{{ name }}` / `{{ x | upper }}` / `{% for x in xs %}`, both produce identical output. Lock in whichever syntax matches your team's existing templates."
-        }
-      ]
-    },
-    {
-      "icon": "🎯",
-      "title": "Common Use Cases",
-      "description": "",
-      "useCases": [
-        {
-          "title": "Render transactional emails per row",
-          "description": "One row per recipient, one `minijinja_render` call producing the HTML body — fed straight into a downstream sender."
-        },
-        {
-          "title": "Generate per-host configuration",
-          "description": "A `virtual_hosts` table plus a single MiniJinja template equals one rendered nginx / Caddy / Envoy block per host, ready to write to disk or push to a config repo."
-        },
-        {
-          "title": "Build dynamic SQL from metadata",
-          "description": "Drive `SELECT` / `CREATE TABLE` shape from a metadata table — MiniJinja renders the SQL, your driver executes it. Useful for codegen, schema migrations, and templated reporting."
-        },
-        {
-          "title": "Format Slack / webhook payloads",
-          "description": "Render alert JSON bodies directly from the query that detected the alert. Pair with [`http_client`](/products/extensions/http_client) to deliver them in the same pipeline."
         }
       ]
     }

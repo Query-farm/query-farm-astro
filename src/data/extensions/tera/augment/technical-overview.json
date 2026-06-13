@@ -5,47 +5,25 @@
   "sections": [
     {
       "icon": "📝",
-      "title": "What this extension is for",
-      "description": "Anywhere you'd otherwise pull rows out of DuckDB just to feed them into a template loop in Python or Node, `tera_render` collapses that loop into a single SQL projection. The template stays declarative; the data stays in the query.",
-      "bulletPoints": [
-        {
-          "label": "Per-row HTML / email",
-          "description": "Build the body of a transactional email per row: pass the row's columns as a JSON object via [`json_object`](https://duckdb.org/docs/sql/functions/json) and render against a template literal."
-        },
-        {
-          "label": "Config-file generation",
-          "description": "Materialize one nginx / systemd / Kubernetes manifest per row of a configuration table. Disable autoescape with `autoescape := false` for non-HTML output."
-        },
-        {
-          "label": "Dynamic SQL",
-          "description": "Use Tera as a meta-SQL preprocessor — render `SELECT ... FROM {{ table }} WHERE {{ pred }}` against context columns, then execute the result. Treat templates as trusted; Tera interpolation is not parameter-safe."
-        },
-        {
-          "label": "Notifications and webhook payloads",
-          "description": "Render Slack / PagerDuty / webhook JSON bodies from query results so a single SQL pipeline takes you from event to delivered message."
-        }
-      ]
+      "title": "What it is",
+      "description": "A single scalar function, `tera_render`, that turns the full Tera template language into something you can call mid-query. The pattern it replaces is familiar: you `SELECT` rows out of DuckDB only to feed them into a template loop in Python or Node, then ship the rendered strings somewhere. Here the loop collapses into one SQL projection — the template stays declarative, the data stays in the query, and the rendered text comes back as a regular `VARCHAR` column you can write, insert, or pass to another extension."
     },
     {
       "icon": "⚙️",
       "title": "How it works",
-      "description": "A scalar function backed by the [Tera](https://github.com/Keats/tera) Rust crate. Each call compiles (or reuses a cached) template, binds the JSON context, and returns the rendered text. There is no `ATTACH`, no secrets — the function surface is one name and a few optional named arguments.",
+      "description": "Each call compiles (or reuses a cached) template, binds a `JSON` value as the rendering context, and returns the rendered text. It is backed by the [Tera](https://github.com/Keats/tera) Rust crate and is purely function-based — no `ATTACH`, no secrets, no virtual catalog. The non-obvious parts are worth knowing up front.",
       "bulletPoints": [
         {
-          "label": "Inline and file-backed templates",
-          "description": "The first argument is either an inline template string or a template name. Pass `template_path := './templates/*.html'` to load templates from disk by name; this enables `{% extends %}` / `{% include %}` across the matched files. See Tera's [inheritance docs](https://keats.github.io/tera/docs/#inheritance)."
+          "label": "Templates are cached",
+          "description": "A template body is compiled once and reused across the rows of a query rather than re-parsed per row, which is why a single `tera_render` over a large table stays cheap. Inline template literals and named templates loaded from a `template_path` glob both go through the same compile-and-cache path."
         },
         {
-          "label": "JSON context",
-          "description": "The second argument is a `JSON` value — a literal string, [`json_object(...)`](https://duckdb.org/docs/sql/functions/json), or a column. Nested objects, arrays, and primitives are all addressable as `{{ user.name }}`, `{% for x in items %}`, `{{ items | length }}`."
+          "label": "Autoescape defaults to HTML-safe",
+          "description": "HTML special characters in context values are escaped by default — correct for HTML and email, but it turns ampersands and apostrophes into `&amp;` / `&#39;` when you're emitting configs, SQL, or JSON. Disable it for non-HTML output. See Tera's [autoescape behavior](https://keats.github.io/tera/docs/#auto-escaping)."
         },
         {
-          "label": "Autoescape on by default",
-          "description": "HTML special characters in context values are escaped — safe default for HTML / email output. Pass `autoescape := false` when generating raw text (configs, SQL, JSON payloads)."
-        },
-        {
-          "label": "Full Tera vocabulary",
-          "description": "Filters (`upper`, `lower`, `length`, `default`, `join`, `date`, `truncate`, etc.), control flow (`if` / `elif` / `else`, `for` with `loop.index` / `loop.last`), inheritance, macros, and includes — see the [Tera manual](https://keats.github.io/tera/docs/) for the full surface."
+          "label": "Interpolation is not parameter-safe",
+          "description": "Tera substitution is not an injection-safe parameterization mechanism. A template body assembled from untrusted input can render arbitrary SQL or shell strings. Keep the template surface fixed and authored by trusted code; only the JSON context should carry query data or user input, and bind any externally-sourced value as a real query parameter."
         }
       ]
     },
@@ -65,29 +43,6 @@
         {
           "label": "Either is fine for everyday substitution",
           "description": "For `{{ name }}` / `{{ x | upper }}` / `{% for x in xs %}`, both produce identical output. Lock in whichever syntax matches your team's existing templates."
-        }
-      ]
-    },
-    {
-      "icon": "🎯",
-      "title": "Common Use Cases",
-      "description": "",
-      "useCases": [
-        {
-          "title": "Render transactional emails per row",
-          "description": "One row per recipient, one `tera_render` call producing the HTML body — fed straight into a downstream sender."
-        },
-        {
-          "title": "Generate per-host configuration",
-          "description": "A `virtual_hosts` table plus a single Tera template equals one rendered nginx / Caddy / Envoy block per host, ready to write to disk or push to a config repo."
-        },
-        {
-          "title": "Build dynamic SQL from metadata",
-          "description": "Drive `SELECT` / `CREATE TABLE` shape from a metadata table — Tera renders the SQL, your driver executes it. Useful for codegen, schema migrations, and templated reporting."
-        },
-        {
-          "title": "Format Slack / webhook payloads",
-          "description": "Render alert JSON bodies directly from the query that detected the alert. Pair with [`http_client`](/products/extensions/http_client) to deliver them in the same pipeline."
         }
       ]
     }

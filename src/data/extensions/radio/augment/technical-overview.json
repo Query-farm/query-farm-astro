@@ -5,93 +5,52 @@
   "sections": [
     {
       "icon": "📡",
-      "title": "What this extension is for",
-      "description": "Real-time messaging without leaving SQL. The path from \"events arriving on a WebSocket\" to \"rows you can `JOIN` and `WHERE` against\" collapses to a subscribe call plus a `SELECT`.",
-      "bulletPoints": [
-        {
-          "label": "Listen and drain incrementally",
-          "description": "Subscribe to a channel and incoming messages flow into an in-memory buffer exposed as ordinary DuckDB tables. Each row tracks how many times it has been seen, so re-querying drains only what's new."
-        },
-        {
-          "label": "Queue and broadcast outbound",
-          "description": "Hand a message to the extension and it delivers asynchronously, with per-message status visible as a table. Poll for delivery, retry, or audit failures from SQL."
-        },
-        {
-          "label": "Inspect what's connected",
-          "description": "Every active subscription shows up as a row with its endpoint, state, and delivery counters — useful for dashboards and runtime debugging."
-        },
-        {
-          "label": "Test pipelines without the wire",
-          "description": "Inject canned messages straight into a subscription's inbox and exercise downstream SQL exactly as it would behave on the real channel."
-        }
-      ]
+      "title": "The model: buffers in, a delivery queue out",
+      "description": "Radio runs an asynchronous I/O thread per subscription so SQL never blocks on the wire. Inbound messages land in a per-subscription in-memory buffer that Radio exposes as ordinary table functions — each row carries a `seen_count` so re-querying drains only what's new, and the rows `JOIN`, `WHERE`, `GROUP BY`, and `CREATE TABLE AS` like any other table. Outbound messages go the other direction: you hand one to a transmit queue that delivers asynchronously and exposes per-message status plus per-subscription success/failure counters, so retries and audits are themselves SQL. That single shape — buffer incoming into tables, queue outgoing with delivery status — covers live dashboards refreshed on a timer, SQL-driven event responders that read then publish a reply, and ad-hoc inspection where you drain an unfamiliar channel into a table and `GROUP BY` to learn its shape; you can even inject canned messages into a subscription's inbox to test downstream SQL without a real upstream."
     },
     {
       "icon": "🔌",
       "title": "Supported transports",
-      "description": "Two transports today; the table-function surface stays identical regardless of protocol.",
+      "description": "Two transports are wired up today, and the table-function surface stays identical regardless of protocol — you subscribe, drain, and transmit the same way whether the bytes arrive over a WebSocket or a Redis channel.",
       "bulletPoints": [
         {
           "label": "WebSocket",
-          "description": "Standard [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455) client. `ws://` or `wss://` URLs — fits browser-style real-time feeds, Slack-style event streams, and any custom server-sent API that speaks WS."
+          "description": "A standard [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455) client. `ws://` for plaintext or `wss://` for TLS; the extension handles ping/pong and reconnect internally. Fits browser-style real-time feeds, event streams, and any custom server-sent API that speaks WebSocket."
         },
         {
           "label": "Redis Pub/Sub",
-          "description": "Subscribe to one or more [Redis channels](https://redis.io/docs/latest/develop/interact/pubsub/) by passing a Redis URL plus channel name. Fits application data flows that already use Redis as the bus."
+          "description": "Point a subscription at a [Redis](https://redis.io/docs/latest/develop/interact/pubsub/) URL plus channel name and Radio handles the Redis-specific [`SUBSCRIBE`](https://redis.io/docs/latest/commands/subscribe/) and [`PUBLISH`](https://redis.io/docs/latest/commands/publish/) under the same SQL surface. Fits application data flows that already use Redis as the bus."
         },
         {
           "label": "Roadmap",
-          "description": "Google Pub/Sub, Azure Service Bus, MQTT, and subprocess pipes are planned. Today's transports are WebSocket and Redis Pub/Sub only."
+          "description": "Google Pub/Sub, Azure Service Bus, MQTT, and subprocess pipes are listed as planned on the [extension's documentation page](https://query.farm/duckdb_extension_radio.html). Only WebSocket and Redis Pub/Sub exist today."
         }
       ]
     },
     {
       "icon": "🛡️",
       "title": "Production caveats",
-      "description": "What to know before pointing this at anything important.",
+      "description": "What to know before pointing this at anything important. Radio trades durability for the simplicity of living entirely inside one DuckDB process.",
       "bulletPoints": [
         {
           "label": "In-memory, process-scoped buffers",
-          "description": "Received messages live in-process. When DuckDB exits, subscriptions tear down and unread messages are lost. For at-least-once across restarts, drain to a durable store before processing."
+          "description": "Subscriptions, the received-message buffer, and the transmit queue all live in DuckDB process memory. When DuckDB exits, subscriptions tear down and unread messages are lost. For at-least-once delivery across restarts, drain to a durable store before processing — a standalone consumer service can crash-restart from the bus, Radio cannot."
         },
         {
-          "label": "Buffers are size-limited",
-          "description": "The receive queue has a fixed capacity — older messages are evicted as new ones arrive. Drain frequently enough to keep up with the inbound rate."
+          "label": "Fixed-capacity receive buffer",
+          "description": "The inbound buffer is size-limited; older messages are evicted as new ones arrive. Drain at a cadence that keeps up with the inbound rate so you don't lose messages to eviction."
         },
         {
           "label": "Best-effort outbound delivery",
-          "description": "Messages are queued and delivered asynchronously. Per-subscription success/failure counters and per-message status tables expose progress so you can build retry logic in SQL."
+          "description": "Transmit returns once the message is queued, not once it's delivered — the I/O thread updates each message's status asynchronously. Per-subscription `transmit_successes` / `transmit_failures` counters and the per-message status table expose progress so you can build retry logic in SQL."
         },
         {
           "label": "Single connection per subscription",
-          "description": "Multiple DuckDB connections in the same process don't share subscription state. Open a subscription on the same connection that will drain it."
+          "description": "Subscription state is not shared across DuckDB connections in the same process. Open a subscription on the same connection that will drain it."
         },
         {
           "label": "Experimental status",
-          "description": "Function shapes may change. Pin a known-good extension version in production."
-        }
-      ]
-    },
-    {
-      "icon": "🎯",
-      "title": "Common use cases",
-      "description": "",
-      "useCases": [
-        {
-          "title": "Live dashboards in DuckDB",
-          "description": "Subscribe to a market-data or activity-event WebSocket and refresh a tile by re-querying on a timer. No separate consumer, no message broker."
-        },
-        {
-          "title": "SQL-driven event responders",
-          "description": "Pull events, run the SQL logic, then publish a response back to a Pub/Sub fanout — all in one query loop."
-        },
-        {
-          "title": "Ad-hoc traffic inspection",
-          "description": "Point at a channel you don't yet understand, drain into a `CREATE TABLE AS`, and `GROUP BY` to discover the message shape. Faster than wiring up a custom consumer."
-        },
-        {
-          "title": "Pipeline testing",
-          "description": "Inject canned messages and exercise downstream SQL exactly as it would behave on the real channel."
+          "description": "Function shapes may change as more transports land. Pin a known-good extension version in production."
         }
       ]
     }
