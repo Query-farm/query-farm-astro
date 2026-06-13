@@ -64,9 +64,20 @@ async function main() {
     latestVersion: `v${latest.version}`,
     latestTag: latest.tag,
     publishedAt: latest.publishedAt ?? null,
-    fetchedAt: payload.fetchedAt ?? new Date().toISOString(),
+    fetchedAt: payload.fetchedAt ?? null,
     source: ENDPOINT,
   };
+
+  // Only rewrite when the meaningful release fields change. fetchedAt alone
+  // would dirty the committed snapshot on every build for no benefit (the .ts
+  // module reads only latestVersion/latestTag), so skip a write when nothing
+  // material moved.
+  const existing = await readExisting();
+  const material = (o) => o && `${o.latestVersion}|${o.latestTag}|${o.publishedAt}`;
+  if (existing && material(existing) === material(generated)) {
+    console.log(`[haybarn-versions] featured release unchanged: ${generated.latestVersion} (${generated.latestTag})`);
+    return;
+  }
 
   await writeFile(OUT, JSON.stringify(generated, null, 2) + '\n', 'utf8');
   console.log(`[haybarn-versions] featured release: ${generated.latestVersion} (${generated.latestTag})`);
