@@ -17,10 +17,24 @@ export interface TerminalOutput {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
+/** Escape control characters the way DuckDB's duckbox does: newlines/tabs/CR
+ *  become visible \n / \t / \r so a value is always one logical line and can't
+ *  break the box border, and any other control char (incl. ESC) is rendered as
+ *  \xNN so cell data can't inject ANSI escapes into the terminal. */
+function escapeControl(s: string): string {
+  return s
+    .replace(/\t/g, "\\t")
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, (c) =>
+      "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0"),
+    );
+}
+
 /** Format a value for display, returning "NULL" for null/undefined. */
 function formatVal(val: unknown, field: Field): string {
   if (val === null || val === undefined) return "NULL";
-  return formatCellValue(val, field?.name, field);
+  return escapeControl(formatCellValue(val, field?.name, field));
 }
 
 /** Truncate a string to maxLen, appending … if needed. */
@@ -262,6 +276,11 @@ export async function printBoxTable(table: Table, out: TerminalOutput, maxDispla
     const tableOpts = {
       colWidths,
       colAligns,
+      // Wrap long cell values across lines (DuckDB duckbox style) instead of
+      // truncating with an ellipsis. wrapOnWordBoundary:false lets it break
+      // inside long tokens like JSON blobs that have no spaces.
+      wordWrap: true,
+      wrapOnWordBoundary: false,
       chars: { "mid": "", "left-mid": "", "mid-mid": "", "right-mid": "" },
       style: { head: [], border: [], "padding-left": 1, "padding-right": 1, compact: true },
     };
@@ -297,7 +316,9 @@ export async function printBoxTable(table: Table, out: TerminalOutput, maxDispla
         if (ellipsisPos === vi) row.push({ content: "…", hAlign: "center" as const });
         const ci = visibleIndices[vi];
         const val = grid[r][ci];
-        const display = val === "NULL" ? `\x1b[2mNULL\x1b[0m` : truncStr(val, idealWidths[ci]);
+        // No manual truncation: cli-table3 wordWrap renders the full value
+        // across as many lines as the column width needs (duckbox style).
+        const display = val === "NULL" ? `\x1b[2mNULL\x1b[0m` : val;
         row.push(isNumeric[ci] ? { content: display, hAlign: "right" as const } : display);
       }
       if (ellipsisPos === shownCount) row.push({ content: "…", hAlign: "center" as const });
