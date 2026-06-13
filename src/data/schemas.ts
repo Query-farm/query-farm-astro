@@ -9,6 +9,9 @@ export const FunctionParameterSchema = z.object({
   default: z.string().optional(),
   description: z.string(),
   varargs: z.boolean().optional(),
+  // Optional positional parameter — rendered in the signature as [, name: TYPE]
+  // (e.g. a function with two arities where the last arg may be omitted).
+  optional: z.boolean().optional(),
   // Set when overloads collapsed into one card differ in this slot's type.
   // Lists every concrete type accepted in this slot. `type` becomes a
   // human-friendly label (family name or pipe-joined union) for display.

@@ -4,6 +4,7 @@ interface Parameter {
   type: string;
   paramType: 'positional' | 'named';
   default?: string;
+  optional?: boolean;
 }
 
 interface Props {
@@ -24,37 +25,38 @@ const { functionName, parameters, returnType, returnsTable } = Astro.props;
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-// Build parameter string for display (with HTML)
-const paramParts = parameters.map(param => {
+// Render one parameter (HTML). Optionality is handled by the assembler below.
+const renderHtml = (param: Parameter) => {
   const typeHtml = escapeHtml(param.type);
   if (param.paramType === 'named') {
-    // Named parameter: name := TYPE = default
-    if (param.default) {
-      return `<span class="text-purple-600">${param.name}</span> := <span class="text-blue-600">${typeHtml}</span> = ${escapeHtml(param.default)}`;
-    } else {
-      return `<span class="text-purple-600">${param.name}</span> := <span class="text-blue-600">${typeHtml}</span>`;
-    }
-  } else {
-    // Positional parameter: name: TYPE
-    return `<span class="text-duck-700">${param.name}</span>: <span class="text-blue-600">${typeHtml}</span>`;
+    return param.default
+      ? `<span class="text-purple-600">${param.name}</span> := <span class="text-blue-600">${typeHtml}</span> = ${escapeHtml(param.default)}`
+      : `<span class="text-purple-600">${param.name}</span> := <span class="text-blue-600">${typeHtml}</span>`;
   }
-});
-
-const paramString = paramParts.join(', ');
-
-// Build plain text signature for copying
-const plainParamParts = parameters.map(param => {
+  // Positional parameter: name: TYPE
+  return `<span class="text-duck-700">${param.name}</span>: <span class="text-blue-600">${typeHtml}</span>`;
+};
+const renderPlain = (param: Parameter) => {
   if (param.paramType === 'named') {
-    if (param.default) {
-      return `${param.name} := ${param.type} = ${param.default}`;
-    } else {
-      return `${param.name} := ${param.type}`;
-    }
-  } else {
-    return `${param.name}: ${param.type}`;
+    return param.default ? `${param.name} := ${param.type} = ${param.default}` : `${param.name} := ${param.type}`;
   }
-});
-const plainParamString = plainParamParts.join(', ');
+  return `${param.name}: ${param.type}`;
+};
+
+// Assemble the parameter list. Optional positional params are bracketed with
+// the separating comma inside the bracket — e.g. `expression, json_data[, bindings]`
+// — to show the function's shorter arity is also valid.
+const assemble = (render: (p: Parameter) => string) =>
+  parameters
+    .map((param, i) => {
+      const core = render(param);
+      if (param.optional) return i === 0 ? `[${core}]` : ` [, ${core}]`;
+      return i === 0 ? core : `, ${core}`;
+    })
+    .join('');
+
+const paramString = assemble(renderHtml);
+const plainParamString = assemble(renderPlain);
 const plainReturnString = returnType || (returnsTable ? 'TABLE' : '');
 const plainSignature = `${functionName}(${plainParamString}) → ${plainReturnString}`;
 
