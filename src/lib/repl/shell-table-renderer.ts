@@ -342,11 +342,14 @@ export async function printBoxTable(table: Table, out: TerminalOutput, maxDispla
       style: { head: [], border: [], "padding-left": 1, "padding-right": 1, compact: true },
     };
 
-    // Header table
+    // Header table. wordWrap is disabled here: header/type cells carry ANSI
+    // styling (bold/gray), and cli-table3's word-wrap counts those escape
+    // characters toward the width and breaks mid-sequence — mangling short
+    // headers like "host". They're already sized to fit, so no wrap is needed.
     const hdrBottomChars = displayRows === 0
       ? { "bottom": "─", "bottom-mid": "┴", "bottom-left": "└", "bottom-right": "┘" }
       : { "bottom": "─", "bottom-mid": "┼", "bottom-left": "├", "bottom-right": "┤" };
-    const hdrTbl = new Table({ ...tableOpts, chars: { ...tableOpts.chars, ...hdrBottomChars } });
+    const hdrTbl = new Table({ ...tableOpts, wordWrap: false, chars: { ...tableOpts.chars, ...hdrBottomChars } });
     hdrTbl.push(headerRow);
     hdrTbl.push(typeRow);
     for (const line of hdrTbl.toString().split("\n")) out.println(line);
