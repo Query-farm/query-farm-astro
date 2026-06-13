@@ -18,6 +18,21 @@ interface Props {
 
 const { functionName, parameters, returnType, returnsTable } = Astro.props;
 
+// Positional parameters keep their declared order (it is semantically
+// meaningful); named parameters are sorted alphabetically so they're easy to
+// scan. Stable across both single-line and multi-line rendering below.
+const sortedParameters = [
+  ...parameters.filter((p) => p.paramType !== 'named'),
+  ...parameters
+    .filter((p) => p.paramType === 'named')
+    .sort((a, b) => a.name.localeCompare(b.name)),
+];
+
+// Past two arguments a single inline signature gets hard to read, so each
+// parameter goes on its own indented line.
+const isMultiline = sortedParameters.length > 2;
+const indent = '  ';
+
 // Type strings can be polymorphic-family labels like `<numeric>` or `<text>`
 // produced by the overload collapser. Those start with `<` and would be eaten
 // by the browser as an unknown HTML tag, so escape before injecting via
@@ -47,7 +62,7 @@ const renderPlain = (param: Parameter) => {
 // the separating comma inside the bracket — e.g. `expression, json_data[, bindings]`
 // — to show the function's shorter arity is also valid.
 const assemble = (render: (p: Parameter) => string) =>
-  parameters
+  sortedParameters
     .map((param, i) => {
       const core = render(param);
       if (param.optional) return i === 0 ? `[${core}]` : ` [, ${core}]`;
@@ -68,6 +83,24 @@ if (returnType) {
   returnString = 'TABLE';
 }
 
+// Assemble the full signature HTML. For multi-line signatures each parameter
+// sits on its own indented line, with the comma trailing the previous line.
+const nameHtml = `<span class="text-harvest-700">${functionName}</span>`;
+let signatureHtml: string;
+if (isMultiline) {
+  const lines = sortedParameters
+    .map((param, i) => {
+      const core = renderHtml(param);
+      const wrapped = param.optional ? `[${core}]` : core;
+      const comma = i < sortedParameters.length - 1 ? ',' : '';
+      return `${indent}${wrapped}${comma}`;
+    })
+    .join('\n');
+  signatureHtml = `${nameHtml}(\n${lines}\n) → ${returnString}`;
+} else {
+  signatureHtml = `${nameHtml}(${paramString}) → ${returnString}`;
+}
+
 // Generate unique ID for this signature
 const signatureId = `sig-${Math.random().toString(36).substr(2, 9)}`;
 ---
@@ -75,8 +108,13 @@ const signatureId = `sig-${Math.random().toString(36).substr(2, 9)}`;
 <div class="mb-4">
   <h5 class="text-sm font-semibold text-soil-700 mb-2">Signature</h5>
   <div class="relative group">
-    <div class="bg-soil-50 rounded p-3 pr-12 font-mono text-sm leading-relaxed overflow-x-auto">
-      <span class="text-harvest-700">{functionName}</span>(<span set:html={paramString} />) → <span set:html={returnString} />
+    <div
+      class:list={[
+        'bg-soil-50 rounded p-3 pr-12 font-mono text-sm leading-relaxed overflow-x-auto',
+        isMultiline && 'whitespace-pre',
+      ]}
+    >
+      <span set:html={signatureHtml} />
     </div>
     <button
       class="signature-copy-btn absolute top-2 right-2 p-1.5 text-soil-400 hover:text-harvest-700 hover:bg-soil-100 rounded transition-colors opacity-0 group-hover:opacity-100"
