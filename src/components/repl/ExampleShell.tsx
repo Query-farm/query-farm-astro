@@ -153,7 +153,7 @@ interface ReplDeps {
  *  disposed (which rejects the pending rl.read()). */
 async function runRepl(
   deps: ReplDeps,
-  opts: { seedSql?: string; extError?: string },
+  opts: { seedSql?: string; extError?: string; fixtures?: string },
 ): Promise<void> {
   const { term, rl, session, tableFromIPC } = deps;
   let maxDisplayRows = 40;
@@ -269,6 +269,33 @@ async function runRepl(
     rl.println("");
   }
 
+  // Seed sample tables the examples query (e.g. `contacts`). Run silently in
+  // this session before the example; print a dim summary so the user knows the
+  // tables exist and can keep querying them interactively.
+  if (opts.fixtures) {
+    const fixtureStmts = splitStatements(opts.fixtures).filter((s) => !isCommentOnly(s));
+    let seeded = 0;
+    for (const stmt of fixtureStmts) {
+      const r = await session.runQuery(stmt);
+      if (r.ok) seeded++;
+    }
+    if (seeded > 0) {
+      const tables = [
+        ...opts.fixtures.matchAll(
+          /CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP\s+|TEMPORARY\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["']?(\w+)/gi,
+        ),
+      ].map((m) => m[1]);
+      const unique = [...new Set(tables)];
+      writeln(
+        unique.length
+          ? `Sample tables ready: ${unique.join(", ")}`
+          : "Sample data loaded.",
+        "2",
+      );
+      rl.println("");
+    }
+  }
+
   // Auto-run the seeded example. Skip any leading INSTALL/LOAD — the extension
   // is already loaded engine-wide by ensureExtension().
   if (opts.seedSql) {
@@ -303,11 +330,14 @@ interface Props {
   installSource: string;
   /** The example SQL this shell was opened from; auto-run on start. */
   sql: string;
+  /** Raw check-fixtures.sql, run silently at session start so examples that
+   *  reference sample tables (e.g. `contacts`) resolve. Null when none exist. */
+  fixtures?: string | null;
   /** Called when the user closes the shell (host unmounts + removes it). */
   onClose?: () => void;
 }
 
-export default function ExampleShell({ extensionName, installSource, sql, onClose }: Props) {
+export default function ExampleShell({ extensionName, installSource, sql, fixtures, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -430,6 +460,7 @@ export default function ExampleShell({ extensionName, installSource, sql, onClos
           { term, rl, session, tableFromIPC },
           {
             seedSql: sql,
+            fixtures: ext.ok ? fixtures ?? undefined : undefined,
             extError: ext.ok
               ? undefined
               : `${extensionName} may not have a WebAssembly build yet — the SQL below may not run in-browser.`,
@@ -446,7 +477,7 @@ export default function ExampleShell({ extensionName, installSource, sql, onClos
       disposed = true;
       cleanup();
     };
-  }, [extensionName, installSource, sql]);
+  }, [extensionName, installSource, sql, fixtures]);
 
   return (
     <div className="mt-2 rounded-lg border border-[#66bb6a]/30 bg-[#0d2818] overflow-hidden shadow-sm">

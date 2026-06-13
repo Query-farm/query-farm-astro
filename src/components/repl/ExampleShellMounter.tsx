@@ -83,9 +83,12 @@ interface OpenShell {
 interface Props {
   extensionName: string;
   installSource: string;
+  /** Raw check-fixtures.sql for this extension, run once per session to seed
+   *  the sample tables the examples reference. Null when the extension has none. */
+  fixtures?: string | null;
 }
 
-export default function ExampleShellMounter({ extensionName, installSource }: Props) {
+export default function ExampleShellMounter({ extensionName, installSource, fixtures }: Props) {
   const [shells, setShells] = useState<OpenShell[]>([]);
 
   useEffect(() => {
@@ -144,7 +147,7 @@ export default function ExampleShellMounter({ extensionName, installSource }: Pr
       });
 
     return () => cleanups.forEach((fn) => fn());
-  }, [extensionName, installSource]);
+  }, [extensionName, installSource, fixtures]);
 
   return (
     <>
@@ -153,6 +156,7 @@ export default function ExampleShellMounter({ extensionName, installSource }: Pr
           <ExampleShell
             extensionName={extensionName}
             installSource={installSource}
+            fixtures={fixtures}
             sql={s.sql}
             onClose={s.onClose}
           />,

@@ -20,6 +20,16 @@ const cookbookModules = import.meta.glob<{ Content: any }>(
   './extensions/*/cookbook.mdx',
 );
 
+// Raw SQL fixtures used to seed the in-browser REPL with the sample tables the
+// examples reference (e.g. `contacts`). Same files check-examples.py validates
+// against, so the shell and the build-time checker stay in lockstep. Eager: the
+// content is inlined at build time and only the current slug's string is passed
+// to the client island, so this does not bloat client bundles.
+const fixtureFiles = import.meta.glob<string>(
+  './extensions/*/augment/check-fixtures.sql',
+  { query: '?raw', import: 'default', eager: true },
+);
+
 interface ParsedPath { slug: string; tree: 'generated' | 'augment'; key: string }
 
 function parsePath(path: string): ParsedPath | null {
@@ -171,4 +181,11 @@ export async function loadCookbookMdx(extensionId: string): Promise<{ Content: a
 
 export function hasCookbookMdx(extensionId: string): boolean {
   return extensionId in cookbookMdxRegistry;
+}
+
+/** Raw `check-fixtures.sql` for an extension, or null if it has none. Run by the
+ *  in-browser REPL at session start so examples that query sample tables work. */
+export function loadCheckFixtures(extensionId: string): string | null {
+  const raw = fixtureFiles[`./extensions/${extensionId}/augment/check-fixtures.sql`];
+  return typeof raw === 'string' ? raw : null;
 }
