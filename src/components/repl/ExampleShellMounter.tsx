@@ -22,14 +22,13 @@ const TRY_LABEL = `${PLAY_ICON}<span>Try using WASM</span>`;
 const HIDE_LABEL = `${HIDE_ICON}<span>Hide</span>`;
 
 const STYLE = `
+/* The Try button lives in the code block's top toolbar (a flex bar), to the
+   left of Copy — never floating over the query text. */
 .example-try-button {
-  position: absolute;
-  top: 0.75rem;
-  right: 0.75rem;
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  padding: 0.375rem 0.625rem;
+  padding: 0.25rem 0.625rem;
   font-size: 0.75rem;
   font-weight: 500;
   font-family: inherit;
@@ -40,9 +39,7 @@ const STYLE = `
   background: rgba(15, 23, 20, 0.85);
   border: 1px solid rgba(251, 191, 36, 0.35);
   border-radius: 0.25rem;
-  backdrop-filter: blur(4px);
   cursor: pointer;
-  z-index: 10;
   transition: color 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 .example-try-button:hover {
@@ -51,7 +48,6 @@ const STYLE = `
   border-color: rgba(251, 191, 36, 0.6);
   box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.15);
 }
-.example-try-button[data-offset-copy="true"] { right: 5.75rem; }
 `;
 
 function ensureStyle(): void {
@@ -66,16 +62,28 @@ function getSql(pre: HTMLElement): string {
   return (pre.querySelector("code")?.textContent ?? pre.textContent ?? "").trim();
 }
 
-/** Return a position:relative ancestor to anchor the button against, wrapping
- *  the <pre> if it has no positioned parent (e.g. MDX/Shiki blocks). */
-function positionedHost(pre: HTMLElement): HTMLElement {
-  const parent = pre.parentElement;
-  if (parent && getComputedStyle(parent).position !== "static") return parent;
-  const wrap = document.createElement("div");
-  wrap.style.position = "relative";
-  pre.replaceWith(wrap);
-  wrap.appendChild(pre);
-  return wrap;
+/** Find the code block's top toolbar (CodeBlock renders one as the element just
+ *  before the <pre>), or create one for blocks that lack it (e.g. MDX/Shiki).
+ *  The Try button goes in here so it sits in a bar above the query, never over
+ *  it. Returns the bar plus whether we created it (so cleanup can remove it). */
+function findOrCreateToolbar(pre: HTMLElement): { bar: HTMLElement; created: boolean } {
+  const prev = pre.previousElementSibling as HTMLElement | null;
+  if (prev && (prev.classList.contains("code-block-toolbar") || prev.querySelector(":scope > .copy-button"))) {
+    return { bar: prev, created: false };
+  }
+  const bar = document.createElement("div");
+  bar.className = "code-block-toolbar";
+  Object.assign(bar.style, {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: "0.25rem",
+    padding: "0.375rem 0.5rem",
+    background: "rgba(13, 40, 24, 0.8)",
+    borderBottom: "1px solid rgba(20, 83, 45, 0.3)",
+  });
+  pre.parentElement?.insertBefore(bar, pre);
+  return { bar, created: true };
 }
 
 interface OpenShell {
@@ -109,19 +117,23 @@ export default function ExampleShellMounter({ extensionName, installSource, fixt
         if (!sql) return;
         pre.dataset[ATTACHED] = "true";
 
-        const host = positionedHost(pre);
-        const hasCopy = !!host.querySelector(":scope > .copy-button");
+        const { bar, created } = findOrCreateToolbar(pre);
+        // Insert the Try button to the left of the Copy button (both right-
+        // aligned in the bar), or at the start if there's no Copy button.
+        const copyBtn = bar.querySelector(":scope > .copy-button");
         const id = ++counter;
 
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "example-try-button";
         btn.setAttribute("aria-label", "Run this example in an in-browser shell");
-        if (hasCopy) btn.dataset.offsetCopy = "true";
         btn.innerHTML = TRY_LABEL;
+        if (copyBtn) bar.insertBefore(btn, copyBtn);
+        else bar.insertBefore(btn, bar.firstChild);
 
-        // One reusable container per block, appended/removed on toggle. Its
-        // presence in the DOM is the source of truth for open vs closed.
+        // The shell opens below the whole block (toolbar + code). One reusable
+        // container per block, appended/removed on toggle.
+        const blockRoot = (pre.closest(".code-block-wrapper") as HTMLElement | null) ?? pre;
         const container = document.createElement("div");
 
         const close = () => {
@@ -130,7 +142,7 @@ export default function ExampleShellMounter({ extensionName, installSource, fixt
           container.remove();
         };
         const open = () => {
-          host.insertAdjacentElement("afterend", container);
+          blockRoot.insertAdjacentElement("afterend", container);
           btn.innerHTML = HIDE_LABEL;
           setShells((prev) =>
             prev.some((s) => s.id === id) ? prev : [...prev, { id, container, sql, onClose: close }],
@@ -143,9 +155,9 @@ export default function ExampleShellMounter({ extensionName, installSource, fixt
           else open();
         });
 
-        host.appendChild(btn);
         cleanups.push(() => {
           btn.remove();
+          if (created) bar.remove();
           container.remove();
           delete pre.dataset[ATTACHED];
         });
