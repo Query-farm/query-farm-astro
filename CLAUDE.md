@@ -13,7 +13,10 @@ npm run dev              # dev server at localhost:4321
 npm run build            # static build to ./dist/
 npm run preview          # serve the built dist/ locally
 npm run check:examples   # validate all SQL examples actually parse & execute
+npm run snapshot:usage   # refresh extension load numbers from Cloudflare AE
 ```
+
+`snapshot:usage` wraps `extension-diff-tools/usage-snapshot.py` (`scripts/snapshot-usage.sh`, 90-day window): it sources `.env` for `CF_API_TOKEN`/`CF_ACCOUNT_ID` and rewrites every `generated/usage.json` plus `src/data/generated/usage-summary.json`. The committed JSON is the fallback; `prebuild` runs it with `--soft` (warn, exit 0) so a build refreshes numbers when AE creds are present but never breaks offline or in CI. Commit the refreshed JSON to publish new numbers. The card/detail labels render the snapshot's own period string (e.g. "last 90 days"), so changing `--days` updates the displayed window automatically.
 
 There is no test suite or linter. `check:examples` (extension-diff-tools/check-examples.py) is the main validation: it executes every SQL snippet in extension quickStarts, function examples, `cookbook.mdx`, and `technical-details.mdx`, reporting PARSE-FAIL/EXEC-FAIL. Per-extension test fixtures live in `src/data/extensions/<slug>/augment/check-fixtures.sql`.
 
