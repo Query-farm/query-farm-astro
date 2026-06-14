@@ -17,8 +17,10 @@ export interface Extension {
   githubUrl?: string;
   docsUrl?: string;
   features?: string[];
-  /** Usage count from generated/usage.json (Cloudflare AE snapshot, last 30d). */
+  /** Usage count from generated/usage.json (Cloudflare AE snapshot). */
   usageCount?: number;
+  /** Human label for the usageCount window, e.g. "last 90 days". */
+  usagePeriod?: string;
 }
 
 const metadataModules = import.meta.glob<ExtensionMetadata>(
@@ -56,6 +58,7 @@ function toListingEntry(slug: string, m: ExtensionMetadata): Extension {
     docsUrl: m.docsUrl,
     features: m.features,
     usageCount: m.usageStats?.count ?? usageBySlug[slug]?.count,
+    usagePeriod: m.usageStats?.period ?? usageBySlug[slug]?.period,
   };
 }
 
