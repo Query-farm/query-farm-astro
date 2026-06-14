@@ -16,12 +16,16 @@
   "installSource": "community",
   "quickStart": [
     {
-      "title": "Hilbert-order rows by (lat, lon) when writing Parquet",
-      "sql": "COPY (\n  SELECT * FROM source\n  ORDER BY hilbert_encode([lat, lon]::DOUBLE[2])\n) TO 'out.parquet' (FORMAT PARQUET);"
+      "title": "Encode a multi-dimensional point to one sortable integer",
+      "sql": "-- Hilbert keeps N-dimensional neighbors close in the 1-D ordering\nSELECT hilbert_encode([10, 20]::UINTEGER[2]) AS hilbert;"
     },
     {
-      "title": "Z-order (Morton) is faster but with weaker locality",
-      "sql": "COPY (\n  SELECT * FROM source\n  ORDER BY morton_encode([time, symbol_id]::INTEGER[2])\n) TO 'out.parquet' (FORMAT PARQUET);"
+      "title": "Order rows by the curve — this is the Parquet write-time sort key",
+      "sql": "-- Neighbors in (x, y) end up adjacent. Wrap this SELECT in\n--   COPY (...) TO 'out.parquet' (FORMAT PARQUET)\n-- to persist the layout for multi-column row-group skipping.\nSELECT x, y, hilbert_encode([x, y]::UINTEGER[2]) AS hilbert\nFROM (VALUES (3, 5), (1, 1), (7, 0), (2, 6), (5, 3), (0, 4)) AS t(x, y)\nORDER BY hilbert;"
+    },
+    {
+      "title": "Morton (Z-order) is cheaper to compute, with weaker locality",
+      "sql": "SELECT x, y, morton_encode([x, y]::UINTEGER[2]) AS morton\nFROM (VALUES (3, 5), (1, 1), (7, 0), (2, 6), (5, 3), (0, 4)) AS t(x, y)\nORDER BY morton;"
     }
   ]
 }

@@ -2,16 +2,15 @@ import Callout from '../../../components/docs/Callout.astro';
 
 ## What you can do with one query
 
-Replace a multi-column `ORDER BY` with one locality-preserving sort key, and watch Parquet block-skipping start working on every dimension at once:
+Replace a multi-column `ORDER BY` with one locality-preserving sort key. Compute the key and order by it — rows that were close in `(x, y, z)` come back adjacent:
 
 ```sql
-COPY (
-  SELECT * FROM points
-  ORDER BY hilbert_encode([x, y, z]::INTEGER[3])
-) TO 'points.parquet' (FORMAT PARQUET);
+SELECT x, y, z, hilbert_encode([x, y, z]::INTEGER[3]) AS hilbert
+FROM points
+ORDER BY hilbert;
 ```
 
-Rows that were close in `(x, y, z)` end up adjacent in the file. A later query like `WHERE x BETWEEN ... AND y BETWEEN ... AND z BETWEEN ...` skips whole row groups whose stats don't overlap any of the three predicates — instead of skipping only on the first sort column. The same trick compresses the file better, because adjacent rows have adjacent coordinates and Parquet's RLE / dictionary / delta encodings find more runs.
+Wrap that ordering in `COPY (...) TO 'points.parquet' (FORMAT PARQUET)` and Parquet block-skipping starts working on every dimension at once. A later query like `WHERE x BETWEEN ... AND y BETWEEN ... AND z BETWEEN ...` skips whole row groups whose stats don't overlap any of the three predicates — instead of skipping only on the first sort column. The same trick compresses the file better, because adjacent rows have adjacent coordinates and Parquet's RLE / dictionary / delta encodings find more runs.
 
 <Callout type="note" title="Best fit, scoped honestly">
 Lindel encodes **multi-dimensional unsigned integer points** to one integer. To use it on floats or signed values, **quantize first** — e.g. `(lat * 1e6)::UINTEGER` — so the meaningful precision lands in the high bits of each dimension.

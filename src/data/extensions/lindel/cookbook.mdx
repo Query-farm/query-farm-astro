@@ -6,24 +6,24 @@ Use Lindel as the `ORDER BY` when writing Parquet. The result: row groups have t
 
 This is the same optimization Databricks calls "Z-Order" (Morton) and now defaults to "Liquid Clustering" (Hilbert).
 
-## Hilbert-order at write time
+## Hilbert-order rows
+
+Compute one Hilbert key per row and `ORDER BY` it — points close in `(lat, lon)` stay adjacent in the result:
 
 ```sql
-COPY (
-  SELECT * FROM source
-  ORDER BY hilbert_encode([lat, lon]::DOUBLE[2])
-) TO 'spatial.parquet' (FORMAT PARQUET);
+SELECT lat, lon, hilbert_encode([lat, lon]::DOUBLE[2]) AS hilbert
+FROM source
+ORDER BY hilbert;
 ```
 
-Rows close in `(lat, lon)` end up close in the file — bounding-box queries (`WHERE lat BETWEEN ... AND lon BETWEEN ...`) skip irrelevant row groups.
+To persist that layout, wrap the same ordering in a write — `COPY (SELECT * FROM source ORDER BY hilbert_encode([lat, lon]::DOUBLE[2])) TO 'spatial.parquet' (FORMAT PARQUET)`. Rows close in `(lat, lon)` end up close in the file, so bounding-box queries (`WHERE lat BETWEEN ... AND lon BETWEEN ...`) skip irrelevant row groups.
 
-For 4D — say flight history `(lat, lon, alt, time)`:
+For 4D — say flight history `(lat, lon, alt, time)` — pass all four dimensions to the encoder:
 
 ```sql
-COPY (
-  SELECT * FROM flights
-  ORDER BY hilbert_encode([lat, lon, alt, time]::INTEGER[4])
-) TO 'flights.parquet' (FORMAT PARQUET);
+SELECT lat, lon, alt, time, hilbert_encode([lat, lon, alt, time]::INTEGER[4]) AS hilbert
+FROM flights
+ORDER BY hilbert;
 ```
 
 ## Morton (Z-order) — faster, slightly weaker
@@ -31,10 +31,9 @@ COPY (
 Same recipe, swap the function:
 
 ```sql
-COPY (
-  SELECT * FROM source
-  ORDER BY morton_encode([time, symbol_id]::INTEGER[2])
-) TO 'trades.parquet' (FORMAT PARQUET);
+SELECT time, symbol_id, morton_encode([time, symbol_id]::INTEGER[2]) AS morton
+FROM source
+ORDER BY morton;
 ```
 
 When in doubt: Hilbert. Pick Morton only when encoding throughput is the bottleneck and you can tolerate slightly larger row-group bounding boxes.
