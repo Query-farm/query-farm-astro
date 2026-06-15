@@ -1,0 +1,126 @@
+---
+// Site-wide search. Trigger lives in the nav; the modal lazy-loads Pagefind's
+// runtime (/pagefind/pagefind.js, produced by scripts/build-search-index.mjs at
+// build time) on first open. Degrades gracefully when the index is absent
+// (e.g. `astro dev`, where Pagefind hasn't run).
+---
+
+<!-- Trigger -->
+<button
+  id="site-search-open"
+  type="button"
+  aria-label="Search the site"
+  class="inline-flex items-center gap-2 rounded-lg border border-soil-300 bg-white px-3 py-2 text-sm text-soil-500 hover:border-harvest-400 hover:text-soil-700 transition-colors"
+>
+  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z" />
+  </svg>
+  <span class="hidden sm:inline">Search</span>
+  <kbd class="hidden md:inline rounded border border-soil-300 bg-soil-50 px-1.5 text-[11px] font-mono text-soil-500">⌘K</kbd>
+</button>
+
+<!-- Modal -->
+<div id="site-search-modal" class="fixed inset-0 z-[100] hidden" role="dialog" aria-modal="true" aria-label="Search">
+  <div data-search-close class="absolute inset-0 bg-soil-900/40 backdrop-blur-sm"></div>
+  <div class="relative mx-auto mt-[10vh] w-[92%] max-w-2xl rounded-2xl border-2 border-soil-900 bg-white shadow-2xl overflow-hidden">
+    <div class="flex items-center gap-3 border-b border-soil-200 px-4">
+      <svg class="w-5 h-5 text-soil-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z" />
+      </svg>
+      <input
+        id="site-search-input"
+        type="search"
+        autocomplete="off"
+        placeholder="Search extensions, functions, docs…"
+        class="flex-1 bg-transparent py-4 text-base text-soil-900 placeholder-soil-400 focus:outline-none"
+      />
+      <button data-search-close type="button" aria-label="Close search" class="rounded p-1 text-soil-400 hover:text-soil-700">
+        <kbd class="rounded border border-soil-300 bg-soil-50 px-1.5 py-0.5 text-[11px] font-mono">Esc</kbd>
+      </button>
+    </div>
+    <div id="site-search-results" class="max-h-[60vh] overflow-y-auto p-2"></div>
+    <p id="site-search-status" class="px-4 py-6 text-center text-sm text-soil-500"></p>
+  </div>
+</div>
+
+<script is:inline>
+  (function () {
+    const openBtn = document.getElementById('site-search-open');
+    const modal = document.getElementById('site-search-modal');
+    const input = document.getElementById('site-search-input');
+    const resultsEl = document.getElementById('site-search-results');
+    const statusEl = document.getElementById('site-search-status');
+    if (!openBtn || !modal || !input || !resultsEl || !statusEl) return;
+
+    const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+    let pf = null; // null=not loaded, 'none'=unavailable
+    async function ensurePagefind() {
+      if (pf) return pf;
+      try {
+        const mod = await import('/pagefind/pagefind.js');
+        await mod.init();
+        pf = mod;
+      } catch (e) {
+        pf = 'none';
+      }
+      return pf;
+    }
+
+    function setStatus(msg) {
+      statusEl.textContent = msg || '';
+      statusEl.hidden = !msg;
+    }
+
+    function openModal() {
+      modal.classList.remove('hidden');
+      document.documentElement.style.overflow = 'hidden';
+      input.focus();
+      ensurePagefind().then((p) => {
+        if (p === 'none') setStatus('Search is available on the published site.');
+        else if (!input.value) setStatus('Type to search the docs and extensions.');
+      });
+    }
+    function closeModal() {
+      modal.classList.add('hidden');
+      document.documentElement.style.overflow = '';
+    }
+
+    openBtn.addEventListener('click', openModal);
+    modal.querySelectorAll('[data-search-close]').forEach((el) => el.addEventListener('click', closeModal));
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openModal(); }
+      else if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
+    });
+
+    let timer;
+    input.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(runSearch, 140);
+    });
+
+    async function runSearch() {
+      const q = input.value.trim();
+      if (!q) { resultsEl.innerHTML = ''; setStatus('Type to search the docs and extensions.'); return; }
+      const p = await ensurePagefind();
+      if (p === 'none') { resultsEl.innerHTML = ''; setStatus('Search is available on the published site.'); return; }
+      const search = await p.search(q);
+      const top = await Promise.all(search.results.slice(0, 8).map((r) => r.data()));
+      if (!top.length) { resultsEl.innerHTML = ''; setStatus(`No results for “${esc(q)}”.`); return; }
+      setStatus('');
+      resultsEl.innerHTML = top.map((d) => {
+        const title = esc((d.meta && d.meta.title) || d.url);
+        const tag = d.meta && d.meta.extension
+          ? `<span class="ml-2 shrink-0 rounded-full bg-harvest-50 px-2 py-0.5 text-[11px] font-medium text-harvest-700">${esc(d.meta.extension)}</span>`
+          : '';
+        return `<a href="${esc(d.url)}" class="block rounded-lg px-3 py-2 hover:bg-grain-50 transition-colors">
+          <div class="flex items-center justify-between gap-2">
+            <span class="font-semibold text-soil-900 truncate">${title}</span>${tag}
+          </div>
+          <p class="mt-0.5 text-sm text-soil-600 line-clamp-2 [&_mark]:bg-harvest-100 [&_mark]:text-soil-900 [&_mark]:rounded">${d.excerpt || ''}</p>
+        </a>`;
+      }).join('');
+    }
+  })();
+</script>
