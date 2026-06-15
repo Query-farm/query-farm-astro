@@ -302,7 +302,7 @@ export async function printBoxTable(table: Table, out: TerminalOutput, maxDispla
   distributeSlack(idealWidths, visibleIndices, ellipsisPos, out.cols, names, grid);
 
   try {
-    const Table = (await import(/* @vite-ignore */ "cli-table3")).default;
+    const Table = (await import("cli-table3")).default;
 
     type CellContent = string | { content: string; hAlign: "left" | "right" | "center" };
     const colWidths: number[] = [];

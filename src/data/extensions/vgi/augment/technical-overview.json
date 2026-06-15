@@ -1,0 +1,114 @@
+{
+  "eyebrow": "Technical Overview",
+  "title": "How VGI works",
+  "description": "VGI lets DuckDB query things it can't reach natively — an API, a model, an internal service — with plain SQL. If someone gives you a **worker** (a URL or a script), you `ATTACH` it and its tables and functions become ordinary SQL. Want to expose your *own* code? You can [build a worker](/vgi/building-a-worker) in any language. Most people only ever query one.",
+  "sections": [
+    {
+      "icon": "🛰️",
+      "title": "What is VGI?",
+      "description": "**VGI** (Vector Gateway Interface) lets DuckDB reach code and data it can't natively — in *any* language, with no C++ and no compiling. Someone writes a **worker** (in Python, TypeScript, Go, Rust, …); you `ATTACH` it and call the functions and query the tables it exposes as if they were built into DuckDB. Most people only ever *query* a worker — building one is optional, and covered in [Building a worker](/vgi/building-a-worker).\n\nUnder the hood, DuckDB and the worker hand data back and forth in a shared, efficient format called [Apache Arrow IPC](https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc) — a columnar (column-by-column) way to hold a table in memory that both sides understand, so data crosses between them without being rebuilt row by row. You don't need to know anything about Arrow to use VGI; it's plumbing.",
+      "bulletPoints": [
+        {
+          "label": "Any language",
+          "description": "Write a quick Python script or ship a compiled Go / Rust binary — whatever speaks the VGI protocol over a pipe or HTTP. SDKs exist for a growing list of languages, with new ones added regularly — see the [languages page](/vgi/languages)."
+        },
+        {
+          "label": "Version independent",
+          "description": "Your *worker* isn't compiled into DuckDB, so it keeps working as you upgrade DuckDB. (The small VGI extension itself is still version-matched to DuckDB, like any extension — but the code you write in the worker isn't.)"
+        },
+        {
+          "label": "Process isolation & real parallelism",
+          "description": "The worker runs in its own process, so a crash or a heavy dependency stays out of DuckDB's memory. And because each worker is a separate OS process, DuckDB pools and runs several side by side — so even a single-threaded runtime like Python (held back by its GIL) gets true parallelism by spreading work across multiple worker processes, instead of being pinned to one core the way an in-process extension would be."
+        }
+      ],
+      "callout": {
+        "title": "Why Query.Farm builds on VGI",
+        "body": "Query.Farm is adopting VGI as its way forward for DuckDB extensions. A worker is dramatically faster to produce than a native C++ extension — a coding agent can write one — far easier to distribute, integrates cleanly with enterprise auth through OAuth, and makes it possible to stand up an entirely private extension ecosystem."
+      }
+    },
+    {
+      "icon": "🔎",
+      "title": "Attach a worker — it's just SQL",
+      "description": "DuckDB's `ATTACH` normally mounts another **database**. VGI widens what it can point at: attach a **VGI worker** — a program running on your own machine or reached over HTTP — and the tables and functions it exposes become ordinary SQL you can query, filter, and join against your local data. It's the same `ATTACH` you already know, aimed at a lot more than a database. If you're only querying, there's no code to write and nothing to install.",
+      "bulletPoints": [
+        {
+          "label": "Attach and query",
+          "description": "Point `ATTACH` at a worker's URL or path and its schemas, tables, and functions appear under the alias you choose. Run [`vgi_catalogs`](#vgi_catalogs) first to see what a worker offers."
+        },
+        {
+          "label": "Join it with your data",
+          "description": "A worker's tables behave like local ones — join them to Parquet files, CSVs, or other catalogs in a single query."
+        },
+        {
+          "label": "Fetches only what you ask for",
+          "description": "When the worker supports it, DuckDB sends your `WHERE`, the columns you select, and `LIMIT` to the worker, so it returns only the rows and columns your query touches instead of shipping the whole table across. (A worker that doesn't implement this falls back to reading the full table into DuckDB.)"
+        }
+      ]
+    },
+    {
+      "icon": "🔌",
+      "title": "How it connects: transports",
+      "description": "The worker can run right beside DuckDB or anywhere you can reach over the network — you pick when you `ATTACH`. Every option carries the same Arrow protocol.",
+      "bulletPoints": [
+        {
+          "label": "On your machine (default)",
+          "description": "Point `ATTACH` at a local script or command and VGI runs it as a worker process next to DuckDB, reusing it across queries. The simplest way to start."
+        },
+        {
+          "label": "Over HTTP — and onward to remote services",
+          "description": "Point `ATTACH` at a URL to reach a worker hosted anywhere. Because it's plain HTTP, a worker can bridge *onward* to remote services — including over **WebSockets** — so DuckDB can reach systems that Arrow Flight, gRPC, and similar transports can't. It's also the only form that runs in the [in-browser WASM build](/products/extensions/vgi)."
+        },
+        {
+          "label": "Local socket or launcher",
+          "description": "For advanced local setups a worker can also be reached over a Unix domain socket, or kept warm and shared across many DuckDB sessions by a small launcher process."
+        },
+        {
+          "label": "Processes and threads",
+          "description": "VGI isn't limited to a single worker: it pools **multiple worker processes** *and* supports **multithreading** within them, so heavy or parallel workloads fan out instead of bottlenecking on one thread."
+        }
+      ]
+    },
+    {
+      "icon": "🔐",
+      "title": "Security: where the code runs",
+      "description": "How much you trust a worker comes down to *where its code runs* — and it's the same security question you already face with any DuckDB extension.",
+      "bulletPoints": [
+        {
+          "label": "A local worker runs on your machine",
+          "description": "Attaching a local worker runs that program **on your machine, with your privileges** — and VGI does **not** sandbox or isolate it (that would cost performance). It's the same risk as loading any DuckDB extension: only run workers you trust. Want to explore sandboxing or isolating local workers? [Reach out to Query.Farm](/consulting)."
+        },
+        {
+          "label": "HTTP can be a security boundary",
+          "description": "Running a worker over HTTP keeps its code in a **different environment, off your machine** — so the HTTP transport can act as a security boundary. That's useful if you want extension-like functionality without running untrusted code locally."
+        },
+        {
+          "label": "Auth & identity over HTTP",
+          "description": "Hosted workers can sit behind authentication: VGI supports **OAuth** and a notion of **identity** when you connect, so a worker knows who's asking and can gate access accordingly."
+        }
+      ]
+    },
+    {
+      "icon": "🧰",
+      "title": "What people build with it",
+      "description": "Anything you can write in your worker's language becomes SQL-accessible. A few common patterns:",
+      "useCases": [
+        {
+          "title": "Call APIs from SQL",
+          "description": "Wrap a REST or gRPC service as SQL-accessible tables and functions, and join remote data with local Parquet in a single query."
+        },
+        {
+          "title": "Run models from SQL",
+          "description": "Score rows through PyTorch, scikit-learn, ONNX, or any model that lives in your own runtime — keep the model where it belongs and call it from SQL."
+        },
+        {
+          "title": "Reuse existing code",
+          "description": "Make pandas / numpy transforms, Go services, or TypeScript validators available to SQL users without compiling a native DuckDB extension."
+        },
+        {
+          "title": "Expose custom sources",
+          "description": "Turn internal or proprietary data sources into queryable tables and views without building native extension plumbing."
+        }
+      ]
+    }
+  ]
+}

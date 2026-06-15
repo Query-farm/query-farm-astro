@@ -25,7 +25,7 @@ const TAXONOMY: Bucket[] = [
     blurb:'Read from, write to, or stand alongside another system.',
     theme:{ iconBg:'bg-sky-200',     iconText:'text-sky-800',     titleText:'text-sky-900',     sectionBg:'bg-sky-50',     sectionBorder:'border-sky-200' },
     subs: [
-      { title:'Databases',           slugs:['adbc_scanner','airport','redis'] },
+      { title:'Databases',           slugs:['adbc_scanner','airport','redis','vgi'] },
       { title:'Messaging & streams', slugs:['tributary','radio'] },
       { title:'HTTP & shell',        slugs:['http_client','httpserver','shellfs'] },
     ]},
@@ -119,11 +119,87 @@ const innerW = CHART_VW - CHART_PAD.left - CHART_PAD.right;
 const innerH = CHART_VH - CHART_PAD.top - CHART_PAD.bottom;
 const barGap = 6;
 const barW = buckets.length > 0 ? (innerW - barGap * (buckets.length - 1)) / buckets.length : 0;
+
+// SEO: structured data. This collection page + a machine-readable ItemList of
+// every extension, the breadcrumb trail, and an FAQ. Mirrors the per-extension
+// detail pages in [slug].astro, which already declare their place pointing up
+// to this URL — this closes the other direction of the graph.
+const SITE_ORIGIN = 'https://query.farm';
+const pageUrl = `${SITE_ORIGIN}/products/extensions`;
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'CollectionPage',
+    name: 'DuckDB Extensions',
+    description: `Browse ${totalExtensions} DuckDB extensions from Query.Farm, organized by what you're trying to do.`,
+    url: pageUrl,
+    isPartOf: { '@type': 'WebSite', name: 'Query.Farm', url: SITE_ORIGIN },
+    publisher: { '@type': 'Organization', name: 'Query.Farm', url: SITE_ORIGIN },
+    mainEntity: {
+      '@type': 'ItemList',
+      numberOfItems: totalExtensions,
+      itemListElement: publicExtensions.map((e, i) => ({
+        '@type': 'ListItem',
+        position: i + 1,
+        name: e.name,
+        url: `${SITE_ORIGIN}/products/extensions/${e.id}`,
+      })),
+    },
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Home', item: SITE_ORIGIN + '/' },
+      { '@type': 'ListItem', position: 2, name: 'Products', item: SITE_ORIGIN + '/products' },
+      { '@type': 'ListItem', position: 3, name: 'DuckDB Extensions', item: pageUrl },
+    ],
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'FAQPage',
+    mainEntity: [
+      {
+        '@type': 'Question',
+        name: 'What is a DuckDB extension?',
+        acceptedAnswer: {
+          '@type': 'Answer',
+          text: "A DuckDB extension is native code that loads inside DuckDB and runs as part of it — the fastest way to add features DuckDB doesn't ship with, with no separate service to run.",
+        },
+      },
+      {
+        '@type': 'Question',
+        name: 'How do I install a DuckDB extension?',
+        acceptedAnswer: {
+          '@type': 'Answer',
+          text: 'Run INSTALL extension_name FROM community; then LOAD extension_name; in DuckDB. Query.Farm extensions are published to the DuckDB community repository, signed and verified.',
+        },
+      },
+      {
+        '@type': 'Question',
+        name: "Are Query.Farm's DuckDB extensions free?",
+        acceptedAnswer: {
+          '@type': 'Answer',
+          text: 'Most are open source and free to install from the DuckDB community repository; a few advanced extensions are commercial. Each extension page lists its license and pricing.',
+        },
+      },
+    ],
+  },
+];
+
+// Flat rows for the sortable/filterable table view. Initial order matches the
+// table's default sort (loads desc, unknown loads last, then name) so the
+// server-rendered markup is already correct before the sort script loads.
+const titleCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const tableRows = [...publicExtensions].sort(
+  (a, b) => (b.usageCount ?? -1) - (a.usageCount ?? -1) || a.name.localeCompare(b.name),
+);
 ---
 
 <PageLayout
-  title="DuckDB Extensions"
-  description={`${totalExtensions} specialized DuckDB extensions, organized by what you're trying to do.`}
+  title="DuckDB Extensions — Browse by What You Need"
+  description={`Browse ${totalExtensions} DuckDB extensions from Query.Farm — for JSON, geospatial, text, crypto, streaming and more. Install in seconds with INSTALL … FROM community.`}
+  jsonLd={jsonLd}
   showBreadcrumbs={true}
   breadcrumbs={[
     { name: 'Products', href: '/products' },
@@ -133,24 +209,81 @@ const barW = buckets.length > 0 ? (innerW - barGap * (buckets.length - 1)) / buc
   <!-- Hero -->
   <Hero
     title="DuckDB Extensions"
-    subtitle={`${totalExtensions} specialized extensions, organized by what you're trying to do.`}
-    primaryCTA={{ text: "Browse by intent ↓", href: "#connect" }}
-    secondaryCTA={{ text: "Commission a custom extension", href: "/consulting" }}
+    logo={{ src: "/images/duckdb-icon.svg", alt: "DuckDB" }}
+    subtitle="Add-ons that load inside DuckDB and give it abilities it doesn't ship with — grouped by the job you're trying to do."
+    primaryCTA={{ text: "Browse extensions ↓", href: "#connect" }}
   />
 
+  <!-- What an extension is / why Query.Farm builds them -->
+  <section class="py-16 lg:py-24 bg-white border-b border-soil-200">
+    <div class="section-container">
+      <div class="max-w-5xl mx-auto">
+        <SectionHeader
+          eyebrow="What is a DuckDB extension?"
+          title="Where DuckDB ends, extensions begin."
+        />
+        <p class="text-lg text-soil-600 max-w-3xl mt-6">
+          An extension is native code that loads inside DuckDB and runs as part of it — the fastest way
+          to add features DuckDB doesn't ship with, with no separate service to run. It's also the right
+          home for capabilities that are too specialized to land in DuckDB itself but that data engineers,
+          analysts, and data scientists need anyway.
+        </p>
+        <p class="text-lg text-soil-600 max-w-3xl mt-4">
+          Query.Farm is one of the foremost builders of them. We ship and maintain dozens, available both
+          through DuckDB's community extension channel and through
+          <a href="/haybarn" class="text-harvest-700 font-medium underline underline-offset-2 hover:text-harvest-800">Haybarn</a>,
+          Query.Farm's own distribution of DuckDB.
+        </p>
+
+        <div class="grid sm:grid-cols-3 gap-6 mt-12">
+          <Card padding="md">
+            <h3 class="text-lg font-bold text-soil-900">Runs inside DuckDB</h3>
+            <p class="text-soil-600 mt-2">
+              Extensions execute as native code alongside your query — no network round-trip, no separate
+              service, no added latency.
+            </p>
+          </Card>
+          <Card padding="md">
+            <h3 class="text-lg font-bold text-soil-900">Fills the gaps</h3>
+            <p class="text-soil-600 mt-2">
+              When a capability is too niche or too complex for DuckDB itself, an extension delivers it
+              without bending your pipeline around the gap.
+            </p>
+          </Card>
+          <Card padding="md">
+            <h3 class="text-lg font-bold text-soil-900">Expert-built</h3>
+            <p class="text-soil-600 mt-2">
+              Each one is built and maintained by Query.Farm, available through DuckDB's community channel
+              and through Haybarn, our DuckDB distribution.
+            </p>
+          </Card>
+        </div>
+
+        <div class="mt-12 flex flex-col sm:flex-row sm:items-center gap-4">
+          <p class="text-soil-600">Need something that doesn't exist yet? We can build it.</p>
+          <Button variant="primary" href="/consulting">Commission a custom extension →</Button>
+        </div>
+      </div>
+    </div>
+  </section>
+
   {usageSummary && buckets.length > 0 && (
-    <section class="py-12 lg:py-16 bg-white border-b border-soil-200">
+    <section class="py-12 lg:py-16 bg-soil-50 border-b border-soil-200">
       <div class="section-container">
-        <div class="max-w-5xl mx-auto grid md:grid-cols-[auto_1fr] gap-8 md:gap-12 items-center">
+        <div class="max-w-5xl mx-auto">
+          <div class="text-xs uppercase tracking-wider text-harvest-600 font-semibold mb-8 text-center md:text-left">
+            Used in production, everywhere
+          </div>
+        <div class="grid md:grid-cols-[auto_1fr] gap-8 md:gap-12 items-center">
           <div class="text-center md:text-left">
             <div class="text-5xl lg:text-6xl font-bold text-harvest-600 leading-none">
-              {compactCount(usageSummary.totalLast365Days)}+
+              {compactCount(usageSummary.annualizedLoads)}+
             </div>
             <div class="mt-2 text-sm uppercase tracking-wide text-soil-600 font-medium">
-              extension loads in the last year
+              extension loads per year
             </div>
             <div class="mt-1 text-xs text-soil-500">
-              Across {totalExtensions} Query.Farm extensions
+              Annualized from the last {usageSummary.windowDays} days · across {totalExtensions} Query.Farm extensions
             </div>
           </div>
 
@@ -203,6 +336,7 @@ const barW = buckets.length > 0 ? (innerW - barGap * (buckets.length - 1)) / buc
             </svg>
           </div>
         </div>
+        </div>
       </div>
     </section>
   )}
@@ -215,9 +349,25 @@ const barW = buckets.length > 0 ? (innerW - barGap * (buckets.length - 1)) / buc
         eyebrow="Browse by intent"
         title="What are you trying to do?"
         description="Pick an intent below. Each section groups the extensions that solve that class of problem, with finer-grained sub-buckets where useful."
-        class="mb-16"
+        class="mb-12"
       />
 
+      <!-- View toggle: Cards (default, browse by intent) / Table (find & compare) -->
+      <div class="flex justify-center mb-12">
+        <div role="tablist" aria-label="Extension view" class="inline-flex rounded-lg border border-soil-300 bg-white p-1 shadow-sm">
+          <button id="view-cards-btn" type="button" role="tab" aria-selected="true"
+            class="px-4 py-2 text-sm font-medium rounded-md transition-colors bg-harvest-600 text-white">
+            <span aria-hidden="true">▣</span> Cards
+          </button>
+          <button id="view-table-btn" type="button" role="tab" aria-selected="false"
+            class="px-4 py-2 text-sm font-medium rounded-md transition-colors text-soil-700 hover:text-soil-900">
+            <span aria-hidden="true">☰</span> Table
+          </button>
+        </div>
+      </div>
+
+      <!-- Cards view -->
+      <div id="cards-view">
       <div class="space-y-20">
         {TAXONOMY.map((bucket) => (
           <section id={bucket.id} class="scroll-mt-24">
@@ -253,8 +403,155 @@ const barW = buckets.length > 0 ? (innerW - barGap * (buckets.length - 1)) / buc
           </section>
         ))}
       </div>
+      </div>
+
+      <!-- Table view (hidden until toggled) -->
+      <div id="table-view" hidden>
+        <div class="max-w-5xl mx-auto">
+          <label class="sr-only" for="ext-filter">Filter extensions</label>
+          <input id="ext-filter" type="search" autocomplete="off"
+            placeholder="Filter by name, description, or category…"
+            class="w-full mb-6 px-4 py-3 rounded-lg border border-soil-300 bg-white text-soil-900 placeholder-soil-400 focus:outline-none focus:ring-2 focus:ring-harvest-400 focus:border-harvest-400" />
+
+          <div class="overflow-x-auto rounded-xl border border-soil-200 bg-white shadow-sm">
+            <table class="w-full text-left border-collapse">
+              <thead class="bg-soil-100 text-soil-700 text-xs uppercase tracking-wide">
+                <tr>
+                  <th scope="col" data-sort="name" aria-sort="none" class="js-sort px-4 py-3 font-semibold cursor-pointer select-none hover:text-soil-900">
+                    Extension <span data-arrow class="text-harvest-600"></span>
+                  </th>
+                  <th scope="col" data-sort="category" aria-sort="none" class="js-sort px-4 py-3 font-semibold cursor-pointer select-none hover:text-soil-900">
+                    Category <span data-arrow class="text-harvest-600"></span>
+                  </th>
+                  <th scope="col" data-sort="loads" aria-sort="descending" class="js-sort px-4 py-3 font-semibold cursor-pointer select-none hover:text-soil-900 text-right">
+                    Loads <span data-arrow class="text-harvest-600">▼</span>
+                  </th>
+                  <th scope="col" data-sort="status" aria-sort="none" class="js-sort px-4 py-3 font-semibold cursor-pointer select-none hover:text-soil-900">
+                    Status <span data-arrow class="text-harvest-600"></span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody id="ext-tbody" class="divide-y divide-soil-100">
+                {tableRows.map((e) => {
+                  const cat = titleCase(e.category);
+                  const search = `${e.name} ${e.id} ${e.description} ${cat}`.toLowerCase();
+                  return (
+                    <tr
+                      data-name={e.name.toLowerCase()}
+                      data-category={cat.toLowerCase()}
+                      data-loads={e.usageCount ?? -1}
+                      data-status={e.status}
+                      data-search={search}
+                      class="hover:bg-soil-50 transition-colors"
+                    >
+                      <td class="px-4 py-3 align-top">
+                        <a href={`/products/extensions/${e.id}`} class="font-semibold text-soil-900 hover:text-harvest-700">
+                          {e.icon && <span class="mr-1.5" aria-hidden="true">{e.icon}</span>}{e.name}
+                        </a>
+                        <code class="block text-xs text-soil-500 font-mono">{e.id}</code>
+                      </td>
+                      <td class="px-4 py-3 align-top text-soil-700 whitespace-nowrap">{cat}</td>
+                      <td class="px-4 py-3 align-top text-right tabular-nums whitespace-nowrap"
+                        title={typeof e.usageCount === 'number' ? `${e.usageCount.toLocaleString()} loads${e.usagePeriod ? ` · ${e.usagePeriod}` : ''}` : 'Just released'}>
+                        {typeof e.usageCount === 'number'
+                          ? <span class="text-soil-900 font-medium">{compactCount(e.usageCount)}</span>
+                          : <span class="text-sky-700">New</span>}
+                      </td>
+                      <td class="px-4 py-3 align-top">
+                        <span class:list={[
+                          'inline-block px-2 py-0.5 rounded-full text-xs font-medium capitalize',
+                          e.status === 'stable' && 'bg-emerald-100 text-emerald-800',
+                          e.status === 'beta' && 'bg-amber-100 text-amber-800',
+                          e.status === 'experimental' && 'bg-rose-100 text-rose-800',
+                        ]}>{e.status}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p id="ext-empty" hidden class="text-center text-soil-500 py-8">No extensions match your filter.</p>
+          <p class="mt-4 text-xs text-soil-500 text-center">Click a column header to sort · {totalExtensions} extensions</p>
+        </div>
+      </div>
     </div>
   </section>
+
+  <script>
+    // View toggle + client-side sort/filter for the extensions table. No React;
+    // both views are server-rendered, this only shows/hides and reorders rows.
+    const cardsBtn = document.getElementById('view-cards-btn');
+    const tableBtn = document.getElementById('view-table-btn');
+    const cardsView = document.getElementById('cards-view');
+    const tableView = document.getElementById('table-view');
+
+    function setView(view: 'cards' | 'table') {
+      const isTable = view === 'table';
+      if (tableView) tableView.hidden = !isTable;
+      if (cardsView) cardsView.hidden = isTable;
+      for (const [btn, active] of [[tableBtn, isTable], [cardsBtn, !isTable]] as const) {
+        if (!btn) continue;
+        btn.setAttribute('aria-selected', String(active));
+        btn.classList.toggle('bg-harvest-600', active);
+        btn.classList.toggle('text-white', active);
+        btn.classList.toggle('text-soil-700', !active);
+      }
+    }
+    cardsBtn?.addEventListener('click', () => setView('cards'));
+    tableBtn?.addEventListener('click', () => setView('table'));
+
+    // Filter
+    const filterInput = document.getElementById('ext-filter') as HTMLInputElement | null;
+    const tbody = document.getElementById('ext-tbody');
+    const emptyMsg = document.getElementById('ext-empty');
+    const rows = tbody ? Array.from(tbody.querySelectorAll('tr')) : [];
+
+    function applyFilter() {
+      const q = (filterInput?.value || '').trim().toLowerCase();
+      let visible = 0;
+      for (const r of rows) {
+        const show = !q || (r.getAttribute('data-search') || '').includes(q);
+        (r as HTMLElement).hidden = !show;
+        if (show) visible++;
+      }
+      if (emptyMsg) emptyMsg.hidden = visible !== 0;
+    }
+    filterInput?.addEventListener('input', applyFilter);
+
+    // Sort — initial state mirrors the server-rendered order (loads, descending).
+    let sortKey = 'loads';
+    let sortDir = -1;
+    const heads = Array.from(document.querySelectorAll<HTMLElement>('th.js-sort'));
+
+    function valFor(r: Element, key: string): number | string {
+      if (key === 'loads') return Number(r.getAttribute('data-loads'));
+      return r.getAttribute('data-' + key) || '';
+    }
+    function sortBy(key: string) {
+      if (sortKey === key) sortDir *= -1;
+      else { sortKey = key; sortDir = key === 'loads' ? -1 : 1; }
+      const sorted = rows.slice().sort((a, b) => {
+        const av = valFor(a, key), bv = valFor(b, key);
+        let cmp = typeof av === 'number'
+          ? (av as number) - (bv as number)
+          : String(av).localeCompare(String(bv));
+        if (cmp === 0) cmp = (a.getAttribute('data-name') || '').localeCompare(b.getAttribute('data-name') || '');
+        return cmp * sortDir;
+      });
+      for (const r of sorted) tbody?.appendChild(r);
+      for (const h of heads) {
+        const k = h.getAttribute('data-sort');
+        const arrow = h.querySelector('[data-arrow]');
+        const active = k === sortKey;
+        if (arrow) arrow.textContent = active ? (sortDir === 1 ? '▲' : '▼') : '';
+        h.setAttribute('aria-sort', active ? (sortDir === 1 ? 'ascending' : 'descending') : 'none');
+      }
+    }
+    for (const h of heads) {
+      h.addEventListener('click', () => sortBy(h.getAttribute('data-sort') || 'name'));
+    }
+  </script>
 
   <!-- Installation Section -->
   <section class="py-16 lg:py-24 bg-white">
@@ -263,7 +560,7 @@ const barW = buckets.length > 0 ? (innerW - barGap * (buckets.length - 1)) / buc
         <SectionHeader
           align="center"
           eyebrow="Getting Started"
-          title="Easy Installation"
+          title="How to install a DuckDB extension"
           description="Install any Query.Farm extension in seconds with DuckDB's built-in extension system."
           class="mb-12"
         />
@@ -280,7 +577,10 @@ const barW = buckets.length > 0 ? (innerW - barGap * (buckets.length - 1)) / buc
 <span class="text-sky-400">SELECT</span> <span class="text-soil-300">*</span> <span class="text-sky-400">FROM</span> <span class="text-harvest-300">your_function</span><span class="text-soil-400">();</span></code></pre>
 
           <p class="text-sm text-soil-300">
-            All extensions are signed and verified. View full documentation and examples on each extension's page.
+            Query.Farm publishes its extensions to DuckDB's community repository, so you install them
+            the same way you install any community extension — no extra setup or custom repository.
+            Every extension is signed and verified; full documentation and examples live on each
+            extension's page.
           </p>
         </Card>
       </div>
@@ -291,7 +591,7 @@ const barW = buckets.length > 0 ? (innerW - barGap * (buckets.length - 1)) / buc
   <section class="py-16 lg:py-24 bg-gradient-to-br from-harvest-600 to-grain-600 text-white">
     <div class="section-container text-center">
       <h2 class="text-3xl md:text-4xl lg:text-5xl font-bold mb-6">
-        Need a Custom Extension?
+        Need a custom DuckDB extension?
       </h2>
       <p class="text-xl md:text-2xl text-harvest-50 mb-8 max-w-3xl mx-auto">
         Our team can build custom DuckDB extensions tailored to your specific needs.

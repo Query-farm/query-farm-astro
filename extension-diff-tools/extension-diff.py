@@ -481,7 +481,13 @@ def build_pragma_doc(row: dict) -> dict:
     input_type = row.get("input_type", "VARCHAR")
     type_map = {"VARCHAR": "string", "BOOLEAN": "boolean", "BIGINT": "number",
                 "INTEGER": "number", "UBIGINT": "number", "DOUBLE": "number"}
+    # Coarse category drives badge colour / default coercion. Anything we don't
+    # model as a scalar (MAP, LIST, STRUCT, ...) is a "map"-style structured
+    # value rendered verbatim. `valueType` carries the real DuckDB type so the
+    # docs can show it faithfully (e.g. "MAP(VARCHAR, BIGINT)", "UBIGINT").
     setting_type = type_map.get(input_type, "string")
+    if input_type.startswith(("MAP", "STRUCT", "LIST", "UNION")):
+        setting_type = "map"
 
     default_value = value
     if setting_type == "boolean":
@@ -499,6 +505,7 @@ def build_pragma_doc(row: dict) -> dict:
         "name": name,
         "default": default_value,
         "type": setting_type,
+        "valueType": input_type,
         "description": coerce_str(row.get("description")),
     }
 
@@ -568,6 +575,12 @@ def main() -> None:
     ap.add_argument("--slug", required=True, help="Extension slug (folder name in src/data/extensions/)")
     ap.add_argument("--community", action="store_true",
                     help="Use a single duckdb CLI; load extension via INSTALL ... FROM community; LOAD")
+    ap.add_argument("--haybarn", action="store_true",
+                    help="Scan against Haybarn (Query.Farm's DuckDB distribution) instead of "
+                         "DuckDB. Implies --community, routes the CLI through the bundled "
+                         "`haybarn` wrapper (override with HAYBARN_CMD), and skips the two "
+                         "DuckDB-only steps that can't see a Haybarn extension: in-process "
+                         "example baking and community-registry compatibility discovery.")
     ap.add_argument("--duckdb", type=Path, default=Path("duckdb"),
                     help="DuckDB CLI binary to use in --community mode (default: PATH lookup)")
     ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE_DUCKDB,
@@ -581,6 +594,13 @@ def main() -> None:
                          "another extension's functions (e.g. --also-load spatial "
                          "for geosilo). Repeatable.")
     args = ap.parse_args()
+
+    # Haybarn mode is community-mode capture routed through the Haybarn CLI.
+    if args.haybarn:
+        args.community = True
+        # Default the CLI to the bundled wrapper unless the caller overrode it.
+        if args.duckdb == Path("duckdb"):
+            args.duckdb = Path(__file__).resolve().parent / "haybarn"
 
     if args.community:
         # Resolve duckdb binary from PATH if a bare name was given.
@@ -597,7 +617,11 @@ def main() -> None:
         # baseline and extension sessions, so the diff cleanly shows only the
         # target's contribution above and beyond them.
         also_preamble = "".join(f"INSTALL {e}; LOAD {e}; " for e in args.also_load)
-        load_preamble = f"{also_preamble}INSTALL {args.slug} FROM community; LOAD {args.slug}; "
+        # In Haybarn mode, FORCE INSTALL the target so a rescan always pulls the
+        # latest published build past Haybarn's on-disk extension cache (a plain
+        # INSTALL is a no-op when a stale copy is already installed).
+        install_verb = "FORCE INSTALL" if args.haybarn else "INSTALL"
+        load_preamble = f"{also_preamble}{install_verb} {args.slug} FROM community; LOAD {args.slug}; "
     else:
         check_binary(args.baseline, "Baseline", "cd duckdb && make release")
         check_binary(args.debug, "Debug", "make debug")
@@ -677,10 +701,17 @@ def main() -> None:
         # In community mode, open a second connection with the extension loaded
         # so we can execute each example expression and capture its result.
         exec_con = None
-        if args.community:
+        if args.community and not args.haybarn:
             exec_con = duckdb.connect()
             exec_con.execute(f"INSTALL {args.slug} FROM community")
             exec_con.execute(f"LOAD {args.slug}")
+        elif args.haybarn:
+            # The in-process python `duckdb` module is plain DuckDB and can't
+            # load a Haybarn-only extension. Skip baking example outputs here;
+            # author curated examples in augment/ and bake them with a
+            # Haybarn-backed run later.
+            print("Haybarn mode: skipping in-process example baking "
+                  "(no DuckDB engine for a Haybarn extension).")
         try:
             # Functions (split macros out into their own file)
             functions, macros = [], []
@@ -720,7 +751,10 @@ def main() -> None:
         if views:
             write_json(generated_dir / "views.json", views)
 
-        if args.community:
+        if args.haybarn:
+            print("Haybarn mode: skipping community-registry compatibility "
+                  "discovery (extension ships in the Haybarn distribution).")
+        elif args.community:
             print("Discovering platform/version compatibility from registry...")
             compat = discover_compatibility(args.slug)
             if compat:

@@ -48,6 +48,11 @@ export const FunctionDocDataSchema = z.object({
   parameters: z.array(FunctionParameterSchema),
   returns: z.string().optional(),
   returnsTable: z.array(ReturnColumnSchema).optional(),
+  // Table functions whose output columns are resolved at bind time (e.g. they
+  // mirror a remote table or a worker-defined function) have no fixed schema to
+  // tabulate. Flag them so the docs render a "dynamic schema" note instead of an
+  // empty/misleading column table. Pair with a `returns` prose explanation.
+  returnsTableDynamic: z.boolean().optional(),
   description: z.string(),
   examples: z.array(FunctionExampleSchema),
   relatedFunctions: z.array(z.string()).optional(),
@@ -64,7 +69,10 @@ export const PragmaSchema = z.object({
   name: z.string(),
   default: z.union([z.string(), z.number(), z.boolean()]).nullable(),
   description: z.string(),
-  type: z.enum(['string', 'number', 'boolean']).optional(),
+  type: z.enum(['string', 'number', 'boolean', 'map']).optional(),
+  // The real DuckDB setting type (e.g. "UBIGINT", "MAP(VARCHAR, BIGINT)"), shown
+  // verbatim so the docs respect the actual type rather than a coarse category.
+  valueType: z.string().optional(),
   validValues: z.array(z.string()).optional(),
   example: z.string().optional(),
 });
@@ -175,8 +183,17 @@ export const TechnicalOverviewSectionSchema = z.object({
   image: z.string().optional(),
   imageAlt: z.string().optional(),
   imageCaption: z.string().optional(),
+  // Optional code sample rendered under the description (syntax-highlighted).
+  code: z.string().optional(),
+  codeLanguage: z.string().optional(),
+  codeTitle: z.string().optional(),
   bulletPoints: z.array(BulletPointSchema).optional(),
   useCases: z.array(UseCaseSchema).optional(),
+  // Optional highlighted callout rendered at the end of the section.
+  callout: z.object({
+    title: z.string().optional(),
+    body: z.string(),
+  }).optional(),
 });
 
 export const TechnicalOverviewSchema = z.object({
@@ -321,7 +338,12 @@ export const FunctionsArraySchema = z.array(FunctionDocDataSchema);
 // Engine. Drives the proof-point band on the extensions index. The current
 // (partial) ISO week is excluded from `weeklyBuckets` upstream.
 export const UsageSummarySchema = z.object({
-  totalLast365Days: z.number().int().nonnegative(),
+  // Annualized run-rate: the measured `windowTotalLoads` over `windowDays`
+  // scaled to 365 days. AE only retains ~90 days, so a true yearly total
+  // isn't available — see extension-diff-tools/usage-snapshot.py.
+  annualizedLoads: z.number().int().nonnegative(),
+  windowDays: z.number().int().positive(),
+  windowTotalLoads: z.number().int().nonnegative(),
   weeklyBuckets: z.array(z.object({
     weekStarting: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     loads: z.number().int().nonnegative(),

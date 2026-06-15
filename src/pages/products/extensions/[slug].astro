@@ -84,6 +84,15 @@ interface ExtensionContent {
   href: string;
 }
 
+// Short summary for the contents index: the first sentence. A naive
+// `.split('.')[0]` truncates at the first period *anywhere* — including ones
+// inside `OVER (...)`, decimals, or `e.g.` — so instead match up to the first
+// sentence-ending `.`/`!`/`?` that is followed by whitespace or end-of-string.
+const firstSentence = (s: string): string => {
+  const m = s.match(/^.*?[.!?](?=\s|$)/);
+  return (m ? m[0] : s).trim();
+};
+
 // Helper to map items to extension content format
 const mapToContent = <T extends { id: string; name: string; category: string; description: string }>(
   items: T[],
@@ -101,7 +110,7 @@ const mapToContent = <T extends { id: string; name: string; category: string; de
       name: item.name + (options?.nameSuffix || ''),
       type,
       category: item.category || options?.defaultCategory || item.category,
-      description: item.description.split('.')[0],
+      description: firstSentence(item.description),
       href: `#${id}`
     };
   });
@@ -109,13 +118,15 @@ const mapToContent = <T extends { id: string; name: string; category: string; de
 
 const extensionContents: ExtensionContent[] = [
   // Functions keep their original type (scalar/table/aggregate)
-  // flatMap to handle functions with multiple categories
-  ...functions.flatMap(fn => fn.categories.map(cat => ({
+  // flatMap to handle functions with multiple categories. Functions without any
+  // category still need to appear, so fall back to a generic bucket — otherwise
+  // `[].map()` drops them from the contents index entirely.
+  ...functions.flatMap(fn => (fn.categories.length ? fn.categories : ['Functions']).map(cat => ({
     id: fn.id,
     name: fn.name + '()',
     type: fn.type,
     category: cat,
-    description: fn.description.split('.')[0],
+    description: firstSentence(fn.description),
     href: `#${fn.id}`
   }))),
   // All other types use the helper
@@ -295,7 +306,7 @@ const jsonLd = [
   <ExtensionHero
     name={metadata.displayName}
     icon={metadata.icon}
-    description={metadata.description}
+    description={firstSentence(metadata.description)}
     actions={heroActions}
     image={metadata.image}
   />
@@ -360,6 +371,9 @@ const jsonLd = [
             <circle cx="40" cy="50" r="18" fill="#FFF000"/>
             <ellipse cx="68" cy="50" rx="8" ry="6" fill="#FFF000"/>
           </svg>
+          <a href="/haybarn" title="Haybarn — Query.Farm's DuckDB distribution" class="flex-shrink-0 hover:opacity-80 transition-opacity">
+            <img src="/images/haybarn-icon.png" alt="Haybarn" width="32" height="32" class="w-8 h-8 rounded-md" />
+          </a>
           <h2 class="text-2xl font-bold text-soil-900">Install</h2>
         </div>
         <CodeBlock code={installCommand} lang="sql" tryable={false} />
@@ -486,7 +500,7 @@ const jsonLd = [
       <SectionHeader
         eyebrow="Configuration"
         title="Settings"
-        description={`Configure the ${metadata.displayName.toLowerCase()} extension behavior using these pragma settings.`}
+        description={`Configure the ${metadata.displayName.toLowerCase()} extension behavior using these settings.`}
         class="mb-12"
       />
       {pragmas.map((pragma) => (
@@ -558,7 +572,8 @@ const jsonLd = [
   <ExtensionInfo
       githubUrl={GITHUB_URL}
       githubStars={metadata.githubStars}
-      license={metadata.license || 'MIT'}
+      license={metadata.license}
+      licenseHref={/source-available/i.test(metadata.license ?? '') ? '/licenses/source-available' : undefined}
       pricing={metadata.pricing || 'free'}
       firstRelease={metadata.firstRelease}
       lastRelease={metadata.lastRelease}
@@ -568,7 +583,7 @@ const jsonLd = [
       dependencies={metadata.dependencies}
       usageStats={metadata.usageStats}
       platforms={metadata.platforms}
-      duckdbVersions={metadata.duckdbVersions || ['1.1.0', '1.1.1', '1.1.2', '1.1.3']}
+      duckdbVersions={metadata.duckdbVersions}
       binarySizes={metadata.binarySizes}
     />
 
@@ -592,6 +607,7 @@ const jsonLd = [
             status={ext.status}
             icon={ext.icon}
             features={ext.features}
+            usageCount={ext.usageCount}
           />
         ))}
       </div>
@@ -618,4 +634,13 @@ const jsonLd = [
     </div>
   </section>
 
+  <!-- Record this visit for the "Recently viewed" list in the Products nav. -->
+  <script is:inline define:vars={{ extId: extensionId, extName: metadata.displayName }}>
+    try {
+      const key = 'qf:recentExtensions';
+      const prev = JSON.parse(localStorage.getItem(key) || '[]').filter((e) => e && e.id !== extId);
+      prev.unshift({ id: extId, name: extName });
+      localStorage.setItem(key, JSON.stringify(prev.slice(0, 8)));
+    } catch (e) { /* ignore storage errors */ }
+  </script>
 </PageLayout>

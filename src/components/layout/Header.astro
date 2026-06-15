@@ -1,8 +1,16 @@
 ---
 import Button from '../ui/Button.astro';
 import { LATEST_STATUS_URL } from '../../data/haybarn-versions';
+import { publicExtensions } from '../../data/extensions';
 
 const currentPath = Astro.url.pathname;
+
+// The most-used extensions (by load count) surfaced directly in the Products
+// mega-menu so they're one hover away instead of buried behind the index.
+const topExtensions = [...publicExtensions]
+  .sort((a, b) => (b.usageCount ?? -1) - (a.usageCount ?? -1))
+  .slice(0, 6)
+  .map(e => ({ name: e.name, href: `/products/extensions/${e.id}` }));
 
 const navigation = [
   { name: 'Home', href: '/' },
@@ -14,15 +22,16 @@ const navigation = [
         title: 'DuckDB Extensions',
         href: '/products/extensions',
         description: 'Connectors, functions, sketches, scripting, and SQL tools you can install into DuckDB.',
-        items: []
+        items: topExtensions
       },
       {
         title: 'Vector Gateway Interface',
         href: '/vgi',
-        description: 'Call Python, TypeScript, Go, Rust, Java, or C++ code from DuckDB SQL.',
+        description: 'Call any code or data anywhere from SQL.',
         items: [
           { name: 'Overview', href: '/vgi' },
           { name: 'Getting Started', href: '/vgi/getting-started' },
+          { name: 'Building a Worker', href: '/vgi/building-a-worker' },
           { name: 'Architecture', href: '/vgi/architecture' },
           { name: 'Languages', href: '/vgi/languages' }
         ]
@@ -143,7 +152,34 @@ function isActive(href: string, currentPath: string): boolean {
                             <p class="text-xs text-soil-600 mt-1 leading-snug">{col.description}</p>
                           )}
                         </a>
-                        {col.items.length > 0 && (
+                        {col.title === 'DuckDB Extensions' ? (
+                          <div class="mt-2 border-l-2 border-soil-900/15 ml-3 pl-3 space-y-3">
+                            <div id="nav-recent-wrap" hidden>
+                              <p class="px-2 mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-soil-400">Recently viewed</p>
+                              <ul id="nav-recent-extensions" class="space-y-0.5"></ul>
+                            </div>
+                            <div>
+                              <p class="px-2 mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-soil-400">Most used</p>
+                              <ul id="nav-top-extensions" class="space-y-0.5">
+                                {col.items.map(sub => (
+                                  <li>
+                                    <a
+                                      href={sub.href}
+                                      class:list={[
+                                        'block px-2 py-1 rounded text-sm transition-colors',
+                                        isActive(sub.href, currentPath)
+                                          ? 'bg-grain-100 text-soil-900'
+                                          : 'text-soil-600 hover:bg-grain-50 hover:text-soil-900'
+                                      ]}
+                                    >{sub.name}</a>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                            <a href="/products/extensions" class="block px-2 py-1 text-sm font-medium text-harvest-700 hover:text-harvest-800 transition-colors">Browse all extensions →</a>
+                          </div>
+                        ) : (
+                          col.items.length > 0 && (
                           <ul class="mt-2 space-y-0.5 border-l-2 border-soil-900/15 ml-3 pl-3">
                             {col.items.map(sub => (
                               <li>
@@ -161,6 +197,7 @@ function isActive(href: string, currentPath: string): boolean {
                               </li>
                             ))}
                           </ul>
+                          )
                         )}
                       </div>
                     ))}
@@ -204,4 +241,26 @@ function isActive(href: string, currentPath: string): boolean {
   mobileMenuButton?.addEventListener('click', () => {
     mobileMenu?.classList.toggle('hidden');
   });
+
+  // Populate the "Recently viewed" extensions in the Products mega-menu from the
+  // list recorded on extension detail pages (localStorage key qf:recentExtensions).
+  try {
+    const ul = document.getElementById('nav-recent-extensions');
+    const wrap = document.getElementById('nav-recent-wrap');
+    // Don't repeat an extension that's already shown under "Most used".
+    const topSlugs = new Set(
+      Array.from(document.querySelectorAll('#nav-top-extensions a[href^="/products/extensions/"]'))
+        .map((a) => (a.getAttribute('href') || '').split('/').pop())
+    );
+    const recent = JSON.parse(localStorage.getItem('qf:recentExtensions') || '[]')
+      .filter((e: { id?: string }) => e && e.id && !topSlugs.has(e.id));
+    if (ul && wrap && Array.isArray(recent) && recent.length) {
+      const esc = (s: string) => s.replace(/[&<>"]/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
+      ul.innerHTML = recent.slice(0, 4).map((e: { id: string; name?: string }) =>
+        `<li><a href="/products/extensions/${encodeURIComponent(e.id)}" class="block px-2 py-1 rounded text-sm text-soil-600 hover:bg-grain-50 hover:text-soil-900 transition-colors">${esc(e.name || e.id)}</a></li>`
+      ).join('');
+      wrap.hidden = false;
+    }
+  } catch { /* ignore storage/parse errors */ }
 </script>

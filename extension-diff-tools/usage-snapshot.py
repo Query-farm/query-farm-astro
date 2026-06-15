@@ -188,8 +188,12 @@ def main() -> None:
     print(f"\nWrote {written} usage.json files.")
 
     # Site-wide summary used by the extensions index hero.
-    print("\nFetching site-wide 365-day total and weekly buckets...")
-    total_365d = fetch_total_last_n_days(token, account_id, 365)
+    # Analytics Engine only retains ~90 days, so we measure the actual window
+    # (args.days) and annualize it to a yearly run-rate rather than pretending
+    # to query a full year of history we don't have.
+    print(f"\nFetching site-wide {args.days}-day total and weekly buckets...")
+    window_total = fetch_total_last_n_days(token, account_id, args.days)
+    annualized = round(window_total * 365 / args.days)
     weekly = fetch_weekly_totals(token, account_id, 13)
 
     # Drop the current (partial) week so the chart only shows complete weeks.
@@ -202,11 +206,14 @@ def main() -> None:
     summary_path = args.site / "src/data/generated/usage-summary.json"
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps({
-        "totalLast365Days": total_365d,
+        "annualizedLoads": annualized,
+        "windowDays": args.days,
+        "windowTotalLoads": window_total,
         "weeklyBuckets": weekly,
         "asOf": as_of,
     }, indent=2) + "\n")
-    print(f"  365d total: {total_365d:,} loads")
+    print(f"  {args.days}d total: {window_total:,} loads "
+          f"→ annualized: {annualized:,} loads/yr")
     for b in weekly:
         print(f"  week of {b['weekStarting']}: {b['loads']:,}")
     print(f"Wrote {summary_path.relative_to(args.site)}")

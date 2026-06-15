@@ -1,8 +1,8 @@
 ---
 import Card from '../ui/Card.astro';
-import Badge from '../ui/Badge.astro';
 import CodeBlock from '../ui/CodeBlock.astro';
 import ShareLinkButton from '../ui/ShareLinkButton.astro';
+import { parseInline } from 'marked';
 import type { Pragma } from '../../data/extension-types';
 
 interface Props extends Pragma {
@@ -16,6 +16,7 @@ const {
   default: defaultValue,
   description,
   type = 'string',
+  valueType,
   validValues,
   example,
   category = 'Configuration'
@@ -27,17 +28,44 @@ const pragmaId = id || name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 // Create category ID for linking
 const categoryId = category.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
-// Type badge colors
-const typeBadges = {
-  string: { variant: 'info' as const, text: 'String' },
-  number: { variant: 'default' as const, text: 'Number', class: 'bg-purple-100 text-purple-800 border-purple-300' },
-  boolean: { variant: 'success' as const, text: 'Boolean' }
+// Setting descriptions frequently reference type names and internal identifiers;
+// render inline markdown so `code` spans pick up a fixed-width treatment.
+const md = (s: string) => parseInline(s ?? '', { async: false }) as string;
+const proseInlineClass = '[&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:bg-soil-100 [&_code]:text-soil-900 [&_code]:font-mono [&_code]:text-[0.9em] [&_a]:text-harvest-700 [&_a]:underline [&_a]:underline-offset-2 [&_a]:decoration-harvest-300 hover:[&_a]:decoration-harvest-700';
+
+// Coarse category drives the badge colour; the label shows the real DuckDB type
+// (valueType) when available so the actual type is respected.
+const typeStyles: Record<string, string> = {
+  string: 'bg-sky-100 text-sky-800 border-sky-300',
+  number: 'bg-purple-100 text-purple-800 border-purple-300',
+  boolean: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+  map: 'bg-amber-100 text-amber-800 border-amber-300',
 };
+const typeClass = typeStyles[type] ?? typeStyles.string;
+const typeLabel = valueType ?? (type.charAt(0).toUpperCase() + type.slice(1));
 
-const badgeConfig = typeBadges[type];
+// Parse a DuckDB map literal `{key=value, key=value}` into entries so a
+// structured default renders as a readable key/value table, not a blob.
+function parseMap(v: unknown): { key: string; value: string }[] | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!s.startsWith('{') || !s.endsWith('}')) return null;
+  const body = s.slice(1, -1).trim();
+  if (!body) return [];
+  return body.split(',').map((pair) => {
+    const eq = pair.indexOf('=');
+    return eq === -1
+      ? { key: pair.trim(), value: '' }
+      : { key: pair.slice(0, eq).trim(), value: pair.slice(eq + 1).trim() };
+  });
+}
+const mapEntries = type === 'map' ? parseMap(defaultValue) : null;
 
-// Format default value for display
-const formattedDefault = typeof defaultValue === 'string' ? `'${defaultValue}'` : String(defaultValue);
+// Scalar default for display: booleans/numbers verbatim, strings as-is (rendered
+// inside a <code>), empty → em dash.
+const formattedDefault = typeof defaultValue === 'boolean' || typeof defaultValue === 'number'
+  ? String(defaultValue)
+  : (typeof defaultValue === 'string' && defaultValue !== '' ? defaultValue : '—');
 ---
 
 <Card padding="lg" id={pragmaId} class="mb-6 scroll-mt-32">
@@ -46,13 +74,9 @@ const formattedDefault = typeof defaultValue === 'string' ? `'${defaultValue}'` 
     <div class="flex-1">
       <h4 class="text-xl font-bold text-soil-900 font-mono mb-2">{name}</h4>
       <div class="flex items-center gap-2 flex-wrap">
-        {type === 'number' ? (
-          <span class="inline-flex items-center font-medium rounded-md border px-2 py-1 text-xs bg-purple-100 text-purple-800 border-purple-300">
-            {badgeConfig.text}
-          </span>
-        ) : (
-          <Badge variant={badgeConfig.variant} size="sm">{badgeConfig.text}</Badge>
-        )}
+        <span class={`inline-flex items-center font-mono font-medium rounded-md border px-2 py-1 text-xs ${typeClass}`}>
+          {typeLabel}
+        </span>
         <a
           href={`#functions-index-${categoryId}`}
           class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-soil-600 hover:text-harvest-700 hover:bg-soil-50 rounded transition-colors"
@@ -69,33 +93,49 @@ const formattedDefault = typeof defaultValue === 'string' ? `'${defaultValue}'` 
 
   <!-- Description -->
   <div class="mb-4">
-    <p class="text-sm text-soil-700 leading-relaxed">
-      {description}
-    </p>
+    <p class:list={["text-sm text-soil-700 leading-relaxed", proseInlineClass]} set:html={md(description)}></p>
   </div>
 
   <!-- Settings Info -->
   <div class="bg-soil-50 rounded-lg p-4 border border-soil-200 mb-4">
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+    {mapEntries ? (
       <div>
-        <span class="text-soil-600 font-medium">Default Value:</span>
-        <code class="ml-2 px-2 py-0.5 bg-white rounded border border-soil-300 text-soil-900 font-mono text-xs">
-          {formattedDefault}
-        </code>
-      </div>
-      {validValues && validValues.length > 0 && (
-        <div>
-          <span class="text-soil-600 font-medium">Valid Values:</span>
-          <div class="mt-1 flex flex-wrap gap-1">
-            {validValues.map((value) => (
-              <code class="px-2 py-0.5 bg-white rounded border border-soil-300 text-soil-900 font-mono text-xs">
-                {value}
-              </code>
-            ))}
-          </div>
+        <span class="text-soil-600 font-medium text-sm">Default value</span>
+        <div class="mt-2 overflow-x-auto rounded border border-soil-200 bg-white max-w-md">
+          <table class="w-full text-sm">
+            <tbody>
+              {mapEntries.map((entry, index) => (
+                <tr class={index % 2 === 0 ? 'bg-white' : 'bg-soil-50'}>
+                  <td class="px-3 py-1.5 border-t border-soil-200"><code class="font-mono text-xs text-duck-700">{entry.key}</code></td>
+                  <td class="px-3 py-1.5 border-t border-soil-200 text-right"><code class="font-mono text-xs text-soil-900">{entry.value}</code></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      )}
-    </div>
+      </div>
+    ) : (
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+        <div>
+          <span class="text-soil-600 font-medium">Default Value:</span>
+          <code class="ml-2 px-2 py-0.5 bg-white rounded border border-soil-300 text-soil-900 font-mono text-xs">
+            {formattedDefault}
+          </code>
+        </div>
+        {validValues && validValues.length > 0 && (
+          <div>
+            <span class="text-soil-600 font-medium">Valid Values:</span>
+            <div class="mt-1 flex flex-wrap gap-1">
+              {validValues.map((value) => (
+                <code class="px-2 py-0.5 bg-white rounded border border-soil-300 text-soil-900 font-mono text-xs">
+                  {value}
+                </code>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    )}
   </div>
 
   <!-- Example -->
