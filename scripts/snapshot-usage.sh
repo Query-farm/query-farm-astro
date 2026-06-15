@@ -23,6 +23,18 @@ set -a
 [ -f ./.env ] && . ./.env
 set +a
 
+# The snapshot tool runs via `uv` (see its shebang). When uv isn't installed
+# (e.g. in CI), check for it first so we skip cleanly instead of letting
+# `/usr/bin/env: 'uv': No such file or directory` leak to stderr.
+if ! command -v uv >/dev/null 2>&1; then
+  if [ "$soft" = 1 ]; then
+    echo "[snapshot-usage] skipped — 'uv' not installed; using committed load numbers" >&2
+    exit 0
+  fi
+  echo "[snapshot-usage] error: 'uv' is required (https://docs.astral.sh/uv/)" >&2
+  exit 1
+fi
+
 if extension-diff-tools/usage-snapshot.py --site . --days 90; then
   exit 0
 elif [ "$soft" = 1 ]; then
