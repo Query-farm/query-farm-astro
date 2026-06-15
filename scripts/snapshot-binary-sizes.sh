@@ -20,7 +20,14 @@ soft=0
 [ "${1:-}" = "--soft" ] && soft=1
 
 if [ "$soft" = 1 ]; then
-  extension-diff-tools/binary-sizes-snapshot.py --site . --soft
+  # Wrap the call so even a failure to *start* the tool (e.g. `uv` not installed
+  # in CI → exit 127) is swallowed — the committed JSON is the fallback. Running
+  # the .py directly would let that 127 abort the `bash -e` prebuild chain.
+  if extension-diff-tools/binary-sizes-snapshot.py --site . --soft; then
+    exit 0
+  fi
+  echo "[snapshot-binary-sizes] skipped — tool unavailable or fetch failed; using committed sizes" >&2
+  exit 0
 else
   extension-diff-tools/binary-sizes-snapshot.py --site .
 fi
