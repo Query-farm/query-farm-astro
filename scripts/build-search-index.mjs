@@ -81,6 +81,9 @@ async function main() {
         url: `/products/extensions/${slug}/#${name}`,
         content: `${name} — ${content}`,
         language: 'en',
+        // `kind` filter lets the search widget hide functions by default
+        // (they outnumber pages ~25:1) and include them only on opt-in.
+        filters: { kind: ['function'] },
         meta: { title: `${name}()`, extension: ext, kind: 'Function' },
       });
       recordCount++;
