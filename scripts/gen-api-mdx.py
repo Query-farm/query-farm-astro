@@ -176,6 +176,58 @@ def docstring_descriptions(obj: griffe.Object) -> dict[str, str]:
     return out
 
 
+def _deslug(s: str) -> str:
+    """Turn a Griffe admonition kind slug into a Title-case label."""
+    s = s.replace("-", " ").replace("_", " ").strip()
+    return s[:1].upper() + s[1:] if s else s
+
+
+def render_doc_block(text: str) -> list[str]:
+    """Render a docstring body to MDX, preserving code and taming RST-isms.
+
+    Real-world docstrings mix prose with RST flourishes that Markdown/MDX
+    mishandle:
+    - indented code blocks (often with no preceding blank line) → would render
+      as a proportional-font paragraph; we wrap them in ```python fences.
+    - setext underlines (``----`` under a title) → would become a stray, wrongly
+      sized heading; we emit the title as a bold label instead.
+    - trailing RST ``::`` literal-block markers → trimmed to ``:``.
+    Prose is MDX-escaped; code inside fences is left raw.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+        # setext underline → make the previous prose line a bold label
+        if stripped and set(stripped) <= {"-", "="} and len(stripped) >= 3 and out and out[-1].strip():
+            title = out.pop().strip()
+            if out and out[-1] == "":
+                out.pop()
+            out += ["", f"**{title}**", ""]
+            i += 1
+            continue
+        # indented code block (>=4 spaces) → fenced python
+        if line.startswith("    ") and stripped:
+            code: list[str] = []
+            while i < n and (lines[i].startswith("    ") or lines[i].strip() == ""):
+                code.append("" if lines[i].strip() == "" else lines[i][4:])
+                i += 1
+            while code and code[0] == "":
+                code.pop(0)
+            while code and code[-1] == "":
+                code.pop()
+            out += ["```python", *code, "```", ""]
+            continue
+        # prose: trim a trailing RST literal-block "::" to ":"
+        if line.rstrip().endswith("::"):
+            line = line.rstrip()[:-1]
+        out.append(esc_md(line))
+        i += 1
+    return out
+
+
 def docstring_text_and_meta(obj: griffe.Object) -> tuple[list[str], list[str], list[tuple[str, str]]]:
     """Return (summary/body lines, returns lines, [(exc, desc)] raises)."""
     body: list[str] = []
@@ -186,7 +238,13 @@ def docstring_text_and_meta(obj: griffe.Object) -> tuple[list[str], list[str], l
     for sec in obj.docstring.parse("google"):
         k = sec.kind.value
         if k == "text":
-            body.append(esc_md(sec.value))
+            body += render_doc_block(sec.value)
+            body.append("")
+        elif k == "admonition":
+            a = sec.value
+            label = getattr(a, "title", None) or _deslug(getattr(a, "kind", "note"))
+            body += ["", f"**{label}**", ""]
+            body += render_doc_block(getattr(a, "contents", "") or "")
             body.append("")
         elif k == "returns":
             for r in sec.value:

@@ -10,13 +10,13 @@ description: API reference for vgi.arguments
 
 Sentinel type for table input parameters in table-in-out functions.
 
-Use this as the type parameter for Arg to declare which argument receives
-the streaming table input. Every TableInOutFunction must have exactly one
-TableInput argument, and it must be positional (not named).
+Use this as the type parameter for [`Arg`][] to declare which argument
+receives the streaming table input. Every [`TableInOutFunction`][] must have
+exactly one `TableInput` argument, and it must be positional (not named).
 
-The TableInput argument determines which table expression feeds the function
-when called from SQL. It doesn't correspond to an actual Arrow value - the
-table data arrives as streaming RecordBatches via process().
+The `TableInput` argument determines which table expression feeds the
+function when called from SQL. It doesn't correspond to an actual Arrow
+value - the table data arrives as streaming `RecordBatch`es via `process()`.
 
 
 </div>
@@ -33,19 +33,24 @@ an AnyArrowValue instead of just the raw value. This provides access to
 both the value and the argument's position/name for schema lookups.
 
 Example using Annotated (recommended):
-    from typing import Annotated
+```python
+from typing import Annotated
 
-    class MyFunction(TableFunctionGenerator):
-        col1: Annotated[AnyArrowValue, Arg(0, doc="First column")]
+class MyFunction(TableFunctionGenerator):
+    col1: Annotated[AnyArrowValue, Arg(0, doc="First column")]
 
-        def on_bind(self) -&gt; None:
-            # self.col1 is an AnyArrowValue
-            print(self.col1.value)     # The column name
-            print(self.col1.position)  # The positional index
+    def on_bind(self) -> None:
+        # self.col1 is an AnyArrowValue
+        print(self.col1.value)     # The column name
+        print(self.col1.position)  # The positional index
+```
 
 Example using legacy Arg[AnyArrow] syntax:
-    class MyFunction(TableFunctionGenerator):
-        col1 = Arg[AnyArrow](0, doc="First column")  # type: ignore[assignment]
+```python
+class MyFunction(TableFunctionGenerator):
+    col1 = Arg[AnyArrow](0, doc="First column")  # type: ignore[assignment]
+```
+
 
 <div class="api-members">
 
@@ -87,8 +92,8 @@ should accept multiple valid Arrow types, validated via the ``type_bound``
 parameter. When accessed, returns an AnyArrowValue containing the value
 plus metadata (position and name).
 
-Choosing Between Specific Types and AnyArrowValue
--------------------------------------------------
+**Choosing Between Specific Types and AnyArrowValue**
+
 - **Single required type**: Use ``Annotated[str, Arg(...)]`` or similar.
   The argument will only accept that exact type.
 
@@ -100,27 +105,47 @@ The ``type_bound`` parameter is ONLY meaningful for ``AnyArrowValue`` arguments.
 Using it with other types will emit a warning.
 
 Examples using Annotated (recommended):
-    from typing import Annotated
-    from vgi import Arg, AnyArrowValue
+```python
+from typing import Annotated
+from vgi import Arg, AnyArrowValue
 
-    # Single type: function only works with strings
-    class UpperCaseFunction(TableFunctionGenerator):
-        column: Annotated[str, Arg(0, doc="String column to uppercase")]
+# Single type: function only works with strings
+class UpperCaseFunction(TableFunctionGenerator):
+    column: Annotated[str, Arg(0, doc="String column to uppercase")]
 
-    # Multiple types: function works with any numeric type
-    class DoubleFunction(TableFunctionGenerator):
-        column: Annotated[
-            AnyArrowValue,
-            Arg(0, type_bound=[pa.types.is_integer, pa.types.is_floating])
-        ]
+# Multiple types: function works with any numeric type
+class DoubleFunction(TableFunctionGenerator):
+    column: Annotated[
+        AnyArrowValue,
+        Arg(0, type_bound=[pa.types.is_integer, pa.types.is_floating])
+    ]
 
-        def on_bind(self) -&gt; None:
-            # Access column metadata for dynamic output type
-            self._output_type = self.column.value
+    def on_bind(self) -> None:
+        # Access column metadata for dynamic output type
+        self._output_type = self.column.value
 
-    # Any type: function works with all types
-    class IdentityFunction(TableFunctionGenerator):
-        column: Annotated[AnyArrowValue, Arg(0, doc="Column to pass through")]
+# Any type: function works with all types
+class IdentityFunction(TableFunctionGenerator):
+    column: Annotated[AnyArrowValue, Arg(0, doc="Column to pass through")]
+```
+
+
+
+**Accessing values**
+
+When using AnyArrowValue, access the value via the ``.value`` attribute:
+
+```python
+val = self.column.value     # The column name as a string
+pos = self.column.position  # The positional index
+```
+
+
+
+**Note**
+
+Unlike TableInput, AnyArrow arguments have actual Arrow values -
+they are just not constrained to a specific Arrow type.
 
 <div class="api-members">
 
@@ -159,21 +184,26 @@ Container for function arguments.
 
 Access arguments using get() for Python values:
 
-    # Positional arguments (by index)
-    count = args.get(0)                      # First argument
-    name = args.get(1, default="unnamed")    # With default
+```python
+# Positional arguments (by index)
+count = args.get(0)                      # First argument
+name = args.get(1, default="unnamed")    # With default
 
-    # Named arguments (by string)
-    separator = args.get("sep", default=",")
-    threshold = args.get("threshold")
+# Named arguments (by string)
+separator = args.get("sep", default=",")
+threshold = args.get("threshold")
 
-    # With type validation (optional, for strict checking)
-    count = args.get(0, type=pa.int64())
+# With type validation (optional, for strict checking)
+count = args.get(0, type=pa.int64())
+```
 
 For direct Arrow Scalar access, use positional/named attributes:
 
-    scalar = args.positional[0]              # pa.Scalar | None
-    scalar = args.named["sep"]               # pa.Scalar
+```python
+scalar = args.positional[0]              # pa.Scalar | None
+scalar = args.named["sep"]               # pa.Scalar
+```
+
 
 <div class="api-members">
 
@@ -448,6 +478,25 @@ Use as a class attribute to declare function arguments that are automatically
 parsed from self.arguments when accessed. This eliminates the need to override
 __init__ for simple argument parsing.
 
+
+**Note**
+
+For named arguments (string position), the Python attribute name should
+match the SQL key. This is the standard convention:
+
+```python
+format = Arg[str]("format")  # Recommended: attribute == key
+```
+
+Avoid using different names:
+
+```python
+output_format = Arg[str]("format")  # Not recommended
+```
+
+While this works at runtime, it can cause issues with metadata
+serialization where only one name is preserved.
+
 <div class="api-members">
 
 <div class="api-member">
@@ -617,24 +666,29 @@ argument validation.
 For ScalarFunction compute() methods, position is inferred from parameter order.
 
 Example (ScalarFunction compute() - position inferred):
-    class AddColumns(ScalarFunction):
-        @classmethod
-        def compute(
-            cls,
-            left: Annotated[pa.Array, Param(pa.int64(), "First value")],
-            right: Annotated[pa.Array, Param(pa.int64(), "Second value")],
-        ) -&gt; Annotated[pa.Array, Returns(pa.int64())]:
-            return pc.add(left, right)
+```python
+class AddColumns(ScalarFunction):
+    @classmethod
+    def compute(
+        cls,
+        left: Annotated[pa.Array, Param(pa.int64(), "First value")],
+        right: Annotated[pa.Array, Param(pa.int64(), "Second value")],
+    ) -> Annotated[pa.Array, Returns(pa.int64())]:
+        return pc.add(left, right)
+```
 
 Example (AnyArrow with type_bound):
-    class Double(ScalarFunction):
-        @classmethod
-        def compute(
-            cls,
-            value: Annotated[pa.Array, Param(doc="Numeric value",
-                                              type_bound=pa.types.is_numeric)],
-        ) -&gt; Annotated[pa.Array, Returns()]:
-            return pc.multiply(value, 2)
+```python
+class Double(ScalarFunction):
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.Array, Param(doc="Numeric value",
+                                          type_bound=pa.types.is_numeric)],
+    ) -> Annotated[pa.Array, Returns()]:
+        return pc.multiply(value, 2)
+```
+
 
 <div class="api-members">
 
