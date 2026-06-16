@@ -75,9 +75,23 @@ export default defineConfig({
       components: { Header: './src/components/starlight/Header.astro' },
       // Load the site's Tailwind theme so the header's utility classes resolve,
       // then a small shell override to align Starlight with the site header.
-      customCss: ['./src/styles/global.css', './src/styles/starlight-shell.css'],
+      customCss: [
+        './src/styles/global.css',
+        './src/styles/starlight-shell.css',
+        './src/styles/starlight-api.css',
+      ],
       sidebar: [
-        { label: 'Pilot', items: [{ label: 'Test page', slug: 'vgi/docs/python' }] },
+        { label: 'Overview', slug: 'vgi/docs/python' },
+        {
+          label: 'API Reference',
+          items: [
+            { label: 'Scalar functions', slug: 'vgi/docs/python/api/vgi-scalar_function' },
+            { label: 'Table functions', slug: 'vgi/docs/python/api/vgi-table_function' },
+            { label: 'Worker', slug: 'vgi/docs/python/api/vgi-worker' },
+            { label: 'Arguments & schema', slug: 'vgi/docs/python/api/vgi-arguments' },
+            { label: 'Catalogs', slug: 'vgi/docs/python/api/vgi-catalog' },
+          ],
+        },
       ],
     }),
     mdx(),
