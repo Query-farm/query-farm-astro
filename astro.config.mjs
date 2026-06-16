@@ -77,8 +77,13 @@ export default defineConfig({
       pagefind: false,
       // Keep the site's own src/pages/404.astro (avoid a route collision).
       disable404Route: true,
-      // Render the Query.Farm site header on docs pages.
-      components: { Header: './src/components/starlight/Header.astro' },
+      // Render the Query.Farm site header on docs pages; force light-only
+      // (the site has no dark mode) and drop the theme toggle.
+      components: {
+        Header: './src/components/starlight/Header.astro',
+        ThemeProvider: './src/components/starlight/ThemeProvider.astro',
+        ThemeSelect: './src/components/starlight/ThemeSelect.astro',
+      },
       // Load the site's Tailwind theme so the header's utility classes resolve,
       // then a small shell override to align Starlight with the site header.
       customCss: [
