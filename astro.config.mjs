@@ -66,6 +66,12 @@ export default defineConfig({
     // mdx() so MDX code blocks render.
     starlight({
       title: 'VGI Python',
+      // Match the site's code styling: the dark-green farm Shiki theme used in
+      // <CodeBlock>, instead of Expressive Code's default light/dark themes.
+      expressiveCode: {
+        themes: [farmTheme],
+        styleOverrides: { borderRadius: '0.5rem', borderColor: 'transparent' },
+      },
       // The site already builds a unified Pagefind index in postbuild over all
       // of dist/ (incl. these docs pages), so disable Starlight's own.
       pagefind: false,
