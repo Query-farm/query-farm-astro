@@ -258,56 +258,53 @@ def docstring_text_and_meta(obj: griffe.Object) -> tuple[list[str], list[str], l
 # ── renderers ────────────────────────────────────────────────────────────────
 
 
-def anchor(obj: griffe.Object) -> str:
-    return f'<a id="{obj.canonical_path}"></a>'
-
-
-def heading_line(h: str, name: str, kind: str, obj: griffe.Object) -> str:
-    """Heading with a kind badge and a right-aligned source link."""
+def head_row(level: int, name: str, kind: str, obj: griffe.Object) -> list[str]:
+    """A symbol header: a Markdown heading (so Starlight's TOC collects it) holding
+    only an empty kind-icon span (CSS-masked → no text → clean TOC) plus the name,
+    a stable cross-ref anchor, and a separately-positioned source link."""
+    hashes = "#" * level
+    icon = f'<span class="api-icon api-icon--{kind}"></span>'
+    out = [f'<a id="{obj.canonical_path}"></a>', f"{hashes} {icon} `{name}`", ""]
     src = source_url(obj)
-    link = f'<a class="api-source" href="{src}" target="_blank" rel="noopener">source</a>' if src else ""
-    return f'{h} `{name}` <span class="api-kind">{kind}</span>{link}'
+    if src:
+        out += [f'<a class="api-source" href="{src}" target="_blank" rel="noopener">source</a>', ""]
+    return out
+
+
+def _deflist(rows: list[tuple[str, str]], label: str) -> list[str]:
+    """A labeled definition list (term html, description text), as one HTML block."""
+    items = "".join(f"<dt>{term}</dt><dd>{desc}</dd>" for term, desc in rows)
+    return [f'<div class="api-meta-block"><p class="api-label">{label}</p><dl class="api-deflist">{items}</dl></div>', ""]
 
 
 def render_function(fn: Function, level: int, index: dict[str, tuple[str, str]]) -> list[str]:
-    h = "#" * level
     kind = "method" if (fn.parent and isinstance(fn.parent, Class)) else "function"
-    out = [anchor(fn), heading_line(h, fn.name, kind, fn), ""]
+    out = head_row(level, fn.name, kind, fn)
     out.append(signature_html(fn, index))
     out.append("")
     body, returns, raises = docstring_text_and_meta(fn)
     out += body
-    # Parameters from the REAL signature (linked), descriptions merged from docstring.
     descs = docstring_descriptions(fn)
     real_params = [p for p in fn.parameters if p.name not in ("self", "cls")]
     if real_params:
-        out.append("**Parameters**")
-        out.append("")
+        rows = []
         for p in real_params:
-            t = f" : {code_type(p.annotation, index)}" if p.annotation is not None else ""
-            d = f" — {descs[p.name]}" if p.name in descs else ""
-            out.append(f"- `{p.name}`{t}{d}")
-        out.append("")
+            ptype = f'<code class="api-ptype">{link_expr(p.annotation, index)}</code>' if p.annotation is not None else ""
+            term = f'<code class="api-pname">{esc_html(p.name)}</code>{ptype}'
+            rows.append((term, esc_html(descs.get(p.name, ""))))
+        out += _deflist(rows, "Parameters")
     if fn.returns is not None or returns:
-        out.append("**Returns**")
-        out.append("")
-        rt = code_type(fn.returns, index) if fn.returns is not None else ""
-        rd = f" — {returns[0]}" if returns else ""
-        out.append(f"- {rt}{rd}")
-        out.append("")
+        rtype = f'<code class="api-ptype">{link_expr(fn.returns, index)}</code>' if fn.returns is not None else ""
+        out += _deflist([(rtype, esc_html(returns[0]) if returns else "")], "Returns")
     if raises:
-        out.append("**Raises**")
-        out.append("")
-        for exc, desc in raises:
-            out.append(f"- `{exc}` — {desc}")
-        out.append("")
+        out += _deflist([(f'<code class="api-ptype">{esc_html(exc)}</code>', desc) for exc, desc in raises], "Raises")
     return out
 
 
 def render_attribute(at: Attribute, level: int, index: dict[str, tuple[str, str]]) -> list[str]:
-    h = "#" * level
-    t = f" : {code_type(at.annotation, index)}" if at.annotation is not None else ""
-    out = [anchor(at), heading_line(h, at.name, "attribute", at) + t, ""]
+    out = head_row(level, at.name, "attribute", at)
+    if at.annotation is not None:
+        out += [f'<p class="api-atype"><code>{link_expr(at.annotation, index)}</code></p>', ""]
     body, _, _ = docstring_text_and_meta(at)
     out += body
     return out
@@ -354,8 +351,7 @@ def render_inherited(cls: Class, index: dict[str, tuple[str, str]]) -> list[str]
 
 
 def render_class(cls: Class, level: int, index: dict[str, tuple[str, str]]) -> list[str]:
-    h = "#" * level
-    out = ['<div class="api-class">', "", anchor(cls), heading_line(h, cls.name, "class", cls), ""]
+    out = ['<div class="api-class">', "", *head_row(level, cls.name, "class", cls)]
     if cls.bases:
         linked = ", ".join(link_expr(b, index) for b in cls.bases)
         out.append(f"<p class=\"api-bases\">Bases: <code>{linked}</code></p>")
