@@ -6,6 +6,7 @@ import icon from 'astro-icon';
 import mdx from '@astrojs/mdx';
 import sitemap from '@astrojs/sitemap';
 import react from '@astrojs/react';
+import starlight from '@astrojs/starlight';
 
 // Custom farm theme for Shiki syntax highlighting
 const farmTheme = {
@@ -59,7 +60,30 @@ const farmTheme = {
 export default defineConfig({
   site: 'https://query.farm',
   output: 'static',
-  integrations: [icon(), mdx(), sitemap(), react()],
+  integrations: [
+    icon(),
+    // Starlight bundles astro-expressive-code, which must be registered before
+    // mdx() so MDX code blocks render.
+    starlight({
+      title: 'VGI Python',
+      // The site already builds a unified Pagefind index in postbuild over all
+      // of dist/ (incl. these docs pages), so disable Starlight's own.
+      pagefind: false,
+      // Keep the site's own src/pages/404.astro (avoid a route collision).
+      disable404Route: true,
+      // Render the Query.Farm site header on docs pages.
+      components: { Header: './src/components/starlight/Header.astro' },
+      // Load the site's Tailwind theme so the header's utility classes resolve,
+      // then a small shell override to align Starlight with the site header.
+      customCss: ['./src/styles/global.css', './src/styles/starlight-shell.css'],
+      sidebar: [
+        { label: 'Pilot', items: [{ label: 'Test page', slug: 'vgi/docs/python' }] },
+      ],
+    }),
+    mdx(),
+    sitemap(),
+    react(),
+  ],
   markdown: {
     shikiConfig: {
       theme: farmTheme
