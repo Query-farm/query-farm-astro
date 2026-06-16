@@ -77,6 +77,7 @@ export default defineConfig({
       // then a small shell override to align Starlight with the site header.
       customCss: [
         './src/styles/global.css',
+        './src/styles/starlight-theme.css',
         './src/styles/starlight-shell.css',
         './src/styles/starlight-api.css',
       ],
