@@ -84,6 +84,12 @@ export default defineConfig({
       sidebar: [
         { label: 'Overview', slug: 'vgi/docs/python' },
         {
+          label: 'Tutorial',
+          items: [
+            { label: '1. Scalar function', slug: 'vgi/docs/python/tutorial/scalar' },
+          ],
+        },
+        {
           label: 'API Reference',
           items: [
             { label: 'Scalar functions', slug: 'vgi/docs/python/api/vgi-scalar_function' },

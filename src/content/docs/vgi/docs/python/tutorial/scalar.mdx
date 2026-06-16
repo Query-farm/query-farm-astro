@@ -1,0 +1,66 @@
+---
+title: 1. Your first scalar function
+description: Build and run a scalar VGI function callable from DuckDB.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import workerSrc from '../../../../../../examples/vgi-python/calc_scalar_worker.py?raw';
+
+**What this is:** the first tutorial step — build a worker with one **scalar** function and call it
+from SQL.<br />
+**Who it's for:** first-time VGI users with Python 3.13+ and [uv](https://docs.astral.sh/uv/). About
+**10 minutes**.
+
+A scalar function maps one row to one row: `double(21)` → `42`.
+
+## Step 1 — Write the worker
+
+Create a file called `calc_scalar_worker.py`:
+
+<CodeBlock code={workerSrc} lang="python" tryable={false} />
+
+What's going on:
+
+1. **The `# /// script` header** is [inline script metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/) — `uv run` provisions the dependencies, so there's no virtualenv to create.
+2. **`Double.compute` receives a whole column** (`pa.Int64Array`) and returns a column of the same length. The `Annotated[…]` types *are* the schema — VGI derives the SQL signature from them.
+3. **`CalcWorker` exposes a catalog** named `calc` containing the function.
+
+<Callout type="info" title="Why a column instead of a single value?">
+VGI hands your function a batch of rows as an Arrow array, not one value at a time. Operating on
+the whole column with `pyarrow.compute` (here `pc.multiply`) is what keeps it fast. If you've
+written a DuckDB UDF before, this is the vectorized equivalent.
+</Callout>
+
+## Step 2 — Attach and call it
+
+Launch a DuckDB-compatible engine (Haybarn shown here), attach the worker, and call it:
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_scalar_worker.py');
+SELECT calc.double(21);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["double(21)"]} rows={[[42]]} />
+
+Over a real column:
+
+<CodeBlock code={`SELECT calc.double(n) FROM (VALUES (1), (2), (3)) AS t(n);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["double(n)"]} rows={[[2], [4], [6]]} />
+
+You've built and run your first VGI function. 🎉
+
+<Callout type="tip" title="It didn't work?">
+- **`Catalog Error: unknown type "vgi"`** — the extension isn't loaded. On stock DuckDB run
+  `INSTALL vgi FROM community; LOAD vgi;` first; on Haybarn it's built in.
+- **The `ATTACH` hangs** — run `uv run calc_scalar_worker.py` directly; the worker speaks Arrow over
+  stdin/stdout, so it *looks* like it hangs waiting for input. You're checking for an import error
+  on stderr.
+- **`Binder Error: function not found`** — the SQL name is the snake_case of the class name
+  (`Double` → `double`), qualified by the catalog name from `ATTACH`.
+</Callout>
+
+## Next steps
+
+- **[2. Add a table function](../)** — generate rows from an argument.
+- **[API Reference](../api/vgi-scalar_function/)** — the exact `ScalarFunction` contract.
