@@ -1,0 +1,617 @@
+---
+title: vgi.aggregate_function
+description: API reference for vgi.aggregate_function
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">Module overview</p>
+
+Framework for implementing aggregate functions.
+
+[`AggregateFunction`](/vgi/docs/python/api/vgi-aggregate_function/#vgi.aggregate_function.AggregateFunction) provides a batch-oriented API for DuckDB aggregate functions
+(e.g., ``SELECT my_agg(col) FROM t GROUP BY category``). The C++ side manages
+trivial per-group state (just an int64 group_id), while Python holds the real
+accumulation state in [`FunctionStorage`](/vgi/docs/python/api/vgi-function_storage/#vgi.function_storage.FunctionStorage).
+
+Three phases:
+- UPDATE: accumulate input rows into per-group state
+- COMBINE: merge states from parallel workers
+- FINALIZE: produce one result per group
+
+
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.aggregate_function.AggregateBindParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `AggregateBindParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L47" target="_blank" rel="noopener">source</a>
+
+<p class="api-section">Description</p>
+
+Parameters passed to `AggregateFunction.on_bind()`.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateBindParams.args"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `args`
+
+<p class="api-atype"><code><a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments">Arguments</a> | None</code></p>
+
+The bound function [`Arguments`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments), or ``None`` if none.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateBindParams.input_schema"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `input_schema`
+
+<p class="api-atype"><code><a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a> | None</code></p>
+
+Arrow schema of the aggregate's input columns, or ``None``.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateBindParams.settings"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `settings`
+
+<p class="api-atype"><code>dict[str, Any]</code></p>
+
+DuckDB session settings relevant to the function.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateBindParams.secrets"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `secrets`
+
+<p class="api-atype"><code><a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.SecretsAccessor">SecretsAccessor</a></code></p>
+
+Accessor for the resolved secrets the function declared.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateBindParams.auth_context"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `auth_context`
+
+<p class="api-atype"><code><a href="https://vgi-rpc-python.query.farm/" class="api-ext" target="_blank" rel="noopener">AuthContext</a></code></p>
+
+The caller's authentication context (anonymous by default).
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.aggregate_function.AggregateFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `AggregateFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L101" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code>vgi.function.Function</code></p>
+
+<p class="api-section">Description</p>
+
+Base class for aggregate functions.
+
+Aggregate functions accumulate input rows into per-group state during
+UPDATE, merge parallel worker states during COMBINE, and produce one
+result row per group during FINALIZE.
+
+Input columns are declared via [`Param`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Param) annotations on ``update()``,
+and the output type via [`Returns`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Returns) annotation — the same pattern as
+``ScalarFunction.compute()``.
+
+Example:
+
+
+<Code lang="python" code={`class SumFunction(AggregateFunction[SumState]):
+    class Meta:
+        name = "vgi_sum"
+
+    @classmethod
+    def initial_state(cls, params):
+        return SumState()
+
+    @classmethod
+    def update(
+        cls,
+        states: dict[int, SumState],
+        group_ids: pa.Int64Array,
+        value: Annotated[pa.Int64Array, Param(doc="Column to sum")],
+    ) -> None:
+        ...
+
+    @classmethod
+    def combine(cls, source, target, params):
+        return SumState(total=source.total + target.total)
+
+    @classmethod
+    def finalize(
+        cls,
+        group_ids: pa.Int64Array,
+        states: dict[int, SumState],
+        params: ProcessParams,
+    ) -> Annotated[pa.RecordBatch, Returns(pa.int64())]:
+        ...`} />
+
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.state_class"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `state_class`
+
+<p class="api-atype"><code>type[TState] | None</code></p>
+
+The resolved ``TState`` dataclass used for per-group
+accumulation state, inferred from the generic parameter; ``None``
+until resolved by ``__init_subclass__``.
+
+</div>
+
+</div>
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.on_bind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `on_bind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L286" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>on_bind(
+    params: <a href="/vgi/docs/python/api/vgi-aggregate_function/#vgi.aggregate_function.AggregateBindParams">AggregateBindParams</a>,
+    **kwargs: Any = &#123;&#125;,
+) -&gt; <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse">BindResponse</a></code></pre>
+
+Override to provide output schema and optional bind-time logic.
+
+Must return a [`BindResponse`](/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse) with an ``output_schema`` containing
+exactly one field (the aggregate result column).
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.catalog_output_schema"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalog_output_schema`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L300" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>catalog_output_schema() -&gt; <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a></code></pre>
+
+Return output schema for catalog introspection.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.initial_state"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `initial_state`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L310" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>initial_state(params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[Any]) -&gt; TState</code></pre>
+
+Create the initial state for a new group.
+
+Called when a group_id is first encountered during UPDATE.
+Must return a valid ``TState`` instance representing the identity
+element (e.g., 0 for SUM, empty list for LISTAGG).
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.update"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `update`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L321" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>update(*args: Any = (), **kwargs: Any = &#123;&#125;) -&gt; None</code></pre>
+
+Accumulate input rows into per-group state.
+
+Declare input columns as [`Param`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Param)-annotated parameters:
+
+
+<Code lang="python" code={`@classmethod
+def update(
+    cls,
+    states: dict[int, MyState],
+    group_ids: pa.Int64Array,
+    value: Annotated[pa.Int64Array, Param(doc="Column to sum")],
+) -> None:
+    ...`} />
+
+The ``states`` dict is pre-populated with ``initial_state()`` for
+all new group_ids. ``group_ids`` is parallel to each column array.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.combine"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `combine`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L343" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>combine(
+    source: TState,
+    target: TState,
+    params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[Any],
+) -&gt; TState</code></pre>
+
+Merge two partial states from parallel workers.
+
+Returns the merged ``TState``. Framework replaces target and removes source.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.finalize"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `finalize`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L358" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>finalize(*args: Any = (), **kwargs: Any = &#123;&#125;) -&gt; Any</code></pre>
+
+Produce results for the requested group_ids.
+
+Annotate the return type with [`Returns`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Returns):
+
+
+<Code lang="python" code={`@classmethod
+def finalize(
+    cls,
+    group_ids: pa.Int64Array,
+    states: dict[int, MyState],
+    params: ProcessParams,
+) -> Annotated[pa.RecordBatch, Returns(pa.int64())]:
+    ...`} />
+
+Must return a RecordBatch with one row per ``group_id``.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.ensure_state"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ensure_state`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L379" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>ensure_state(
+    states: dict[int, TState],
+    group_id: int,
+    params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[Any],
+) -&gt; TState</code></pre>
+
+Get or create state for a group_id.
+
+The framework pre-populates the states dict before calling ``update()``
+and ``finalize()``, so this helper should not normally be needed.
+Provided for defensive coding.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">states</code></dt><dd>Mapping of group_id to its accumulated state.</dd><dt><code class="api-pname">group_id</code></dt><dd>The group to fetch or create state for.</dd><dt><code class="api-pname">params</code></dt><dd>The current process parameters (used to build fresh state).</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>The state for the given group_id.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.window_init"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `window_init`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L419" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>window_init(
+    partition: <a href="/vgi/docs/python/api/vgi-aggregate_function/#vgi.aggregate_function.WindowPartition">WindowPartition</a>,
+    params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[Any],
+) -&gt; Any</code></pre>
+
+Derive optional per-partition state from the raw partition.
+
+Called once per partition before any ``window()`` call. Return any
+``ArrowSerializableDataclass`` (so it can round-trip through storage),
+or ``None`` if no derived state is required. The return value is
+passed back to ``window()`` as ``window_state``.
+
+Default implementation returns ``None``.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.window_prepare"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `window_prepare`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L436" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>window_prepare(
+    partition: <a href="/vgi/docs/python/api/vgi-aggregate_function/#vgi.aggregate_function.WindowPartition">WindowPartition</a>,
+    window_state: Any,
+    params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[Any],
+) -&gt; Any</code></pre>
+
+Derive per-partition state for the window() loop (optional hook).
+
+Called once per partition, after ``window_init`` (or after the state
+is rehydrated from storage on a cold reload), before any
+``window()`` call. The return value is passed as ``window_state``
+to every ``window()`` call against this partition, replacing the
+opaque ``_WindowStatePlaceholder`` user code would otherwise
+receive.
+
+Use this hook for one-shot per-partition work that ``window()``
+would otherwise have to redo on every call: deserialise the
+``_WindowStatePlaceholder``, reshape NumPy buffers from
+``window_init``'s state, build symbol→index lookups, etc.
+Anything you would otherwise be tempted to memoise via a
+module-level dict.
+
+The result lives in the framework's per-partition cache and is
+dropped automatically when the partition is evicted from the LRU
+or its destructor fires.
+
+Default implementation returns ``window_state`` unchanged — for
+aggregates that don't define this hook, ``window()`` receives the
+placeholder (or ``None``) exactly as it did before. Backward
+compatible.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.window"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `window`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L470" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>window(
+    rid: int,
+    subframes: list[tuple[int, int]],
+    partition: <a href="/vgi/docs/python/api/vgi-aggregate_function/#vgi.aggregate_function.WindowPartition">WindowPartition</a>,
+    window_state: Any,
+    params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[Any],
+) -&gt; Any</code></pre>
+
+Compute the aggregate value for one output row.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">rid</code></dt><dd>Partition-local row index being filled.</dd><dt><code class="api-pname">subframes</code></dt><dd>Frame ranges <code>[(begin, end), ...]</code> — 1 for the default frame, 3 when <code>EXCLUDE</code> produces multiple subframes.</dd><dt><code class="api-pname">partition</code></dt><dd>The cached partition data.</dd><dt><code class="api-pname">window_state</code></dt><dd><code>window_prepare()</code>'s return value if the function defines that hook; otherwise the value returned by <code>window_init()</code> (may be <code>None</code>), wrapped in a <code>_WindowStatePlaceholder</code> on cold reload.</dd><dt><code class="api-pname">params</code></dt><dd>Shared <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams"><code>ProcessParams</code></a>.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>A Python scalar or Arrow-compatible value; the worker wraps it into an IPC batch matching the function's output schema.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.window_batch"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `window_batch`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L499" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>window_batch(
+    row_ids: list[int],
+    subframes: list[list[tuple[int, int]]],
+    partition: <a href="/vgi/docs/python/api/vgi-aggregate_function/#vgi.aggregate_function.WindowPartition">WindowPartition</a>,
+    window_state: Any,
+    params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[Any],
+) -&gt; <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Array</a>[Any] | list[Any]</code></pre>
+
+Compute the aggregate value for ``count`` consecutive output rows.
+
+Default implementation calls :meth:`window` once per row. Override
+when per-row Python object construction dominates the call cost
+and you want to build the output as an Arrow array directly,
+bypassing the framework's default ``pa.array(results, ...)``
+conversion.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">row_ids</code></dt><dd>Partition-local row indices being filled. Length is the batch size.</dd><dt><code class="api-pname">subframes</code></dt><dd><code>subframes[i]</code> is the frame ranges for output row <code>row_ids[i]</code>. Same shape as :meth:<code>window</code>'s <code>subframes</code> argument, one per row.</dd><dt><code class="api-pname">partition</code></dt><dd>The cached partition data.</dd><dt><code class="api-pname">window_state</code></dt><dd>As :meth:<code>window</code>.</dd><dt><code class="api-pname">params</code></dt><dd>As :meth:<code>window</code>.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>Either a :class:<code>pa.Array</code> of length <code>len(row_ids)</code> matching the function's output type — shipped directly as the response with no further conversion — or a <code>list[Any]</code> of the same length, fed through <code>pa.array(results, type=output_type)</code> (equivalent to the default per-row path).</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.streaming_open"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `streaming_open`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L554" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>streaming_open(params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[Any]) -&gt; Any</code></pre>
+
+Build cross-partition global state for a streaming session.
+
+Called once when ``aggregate_streaming_open`` arrives, before any
+chunk is processed. Return any object (it lives in an in-process
+cache keyed by ``execution_id`` for the duration of the session).
+
+Typical contents: a ``dict`` of per-partition aggregate states
+(populated lazily as new partition keys appear in input chunks),
+plus any cross-partition resources to share — symbol intern
+tables, allocator pools, prepared output buffers.
+
+Default implementation returns ``None`` (no shared state); the
+function still works if ``streaming_chunk`` keeps everything in
+local variables, but per-partition state would have to live
+somewhere caller-supplied.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.streaming_chunk"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `streaming_chunk`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L574" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>streaming_chunk(
+    chunk: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>,
+    streaming_state: Any,
+    partition_key_count: int,
+    order_key_count: int,
+    params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[Any],
+) -&gt; <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Array</a>[Any] | list[Any]</code></pre>
+
+Process one chunk of streaming input.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">chunk</code></dt><dd>Input rows for this batch. Schema layout is <code>[partition_key_cols..., order_key_cols..., value_cols...]</code> — the first <code>partition_key_count</code> columns are partition keys (used to dispatch to the right per-partition state), the next <code>order_key_count</code> are order keys (informational; may be used to verify monotonicity), the rest are the function's value arguments in declaration order.</dd><dt><code class="api-pname">streaming_state</code></dt><dd>Whatever <code>streaming_open</code> returned. The framework passes the same object on every chunk; mutate in place to accumulate state across chunks.</dd><dt><code class="api-pname">partition_key_count</code></dt><dd>Number of leading columns that form the partition key.</dd><dt><code class="api-pname">order_key_count</code></dt><dd>Number of columns following the partition key that form the order key.</dd><dt><code class="api-pname">params</code></dt><dd>Shared <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams"><code>ProcessParams</code></a>.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>Either a :class:<code>pa.Array</code> of length <code>chunk.num_rows</code> matching the function's output type, or a list of the same length (which the framework converts via <code>pa.array</code>). Each output value is the cumulative aggregate snapshot at that input row's position in its partition's order.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.AggregateFunction.streaming_close"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `streaming_close`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L614" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>streaming_close(
+    streaming_state: Any,
+    params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[Any],
+) -&gt; None</code></pre>
+
+Tear down streaming session state.
+
+Called once when ``aggregate_streaming_close`` arrives, after the
+last chunk. Use to release any external resources held by
+``streaming_state``. The framework drops its reference after this
+call, so anything not held elsewhere is GCed naturally.
+
+Default implementation is a no-op.
+
+
+</div>
+
+</div>
+<details class="api-inherited">
+<summary>Inherited members (4)</summary>
+
+- `get_metadata` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.MetadataMixin">MetadataMixin</a> — Get the resolved metadata for this function class.
+- `describe` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.MetadataMixin">MetadataMixin</a> — Get metadata as a dictionary (for JSON serialization).
+- `logger` <span class="api-kind">attribute</span> · from Function
+- `storage` <span class="api-kind">attribute</span> · from Function
+
+</details>
+
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.aggregate_function.WindowPartition"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `WindowPartition`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L66" target="_blank" rel="noopener">source</a>
+
+<p class="api-section">Description</p>
+
+Full partition data passed to a windowed aggregate callback.
+
+Constructed by the worker from the ``aggregate_window_init`` RPC payload
+and re-hydrated on every ``aggregate_window`` call via storage.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.aggregate_function.WindowPartition.inputs"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `inputs`
+
+<p class="api-atype"><code><a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a></code></p>
+
+The partition's input `RecordBatch` (all input columns, all rows).
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.WindowPartition.row_count"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `row_count`
+
+<p class="api-atype"><code>int</code></p>
+
+Total number of rows in the partition.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.WindowPartition.filter_mask"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `filter_mask`
+
+<p class="api-atype"><code><a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">BooleanArray</a></code></p>
+
+Boolean mask from an optional ``FILTER (WHERE ...)`` clause.
+Length equals ``row_count``.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.WindowPartition.frame_stats"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `frame_stats`
+
+<p class="api-atype"><code>tuple[tuple[int, int], tuple[int, int]]</code></p>
+
+``((begin_delta, end_delta), (begin_delta, end_delta))`` —
+DuckDB's per-partition frame statistics for planning.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.aggregate_function.WindowPartition.all_valid"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `all_valid`
+
+<p class="api-atype"><code>list[bool]</code></p>
+
+Per-input-column validity flag (True if no nulls in column).
+
+</div>
+
+</div>
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.aggregate_function.WindowPartition.filter"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `filter`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/aggregate_function.py#L90" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>filter(start: int, end: int) -&gt; <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a></code></pre>
+
+Slice the partition inputs for rows ``[start, end)``.
+
+
+</div>
+
+</div>
+
+</div>

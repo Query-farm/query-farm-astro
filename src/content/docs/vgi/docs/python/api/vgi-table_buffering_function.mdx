@@ -1,0 +1,386 @@
+---
+title: vgi.table_buffering_function
+description: API reference for vgi.table_buffering_function
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">Module overview</p>
+
+Framework for implementing table sink+source functions.
+
+[`TableBufferingFunction`](/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingFunction) is the worker-side base for functions that must
+see *every* input row before producing any output (e.g. buffer-then-emit,
+global aggregations, sort-then-emit). Routed through the C++
+``PhysicalVgiTableBuffering`` Sink+Source operator.
+
+Three callbacks, mirroring the operator's three phases:
+
+* ``process(batch, params) -> bytes`` — ingest one batch, return an opaque
+  state_id naming where the worker stored it.
+* ``combine(state_ids, params) -> list[bytes]`` — once per query, on the
+  coordinator worker; group/merge/sort the per-batch state_ids and
+  return finalize_state_ids for the Source phase.
+* ``finalize(params, finalize_state_id, state, out)`` — producer-mode
+  streaming RPC mirroring ``TableFunctionGenerator.process``: one tick
+  per call, emit one batch via ``out.emit(batch)`` (or ``out.finish()``
+  for EOS), state persists between ticks via wire-serialization.
+
+State_ids are opaque ``bytes``. The worker picks the granularity (per-batch,
+per-thread, custom partitioning); the framework just round-trips them.
+
+INVARIANT: any state the worker stores in ``process()`` that ``finalize()``
+will need MUST live in cross-process storage scoped by
+``params.execution_id`` ([`BoundStorage`](/vgi/docs/python/api/vgi-function_storage/#vgi.function_storage.BoundStorage) is the canonical choice). The
+Source phase may route a given ``finalize_state_id`` to a worker process
+that did NOT run the corresponding ``process()`` calls.
+
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.table_buffering_function.TableBufferingFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableBufferingFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/table_buffering_function.py#L178" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code><a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a>[TArgs]</code></p>
+
+<p class="api-section">Description</p>
+
+Base class for table sink+source functions.
+
+Subclass to declare a function that must see every input row before
+producing output. The C++ ``PhysicalVgiTableBuffering`` operator
+routes calls through three phases:
+
+1. **Sink** — ``process(batch, params) -> state_id`` is called per
+   input batch (parallel across DuckDB threads unless
+   ``Meta.sink_order_dependent`` is set).
+2. **Combine** — ``combine(state_ids, params) -> finalize_state_ids``
+   is called once on the coordinator worker after every ``process()``
+   completes.
+3. **Source** — ``finalize(params, fid, state, out)`` is called per
+   tick by the framework, emitting one batch per call (parallel
+   across ``finalize_state_ids`` unless ``Meta.source_order_dependent``).
+
+Cross-process invariant: any state the worker writes during
+``process()`` that ``finalize()`` will read MUST live in cross-process
+storage scoped by ``params.execution_id`` — [`BoundStorage`](/vgi/docs/python/api/vgi-function_storage/#vgi.function_storage.BoundStorage) is the
+canonical choice. The Source phase routes a given ``finalize_state_id``
+to whatever worker process the C++ scheduler picks; it is NOT
+guaranteed to be the same process that ran ``process()``.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.table_buffering_function.TableBufferingFunction.on_bind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `on_bind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/table_buffering_function.py#L280" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>on_bind(params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.BindParams">BindParams</a>[TArgs]) -&gt; <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse">BindResponse</a></code></pre>
+
+Pass-through default — output schema is the input schema.
+
+Override to validate arguments, compute a dynamic output type, or
+request secrets via [`SecretsAccessor`](/vgi/docs/python/api/vgi-table_function/#vgi.table_function.SecretsAccessor). See
+``TableFunctionBase.on_bind`` for the broader contract.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.table_buffering_function.TableBufferingFunction.process"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `process`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/table_buffering_function.py#L300" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>process(
+    batch: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>,
+    params: <a href="/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingParams">TableBufferingParams</a>[TArgs],
+) -&gt; bytes</code></pre>
+
+Ingest one input batch and return an opaque ``state_id``.
+
+The worker chooses both *where* to store the batch ([`BoundStorage`](/vgi/docs/python/api/vgi-function_storage/#vgi.function_storage.BoundStorage),
+external files, in-memory cross-process structures, etc.) and the
+*granularity* of state_ids (per-batch, per-thread, custom
+partitioning). The framework collects all returned state_ids and
+passes them to ``combine()`` on the coordinator worker.
+
+Common pattern for "one bucket per execution" is to return
+``params.execution_id``; ``combine()`` then collapses the list of
+identical state_ids to a single finalize stream.
+
+Cross-process invariant: any state the worker stores here that
+``finalize()`` will need MUST live in cross-process storage scoped
+by ``params.execution_id``. The Source phase may route the
+corresponding finalize_state_id to a different worker process.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">batch</code></dt><dd>One input batch from DuckDB. Schema matches the function's declared <code>input_schema</code>.</dd><dt><code class="api-pname">params</code></dt><dd>Process-time params, including identity fields (<code>execution_id</code>, <code>attach_id</code>, <code>transaction_id</code>, <code>function_name</code>) and <code>params.batch_index</code> when <code>Meta.requires_input_batch_index=True</code>.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>Opaque state_id naming where the batch was stored.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.table_buffering_function.TableBufferingFunction.combine"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `combine`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/table_buffering_function.py#L341" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>combine(
+    state_ids: list[bytes],
+    params: <a href="/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingParams">TableBufferingParams</a>[TArgs],
+) -&gt; list[bytes]</code></pre>
+
+Group / merge / sort state_ids; return finalize_state_ids.
+
+Called once on the coordinator worker after every ``process()``
+completes. State_ids are opaque bytes — the framework does not
+inspect, dedup, or transform them. ``combine`` returns the exact
+list of finalize_state_ids the Source phase will iterate; one
+finalize stream per returned id.
+
+Typical patterns:
+
+* **Single-bucket execution** — process() returns ``params.execution_id``
+  for every call; combine() returns ``[params.execution_id]`` so
+  one finalize stream drains the single accumulator.
+* **Per-shard fan-out** — process() returns a per-shard
+  identifier; combine() returns the list of unique shard ids
+  for parallel finalize.
+* **Global sort under ``Meta.sink_order_dependent``** — process()
+  returns per-batch ids; combine() reads each, sorts globally,
+  returns ``[sentinel]`` so a single ordered finalize stream
+  emits the merged result.
+
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">state_ids</code></dt><dd>Every state_id returned from every <code>process()</code> call across every DuckDB thread, in arbitrary order. Duplicates from multiple Sink threads using the same state_id are NOT dedup'd by the framework.</dd><dt><code class="api-pname">params</code></dt><dd>Process-time params (same identity fields as <code>process()</code>).</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>finalize_state_ids — keys the Source phase will iterate.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.table_buffering_function.TableBufferingFunction.initial_finalize_state"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `initial_finalize_state`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/table_buffering_function.py#L386" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>initial_finalize_state(
+    finalize_state_id: bytes,
+    params: <a href="/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingParams">TableBufferingParams</a>[TArgs],
+) -&gt; TFinalizeState | None</code></pre>
+
+Build the initial wire-serializable state for a finalize stream.
+
+Called once per finalize_state_id at stream init time. The
+returned state is passed to the first ``finalize()`` tick; the
+framework serializes it between ticks so the stream survives
+worker process boundaries (HTTP transport).
+
+Default returns ``None`` (suitable when ``TFinalizeState = None``).
+Override and declare a concrete ``TFinalizeState`` subclass of
+``ArrowSerializableDataclass`` to carry cursor / progress state
+between ticks.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.table_buffering_function.TableBufferingFunction.finalize"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `finalize`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/table_buffering_function.py#L406" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>finalize(
+    params: <a href="/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingParams">TableBufferingParams</a>[TArgs],
+    finalize_state_id: bytes,
+    state: TFinalizeState,
+    out: <a href="https://vgi-rpc-python.query.farm/" class="api-ext" target="_blank" rel="noopener">OutputCollector</a>,
+) -&gt; None</code></pre>
+
+Produce one batch's worth of output for ``finalize_state_id``.
+
+Called repeatedly by the framework (one call per tick). Each call
+should either:
+
+* ``out.emit(batch)`` to produce one output batch and mutate
+  ``state`` in place — ``state`` is wire-serialized after the
+  call so the next tick (possibly on a different worker)
+  resumes from the updated value.
+* ``out.finish()`` to signal EOS for this ``finalize_state_id``.
+
+Mirrors ``TableFunctionGenerator.process`` exactly — the only
+difference is the parameterization by ``finalize_state_id``
+instead of free function arguments.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.table_buffering_function.TableBufferingFunction.on_cancel"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `on_cancel`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/table_buffering_function.py#L431" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>on_cancel(
+    params: <a href="/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingParams">TableBufferingParams</a>[TArgs],
+    finalize_state_id: bytes,
+    state: TFinalizeState,
+) -&gt; None</code></pre>
+
+No-op default; runtime docstring set below via __func__.__doc__.
+
+
+</div>
+
+</div>
+<details class="api-inherited">
+<summary>Inherited members (12)</summary>
+
+- `get_metadata` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.MetadataMixin">MetadataMixin</a> — Get the resolved metadata for this function class.
+- `describe` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.MetadataMixin">MetadataMixin</a> — Get metadata as a dictionary (for JSON serialization).
+- `logger` <span class="api-kind">attribute</span> · from Function
+- `storage` <span class="api-kind">attribute</span> · from Function
+- `FunctionArguments` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a>
+- `bind` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — Bind protocol entry point. Do not override; use ``on_bind()``.
+- `on_init` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — One-time setup after bind, before processing batches.
+- `global_init` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — Global init protocol entry point. Do not override; use ``on_init()``.
+- `cardinality` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — Return the cardinality for the output.
+- `dynamic_to_string` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — Return diagnostics rendered as Extra Info under EXPLAIN ANALYZE.
+- `statistics` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — Return per-output-column statistics for this invocation.
+- `pushdown_filters` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — Get deserialized pushdown filters, or None if not present.
+
+</details>
+
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.table_buffering_function.TableBufferingParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableBufferingParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/table_buffering_function.py#L133" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code><a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[TArgs]</code></p>
+
+<p class="api-section">Description</p>
+
+Params for [`TableBufferingFunction`](/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingFunction) callbacks.
+
+Adds identity fields that the buffered API needs to scope worker-owned
+storage and coordinate cross-process state. Other function shapes
+([`TableFunctionGenerator`](/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionGenerator), [`TableInOutGenerator`](/vgi/docs/python/api/vgi-table_in_out_function/#vgi.table_in_out_function.TableInOutGenerator), aggregates) keep
+using the plain [`ProcessParams`](/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams) they always have.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.table_buffering_function.TableBufferingParams.execution_id"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `execution_id`
+
+<p class="api-atype"><code>bytes</code></p>
+
+Stable across coordinator + secondary workers for one
+DuckDB query execution. Key worker-owned storage by this.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.table_buffering_function.TableBufferingParams.attach_id"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `attach_id`
+
+<p class="api-atype"><code>bytes</code></p>
+
+Catalog attach identity; pin attach-time config lookups
+by this.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.table_buffering_function.TableBufferingParams.transaction_id"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `transaction_id`
+
+<p class="api-atype"><code>bytes | None</code></p>
+
+Hex-encoded VGI transaction id when running inside
+a DuckDB transaction, ``None`` otherwise.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.table_buffering_function.TableBufferingParams.function_name"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `function_name`
+
+<p class="api-atype"><code>str</code></p>
+
+Convenience accessor — same as
+``init_call.function_name``.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.table_buffering_function.TableBufferingParams.worker_path"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `worker_path`
+
+<p class="api-atype"><code>str | None</code></p>
+
+Subprocess path / ``unix://`` / ``launch:`` argv. For
+diagnostics.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.table_buffering_function.TableBufferingParams.client_log"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `client_log`
+
+<p class="api-atype"><code>Callable[..., None]</code></p>
+
+In-band log sink — emits a 0-row log batch on the RPC
+response stream, which DuckDB surfaces as a row in ``duckdb_logs()``
+with ``type='VGI'``. Use this from ``process()`` and ``combine()``
+(unary RPCs with no ``OutputCollector``); the streaming
+``finalize(... out)`` callback should use ``out.client_log(...)``
+instead. The worker handler wires this to ``ctx.client_log`` before
+invoking the user callback; the default no-op is a safety net for
+unit-test callers that build [`TableBufferingParams`](/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingParams) outside the
+RPC path.
+
+</div>
+
+</div>
+<details class="api-inherited">
+<summary>Inherited members (13)</summary>
+
+- `args` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>
+- `init_call` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>
+- `init_response` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>
+- `output_schema` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>
+- `settings` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>
+- `secrets` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>
+- `storage` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>
+- `auth_context` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>
+- `current_pushdown_filters` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>
+- `batch_index` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>
+- `attach_opaque_data` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>
+- `at_unit` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a> — AT (TIMESTAMP|VERSION) unit for this scan, or None.
+- `at_value` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a> — AT (TIMESTAMP|VERSION) value for this scan, or None. See ``at_unit``.
+
+</details>
+
+
+</div>

@@ -1,0 +1,261 @@
+---
+title: Argument serialization
+description: "How VGI serializes a function's argument specifications to Apache Arrow schemas for IPC and DuckDB registration — the metadata keys, field order, and parse rules."
+---
+
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+How VGI turns a function's argument specifications into Apache Arrow schemas for IPC transmission and
+DuckDB function registration — the metadata keys, field ordering, and parse rules. This is wire-level
+reference; you don't need it to write a worker (declare arguments with `Annotated[...]` and VGI
+handles the rest).
+
+## Quick Reference
+
+<table>
+<thead>
+<tr><th>Metadata Key</th><th>Value</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>vgi_arg</code></td><td><code>named</code></td><td>Named argument (not positional)</td></tr>
+<tr><td><code>vgi_type</code></td><td><code>table</code></td><td>Table input argument</td></tr>
+<tr><td><code>vgi_type</code></td><td><code>any</code></td><td>Any Arrow type argument</td></tr>
+<tr><td><code>vgi_varargs</code></td><td><code>true</code></td><td>Variable arguments</td></tr>
+</tbody>
+</table>
+
+## Schema Format
+
+Arguments are serialized as a **single Arrow schema** where each field
+represents one argument.
+
+### Field Order
+
+1. **Positional arguments** come first, in order (field index = position index)
+2. **Named arguments** follow, marked with metadata
+
+### Field Components
+
+<table>
+<thead>
+<tr><th>Component</th><th>Source</th></tr>
+</thead>
+<tbody>
+<tr><td>Field name</td><td>Python attribute name</td></tr>
+<tr><td>Field type</td><td>Exact Arrow data type</td></tr>
+<tr><td>Field metadata</td><td>Markers for named, table, any, varargs</td></tr>
+</tbody>
+</table>
+
+## Positional Arguments
+
+Positional arguments have no special metadata. Their position index is
+determined by their order in the schema.
+
+<CodeBlock code={`# count: Annotated[int, Arg(0)] becomes:
+pa.field("count", pa.int64())
+
+# name: Annotated[str, Arg(1)] becomes:
+pa.field("name", pa.utf8())`} lang="python" tryable={false} />
+
+## Named Arguments
+
+Named arguments have `vgi_arg=named` metadata. The field name is the
+argument key used in SQL.
+
+<CodeBlock code={`# format: Annotated[str, Arg("format")] becomes:
+pa.field("format", pa.utf8(), metadata={b"vgi_arg": b"named"})`} lang="python" tryable={false} />
+
+## Special Types
+
+### Table Input
+
+Table input arguments (`Annotated[TableInput, Arg(...)]`) receive streaming
+RecordBatches rather than scalar values.
+
+- **Arrow type**: `pa.null()`
+- **Metadata**: `{b"vgi_type": b"table"}`
+
+<CodeBlock code={`# data: Annotated[TableInput, Arg(1)] becomes:
+pa.field("data", pa.null(), metadata={b"vgi_type": b"table"})`} lang="python" tryable={false} />
+
+### Any Type
+
+Any-type arguments (`Annotated[AnyArrowValue, Arg(...)]`) accept any valid
+Arrow scalar type at runtime.
+
+- **Arrow type**: `pa.null()`
+- **Metadata**: `{b"vgi_type": b"any"}`
+
+<CodeBlock code={`# value: Annotated[AnyArrowValue, Arg(0)] becomes:
+pa.field("value", pa.null(), metadata={b"vgi_type": b"any"})`} lang="python" tryable={false} />
+
+### Variable Arguments
+
+Varargs arguments (`varargs=True`) collect all remaining positional
+arguments from their position onwards.
+
+- **Arrow type**: The element type (e.g., `pa.int64()` for int varargs)
+- **Metadata**: `{b"vgi_varargs": b"true"}`
+
+<CodeBlock code={`# columns: Annotated[tuple[str, ...], Arg(0, varargs=True)] becomes:
+pa.field("columns", pa.utf8(), metadata={b"vgi_varargs": b"true"})`} lang="python" tryable={false} />
+
+## Combined Metadata
+
+Fields can have multiple metadata keys. For example, a named argument
+that accepts any type:
+
+<CodeBlock code={`# threshold: Annotated[AnyArrowValue, Arg("threshold")] becomes:
+pa.field("threshold", pa.null(), metadata={
+    b"vgi_arg": b"named",
+    b"vgi_type": b"any",
+})`} lang="python" tryable={false} />
+
+## Complete Examples
+
+### Example 1: Simple Function
+
+<CodeBlock code={`from typing import Annotated
+
+class MyFunction(TableInOutFunction):
+    count: Annotated[int, Arg(0)]           # Positional 0
+    name: Annotated[str, Arg(1)]            # Positional 1
+    verbose: Annotated[bool, Arg("verbose")] # Named
+
+# Serializes to:
+schema = pa.schema([
+    pa.field("count", pa.int64()),
+    pa.field("name", pa.utf8()),
+    pa.field("verbose", pa.bool_(), metadata={b"vgi_arg": b"named"}),
+])`} lang="python" tryable={false} />
+
+### Example 2: Function with Table Input
+
+<CodeBlock code={`from typing import Annotated
+from vgi.arguments import TableInput
+
+class TransformFunction(TableInOutFunction):
+    multiplier: Annotated[float, Arg(0)]
+    data: Annotated[TableInput, Arg(1)]
+
+# Serializes to:
+schema = pa.schema([
+    pa.field("multiplier", pa.float64()),
+    pa.field("data", pa.null(), metadata={b"vgi_type": b"table"}),
+])`} lang="python" tryable={false} />
+
+### Example 3: Function with Varargs
+
+<CodeBlock code={`from typing import Annotated
+
+class SumValuesFunction(TableInOutFunction):
+    columns: Annotated[tuple[str, ...], Arg(0, varargs=True)]
+
+# Serializes to:
+schema = pa.schema([
+    pa.field("columns", pa.utf8(), metadata={b"vgi_varargs": b"true"}),
+])`} lang="python" tryable={false} />
+
+### Example 4: Complex Function
+
+<CodeBlock code={`from typing import Annotated
+from vgi import AnyArrowValue
+from vgi.arguments import TableInput
+
+class ComplexFunction(TableInOutFunction):
+    count: Annotated[int, Arg(0)]
+    data: Annotated[TableInput, Arg(1)]
+    extra: Annotated[tuple[float, ...], Arg(2, varargs=True)]
+    format: Annotated[str, Arg("format")]
+    threshold: Annotated[AnyArrowValue, Arg("threshold")]
+
+# Serializes to:
+schema = pa.schema([
+    pa.field("count", pa.int64()),
+    pa.field("data", pa.null(), metadata={b"vgi_type": b"table"}),
+    pa.field("extra", pa.float64(), metadata={b"vgi_varargs": b"true"}),
+    pa.field("format", pa.utf8(), metadata={b"vgi_arg": b"named"}),
+    pa.field("threshold", pa.null(), metadata={
+        b"vgi_arg": b"named",
+        b"vgi_type": b"any",
+    }),
+])`} lang="python" tryable={false} />
+
+## Serialization Code
+
+### Serialize to Bytes
+
+<CodeBlock code={`from vgi.argument_spec import argument_specs_to_schema
+
+# Create schema from specs
+schema = argument_specs_to_schema(specs)
+
+# Serialize to bytes
+schema_bytes = schema.serialize().to_pybytes()`} lang="python" tryable={false} />
+
+### Deserialize from Bytes
+
+<CodeBlock code={`import pyarrow as pa
+from vgi.argument_spec import schema_to_argument_specs
+
+# Deserialize schema
+schema = pa.ipc.read_schema(pa.py_buffer(schema_bytes))
+
+# Convert to ArgumentSpec objects
+specs = schema_to_argument_specs(schema)`} lang="python" tryable={false} />
+
+## Parsing Algorithm
+
+To parse a schema back to argument specifications:
+
+1. Initialize `position_index = 0`
+2. For each field in schema:
+   - Check if field has `vgi_arg=named` metadata
+   - If named: `position = field.name` (string)
+   - If positional: `position = position_index`, then increment `position_index`
+   - Check for `vgi_type` metadata (`table` or `any`)
+   - Check for `vgi_varargs` metadata
+   - Create `ArgumentSpec` with extracted info
+
+<CodeBlock code={`def parse_schema(schema):
+    specs = []
+    position_index = 0
+
+    for field in schema:
+        metadata = field.metadata or {}
+
+        # Determine position type
+        if metadata.get(b"vgi_arg") == b"named":
+            position = field.name  # Named argument
+        else:
+            position = position_index  # Positional argument
+            position_index += 1
+
+        # Check special types
+        vgi_type = metadata.get(b"vgi_type")
+        is_table_input = (vgi_type == b"table")
+        is_any_type = (vgi_type == b"any")
+        is_varargs = (metadata.get(b"vgi_varargs") == b"true")
+
+        specs.append(ArgumentSpec(
+            name=field.name,
+            position=position,
+            arrow_type=field.type,
+            is_table_input=is_table_input,
+            is_any_type=is_any_type,
+            is_varargs=is_varargs,
+        ))
+
+    return specs`} lang="python" tryable={false} />
+
+## Not Included
+
+The following are **not** serialized in the schema:
+
+- **Default values** - handled at runtime by the `Arg` descriptor
+- **Validation constraints** (`ge`, `le`, `choices`, `pattern`) - Python-side validation
+- **Documentation strings** - available via `ParameterInfo` in metadata
+
+These are implementation details of the Python function runtime, not part
+of the argument type specification needed for function registration.

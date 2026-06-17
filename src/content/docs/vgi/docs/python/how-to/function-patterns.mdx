@@ -1,0 +1,162 @@
+---
+title: Function patterns
+description: "The five VGI function shapes — scalar, table, table-in-out, aggregate, buffering — each with a complete, runnable worker."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import scalarSrc from '../../../../../../examples/vgi-python/calc_scalar_worker.py?raw';
+import greetingSrc from '../../../../../../examples/vgi-python/greeting_scalar_worker.py?raw';
+import calcSrc from '../../../../../../examples/vgi-python/calc_worker.py?raw';
+import streamingSrc from '../../../../../../examples/vgi-python/series_streaming_worker.py?raw';
+import filterSrc from '../../../../../../examples/vgi-python/filter_worker.py?raw';
+import sumSrc from '../../../../../../examples/vgi-python/sum_worker.py?raw';
+import rowCountSrc from '../../../../../../examples/vgi-python/row_count_worker.py?raw';
+
+Each of the five VGI function shapes, with a complete, runnable worker for each — so you can find
+the shape that fits your problem. (Do the [tutorial](/vgi/docs/python/tutorial/scalar/) first.)
+
+## Which shape do I need?
+
+<div class="kind-gallery">
+<a class="kind-gallery__card kind-gallery--scalar" href="#scalar"><img src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><span class="kind-gallery__name">Scalar</span><code class="kind-gallery__formula">1 row → 1 value</code></a>
+<a class="kind-gallery__card kind-gallery--table" href="#table"><img src="/vgi/docs/assets/kinds/table.svg" alt="table shape" /><span class="kind-gallery__name">Table</span><code class="kind-gallery__formula">args → N rows</code></a>
+<a class="kind-gallery__card kind-gallery--table-in-out" href="#table-in-out"><img src="/vgi/docs/assets/kinds/table-in-out.svg" alt="table-in-out shape" /><span class="kind-gallery__name">Table-in-out</span><code class="kind-gallery__formula">N rows → M rows</code></a>
+<a class="kind-gallery__card kind-gallery--aggregate" href="#aggregate"><img src="/vgi/docs/assets/kinds/aggregate.svg" alt="aggregate shape" /><span class="kind-gallery__name">Aggregate</span><code class="kind-gallery__formula">N rows → 1 value</code></a>
+<a class="kind-gallery__card kind-gallery--buffering" href="#buffering"><img src="/vgi/docs/assets/kinds/buffering.svg" alt="buffering shape" /><span class="kind-gallery__name">Buffering</span><code class="kind-gallery__formula">stream → [state] → stream</code></a>
+</div>
+
+At a glance — pick the shape whose input/output cardinality matches your problem:
+
+<table>
+<thead>
+<tr><th>Pattern</th><th>Shape</th><th>Use it when…</th><th>SQL</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Scalar</strong></td><td>1 row → 1 row</td><td>you transform each row independently</td><td><code>SELECT f(col) FROM t</code></td></tr>
+<tr><td><strong>Table</strong></td><td>args → N rows</td><td>you generate rows from arguments</td><td><code>SELECT * FROM f(args)</code></td></tr>
+<tr><td><strong>Table-in-out</strong></td><td>N rows → M rows</td><td>you reshape/filter a streamed table</td><td><code>SELECT * FROM f((SELECT …))</code></td></tr>
+<tr><td><strong>Aggregate</strong></td><td>grouped rows → 1 row/group</td><td>you accumulate per <code>GROUP BY</code> group</td><td><code>SELECT f(col) FROM t GROUP BY k</code></td></tr>
+<tr><td><strong>Buffering</strong></td><td>stream → [state] → stream</td><td>you must see <em>every</em> row first (sort, top-k, full reduction)</td><td><code>SELECT * FROM f((SELECT …))</code></td></tr>
+</tbody>
+</table>
+
+## Scalar
+
+<div class="kind-banner kind-banner--scalar"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><div class="kind-banner__text"><code class="kind-banner__formula">1 row → 1 value</code><p class="kind-banner__desc">Runs on each row independently and returns a single value — a pure per-row transform.</p></div></div>
+
+One row in, one row out. Operate on the whole column with `pyarrow.compute`; the `Annotated` types
+*are* the schema.
+
+<CodeBlock code={scalarSrc} lang="python" tryable={false} />
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_scalar_worker.py');
+SELECT calc.double(n) FROM (VALUES (1), (2), (3)) AS t(n);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["double(n)"]} rows={[[2], [4], [6]]} />
+
+Scalars aren't just for numbers — any column type works. A string transform looks the same; here
+`compute` joins `Hello, ` + name + `!` across the column:
+
+<CodeBlock code={greetingSrc} lang="python" tryable={false} />
+
+<CodeBlock code={`SELECT greetings.greeting(name) FROM (VALUES ('Alice'), ('Bob')) AS t(name);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["greeting(name)"]} rows={[["Hello, Alice!"], ["Hello, Bob!"]]} />
+
+## Table
+
+<div class="kind-banner kind-banner--table"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table.svg" alt="table shape" /><div class="kind-banner__text"><code class="kind-banner__formula">args → N rows</code><p class="kind-banner__desc">A table-valued source: scalar arguments in, a whole set of rows out.</p></div></div>
+
+Generate rows from arguments, no input table. Declare a typed args dataclass and a `FIXED_SCHEMA`;
+`process` emits batches until `out.finish()`. The `@bind_fixed_schema` / `@init_single_worker`
+decorators wire up the common single-worker lifecycle. (This is the full tutorial worker — the
+scalar `double` plus the `series` generator.)
+
+<CodeBlock code={calcSrc} lang="python" tryable={false} />
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_worker.py');
+SELECT * FROM calc.series(3);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["n"]} rows={[[0], [1], [2]]} />
+
+### Streaming with state
+
+The tutorial's `series` emits every row in a single `process` call. That's fine for small results,
+but `process` is actually called *repeatedly* until you call `out.finish()` — so for large output
+you emit a bounded chunk per call and remember your place in a small **state** object. The state
+extends `ArrowSerializableDataclass` so it survives HTTP state round-trips:
+
+<CodeBlock code={streamingSrc} lang="python" tryable={false} />
+
+<CodeBlock code={`SELECT * FROM calc.series(1000000);   -- streamed CHUNK rows per process() call`} lang="sql" tryable={false} />
+
+## Table-in-out
+
+<div class="kind-banner kind-banner--table-in-out"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table-in-out.svg" alt="table-in-out shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → M rows</code><p class="kind-banner__desc">Consumes a relation and streams a transformed relation back, batch by batch.</p></div></div>
+
+Stream an input table through, batch by batch, emitting transformed output. `on_bind` declares the
+output schema; `process` receives each input `batch` and emits results. Here we keep only rows
+whose `value` column is positive.
+
+<CodeBlock code={filterSrc} lang="python" tryable={false} />
+
+<CodeBlock code={`ATTACH 'filters' (TYPE vgi, LOCATION 'uv run filter_worker.py');
+SELECT * FROM filters.filter_positive((SELECT * FROM (VALUES (-2), (5), (0), (9), (-1)) AS t(value)));`} lang="sql" tryable={false} />
+
+<QueryResult columns={["value"]} rows={[[5], [9]]} />
+
+## Aggregate
+
+<div class="kind-banner kind-banner--aggregate"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/aggregate.svg" alt="aggregate shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → 1 value</code><p class="kind-banner__desc">Folds many rows down into a single value per group.</p></div></div>
+
+Accumulate input rows into per-group state, then emit one row per group. Aggregates are driven by
+DuckDB's `GROUP BY` and run in three phases — `update` (fold a batch into per-group state),
+`combine` (merge partial states across parallel workers), and `finalize` (state → output row).
+
+<CodeBlock code={sumSrc} lang="python" tryable={false} />
+
+<CodeBlock code={`ATTACH 'aggregates' (TYPE vgi, LOCATION 'uv run sum_worker.py');
+SELECT category, aggregates.vgi_sum(value) AS total
+FROM (VALUES (0, 10), (0, 5), (1, 1), (1, 2), (1, 3)) AS t(category, value)
+GROUP BY category ORDER BY category;`} lang="sql" tryable={false} />
+
+<QueryResult columns={["category", "total"]} rows={[[0, 15], [1, 6]]} />
+
+<Callout type="info" title="State must be an ArrowSerializableDataclass">
+Table generators and aggregates keep state between calls. Because that state is serialized across
+parallel workers (aggregates) and HTTP round-trips, the framework requires it to extend
+`ArrowSerializableDataclass`. Annotate fields with `ArrowType(...)` so the wire type is explicit.
+</Callout>
+
+## Buffering
+
+<div class="kind-banner kind-banner--buffering"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/buffering.svg" alt="buffering shape" /><div class="kind-banner__text"><code class="kind-banner__formula">stream → [state] → stream</code><p class="kind-banner__desc">Holds every input row in state before emitting — the basis for sorts, top-k, and full-stream reductions.</p></div></div>
+
+When a function must see the **whole** input before it can produce *any* output — a global sort,
+top-k, or a full reduction — use a buffering function. Unlike table-in-out (which emits per input
+batch), it runs in three phases: `process` (the **sink** — stash each batch, return a `state_id`),
+`combine` (reduce all the partials once), and `finalize` (the **source** — stream the result out).
+Because the phases can run in different worker processes, state can't live in memory — it goes in
+`params.storage`, a shared store keyed to this call.
+
+<CodeBlock code={rowCountSrc} lang="python" tryable={false} />
+
+<CodeBlock code={`ATTACH 'buffers' (TYPE vgi, LOCATION 'uv run row_count_worker.py');
+SELECT * FROM buffers.row_count((SELECT * FROM (VALUES (1), (2), (3), (4), (5)) AS t(x)));`} lang="sql" tryable={false} />
+
+<QueryResult columns={["count"]} rows={[[5]]} />
+
+<Callout type="info" title="Buffering vs. table-in-out">
+Both consume a relation, but a **table-in-out** function emits *per input batch* and never holds the
+whole input — use it for streaming transforms (filter, enrich, reshape). Reach for **buffering**
+only when output genuinely depends on every row.
+</Callout>
+
+## Next steps
+
+- **[1. Scalar function](/vgi/docs/python/tutorial/scalar/)** and
+  **[2. Table function](/vgi/docs/python/tutorial/table/)** — the guided build, start to finish.
+- **[API Reference — functions](/vgi/docs/python/api/vgi-scalar_function/)** — the exact contracts
+  for each shape.

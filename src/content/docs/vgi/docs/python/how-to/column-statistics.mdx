@@ -1,0 +1,210 @@
+---
+title: Column statistics
+description: "Report per-column min/max, null counts, and distinct counts so DuckDB's optimizer can prune scans, order joins better, and push down filters."
+---
+
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+How a worker reports per-column statistics — min/max values, null counts, distinct counts — so
+DuckDB's query optimizer can make cost-based decisions: eliminate unnecessary scans, improve join
+ordering, and push down spatial filters.
+
+## How It Works
+
+1. The worker declares `supports_column_statistics=True` on tables that provide statistics
+2. When DuckDB plans a query, it calls the `catalog_table_column_statistics_get` RPC
+3. The worker returns per-column statistics (min, max, null flags, distinct count)
+4. DuckDB caches the result based on the worker's specified TTL
+5. The optimizer uses the statistics for filter elimination, cardinality estimation, etc.
+
+<CodeBlock code={`-- With statistics: optimizer knows id max=10, eliminates entire scan
+EXPLAIN SELECT * FROM mydb.data.departments WHERE id > 100;
+-- Physical Plan: EMPTY_RESULT
+
+-- Without statistics: optimizer must scan and filter
+EXPLAIN SELECT * FROM mydb.data.departments WHERE id > 100;
+-- Physical Plan: FILTER → VGI_TABLE_SCAN`} lang="sql" tryable={false} />
+
+## Declarative Statistics (Recommended)
+
+The simplest approach: add a `statistics` dict to your `Table` descriptor. Types are auto-inferred from the table's column schema.
+
+<CodeBlock code={`from vgi.catalog import Table, Schema, Catalog
+from vgi.catalog.descriptors import ColumnStatisticsInput
+
+catalog = Catalog(
+    name="mydb",
+    schemas=[
+        Schema(
+            name="data",
+            tables=[
+                Table(
+                    name="products",
+                    columns=pa.schema([
+                        ("id", pa.int64()),
+                        ("name", pa.string()),
+                        ("price", pa.float64()),
+                    ]),
+                    statistics={
+                        "id": ColumnStatisticsInput(min=1, max=10000, has_null=False, distinct_count=10000),
+                        "name": ColumnStatisticsInput(min="Anvil", max="Zebra Tape", distinct_count=5000),
+                        "price": ColumnStatisticsInput(min=0.99, max=999.99, has_null=False, distinct_count=800),
+                    },
+                    statistics_cache_max_age_seconds=3600,  # Cache for 1 hour
+                ),
+            ],
+        ),
+    ],
+)`} lang="python" tryable={false} />
+
+### ColumnStatisticsInput Fields
+
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>min</code></td><td>Python value or <code>pa.Scalar</code></td><td><code>None</code></td><td>Minimum value (auto-converted to PyArrow scalar using column type)</td></tr>
+<tr><td><code>max</code></td><td>Python value or <code>pa.Scalar</code></td><td><code>None</code></td><td>Maximum value</td></tr>
+<tr><td><code>has_null</code></td><td><code>bool</code></td><td><code>True</code></td><td>Whether the column contains NULL values</td></tr>
+<tr><td><code>has_not_null</code></td><td><code>bool</code></td><td><code>True</code></td><td>Whether the column contains non-NULL values</td></tr>
+<tr><td><code>distinct_count</code></td><td><code>int | None</code></td><td><code>None</code></td><td>Approximate count of distinct values</td></tr>
+<tr><td><code>contains_unicode</code></td><td><code>bool | None</code></td><td><code>None</code></td><td>String columns only: contains non-ASCII characters</td></tr>
+<tr><td><code>max_string_length</code></td><td><code>int | None</code></td><td><code>None</code></td><td>String columns only: maximum byte length</td></tr>
+</tbody>
+</table>
+
+Values can be plain Python literals (`int`, `float`, `str`) which are auto-converted using the column's Arrow type, or explicit `pa.Scalar` values for precise control:
+
+<CodeBlock code={`# Plain Python values — types inferred from schema
+ColumnStatisticsInput(min=1, max=100)
+
+# Explicit PyArrow scalars — used as-is
+ColumnStatisticsInput(min=pa.scalar(1, pa.int32()), max=pa.scalar(100, pa.int32()))`} lang="python" tryable={false} />
+
+### Cache TTL
+
+`statistics_cache_max_age_seconds` controls how long DuckDB caches the statistics before making another RPC call:
+
+<table>
+<thead>
+<tr><th>Value</th><th>Behavior</th></tr>
+</thead>
+<tbody>
+<tr><td><code>None</code></td><td>Cache forever (default for static data)</td></tr>
+<tr><td><code>0</code></td><td>Never cache — re-fetch on every query</td></tr>
+<tr><td><code>N</code></td><td>Cache for N seconds</td></tr>
+</tbody>
+</table>
+
+## Dynamic Statistics from DuckDB
+
+For workers that proxy data from a DuckDB database, use the `statistics_from_duckdb` helper to extract real statistics:
+
+<CodeBlock code={`import duckdb
+from vgi.catalog.duckdb_statistics import statistics_from_duckdb
+
+conn = duckdb.connect("my_data.duckdb")
+stats = statistics_from_duckdb(conn, "products")
+
+Table(
+    name="products",
+    columns=conn.execute("SELECT * FROM products LIMIT 0").to_arrow_table().schema,
+    statistics=stats,
+    statistics_cache_max_age_seconds=3600,
+)`} lang="python" tryable={false} />
+
+The helper queries `min()`, `max()`, `approx_count_distinct()`, and null counts per column using DuckDB's Arrow API, returning properly typed `pa.Scalar` values.
+
+### Special Type Handling
+
+<table>
+<thead>
+<tr><th>Column Type</th><th>Strategy</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Geometry</strong></td><td>Computes spatial bounding box via <code>ST_XMin/ST_XMax/ST_YMin/ST_YMax</code>, handles XY/XYZ/XYM/XYZM vertex types</td></tr>
+<tr><td><strong>List / Array</strong></td><td>Uses <code>list_min()</code>/<code>list_max()</code> for child element bounds, wraps in single-element lists</td></tr>
+<tr><td><strong>Fixed-size Array</strong></td><td>Same as List, with type converted to variable-length list</td></tr>
+<tr><td><strong>Struct</strong></td><td>Standard <code>min()</code>/<code>max()</code> (lexicographic), <code>FromConstant+Merge</code> produces per-field child stats</td></tr>
+<tr><td><strong>Map</strong></td><td>Standard <code>min()</code>/<code>max()</code> on underlying key-value list structure</td></tr>
+<tr><td><strong>Nested Lists</strong></td><td><code>list_min()</code>/<code>list_max()</code> naturally peels one nesting layer per level</td></tr>
+</tbody>
+</table>
+
+## Dynamic Statistics (Override Method)
+
+For computed or live statistics, override `table_column_statistics_get()` on your `CatalogInterface`:
+
+<CodeBlock code={`from vgi.catalog.catalog_interface import CatalogInterface, TableColumnStatisticsResult
+from vgi.catalog.duckdb_statistics import column_statistics_from_duckdb
+
+class MyCatalog(CatalogInterface):
+    def table_column_statistics_get(
+        self, *, attach_opaque_data, transaction_opaque_data, schema_name, name,
+    ) -> TableColumnStatisticsResult | None:
+        conn = self._get_connection(attach_opaque_data)
+        return TableColumnStatisticsResult(
+            statistics=column_statistics_from_duckdb(conn, name, schema_name=schema_name),
+            cache_max_age_seconds=60,  # Re-fetch every minute
+        )`} lang="python" tryable={false} />
+
+`column_statistics_from_duckdb()` returns `list[ColumnStatistics]` with fully resolved PyArrow scalars — ready to wrap in `TableColumnStatisticsResult`.
+
+## Debugging Statistics
+
+Use the `vgi_table_statistics()` SQL function to inspect what statistics DuckDB has for a VGI table:
+
+<CodeBlock code={`SELECT * FROM vgi_table_statistics('mydb', 'data', 'products');`} lang="sql" tryable={false} />
+
+<table>
+<thead>
+<tr><th>column_name</th><th>column_type</th><th>min</th><th>max</th><th>has_null</th><th>has_not_null</th><th>distinct_count</th></tr>
+</thead>
+<tbody>
+<tr><td>id</td><td>BIGINT</td><td>1</td><td>10000</td><td>false</td><td>true</td><td>10000</td></tr>
+<tr><td>name</td><td>VARCHAR</td><td>Anvil</td><td>Zebra Ta</td><td>false</td><td>true</td><td>5000</td></tr>
+<tr><td>price</td><td>DOUBLE</td><td>0.99</td><td>999.99</td><td>false</td><td>true</td><td>800</td></tr>
+</tbody>
+</table>
+
+Notes:
+- The `min` and `max` columns use a DuckDB `UNION` type — each column's value is in its native type
+- String min/max are truncated to 8 bytes (DuckDB's internal `StringStats` limit)
+- Geometry columns show the bounding box extent: `BOX(xmin ymin, xmax ymax)`
+- Tables without `supports_column_statistics=True` return zero rows
+
+## Wire Format
+
+Statistics are transmitted via the `catalog_table_column_statistics_get` RPC method:
+
+**Request**: standard catalog params (`attach_opaque_data`, `schema_name`, `name`, `transaction_opaque_data`)
+
+**Response**: single RecordBatch with N rows (one per column):
+
+<table>
+<thead>
+<tr><th>Field</th><th>Arrow Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>column_name</code></td><td><code>utf8</code></td><td>Column name</td></tr>
+<tr><td><code>min</code></td><td><code>sparse_union&lt;...&gt;</code></td><td>Minimum value (union children are distinct column types)</td></tr>
+<tr><td><code>max</code></td><td><code>sparse_union&lt;...&gt;</code></td><td>Maximum value</td></tr>
+<tr><td><code>has_null</code></td><td><code>bool</code></td><td>Column contains NULLs</td></tr>
+<tr><td><code>has_not_null</code></td><td><code>bool</code></td><td>Column contains non-NULLs</td></tr>
+<tr><td><code>distinct_count</code></td><td><code>int64</code> (nullable)</td><td>Approximate distinct count</td></tr>
+<tr><td><code>contains_unicode</code></td><td><code>bool</code> (nullable)</td><td>String columns only</td></tr>
+<tr><td><code>max_string_length</code></td><td><code>uint64</code> (nullable)</td><td>String columns only</td></tr>
+</tbody>
+</table>
+
+Cache TTL is carried as IPC batch `custom_metadata` with key `cache_max_age_seconds`.
+
+## Capability Flags
+
+Statistics are opt-in at two levels:
+
+1. **Catalog level**: `CatalogAttachResult.supports_column_statistics` — global gate. If `False`, DuckDB never calls the statistics RPC.
+2. **Table level**: `TableInfo.supports_column_statistics` — per-table opt-in. Mixed catalogs can have some tables with stats and others without.
+
+When using the `Table` descriptor, both flags are auto-derived from whether the `statistics` dict is non-empty.

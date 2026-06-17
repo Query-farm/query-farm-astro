@@ -1,0 +1,127 @@
+---
+title: Function lifecycle
+description: "When each VGI lifecycle method runs — bind, init, exchange, update, combine, and finalize — across scalar, table, table-in-out, aggregate, and buffering functions."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+
+Knowing **when** each lifecycle method runs is key to managing resources and getting distributed
+processing right. Every VGI [function shape](/vgi/docs/python/how-to/function-patterns/) is driven by
+the engine through the same skeleton — **bind → init → per-batch processing → (optionally) finalize** —
+but the shapes differ in whether they have a finalize phase and how they behave across parallel
+workers. The sequence diagrams below trace the calls between the DuckDB engine and your worker.
+
+## The shapes at a glance
+
+Each row links to the full pattern in [Function patterns](/vgi/docs/python/how-to/function-patterns/).
+
+<table>
+<thead>
+<tr><th>Shape</th><th>Lifecycle</th><th>Finalize phase?</th></tr>
+</thead>
+<tbody>
+<tr><td><strong><a href="/vgi/docs/python/how-to/function-patterns/#scalar">Scalar</a></strong></td><td><code>bind</code> → <code>init</code> → <code>compute</code> per batch</td><td>No — ends when input ends</td></tr>
+<tr><td><strong><a href="/vgi/docs/python/how-to/function-patterns/#table">Table</a></strong> (producer)</td><td><code>bind</code> → <code>init</code> → <code>process</code> emits batches</td><td>Self-terminated via <code>out.finish()</code></td></tr>
+<tr><td><strong><a href="/vgi/docs/python/how-to/function-patterns/#table-in-out">Table-in-out</a></strong></td><td><code>bind</code> → <code>init(INPUT)</code> → <code>process</code> per batch → <code>init(FINALIZE)</code> → <code>finalize</code></td><td>Yes</td></tr>
+<tr><td><strong><a href="/vgi/docs/python/how-to/function-patterns/#aggregate">Aggregate</a></strong></td><td><code>initial_state</code> → <code>update</code> → <code>combine</code> → <code>finalize</code></td><td>Yes — one row per group</td></tr>
+<tr><td><strong><a href="/vgi/docs/python/how-to/function-patterns/#buffering">Buffering</a></strong></td><td><code>process</code> (sink) → <code>combine</code> → <code>finalize</code> (source)</td><td>Yes — streamed from storage</td></tr>
+</tbody>
+</table>
+
+The producer **Table** lifecycle is the simplest stateful generator — `init` builds state, then
+`process` is called repeatedly to emit batches until it calls `out.finish()`; see the
+[tutorial](/vgi/docs/python/tutorial/table/). The remaining shapes are detailed below.
+
+## Scalar — batches in, one column out
+
+<div class="kind-banner kind-banner--scalar"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><div class="kind-banner__text"><code class="kind-banner__formula">1 row → 1 value</code><p class="kind-banner__desc">A pure per-row transform — see <a href="/vgi/docs/python/how-to/function-patterns/#scalar">Function patterns → Scalar</a>.</p></div></div>
+
+The simplest lifecycle: `bind`, then `init`, then a `compute` call for each input batch returning an
+output array with the **same row count** — ending when the input stream closes. There is **no
+finalize phase** and no distributed state.
+
+<img class="lifecycle-diagram" src="/vgi/docs/diagrams/lifecycle-scalar.svg" alt="Sequence: the engine calls bind then init, then for each input batch calls exchange, the worker computes an output array of the same row count, and finally the input stream closes." />
+
+## Table-in-out — stream through, then finalize
+
+<div class="kind-banner kind-banner--table-in-out"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table-in-out.svg" alt="table-in-out shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → M rows</code><p class="kind-banner__desc">Consumes a relation and streams a transformed relation back — see <a href="/vgi/docs/python/how-to/function-patterns/#table-in-out">Function patterns → Table-in-out</a>.</p></div></div>
+
+In a single worker (`max_workers=1`), a table-in-out function processes every input batch, then gets
+a distinct **finalize** phase to emit anything it held back.
+
+<img class="lifecycle-diagram" src="/vgi/docs/diagrams/lifecycle-table-in-out.svg" alt="Sequence: the engine calls bind, then init for the INPUT phase; for each input batch it calls exchange and the worker emits output; after the input stream closes the engine calls init for the FINALIZE phase and the worker runs finalize, emitting final output." />
+
+### Running table-in-out in parallel — primary and secondary workers
+
+The same **table-in-out** function, but with `max_workers > 1` the engine spawns several worker
+processes. One becomes the **primary** (it runs `finalize`); the rest are **secondaries** and never
+finalize.
+
+<img class="lifecycle-diagram" src="/vgi/docs/diagrams/lifecycle-multi-worker.svg" alt="Sequence: the engine initialises the primary worker (which runs global_init) and the secondary workers with the primary's execution_id; input batches are exchanged round-robin to all workers; when input ends the secondaries stop without finalizing, while the primary receives an init for the FINALIZE phase and runs finalize to produce output." />
+
+<table>
+<thead>
+<tr><th>Aspect</th><th>Primary worker</th><th>Secondary workers</th></tr>
+</thead>
+<tbody>
+<tr><td><code>global_init()</code> called?</td><td>Yes</td><td>No (uses the primary's <code>execution_id</code>)</td></tr>
+<tr><td><code>finalize()</code> called?</td><td>Yes</td><td>No</td></tr>
+<tr><td>Which batches?</td><td>A round-robin subset</td><td>A round-robin subset</td></tr>
+</tbody>
+</table>
+
+## Aggregate — update, combine, finalize
+
+<div class="kind-banner kind-banner--aggregate"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/aggregate.svg" alt="aggregate shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → 1 value</code><p class="kind-banner__desc">Folds many rows into one value per group — see <a href="/vgi/docs/python/how-to/function-patterns/#aggregate">Function patterns → Aggregate</a>.</p></div></div>
+
+Aggregates are driven by DuckDB's `GROUP BY` and run four hooks per invocation:
+
+1. **`initial_state(params)`** — the identity state for a group, created the first time a `group_id`
+   is seen (e.g. `0` for sum, an empty list for list-agg).
+2. **`update(states, group_ids, …)`** — fold each input batch into per-group state. Runs in every
+   worker, in parallel, over that worker's share of the rows.
+3. **`combine(source, target)`** — merge two partial states for the same group across parallel
+   workers into one.
+4. **`finalize(group_ids, states)`** — produce the result, **one output row per group**.
+
+<img class="lifecycle-diagram" src="/vgi/docs/diagrams/lifecycle-aggregate.svg" alt="Flow: parallel workers each run update to fold their batches into per-group state; combine merges the partial states for each group across workers; finalize then produces one output row per group." />
+
+## Buffering — sink, combine, source
+
+<div class="kind-banner kind-banner--buffering"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/buffering.svg" alt="buffering shape" /><div class="kind-banner__text"><code class="kind-banner__formula">stream → [state] → stream</code><p class="kind-banner__desc">Holds every input row before emitting — sorts, top-k, full reductions — see <a href="/vgi/docs/python/how-to/function-patterns/#buffering">Function patterns → Buffering</a>.</p></div></div>
+
+Use a buffering function when output depends on the **whole** input (a global sort, top-k, or a full
+reduction). It runs in three phases, and because they can run in different worker processes, state
+lives in **`params.storage`** (a `BoundStorage` keyed by `execution_id`), not in memory:
+
+1. **`process(batch, params)`** — the **sink**: stash each batch in `params.storage` and return a
+   `state_id`. Runs per input batch, in parallel across workers.
+2. **`combine(state_ids, params)`** — reduce all the partials **once** on the coordinator into the
+   `finalize_state_id`(s).
+3. **`finalize(params, fid, state, out)`** — the **source**: stream the result out, one batch per
+   tick.
+
+<img class="lifecycle-diagram" src="/vgi/docs/diagrams/lifecycle-buffering.svg" alt="Flow: each worker's process (sink) stashes its batch in params.storage and returns a state_id; combine reduces all partials once; finalize (source) streams the result out." />
+
+<Callout type="info" title="Aggregate vs. buffering">
+Both fold many rows down, but an **aggregate** is grouped (`GROUP BY`) and keeps small per-group
+state in memory across `update`/`combine`/`finalize`; a **buffering** function holds the *entire*
+relation in cross-process `params.storage` because it needs every row before emitting any output.
+</Callout>
+
+## Which hook runs when
+
+<table>
+<thead>
+<tr><th>Hook</th><th>Used by</th><th>When / use for</th></tr>
+</thead>
+<tbody>
+<tr><td><code>on_bind()</code></td><td>all shapes</td><td>At bind — validate arguments, set the output schema</td></tr>
+<tr><td><code>compute()</code></td><td>scalar</td><td>Per batch — transform a column into one output column</td></tr>
+<tr><td><code>process()</code> / <code>transform()</code></td><td>table, table-in-out, buffering</td><td>Per input batch — emit (or stash, for buffering) output</td></tr>
+<tr><td><code>initial_state()</code> / <code>update()</code></td><td>aggregate</td><td>Create per-group state, then fold each batch into it</td></tr>
+<tr><td><code>combine()</code></td><td>aggregate, buffering</td><td>Merge partial states across parallel workers</td></tr>
+<tr><td><code>finalize()</code></td><td>table-in-out, aggregate, buffering</td><td>Emit final results (one row per group for aggregate; streamed for buffering)</td></tr>
+<tr><td><code>params.storage</code></td><td>buffering</td><td>Cross-process state keyed by <code>execution_id</code> (sink → source)</td></tr>
+</tbody>
+</table>

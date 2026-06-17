@@ -1,0 +1,61 @@
+---
+title: Expose a catalog
+description: "How to expose a VGI worker as a DuckDB catalog: schemas, function qualification, and tables/views via ATTACH."
+---
+
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import calcWorkerSrc from '../../../../../../examples/vgi-python/calc_worker.py?raw';
+
+How a worker presents itself to DuckDB as a **catalog** — a named namespace of schemas, functions,
+tables, and views you reach with `ATTACH`. Read this once you've done the
+[tutorial](/vgi/docs/python/tutorial/scalar/) and want to understand how your functions get qualified
+names, or to expose data (not just functions).
+
+## Prerequisites
+
+- You can build and run a worker (see the [tutorial](/vgi/docs/python/tutorial/scalar/)).
+- Familiarity with the function patterns is helpful: [Function patterns](/vgi/docs/python/how-to/function-patterns/).
+
+## The model
+
+Every worker exposes one **`Catalog`** with a name. Inside it are one or more **`Schema`**
+namespaces (DuckDB's default is `main`), each holding functions — and optionally tables and views.
+You attach the catalog and address its contents by name:
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_worker.py');
+
+-- catalog.function  (functions in \`main\` are reachable as catalog.name)
+SELECT calc.double(21);
+
+-- catalog.schema.object  (fully qualified)
+SELECT * FROM calc.main.series(3);`} lang="sql" tryable={false} />
+
+The worker from the tutorial is exactly this — a catalog named `calc` with a `main` schema holding
+the two functions:
+
+<CodeBlock code={calcWorkerSrc} lang="python" tryable={false} />
+
+The SQL name of a function is the snake_case of its class name (`Double` → `double`), unless you
+override it with a `Meta.name` (as `sum_worker.py` does for `vgi_sum`).
+
+## Exposing data: tables and views
+
+A catalog can expose more than functions:
+
+- **`View`** — a named SQL query DuckDB evaluates. Pure SQL; no data provider needed:
+
+<CodeBlock code={`from vgi.catalog import View
+View(name="recent", definition="SELECT * FROM calc.series(5)")`} lang="python" tryable={false} />
+
+- **`Table`** — a queryable table. Define it with an explicit `columns` schema (you supply the
+    scan) or back it with a `TableFunctionGenerator` so the schema is derived from the function.
+
+Both are passed to a `Schema(..., tables=[...], views=[...])`. The full set of options —
+constraints, generated columns, column comments, filter requirements — is covered in the
+[Catalog Interface reference](/vgi/docs/python/how-to/catalog-interface/).
+
+## Next steps
+
+- **Persist per-group state** → [State storage](/vgi/docs/python/how-to/state-storage/).
+- **Full catalog options** (tables, views, constraints) → [Catalog Interface reference](/vgi/docs/python/how-to/catalog-interface/).
+- **Exact API** → [API Reference: Catalogs](/vgi/docs/python/api/vgi-catalog/).

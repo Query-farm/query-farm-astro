@@ -1,0 +1,164 @@
+---
+title: Filter pushdown wire format
+description: "The hybrid JSON + Arrow wire format DuckDB uses to push WHERE-clause predicates to a table function — the low-level contract behind the decoded PushdownFilters API."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+The low-level **wire format** DuckDB uses to push SQL `WHERE`-clause predicates to a VGI **table
+function**, so a worker can apply them during data generation and move less data.
+
+<Callout type="note" title="You usually don't parse this by hand">
+For everyday use the framework decodes pushed-down filters into a typed `PushdownFilters` tree for
+you — see the recipe, [Integrate with the optimizer](/vgi/docs/python/how-to/pushdown-and-statistics/).
+This page documents the raw format underneath, for porting and debugging.
+</Callout>
+
+VGI uses a **hybrid JSON + Arrow** format:
+- **JSON** describes filter structure (operators, column references)
+- **Arrow columns** store filter values (preserves exact types)
+
+## Transport
+
+Filters are sent in **Stream 3 (InitInput)** as a binary field containing Arrow IPC bytes:
+
+<CodeBlock code={`InitInput Schema:
+├── projection_ids: list<int32>
+└── filters: binary (nullable)    -- Arrow IPC bytes`} lang="text" tryable={false} />
+
+Table functions must declare `filter_pushdown: true` in metadata to receive filters.
+
+## Format
+
+The Arrow RecordBatch contains:
+
+<table>
+<thead>
+<tr><th>Column</th><th>Name</th><th>Type</th><th>Content</th></tr>
+</thead>
+<tbody>
+<tr><td>0</td><td><code>filter_spec</code></td><td>string</td><td>JSON array of filters</td></tr>
+<tr><td>1+</td><td><code>_val_0</code>, <code>_val_1</code>, ...</td><td>varies</td><td>Values referenced by filters</td></tr>
+</tbody>
+</table>
+
+**Version metadata** on `filter_spec` field: `{"vgi_filter_version": "1"}`
+
+## Example
+
+SQL: `WHERE salary > 50000 AND name = 'Alice'`
+
+**RecordBatch:**
+<CodeBlock code={`filter_spec: "[{...}, {...}]"   (string)
+_val_0: 50000                   (int64)
+_val_1: "Alice"                 (string)`} lang="text" tryable={false} />
+
+**filter_spec JSON:**
+<CodeBlock code={`[
+  {"column_name": "salary", "column_index": 2, "type": "constant", "op": "gt", "value_ref": 0},
+  {"column_name": "name", "column_index": 0, "type": "constant", "op": "eq", "value_ref": 1}
+]`} lang="json" tryable={false} />
+
+The `value_ref` points to value columns: `value_ref: 0` → column `_val_0` (index 1 in batch).
+
+## Filter Types
+
+### constant
+Comparison filter: `col > value`
+
+<CodeBlock code={`{"column_name": "age", "column_index": 1, "type": "constant", "op": "ge", "value_ref": 0}`} lang="json" tryable={false} />
+
+**Operators:** `eq` (=), `ne` (!=), `gt` (>), `ge` (>=), `lt` (&lt;), `le` (&lt;=)
+
+### is_null / is_not_null
+NULL check: `col IS NULL` or `col IS NOT NULL`
+
+<CodeBlock code={`{"column_name": "email", "column_index": 3, "type": "is_null"}`} lang="json" tryable={false} />
+
+### in
+Set membership: `col IN (v1, v2, v3)`
+
+<CodeBlock code={`{"column_name": "status", "column_index": 4, "type": "in", "value_ref": 0}`} lang="json" tryable={false} />
+
+The value column is a list type containing all IN values: `_val_0: ["active", "pending", "review"]`
+
+### and / or
+Conjunction combining multiple filters on same column:
+
+<CodeBlock code={`{"column_name": "age", "column_index": 1, "type": "and", "children": [
+  {"column_name": "age", "column_index": 1, "type": "constant", "op": "ge", "value_ref": 0},
+  {"column_name": "age", "column_index": 1, "type": "constant", "op": "lt", "value_ref": 1}
+]}`} lang="json" tryable={false} />
+
+### struct
+Nested field filter: `address.city = 'Seattle'`
+
+<CodeBlock code={`{"column_name": "address", "column_index": 5, "type": "struct",
+ "child_index": 1, "child_name": "city",
+ "child_filter": {"column_name": "address", "column_index": 5, "type": "constant", "op": "eq", "value_ref": 0}}`} lang="json" tryable={false} />
+
+## Unsupported Filter Types
+
+Some DuckDB filter types cannot be serialized for pushdown. When these are encountered, VGI skips filter pushdown entirely and the `filters` field is null:
+
+- **DynamicFilter** - Created by TOP-N queries (`ORDER BY ... LIMIT N`). The filter value mutates during query execution.
+- **BloomFilter** - Created by join optimization. Contains a large binary buffer.
+- **ExpressionFilter** - Created by complex predicates like `UPPER(col) = 'X'`. Contains expression trees that may reference functions unavailable in the worker.
+
+## Deserialization
+
+<CodeBlock code={`import pyarrow as pa
+import json
+
+def deserialize_filters(ipc_bytes: bytes):
+    reader = pa.ipc.open_stream(ipc_bytes)
+    batch = reader.read_next_batch()
+
+    # Check version
+    version = batch.schema.field(0).metadata.get(b"vgi_filter_version", b"").decode()
+    assert version == "1", f"Unknown filter version: {version}"
+
+    # Parse filters
+    filters = json.loads(batch.column(0)[0].as_py())
+
+    # Get value by ref: value_ref N → column N+1
+    # Returns Arrow scalar to preserve exact type
+    def get_value(ref: int) -> pa.Scalar:
+        return batch.column(ref + 1)[0]
+
+    return filters, get_value`} lang="python" tryable={false} />
+
+## JSON Schema
+
+<CodeBlock code={`{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vgi-protocol.dev/filter-pushdown/v1",
+  "title": "VGI Filter Specification",
+  "type": "array",
+  "items": {"$ref": "#/$defs/filter"},
+
+  "$defs": {
+    "filter": {
+      "type": "object",
+      "required": ["column_name", "column_index", "type"],
+      "properties": {
+        "column_name": {"type": "string"},
+        "column_index": {"type": "integer", "minimum": 0},
+        "type": {"enum": ["constant", "is_null", "is_not_null", "in", "and", "or", "struct"]},
+        "op": {"enum": ["eq", "ne", "gt", "ge", "lt", "le"]},
+        "value_ref": {"type": "integer", "minimum": 0},
+        "children": {"type": "array", "items": {"$ref": "#/$defs/filter"}},
+        "child_index": {"type": "integer", "minimum": 0},
+        "child_name": {"type": "string"},
+        "child_filter": {"$ref": "#/$defs/filter"}
+      }
+    }
+  }
+}`} lang="json" tryable={false} />
+
+## Worker Implementation Notes
+
+- **Partial application OK**: Apply filters you can handle; DuckDB always re-verifies results
+- **Unsupported filters**: Return all rows for that column, let DuckDB filter locally
+- **Type fidelity**: Values preserve exact Arrow types (decimal, timestamp with timezone, nested types)

@@ -1,0 +1,1248 @@
+---
+title: vgi.metadata
+description: API reference for vgi.metadata
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">Module overview</p>
+
+Function metadata for introspection, documentation, and DuckDB registration.
+
+This module provides declarative metadata classes that enable functions to
+describe themselves. Metadata is used for:
+
+1. Documentation generation
+2. Worker registration (serialized to Arrow for IPC)
+3. DuckDB function catalog integration
+4. Tooling and discovery
+
+**DESIGN**
+
+Users define a nested [`Meta`](/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingFunction.Meta) class with attributes. No inheritance required:
+
+The system automatically:
+- Resolves metadata from the class hierarchy (inheritance works)
+- Extracts parameter info from [`Arg`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arg) descriptors
+- Infers function name from class name if not specified
+- Uses docstring as description fallback
+
+**ARROW SERIALIZATION**
+
+For worker registration, metadata can be serialized to Arrow:
+
+
+<Code lang="python" code={`from vgi.metadata import functions_to_arrow, arrow_to_functions
+
+# Worker sends available functions to client
+batch = functions_to_arrow([MyFunction, OtherFunction])
+
+# Client receives and deserializes
+function_infos = arrow_to_functions(batch)`} />
+
+
+
+</div>
+
+<a id="vgi.metadata.arrow_to_functions"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `arrow_to_functions`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L1435" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>arrow_to_functions(batch: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>) -&gt; list[<a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata">ResolvedMetadata</a>]</code></pre>
+
+Deserialize Arrow `RecordBatch` to list of [`ResolvedMetadata`](/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata).
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">batch</code></dt><dd><code>RecordBatch</code> with one row per function.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>List of deserialized <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata"><code>ResolvedMetadata</code></a> objects.</dd></dl></div>
+
+
+<a id="vgi.metadata.arrow_to_metadata"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `arrow_to_metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L1377" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>arrow_to_metadata(batch: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>) -&gt; <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata">ResolvedMetadata</a></code></pre>
+
+Deserialize Arrow `RecordBatch` to [`ResolvedMetadata`](/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata).
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">batch</code></dt><dd><code>RecordBatch</code> with one row containing metadata.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>Deserialized <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata"><code>ResolvedMetadata</code></a>.</dd></dl></div>
+
+
+<div class="api-class">
+
+<a id="vgi.metadata.CatalogFunctionType"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `CatalogFunctionType`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L95" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code>Enum</code></p>
+
+<p class="api-section">Description</p>
+
+Type of function for DuckDB registration.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.CatalogFunctionType.SCALAR"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `SCALAR`
+
+Scalar function: one output per input row.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.CatalogFunctionType.AGGREGATE"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `AGGREGATE`
+
+Aggregate function: many inputs → one output.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.CatalogFunctionType.TABLE"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `TABLE`
+
+Table function: returns a table (streaming producer or streaming exchange).
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.CatalogFunctionType.TABLE_BUFFERING"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `TABLE_BUFFERING`
+
+Buffered table function: Sink+Source PhysicalOperator that sees all
+input before producing output. Dispatched to the custom
+``PhysicalVgiTableBufferingFunction`` operator instead of the streaming
+``in_out_function`` registration. The class hierarchy is the dispatch
+key — set automatically for [`TableBufferingFunction`](/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingFunction) subclasses.
+
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.metadata.DistinctDependence"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `DistinctDependence`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L223" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code>Enum</code></p>
+
+<p class="api-section">Description</p>
+
+Aggregate DISTINCT modifier sensitivity.
+
+Maps to DuckDB's `AggregateDistinctDependent` enum.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.DistinctDependence.DISTINCT_DEPENDENT"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `DISTINCT_DEPENDENT`
+
+DISTINCT changes the result (e.g., COUNT DISTINCT).
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.DistinctDependence.NOT_DISTINCT_DEPENDENT"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `NOT_DISTINCT_DEPENDENT`
+
+DISTINCT has no effect (e.g., MAX, MIN).
+
+
+</div>
+
+</div>
+
+</div>
+
+<a id="vgi.metadata.extract_parameters"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `extract_parameters`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L628" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>extract_parameters(
+    *,
+    validate_table_input: bool = True,
+) -&gt; list[<a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ParameterInfo">ParameterInfo</a>]</code></pre>
+
+Extract parameter information from Arg descriptors on a class.
+
+Walks the class and its bases to find all [`Arg`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arg) descriptors and converts
+them to [`ParameterInfo`](/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ParameterInfo) objects. Also handles the new [`Param`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Param)/[`ConstParam`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.ConstParam) API
+for [`ScalarFunction`](/vgi/docs/python/api/vgi-scalar_function/#vgi.scalar_function.ScalarFunction) subclasses.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">validate_table_input</code></dt><dd>If True, validates <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.TableInput"><code>TableInput</code></a> requirements for <a href="/vgi/docs/python/api/vgi-table_in_out_function/#vgi.table_in_out_function.TableInOutFunction"><code>TableInOutFunction</code></a> subclasses.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>List of <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ParameterInfo"><code>ParameterInfo</code></a> objects, sorted by position.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><code class="api-ptype">TableInputValidationError</code></dt><dd>If <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.TableInput"><code>TableInput</code></a> validation fails.</dd></dl></div>
+
+
+<div class="api-class">
+
+<a id="vgi.metadata.FunctionExample"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `FunctionExample`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L317" target="_blank" rel="noopener">source</a>
+
+<p class="api-section">Description</p>
+
+An example usage of a function.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.FunctionExample.sql"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `sql`
+
+<p class="api-atype"><code>str</code></p>
+
+SQL query demonstrating the function.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.FunctionExample.description"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `description`
+
+<p class="api-atype"><code>str</code></p>
+
+What this example demonstrates.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.FunctionExample.expected_output"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `expected_output`
+
+<p class="api-atype"><code>str | None</code></p>
+
+Optional expected result description.
+
+</div>
+
+</div>
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.FunctionExample.to_dict"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `to_dict`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L332" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>to_dict() -&gt; dict[str, str | None]</code></pre>
+
+Convert to dictionary for serialization.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.FunctionExample.from_dict"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `from_dict`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L340" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>from_dict(d: dict[str, Any]) -&gt; <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.FunctionExample">FunctionExample</a></code></pre>
+
+Create from dictionary.
+
+
+</div>
+
+</div>
+
+</div>
+
+<a id="vgi.metadata.functions_to_arrow"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `functions_to_arrow`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L1419" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>functions_to_arrow(function_classes: Sequence[type]) -&gt; <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a></code></pre>
+
+Serialize multiple function classes to Arrow `RecordBatch`.
+
+Convenience function that resolves metadata for each class, then serializes.
+For pre-resolved metadata, use `metadatas_to_arrow()` directly.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_classes</code></dt><dd>Sequence of function classes to serialize.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd><code>RecordBatch</code> with one row per function.</dd></dl></div>
+
+
+<div class="api-class">
+
+<a id="vgi.metadata.FunctionStability"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `FunctionStability`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L115" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code>Enum</code></p>
+
+<p class="api-section">Description</p>
+
+Function output stability classification.
+
+Maps to DuckDB's [`FunctionStability`](/vgi/docs/python/api/vgi-metadata/#vgi.metadata.FunctionStability) enum.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.FunctionStability.CONSISTENT"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `CONSISTENT`
+
+Same input always produces same output (deterministic).
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.FunctionStability.VOLATILE"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `VOLATILE`
+
+Output may change per row even with same input (e.g., random()).
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.FunctionStability.CONSISTENT_WITHIN_QUERY"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `CONSISTENT_WITHIN_QUERY`
+
+Same within a query, but may vary across queries (e.g., now()).
+
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.metadata.FunctionTypeError"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `FunctionTypeError`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L974" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code>TypeError</code></p>
+
+<p class="api-section">Description</p>
+
+Raised when a function's type cannot be determined from its class hierarchy.
+
+
+</div>
+
+<a id="vgi.metadata.metadata_to_arrow"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `metadata_to_arrow`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L1361" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>metadata_to_arrow(metadata: <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata">ResolvedMetadata</a>) -&gt; <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a></code></pre>
+
+Serialize a single [`ResolvedMetadata`](/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata) to Arrow `RecordBatch`.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">metadata</code></dt><dd>The metadata to serialize.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd><code>RecordBatch</code> with one row containing the metadata.</dd></dl></div>
+
+
+<div class="api-class">
+
+<a id="vgi.metadata.MetadataMixin"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `MetadataMixin`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L1454" target="_blank" rel="noopener">source</a>
+
+<p class="api-section">Description</p>
+
+Mixin that provides metadata access for function classes.
+
+Add this to the base Function class to enable metadata resolution.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.MetadataMixin.get_metadata"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `get_metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L1460" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>get_metadata() -&gt; <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata">ResolvedMetadata</a></code></pre>
+
+Get the resolved metadata for this function class.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.MetadataMixin.describe"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `describe`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L1465" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>describe() -&gt; dict[str, Any]</code></pre>
+
+Get metadata as a dictionary (for JSON serialization).
+
+
+</div>
+
+</div>
+
+</div>
+
+<a id="vgi.metadata.metadatas_to_arrow"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `metadatas_to_arrow`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L1395" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>metadatas_to_arrow(
+    metadatas: Sequence[<a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata">ResolvedMetadata</a>],
+) -&gt; <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a></code></pre>
+
+Serialize multiple [`ResolvedMetadata`](/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata) objects to Arrow `RecordBatch`.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">metadatas</code></dt><dd>Sequence of <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata"><code>ResolvedMetadata</code></a> objects to serialize.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd><code>RecordBatch</code> with one row per metadata object.</dd></dl></div>
+
+
+<div class="api-class">
+
+<a id="vgi.metadata.NullHandling"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `NullHandling`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L131" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code>Enum</code></p>
+
+<p class="api-section">Description</p>
+
+NULL input handling behavior.
+
+Maps to DuckDB's `FunctionNullHandling` enum.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.NullHandling.DEFAULT"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `DEFAULT`
+
+NULL in → NULL out (standard SQL behavior).
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.NullHandling.SPECIAL"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `SPECIAL`
+
+Function handles NULLs specially (e.g., COALESCE, IFNULL).
+
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.metadata.OrderDependence"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `OrderDependence`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L210" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code>Enum</code></p>
+
+<p class="api-section">Description</p>
+
+Aggregate order sensitivity.
+
+Maps to DuckDB's `AggregateOrderDependent` enum.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.OrderDependence.ORDER_DEPENDENT"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `ORDER_DEPENDENT`
+
+Result changes based on row order (e.g., FIRST, LAST, LISTAGG).
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.OrderDependence.NOT_ORDER_DEPENDENT"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `NOT_ORDER_DEPENDENT`
+
+Result is the same regardless of order (e.g., SUM, COUNT).
+
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.metadata.OrderPreservation"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `OrderPreservation`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L144" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code>Enum</code></p>
+
+<p class="api-section">Description</p>
+
+Row order preservation behavior.
+
+Maps to DuckDB's ``OrderPreservationType`` enum:
+
+* ``PRESERVES_ORDER`` → ``OrderPreservationType::INSERTION_ORDER``
+  (DuckDB default — operator maintains child operator order).
+* ``NO_ORDER_GUARANTEE`` → ``OrderPreservationType::NO_ORDER``
+  (operator may freely reorder its input/output).
+* ``FIXED_ORDER`` → ``OrderPreservationType::FIXED_ORDER``
+  (operator outputs rows in a fixed, mandatory order — DuckDB
+  serializes the pipeline so a single worker produces all rows).
+
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.OrderPreservation.PRESERVES_ORDER"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `PRESERVES_ORDER`
+
+Output rows are in same order as input rows (DuckDB INSERTION_ORDER).
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.OrderPreservation.NO_ORDER_GUARANTEE"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `NO_ORDER_GUARANTEE`
+
+Output order is undefined; may be reordered (DuckDB NO_ORDER).
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.OrderPreservation.FIXED_ORDER"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `FIXED_ORDER`
+
+Output is in a fixed mandatory order; DuckDB serializes the pipeline
+(single worker) to preserve it (DuckDB FIXED_ORDER).
+
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.metadata.ParameterInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `ParameterInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L241" target="_blank" rel="noopener">source</a>
+
+<p class="api-section">Description</p>
+
+Metadata about a function parameter.
+
+Automatically extracted from [`Arg`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arg) descriptors.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.ParameterInfo.name"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `name`
+
+<p class="api-atype"><code>str</code></p>
+
+Parameter name (attribute name from class).
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ParameterInfo.position"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `position`
+
+<p class="api-atype"><code>int | str</code></p>
+
+Positional index (int) or named key (str).
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ParameterInfo.type_name"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `type_name`
+
+<p class="api-atype"><code>str | None</code></p>
+
+Type name as string (e.g., "int", "str", [`TableInput`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.TableInput)).
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ParameterInfo.description"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `description`
+
+<p class="api-atype"><code>str</code></p>
+
+Documentation from `Arg.doc`.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ParameterInfo.required"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `required`
+
+<p class="api-atype"><code>bool</code></p>
+
+True if no default value.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ParameterInfo.default"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `default`
+
+<p class="api-atype"><code>Any</code></p>
+
+Default value, or None if required.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ParameterInfo.constraints"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `constraints`
+
+<p class="api-atype"><code>dict[str, Any]</code></p>
+
+Validation constraints as dict.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ParameterInfo.is_table_input"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `is_table_input`
+
+<p class="api-atype"><code>bool</code></p>
+
+True if this is the table input parameter.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ParameterInfo.is_varargs"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `is_varargs`
+
+<p class="api-atype"><code>bool</code></p>
+
+True if this accepts multiple trailing values.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ParameterInfo.is_const"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `is_const`
+
+<p class="api-atype"><code>bool</code></p>
+
+True if this is a constant parameter ([`ConstParam`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.ConstParam)).
+
+</div>
+
+</div>
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.ParameterInfo.to_dict"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `to_dict`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L272" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>to_dict() -&gt; dict[str, str | int | bool | None]</code></pre>
+
+Convert to dictionary for serialization.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ParameterInfo.from_dict"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `from_dict`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L288" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>from_dict(d: dict[str, Any]) -&gt; <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ParameterInfo">ParameterInfo</a></code></pre>
+
+Create from dictionary.
+
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.metadata.PartitionKind"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `PartitionKind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L169" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code>Enum</code></p>
+
+<p class="api-section">Description</p>
+
+Partition shape declared by a table function.
+
+Declared over its ``vgi.partition_column``-annotated bind-schema fields.
+
+Mirrors DuckDB's ``TablePartitionInfo`` at
+``duckdb/src/include/duckdb/function/partition_stats.hpp:20``.
+
+The C++ extension returns this from ``TableFunction::get_partition_info``;
+DuckDB's planner currently consumes only ``SINGLE_VALUE_PARTITIONS``
+(to plan ``PhysicalPartitionedAggregate`` over ``PhysicalHashAggregate``;
+see ``plan_aggregate.cpp:109``). The other values are declarable
+so the protocol is future-proof; today they fall back to
+``HASH_GROUP_BY``.
+
+Only set this to a non-default value when at least one field in
+the bind schema is annotated with
+``{b"vgi.partition_column": b"true"}`` (use
+:func:`vgi.schema_utils.partition_field` to construct such fields).
+The reverse is also required — annotated fields without a
+matching ``partition_kind`` raise at worker startup.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.PartitionKind.NOT_PARTITIONED"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `NOT_PARTITIONED`
+
+Function does not declare partitioning over the annotated columns
+(default; same effect as leaving fields un-annotated).
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.PartitionKind.SINGLE_VALUE_PARTITIONS"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `SINGLE_VALUE_PARTITIONS`
+
+Each emitted chunk has exactly one distinct value per partition
+column. Unlocks ``PhysicalPartitionedAggregate`` for ``GROUP BY``
+over those columns.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.PartitionKind.OVERLAPPING_PARTITIONS"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `OVERLAPPING_PARTITIONS`
+
+Partitions overlap only at boundaries (bounds = ``[1,2] [2,3] [3,4]``).
+Wire-level declarable; DuckDB has no consumer today.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.PartitionKind.DISJOINT_PARTITIONS"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `DISJOINT_PARTITIONS`
+
+Partitions are pairwise disjoint (bounds = ``[1,2] [3,4] [5,6]``).
+Wire-level declarable; DuckDB has no consumer today.
+
+
+</div>
+
+</div>
+
+</div>
+
+<a id="vgi.metadata.resolve_metadata"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `resolve_metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L1000" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>resolve_metadata() -&gt; <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata">ResolvedMetadata</a></code></pre>
+
+Resolve metadata for a function class.
+
+Results are cached since class metadata doesn't change at runtime.
+
+This function:
+1. Walks the class hierarchy to find and merge [`Meta`](/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingFunction.Meta) classes
+2. Extracts parameter info from [`Arg`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arg) descriptors
+3. Infers function name from class name if not specified
+4. Uses docstring as description fallback
+
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd><a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata"><code>ResolvedMetadata</code></a> with all resolved values.</dd></dl></div>
+
+
+<div class="api-class">
+
+<a id="vgi.metadata.ResolvedMetadata"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `ResolvedMetadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L350" target="_blank" rel="noopener">source</a>
+
+<p class="api-section">Description</p>
+
+Fully resolved metadata for a function.
+
+This is the result of resolving a [`Meta`](/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingFunction.Meta) class hierarchy and extracting
+parameter information from [`Arg`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arg) descriptors.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.name"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `name`
+
+<p class="api-atype"><code>str</code></p>
+
+Function name used for registration.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.class_name"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `class_name`
+
+<p class="api-atype"><code>str</code></p>
+
+The Python class name of the function.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.function_type"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `function_type`
+
+<p class="api-atype"><code><a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.CatalogFunctionType">CatalogFunctionType</a></code></p>
+
+The [`CatalogFunctionType`](/vgi/docs/python/api/vgi-metadata/#vgi.metadata.CatalogFunctionType) (scalar, table, aggregate,
+or table-buffering).
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.description"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `description`
+
+<p class="api-atype"><code>str</code></p>
+
+Human-readable description of the function.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.examples"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `examples`
+
+<p class="api-atype"><code>list[<a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.FunctionExample">FunctionExample</a>]</code></p>
+
+SQL usage examples for the function.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.categories"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `categories`
+
+<p class="api-atype"><code>list[str]</code></p>
+
+Classification/category labels.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.tags"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `tags`
+
+<p class="api-atype"><code>dict[str, str]</code></p>
+
+Free-form key/value metadata tags.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.parameters"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `parameters`
+
+<p class="api-atype"><code>list[<a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ParameterInfo">ParameterInfo</a>]</code></p>
+
+Resolved per-argument information from the [`Arg`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arg)
+descriptors.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.stability"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `stability`
+
+<p class="api-atype"><code><a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.FunctionStability">FunctionStability</a></code></p>
+
+Scalar evaluation stability (CONSISTENT, VOLATILE, …).
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.null_handling"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `null_handling`
+
+<p class="api-atype"><code><a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.NullHandling">NullHandling</a></code></p>
+
+Whether NULL inputs are passed through or handled.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.required_settings"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `required_settings`
+
+<p class="api-atype"><code>list[str]</code></p>
+
+DuckDB settings the function needs at runtime.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.required_secrets"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `required_secrets`
+
+<p class="api-atype"><code>list[<a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.SecretLookupEntry">SecretLookupEntry</a>]</code></p>
+
+Secrets the function needs (each entry carries
+secret_type, optional secret_name, optional scope).
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.projection_pushdown"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `projection_pushdown`
+
+<p class="api-atype"><code>bool</code></p>
+
+Whether the table function accepts projection
+pushdown.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.filter_pushdown"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `filter_pushdown`
+
+<p class="api-atype"><code>bool</code></p>
+
+Whether the table function accepts filter pushdown.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.sampling_pushdown"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `sampling_pushdown`
+
+<p class="api-atype"><code>bool</code></p>
+
+Whether the table function accepts TABLESAMPLE
+pushdown.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.late_materialization"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `late_materialization`
+
+<p class="api-atype"><code>bool</code></p>
+
+When True, the table function participates in
+DuckDB's late-materialization optimizer (TOP_N/LIMIT/SAMPLE over the
+scan is rewritten into a SEMI join on the rowid virtual column).
+Requires a unique, deterministic, snapshot-stable rowid column plus
+projection and filter pushdown.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.supported_expression_filters"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `supported_expression_filters`
+
+<p class="api-atype"><code>list[str]</code></p>
+
+Names of expression-filter classes the
+function can accept pushed down.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.preserves_order"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `preserves_order`
+
+<p class="api-atype"><code><a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.OrderPreservation">OrderPreservation</a></code></p>
+
+Whether the function preserves input row order.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.max_workers"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `max_workers`
+
+<p class="api-atype"><code>int | None</code></p>
+
+Maximum parallel workers, or ``None`` for unbounded.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.supports_batch_index"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `supports_batch_index`
+
+<p class="api-atype"><code>bool</code></p>
+
+Whether the function opts into per-batch
+``vgi_batch_index`` tagging for ordered parallel output.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.partition_kind"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `partition_kind`
+
+<p class="api-atype"><code><a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.PartitionKind">PartitionKind</a></code></p>
+
+Partition shape the function declares over its
+partition-column bind fields.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.order_dependent"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `order_dependent`
+
+<p class="api-atype"><code><a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.OrderDependence">OrderDependence</a></code></p>
+
+Whether the aggregate result depends on input order.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.distinct_dependent"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `distinct_dependent`
+
+<p class="api-atype"><code><a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.DistinctDependence">DistinctDependence</a></code></p>
+
+Whether the aggregate result depends on DISTINCT.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.supports_window"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `supports_window`
+
+<p class="api-atype"><code>bool</code></p>
+
+Whether the aggregate implements the window() callback.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.streaming_partitioned"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `streaming_partitioned`
+
+<p class="api-atype"><code>bool</code></p>
+
+Whether the aggregate opts into the
+streaming-partitioned protocol.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.has_finalize"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `has_finalize`
+
+<p class="api-atype"><code>bool</code></p>
+
+True if the function has a meaningful finalize phase
+(override of finalize()/finish()); the C++ extension uses this to
+decide whether to register ``in_out_function_final``.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.source_order_dependent"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `source_order_dependent`
+
+<p class="api-atype"><code>bool</code></p>
+
+Only meaningful for ``TABLE_BUFFERING`` — when
+True the source phase is single-threaded and finalize_state_ids
+drain in combine-returned order.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.sink_order_dependent"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `sink_order_dependent`
+
+<p class="api-atype"><code>bool</code></p>
+
+Only meaningful for ``TABLE_BUFFERING`` — when True
+the sink phase runs single-threaded, so every process() call arrives
+in source order. Mutually exclusive with
+``requires_input_batch_index``.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.requires_input_batch_index"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `requires_input_batch_index`
+
+<p class="api-atype"><code>bool</code></p>
+
+Only meaningful for ``TABLE_BUFFERING`` —
+when True the C++ Sink declares ``RequiredPartitionInfo()=
+BatchIndex()`` so each process() call carries a globally-unique
+monotonic batch_index for reconstructing source order under parallel
+ingest. Mutually exclusive with ``sink_order_dependent``.
+
+</div>
+
+</div>
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.to_dict"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `to_dict`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L488" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>to_dict() -&gt; dict[str, Any]</code></pre>
+
+Convert to dictionary for JSON serialization.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.metadata.ResolvedMetadata.from_dict"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `from_dict`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L522" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>from_dict(d: dict[str, Any]) -&gt; <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.ResolvedMetadata">ResolvedMetadata</a></code></pre>
+
+Create from dictionary.
+
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.metadata.TableInputValidationError"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableInputValidationError`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L601" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code>ValueError</code></p>
+
+<p class="api-section">Description</p>
+
+Raised when [`TableInput`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.TableInput) parameter validation fails.
+
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.metadata.VarargsValidationError"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `VarargsValidationError`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/metadata.py#L605" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code>ValueError</code></p>
+
+<p class="api-section">Description</p>
+
+Raised when varargs parameter validation fails.
+
+
+</div>

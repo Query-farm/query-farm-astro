@@ -1,0 +1,126 @@
+---
+title: Authentication
+description: "Authenticate callers to a VGI worker served over HTTP — bearer tokens and JWT/OAuth — and read the AuthContext in your functions. Auth is an HTTP-transport concern, provided by vgi-rpc."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+Require authentication for a worker served over HTTP, and read the caller's identity inside your
+functions.
+
+<Callout type="warning" title="Authentication is an HTTP-only concern">
+Auth applies **only to the HTTP transport**. A subprocess or Unix-socket worker is launched by the
+engine and runs co-located and trusted — there's no remote caller to authenticate — so it always
+runs as `AuthContext.anonymous()`. Reach for authentication when you
+[serve over HTTP](/vgi/docs/python/how-to/serve-http/).
+</Callout>
+
+<table>
+<thead>
+<tr><th>Transport</th><th>Auth behavior</th></tr>
+</thead>
+<tbody>
+<tr><td>HTTP, with auth configured</td><td>Validated per request; the caller's <code>AuthContext</code> is propagated to your functions</td></tr>
+<tr><td>HTTP, no auth configured</td><td>All requests anonymous</td></tr>
+<tr><td>Subprocess / Unix socket</td><td>Always <code>AuthContext.anonymous()</code> (co-located, trusted)</td></tr>
+</tbody>
+</table>
+
+## How it fits together
+
+The authentication machinery — the `AuthContext`, the `authenticate` callback, and the HTTP
+middleware that runs it per request — is provided by **vgi-rpc**, the RPC framework VGI runs on. VGI
+wires it into the HTTP server and surfaces the resulting `AuthContext` to your functions. So this
+page covers the **VGI integration**; for the full model (the callback contract, the `AuthContext`
+type, mTLS, OAuth discovery) see vgi-rpc's
+[Auth & Context reference](https://vgi-rpc-python.query.farm/api/auth/).
+
+Authentication is fully optional — unconfigured, every request is anonymous.
+
+## Enable it: static bearer tokens
+
+The quickest setup is static bearer tokens via an environment variable — comma-separated
+`token=principal` pairs:
+
+<CodeBlock code={`VGI_BEARER_TOKENS="token1=alice,token2=bob" vgi-serve my_worker.py --http`} lang="bash" tryable={false} />
+
+Unauthenticated requests get **HTTP 401**; authenticated ones carry the principal in an
+`AuthContext`. (Each pair splits on the first `=`, so a *principal* may contain `=`, but a **token**
+must not contain `=` or `,`.)
+
+## Read the caller in your functions
+
+A function opts in by declaring the auth context; the framework injects it per call.
+
+**Scalar functions** — annotate a `compute` parameter with `Auth`:
+
+<CodeBlock code={`from typing import Annotated
+import pyarrow as pa
+from vgi import ScalarFunction, Param, Returns, Auth
+from vgi.auth import AuthContext
+
+class WhoAmI(ScalarFunction):
+    @classmethod
+    def compute(
+        cls,
+        x: Annotated[pa.Int64Array, Param(doc="rows to label")],
+        auth: Annotated[AuthContext, Auth()],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        auth.require_authenticated()          # raises if anonymous
+        return pa.array([auth.principal] * len(x))`} lang="python" tryable={false} />
+
+**Table / aggregate / buffering functions** — read `params.auth_context` (also available at bind
+time on the bind params):
+
+<CodeBlock code={`from vgi.table_function import TableFunctionGenerator
+
+class SecureTable(TableFunctionGenerator):
+    @classmethod
+    def process(cls, params, state, out):
+        if not params.auth_context.authenticated:
+            raise PermissionError("Authentication required")
+        # … produce output …`} lang="python" tryable={false} />
+
+`AuthContext` carries `principal`, `authenticated`, and `domain`, and `require_authenticated()`
+raises `PermissionError` when anonymous. The full type lives in vgi-rpc —
+[Auth & Context](https://vgi-rpc-python.query.farm/api/auth/).
+
+## JWT / OAuth
+
+For real deployments, validate JWTs against a JWKS endpoint instead of static tokens. Set the issuer
+and audience (`pip install vgi-python[oauth]`):
+
+<CodeBlock code={`VGI_JWT_ISSUER="https://auth.example.com/" \\
+VGI_JWT_AUDIENCE="my-api" \\
+vgi-serve my_worker.py --http`} lang="bash" tryable={false} />
+
+<table>
+<thead>
+<tr><th>Variable</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>VGI_JWT_ISSUER</code></td><td>JWT issuer URL (enables JWT validation)</td></tr>
+<tr><td><code>VGI_JWT_AUDIENCE</code></td><td>Expected audience(s), comma-separated</td></tr>
+<tr><td><code>VGI_JWT_JWKS_URI</code></td><td>JWKS endpoint (auto-discovered from the issuer if omitted)</td></tr>
+<tr><td><code>VGI_OAUTH_RESOURCE</code></td><td>Resource URL for RFC 9728 OAuth metadata (and related <code>VGI_OAUTH_*</code> vars)</td></tr>
+</tbody>
+</table>
+
+When both `VGI_BEARER_TOKENS` and `VGI_JWT_ISSUER` are set, JWT validation is tried first, falling
+back to bearer lookup. The full OAuth/JWKS surface — RFC 9728 resource metadata, OIDC `id_token`
+mode, and the discovery flow — is documented in vgi-rpc's
+[OAuth discovery reference](https://vgi-rpc-python.query.farm/api/oauth/).
+
+## Beyond env vars
+
+- **Custom schemes** — pass your own `authenticate` callback to `make_wsgi_app(authenticate=…)`
+  / `create_app(...)` to implement any scheme; env vars are then ignored. See vgi-rpc's
+  [Auth & Context](https://vgi-rpc-python.query.farm/api/auth/).
+- **Mutual TLS** — client-certificate auth is a vgi-rpc capability; see
+  [Mutual TLS](https://vgi-rpc-python.query.farm/api/mtls/).
+
+## Next steps
+
+- **Stand up the HTTP service first** → [Serve over HTTP](/vgi/docs/python/how-to/serve-http/).
+- **The auth model in full** → [vgi-rpc Auth & Context](https://vgi-rpc-python.query.farm/api/auth/).

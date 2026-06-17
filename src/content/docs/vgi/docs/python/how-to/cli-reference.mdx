@@ -1,0 +1,697 @@
+---
+title: CLI reference
+description: "Complete reference for the vgi-client and vgi-serve command-line tools: every subcommand, flag, environment variable, and the bundled fixture functions."
+---
+
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+The complete command surface for VGI's command-line tools. For a task-focused walkthrough of the everyday commands, see [Use the CLI](/vgi/docs/python/how-to/cli/).
+
+## Available commands
+
+<table>
+<thead>
+<tr><th>Command</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>vgi-client</code></td><td>Invoke functions and manage catalogs</td></tr>
+<tr><td><code>vgi-serve</code></td><td>Serve a worker over stdio or HTTP</td></tr>
+<tr><td><code>vgi-fixture-worker</code></td><td>Run the example worker with demo functions (requires <code>vgi-python[fixtures]</code>)</td></tr>
+</tbody>
+</table>
+
+---
+
+## vgi-client
+
+The main CLI for invoking VGI functions and managing catalogs.
+
+### Function invocation
+
+<CodeBlock code={`vgi-client [OPTIONS]`} lang="bash" tryable={false} />
+
+**Options:**
+
+<table>
+<thead>
+<tr><th>Option</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--input FILE</code></td><td>Input parquet file (omit for table functions)</td></tr>
+<tr><td><code>--output FILE</code>, <code>-o</code></td><td>Output file (use <code>-</code> for stdout)</td></tr>
+<tr><td><code>--format FORMAT</code>, <code>-f</code></td><td>Output format: <code>json</code> (default), <code>csv</code>, <code>parquet</code>, <code>arrow-ipc</code></td></tr>
+<tr><td><code>--function NAME</code></td><td>Function name to invoke</td></tr>
+<tr><td><code>--args JSON</code></td><td>Function arguments as JSON array (default: <code>[]</code>)</td></tr>
+<tr><td><code>--named-arg KEY=VALUE</code></td><td>Named argument (repeatable)</td></tr>
+<tr><td><code>--setting KEY=VALUE</code>, <code>-s</code></td><td>Function setting (repeatable)</td></tr>
+<tr><td><code>--worker PATH</code>, <code>-w</code></td><td>Worker command (default: <code>vgi-fixture-worker</code>)</td></tr>
+<tr><td><code>--type TYPE</code>, <code>-t</code></td><td>Function type: <code>auto</code>, <code>table</code>, <code>table-in-out</code>, <code>scalar</code></td></tr>
+<tr><td><code>--projection-id N</code></td><td>Column IDs to project (repeatable)</td></tr>
+<tr><td><code>--table-input-position N</code></td><td>Position (0-indexed) to insert table input in positional args</td></tr>
+<tr><td><code>--max-workers N</code></td><td>Limit parallel workers</td></tr>
+<tr><td><code>--worker-stderr</code></td><td>Show worker stderr output</td></tr>
+</tbody>
+</table>
+
+### Examples
+
+**Table function (generates data):**
+
+<CodeBlock code={`# Generate a sequence of 100 integers
+vgi-client --function sequence --args '[100]'
+
+# Output as CSV
+vgi-client --function sequence --args '[10]' --format csv`} lang="bash" tryable={false} />
+
+**Table-in-out function (transforms data):**
+
+<CodeBlock code={`# Echo input unchanged
+vgi-client --input data.parquet --function echo
+
+# Sum all numeric columns
+vgi-client --input data.parquet --function sum_all_columns
+
+# Repeat each row 3 times
+vgi-client --input data.parquet --function repeat_inputs --args '[3]'`} lang="bash" tryable={false} />
+
+**Scalar function (per-row transform):**
+
+<CodeBlock code={`# Multiply values in column "price" by 2
+vgi-client --input data.parquet --function multiply --args '["price", 2]' --type scalar`} lang="bash" tryable={false} />
+
+**Output to file:**
+
+<CodeBlock code={`vgi-client --function sequence --args '[1000]' --output result.parquet --format parquet`} lang="bash" tryable={false} />
+
+---
+
+## Catalog commands
+
+Manage database catalogs exposed by VGI workers.
+
+### Attach/detach pattern
+
+Most catalog operations require an attach ID. Two workflows are supported:
+
+**Explicit attach (recommended for stateful catalogs):**
+
+<CodeBlock code={`# Attach and capture the attach ID
+ATTACH_ID=$(vgi-client catalog attach mydb --worker ./worker.py | jq -r '.attach_opaque_data')
+
+# Use attach ID for subsequent operations
+vgi-client catalog schema list --attach-opaque-data $ATTACH_ID --worker ./worker.py
+
+# Detach when done
+vgi-client catalog detach $ATTACH_ID --worker ./worker.py`} lang="bash" tryable={false} />
+
+**Auto-attach (for stateless catalogs):**
+
+<CodeBlock code={`# Specify catalog name instead of attach ID
+vgi-client catalog schema list --catalog mydb --worker ./worker.py`} lang="bash" tryable={false} />
+
+### catalog list
+
+List available catalogs from a worker.
+
+<CodeBlock code={`vgi-client catalog list --worker ./worker.py`} lang="bash" tryable={false} />
+
+### catalog attach
+
+Attach to a catalog and get an attach ID.
+
+<CodeBlock code={`vgi-client catalog attach <name> --worker <worker> [--options '{}']`} lang="bash" tryable={false} />
+
+**Output:**
+
+<CodeBlock code={`{
+  "attach_opaque_data": "a1b2c3d4",
+  "supports_transactions": true,
+  "catalog_version": 1
+}`} lang="json" tryable={false} />
+
+### catalog detach
+
+Detach from a catalog.
+
+<CodeBlock code={`vgi-client catalog detach <attach_opaque_data> --worker <worker>`} lang="bash" tryable={false} />
+
+### catalog create
+
+Create a new catalog.
+
+<CodeBlock code={`vgi-client catalog create <name> --worker <worker> \\
+    [--on-conflict {error|ignore|replace}] \\
+    [--options '{}']`} lang="bash" tryable={false} />
+
+### catalog drop
+
+Drop a catalog.
+
+<CodeBlock code={`vgi-client catalog drop <name> --worker <worker>`} lang="bash" tryable={false} />
+
+### catalog version
+
+Get the current catalog version.
+
+<CodeBlock code={`vgi-client catalog version --catalog <name> --worker <worker>`} lang="bash" tryable={false} />
+
+---
+
+## Schema commands
+
+Manage schemas within a catalog.
+
+### schema list
+
+List all schemas in a catalog.
+
+<CodeBlock code={`vgi-client catalog schema list --catalog <name> --worker <worker>`} lang="bash" tryable={false} />
+
+### schema get
+
+Get schema details.
+
+<CodeBlock code={`vgi-client catalog schema get <schema_name> --catalog <name> --worker <worker>`} lang="bash" tryable={false} />
+
+### schema create
+
+Create a new schema.
+
+<CodeBlock code={`vgi-client catalog schema create <schema_name> \\
+    --catalog <name> --worker <worker> \\
+    [--comment "Description"] \\
+    [--tags '{"key": "value"}']`} lang="bash" tryable={false} />
+
+### schema drop
+
+Drop a schema.
+
+<CodeBlock code={`vgi-client catalog schema drop <schema_name> \\
+    --catalog <name> --worker <worker> \\
+    [--ignore-not-found] [--cascade]`} lang="bash" tryable={false} />
+
+### schema contents
+
+List objects in a schema by type. Requires `--type` to select the object kind (`table`, `view`, `scalar_function`, `table_function`, or `aggregate_function`).
+
+<CodeBlock code={`vgi-client catalog schema contents <schema_name> \\
+    --catalog <name> --worker <worker> \\
+    --type table`} lang="bash" tryable={false} />
+
+---
+
+## Table commands
+
+Manage tables within a schema.
+
+### table get
+
+Get table details.
+
+<CodeBlock code={`vgi-client catalog table get <schema> <table> --catalog <name> --worker <worker>`} lang="bash" tryable={false} />
+
+### table create
+
+Create a new table.
+
+<CodeBlock code={`vgi-client catalog table create <schema> <table> \\
+    --catalog <name> --worker <worker> \\
+    --columns '[{"name": "id", "type": "int64"}, {"name": "name", "type": "string"}]' \\
+    [--not-null 0] \\
+    [--unique "0,1"] \\
+    [--check "id > 0"] \\
+    [--on-conflict {error|ignore|replace}]`} lang="bash" tryable={false} />
+
+**Supported column types:**
+
+<table>
+<thead>
+<tr><th>Category</th><th>Types</th></tr>
+</thead>
+<tbody>
+<tr><td>Integer</td><td><code>int8</code>, <code>int16</code>, <code>int32</code>, <code>int64</code>, <code>uint8</code>, <code>uint16</code>, <code>uint32</code>, <code>uint64</code></td></tr>
+<tr><td>Float</td><td><code>float16</code>, <code>float32</code>, <code>float64</code></td></tr>
+<tr><td>String</td><td><code>string</code>, <code>utf8</code>, <code>large_string</code>, <code>binary</code>, <code>large_binary</code></td></tr>
+<tr><td>Boolean</td><td><code>bool</code>, <code>boolean</code></td></tr>
+<tr><td>Date</td><td><code>date32</code>, <code>date64</code></td></tr>
+<tr><td>Timestamp</td><td><code>timestamp</code>, <code>timestamp_s</code>, <code>timestamp_ms</code>, <code>timestamp_us</code>, <code>timestamp_ns</code></td></tr>
+<tr><td>Duration</td><td><code>duration</code>, <code>duration_s</code>, <code>duration_ms</code>, <code>duration_us</code>, <code>duration_ns</code></td></tr>
+<tr><td>Time</td><td><code>time32</code>, <code>time64</code></td></tr>
+</tbody>
+</table>
+
+### table drop
+
+Drop a table.
+
+<CodeBlock code={`vgi-client catalog table drop <schema> <table> \\
+    --catalog <name> --worker <worker> \\
+    [--ignore-not-found]`} lang="bash" tryable={false} />
+
+### table rename
+
+Rename a table.
+
+<CodeBlock code={`vgi-client catalog table rename <schema> <old_name> <new_name> \\
+    --catalog <name> --worker <worker>`} lang="bash" tryable={false} />
+
+### table comment
+
+Set or clear table comment.
+
+<CodeBlock code={`# Set comment
+vgi-client catalog table comment <schema> <table> \\
+    --catalog <name> --worker <worker> \\
+    --set "Table description"
+
+# Clear comment
+vgi-client catalog table comment <schema> <table> \\
+    --catalog <name> --worker <worker> \\
+    --clear`} lang="bash" tryable={false} />
+
+### table scan-function
+
+Get the scan function for a table.
+
+<CodeBlock code={`vgi-client catalog table scan-function <schema> <table> \\
+    --catalog <name> --worker <worker>`} lang="bash" tryable={false} />
+
+---
+
+## Column commands
+
+Modify table columns.
+
+### column add
+
+Add a column to a table.
+
+<CodeBlock code={`vgi-client catalog table column add <schema> <table> \\
+    --catalog <name> --worker <worker> \\
+    --column '{"name": "email", "type": "string"}' \\
+    [--if-not-exists]`} lang="bash" tryable={false} />
+
+### column drop
+
+Drop a column from a table.
+
+<CodeBlock code={`vgi-client catalog table column drop <schema> <table> <column> \\
+    --catalog <name> --worker <worker> \\
+    [--if-exists] [--cascade]`} lang="bash" tryable={false} />
+
+### column rename
+
+Rename a column.
+
+<CodeBlock code={`vgi-client catalog table column rename <schema> <table> <old_name> <new_name> \\
+    --catalog <name> --worker <worker>`} lang="bash" tryable={false} />
+
+### column set-default
+
+Set column default value.
+
+<CodeBlock code={`vgi-client catalog table column set-default <schema> <table> <column> "0" \\
+    --catalog <name> --worker <worker>`} lang="bash" tryable={false} />
+
+### column drop-default
+
+Remove column default value.
+
+<CodeBlock code={`vgi-client catalog table column drop-default <schema> <table> <column> \\
+    --catalog <name> --worker <worker>`} lang="bash" tryable={false} />
+
+### column set-type
+
+Change column type.
+
+<CodeBlock code={`vgi-client catalog table column set-type <schema> <table> \\
+    --catalog <name> --worker <worker> \\
+    --column '{"name": "count", "type": "int64"}' \\
+    [--using "CAST(count AS int64)"]`} lang="bash" tryable={false} />
+
+### column set-not-null / drop-not-null
+
+Set or remove NOT NULL constraint.
+
+<CodeBlock code={`vgi-client catalog table column set-not-null <schema> <table> <column> \\
+    --catalog <name> --worker <worker>
+
+vgi-client catalog table column drop-not-null <schema> <table> <column> \\
+    --catalog <name> --worker <worker>`} lang="bash" tryable={false} />
+
+---
+
+## View commands
+
+Manage views within a schema.
+
+### view get
+
+Get view details.
+
+<CodeBlock code={`vgi-client catalog view get <schema> <view> --catalog <name> --worker <worker>`} lang="bash" tryable={false} />
+
+### view create
+
+Create a view.
+
+<CodeBlock code={`vgi-client catalog view create <schema> <view> \\
+    --catalog <name> --worker <worker> \\
+    --definition "SELECT id, name FROM users WHERE active = true" \\
+    [--on-conflict {error|ignore|replace}]`} lang="bash" tryable={false} />
+
+### view drop
+
+Drop a view.
+
+<CodeBlock code={`vgi-client catalog view drop <schema> <view> \\
+    --catalog <name> --worker <worker> \\
+    [--ignore-not-found]`} lang="bash" tryable={false} />
+
+### view rename
+
+Rename a view.
+
+<CodeBlock code={`vgi-client catalog view rename <schema> <old_name> <new_name> \\
+    --catalog <name> --worker <worker>`} lang="bash" tryable={false} />
+
+### view comment
+
+Set or clear view comment.
+
+<CodeBlock code={`vgi-client catalog view comment <schema> <view> \\
+    --catalog <name> --worker <worker> \\
+    --set "View description"`} lang="bash" tryable={false} />
+
+---
+
+## Transaction commands
+
+Manage transactions for catalogs that support them.
+
+### transaction begin
+
+Begin a new transaction.
+
+<CodeBlock code={`TX_ID=$(vgi-client catalog transaction begin \\
+    --attach-opaque-data $ATTACH_ID --worker <worker> | jq -r '.transaction_opaque_data')`} lang="bash" tryable={false} />
+
+### transaction commit
+
+Commit a transaction.
+
+<CodeBlock code={`vgi-client catalog transaction commit $TX_ID \\
+    --attach-opaque-data $ATTACH_ID --worker <worker>`} lang="bash" tryable={false} />
+
+### transaction rollback
+
+Rollback a transaction.
+
+<CodeBlock code={`vgi-client catalog transaction rollback $TX_ID \\
+    --attach-opaque-data $ATTACH_ID --worker <worker>`} lang="bash" tryable={false} />
+
+### Transaction example
+
+<CodeBlock code={`# Attach to catalog
+ATTACH_ID=$(vgi-client catalog attach mydb --worker ./worker.py | jq -r '.attach_opaque_data')
+
+# Begin transaction
+TX_ID=$(vgi-client catalog transaction begin \\
+    --attach-opaque-data $ATTACH_ID --worker ./worker.py | jq -r '.transaction_opaque_data')
+
+# Make changes within transaction
+vgi-client catalog table create main users \\
+    --attach-opaque-data $ATTACH_ID --transaction-opaque-data $TX_ID --worker ./worker.py \\
+    --columns '[{"name":"id","type":"int64"}]'
+
+# Commit or rollback
+vgi-client catalog transaction commit $TX_ID \\
+    --attach-opaque-data $ATTACH_ID --worker ./worker.py
+
+# Detach
+vgi-client catalog detach $ATTACH_ID --worker ./worker.py`} lang="bash" tryable={false} />
+
+---
+
+## vgi-serve
+
+Serve any worker by module reference or file path — stdio by default, `--http` for cloud deployment.
+
+<CodeBlock code={`# Stdio (default) — for subprocess/pipe use by vgi-client or DuckDB
+vgi-serve my_worker.py
+vgi-serve my_app.workers:ProductionWorker
+
+# HTTP — for cloud deployment
+vgi-serve my_worker.py --http
+vgi-serve my_worker.py --http --host 0.0.0.0 --port 8080`} lang="bash" tryable={false} />
+
+**Options:**
+
+<table>
+<thead>
+<tr><th>Option</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--http</code></td><td>Serve over HTTP instead of stdin/stdout</td></tr>
+<tr><td><code>--host ADDR</code></td><td>HTTP bind address (default: <code>0.0.0.0</code>)</td></tr>
+<tr><td><code>--port N</code>, <code>-p</code></td><td>HTTP port (default: <code>$PORT</code> or <code>8080</code>)</td></tr>
+<tr><td><code>--prefix PREFIX</code></td><td>URL prefix for RPC endpoints</td></tr>
+<tr><td><code>--cors-origins ORIGINS</code></td><td>Allowed CORS origins (default: <code>*</code>)</td></tr>
+<tr><td><code>--describe</code> / <code>--no-describe</code></td><td>Enable description pages (worker + RPC API)</td></tr>
+<tr><td><code>--max-stream-response-bytes N</code></td><td>HTTP-only producer-stream batch packing budget</td></tr>
+<tr><td><code>--quiet</code>, <code>-q</code></td><td>Suppress the startup banner (stdio mode)</td></tr>
+</tbody>
+</table>
+
+Logging flags (`--debug`, `--log-level`, `--log-logger`, `--log-format`) are described under [Worker logging](#worker-logging) below.
+
+---
+
+## Worker logging
+
+All workers that use `Worker.main()` (including `vgi-fixture-worker`) and `vgi-serve` support
+logging options on the command line. Logs are written to stderr.
+
+### Options
+
+<table>
+<thead>
+<tr><th>Option</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--debug</code></td><td>Enable DEBUG level on all <code>vgi</code> and <code>vgi_rpc</code> loggers</td></tr>
+<tr><td><code>--log-level LEVEL</code></td><td>Set log level: <code>DEBUG</code>, <code>INFO</code> (default), <code>WARNING</code>, <code>ERROR</code></td></tr>
+<tr><td><code>--log-logger NAME</code></td><td>Target specific logger(s) instead of all defaults (repeatable)</td></tr>
+<tr><td><code>--log-format FORMAT</code></td><td>Stderr format: <code>text</code> (default) or <code>json</code></td></tr>
+<tr><td><code>--quiet</code> / <code>-q</code></td><td>Suppress the interactive-terminal startup warning</td></tr>
+</tbody>
+</table>
+
+`--debug` overrides `--log-level` when both are provided.
+
+### Examples
+
+<CodeBlock code={`# Enable debug logging
+vgi-fixture-worker --debug
+
+# Set WARNING level only
+vgi-fixture-worker --log-level WARNING
+
+# Target a specific logger at DEBUG
+vgi-fixture-worker --log-level DEBUG --log-logger vgi.worker
+
+# JSON-formatted logs (for structured log pipelines)
+vgi-fixture-worker --log-format json`} lang="bash" tryable={false} />
+
+### Available loggers
+
+<table>
+<thead>
+<tr><th>Logger</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>vgi</code></td><td>VGI root logger (all VGI messages)</td></tr>
+<tr><td><code>vgi.worker</code></td><td>Worker lifecycle (startup, shutdown)</td></tr>
+<tr><td><code>vgi.client</code></td><td>Client operations (spawn, bind, exchange)</td></tr>
+<tr><td><code>vgi.client.cli</code></td><td>CLI front-end (argument parsing)</td></tr>
+<tr><td><code>vgi.filter_pushdown</code></td><td>Filter pushdown debug (deserialization/evaluation)</td></tr>
+<tr><td><code>vgi_rpc</code></td><td>vgi_rpc root logger (all vgi_rpc messages)</td></tr>
+<tr><td><code>vgi_rpc.wire.request</code></td><td>RPC wire request (serialised request bytes)</td></tr>
+<tr><td><code>vgi_rpc.wire.response</code></td><td>RPC wire response (serialised response bytes)</td></tr>
+<tr><td><code>vgi_rpc.wire.transport</code></td><td>Transport layer (pipe/HTTP transport debug)</td></tr>
+</tbody>
+</table>
+
+### Environment variables
+
+<table>
+<thead>
+<tr><th>Variable</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>VGI_QUIET=1</code></td><td>Suppress the interactive-terminal startup warning (same as <code>--quiet</code>)</td></tr>
+<tr><td><code>VGI_WORKER_DEBUG=1</code></td><td>Enable DEBUG logging on worker and stderr passthrough on client</td></tr>
+<tr><td><code>VGI_FILTER_DEBUG=1</code></td><td>Enable filter pushdown debug logging</td></tr>
+<tr><td><code>VGI_BEARER_TOKENS</code></td><td>Comma-separated <code>token=principal</code> pairs for static bearer auth (HTTP only)</td></tr>
+<tr><td><code>VGI_JWT_ISSUER</code></td><td>JWT issuer URL for JWT/JWKS auth (requires <code>vgi[oauth]</code> extra)</td></tr>
+<tr><td><code>VGI_JWT_AUDIENCE</code></td><td>JWT audience string, comma-separated for multiple audiences (required when <code>VGI_JWT_ISSUER</code> is set)</td></tr>
+<tr><td><code>VGI_JWT_JWKS_URI</code></td><td>JWKS endpoint URL (auto-discovered if omitted)</td></tr>
+<tr><td><code>VGI_OAUTH_RESOURCE</code></td><td>OAuth resource URL for RFC 9728 metadata</td></tr>
+<tr><td><code>VGI_OAUTH_AUTH_SERVERS</code></td><td>Comma-separated authorization server URLs</td></tr>
+<tr><td><code>VGI_OAUTH_CLIENT_ID</code></td><td>Client ID for MCP compatibility (optional, URL-safe chars only)</td></tr>
+<tr><td><code>VGI_SIGNING_KEY</code></td><td>Shared signing key for state tokens (set for multi-process deployments)</td></tr>
+<tr><td><code>VGI_OTEL_ENABLED</code></td><td>Enable OpenTelemetry instrumentation (<code>1</code>/<code>true</code>/<code>yes</code>)</td></tr>
+<tr><td><code>VGI_OTEL_CUSTOM_ATTRIBUTES</code></td><td>Comma-separated <code>key=value</code> pairs for custom span/metric attributes</td></tr>
+<tr><td><code>VGI_OTEL_CLAIM_ATTRIBUTES</code></td><td>Comma-separated <code>claim_key=span_attr_name</code> pairs for claim extraction</td></tr>
+<tr><td><code>VGI_OTEL_DISABLE_TRACING</code></td><td>Disable tracing only (<code>1</code>/<code>true</code>/<code>yes</code>)</td></tr>
+<tr><td><code>VGI_OTEL_DISABLE_METRICS</code></td><td>Disable metrics only (<code>1</code>/<code>true</code>/<code>yes</code>)</td></tr>
+</tbody>
+</table>
+
+> **Note:** Service name, exporters, and endpoints are configured via standard `OTEL_*` SDK
+> env vars (e.g. `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT`).
+
+**OTEL usage examples:**
+
+<CodeBlock code={`# Enable OTEL with standard SDK configuration
+VGI_OTEL_ENABLED=1 \\
+OTEL_SERVICE_NAME=my-vgi-worker \\
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \\
+    vgi-serve my_worker.py --http
+
+# With custom attributes and claim extraction
+VGI_OTEL_ENABLED=1 \\
+VGI_OTEL_CUSTOM_ATTRIBUTES="deployment=prod,region=us-east-1" \\
+VGI_OTEL_CLAIM_ATTRIBUTES="tenant_id=rpc.vgi_rpc.auth.claim.tenant_id" \\
+    vgi-serve my_worker.py --http`} lang="bash" tryable={false} />
+
+Programmatic usage:
+
+<CodeBlock code={`from vgi_rpc.otel import OtelConfig
+from vgi.serve import create_app, load_worker_class
+
+app = create_app(
+    load_worker_class("my_worker:MyWorker"),
+    otel_config=OtelConfig(
+        custom_attributes={"deployment": "prod"},
+        claim_attributes={"tenant_id": "rpc.vgi_rpc.auth.claim.tenant_id"},
+    ),
+)`} lang="python" tryable={false} />
+
+---
+
+## Example workers
+
+### vgi-fixture-worker
+
+Runs the built-in example worker with demo functions (install with `vgi-python[fixtures]`).
+
+<CodeBlock code={`vgi-fixture-worker`} lang="bash" tryable={false} />
+
+**Available functions:**
+
+<table>
+<thead>
+<tr><th>Function</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>echo</code></td><td>table-in-out</td><td>Pass through input unchanged</td></tr>
+<tr><td><code>sum_all_columns</code></td><td>table-in-out</td><td>Sum all numeric columns</td></tr>
+<tr><td><code>repeat_inputs</code></td><td>table-in-out</td><td>Repeat each row N times</td></tr>
+<tr><td><code>buffer_input</code></td><td>table-in-out</td><td>Collect all input, emit on finalize</td></tr>
+<tr><td><code>sequence</code></td><td>table</td><td>Generate sequence of integers</td></tr>
+<tr><td><code>double_sequence</code></td><td>table</td><td>Generate sequence of floats</td></tr>
+<tr><td><code>nested_sequence</code></td><td>table</td><td>Generate sequence with nested struct/list columns</td></tr>
+<tr><td><code>partitioned_sequence</code></td><td>table</td><td>Generate sequence across multiple workers</td></tr>
+<tr><td><code>projected_data</code></td><td>table</td><td>Generate data with projection pushdown</td></tr>
+<tr><td><code>ten_thousand</code></td><td>table</td><td>Generate 10000 integers</td></tr>
+<tr><td><code>constant_columns</code></td><td>table</td><td>Generate rows with constant values from varargs</td></tr>
+<tr><td><code>named_params_echo</code></td><td>table</td><td>Echo named parameter values in output columns</td></tr>
+<tr><td><code>multiply</code></td><td>scalar</td><td>Multiply values by a constant factor</td></tr>
+<tr><td><code>double</code></td><td>scalar</td><td>Double numeric values</td></tr>
+<tr><td><code>add_values</code></td><td>scalar</td><td>Add two columns together</td></tr>
+<tr><td><code>sum_values</code></td><td>scalar</td><td>Sum multiple numeric values (varargs)</td></tr>
+<tr><td><code>upper_case</code></td><td>scalar</td><td>Convert string values to uppercase</td></tr>
+<tr><td><code>null_handling</code></td><td>scalar</td><td>Returns value or -5000 if null</td></tr>
+<tr><td><code>random_int</code></td><td>scalar</td><td>Generate random integers (VOLATILE)</td></tr>
+<tr><td><code>bernoulli</code></td><td>scalar</td><td>Generate random booleans (VOLATILE)</td></tr>
+<tr><td><code>random_bytes</code></td><td>scalar</td><td>Generate pseudo-random binary blobs</td></tr>
+</tbody>
+</table>
+
+### In-memory catalog example
+
+The mutable catalog demo (`vgi/examples/catalog.py`) is no longer installed as a
+console script. Run it from a source checkout via:
+
+<CodeBlock code={`python -m vgi._test_fixtures.catalog`} lang="bash" tryable={false} />
+
+---
+
+## Output formats
+
+### JSON (default)
+
+Line-delimited JSON, one record per line:
+
+<CodeBlock code={`vgi-client --function sequence --args '[3]' --format json`} lang="bash" tryable={false} />
+
+<CodeBlock code={`{"n": 0}
+{"n": 1}
+{"n": 2}`} lang="json" tryable={false} />
+
+### CSV
+
+CSV with headers:
+
+<CodeBlock code={`vgi-client --function sequence --args '[3]' --format csv`} lang="bash" tryable={false} />
+
+<CodeBlock code={`n
+0
+1
+2`} lang="csv" tryable={false} />
+
+### Parquet
+
+Binary Apache Parquet format (requires output file):
+
+<CodeBlock code={`vgi-client --function sequence --args '[1000]' --format parquet --output data.parquet`} lang="bash" tryable={false} />
+
+### Arrow IPC
+
+Apache Arrow IPC streaming format, useful for debugging or piping to other Arrow-aware tools:
+
+<CodeBlock code={`vgi-client --function sequence --args '[10]' --format arrow-ipc -o out.arrow
+vgi-client --function echo --input data.parquet --format arrow-ipc -o -`} lang="bash" tryable={false} />
+
+---
+
+## Common patterns
+
+### Piping data
+
+<CodeBlock code={`# Generate data and process it
+vgi-client --function sequence --args '[100]' --format parquet --output /tmp/data.parquet
+vgi-client --input /tmp/data.parquet --function sum_all_columns`} lang="bash" tryable={false} />
+
+### Using with jq
+
+<CodeBlock code={`# Extract specific fields
+vgi-client catalog attach mydb --worker ./worker.py | jq -r '.attach_opaque_data'
+
+# Pretty print
+vgi-client --function sequence --args '[3]' | jq .`} lang="bash" tryable={false} />
+
+### Shell scripts
+
+<CodeBlock code={`#!/bin/bash
+WORKER="./my_worker.py"
+
+# Attach
+ATTACH_ID=$(vgi-client catalog attach mydb --worker $WORKER | jq -r '.attach_opaque_data')
+
+# List schemas
+vgi-client catalog schema list --attach-opaque-data $ATTACH_ID --worker $WORKER
+
+# Cleanup
+vgi-client catalog detach $ATTACH_ID --worker $WORKER`} lang="bash" tryable={false} />

@@ -1,0 +1,134 @@
+---
+title: Concepts
+description: "What VGI is and why: extend DuckDB with out-of-process functions in any language. The worker model, the Apache Arrow data path, the function shapes, and how it all fits together."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+
+<img class="concept-emblem" src="/vgi/vgi-emblem.png" alt="Vector Gateway Interface" width="1197" height="880" />
+
+The mental model behind VGI — what it's for, and how the pieces fit. Start here if you want the
+"why" before the "how"; to just build something, do the
+[tutorial](/vgi/docs/python/tutorial/scalar/).
+
+## The problem VGI solves
+
+[DuckDB](https://duckdb.org/) is a fast SQL database that runs *inside* your application. It's great
+out of the box, but eventually you want it to do something it can't — call your ML model, hit an
+internal API, run a custom transform — from SQL.
+
+<Callout type="note" title="New to DuckDB?">
+[DuckDB](https://duckdb.org/) is an in-process analytical SQL database (think "SQLite for
+analytics"): no server to run, it executes queries right in your program. You query it with ordinary
+SQL.
+
+<a href="https://duckdb.org/" target="_blank" rel="noopener" class="brand-logo-link"><img src="/vgi/duckdb-inline.svg" alt="DuckDB" class="brand-logo" /></a>
+</Callout>
+
+The usual way to add a new capability is a **DuckDB extension**. Classic extensions are C++ compiled
+against DuckDB's internals; more recently DuckDB has stabilised a **C extension API** that decouples
+from those internals and opens the door to other languages (Rust, Go, …). Either way, though, an
+extension still runs **in-process** — a crash can take the whole database down — and, more
+practically, you stay tied to DuckDB's **release and distribution cadence**: you build against
+specific DuckDB versions and distribute through its community-extension repository, so shipping a new
+version of your extension depends on the DuckDB team's latency in approving and merging your release.
+
+<Callout type="note" title="What's a DuckDB extension?">
+An extension is compiled code (a shared library) DuckDB loads to add new SQL functions, types, or
+file formats — like `httpfs` or `spatial`. It runs *inside* the DuckDB process — traditionally in
+C++, though DuckDB's stable [C extension API](https://duckdb.org/docs/stable/clients/c/overview.html)
+now allows other languages.
+</Callout>
+
+Your function is compiled **into** the engine and shipped per DuckDB release — fast, but in-process
+(a crash can take the database down) and on DuckDB's release cadence:
+
+<img class="lifecycle-diagram lifecycle-diagram--narrow" src="/vgi/docs/diagrams/concepts-native-extension.svg" alt="A native extension: your function is compiled inside the DuckDB engine and shipped per DuckDB release. The SQL client queries the engine." />
+
+**VGI takes a different approach.** Instead of compiling code into DuckDB, you write your function as
+an ordinary **separate program** — a *worker* — in whatever language you like (Python, here). DuckDB
+launches it and talks to it **out-of-process**. From SQL, your function looks completely native — but
+it's an independent program you build, ship, and update on your own schedule, not DuckDB's.
+
+<Callout type="note" title="What does “out-of-process” mean?">
+Your code runs in its own operating-system process, not inside DuckDB's. The two exchange data over
+a connection (a pipe, socket, or HTTP). The upside: no compiling against DuckDB, use any library, a
+crash in your worker can't take down the database, and you ship on your own release cadence.
+</Callout>
+
+Now your function is a **separate process** the engine talks to over a transport using Apache Arrow:
+
+<img class="lifecycle-diagram lifecycle-diagram--tall" src="/vgi/docs/diagrams/concepts-vgi-worker.svg" alt="The VGI approach: your function is a separate worker process (Python, or any language) that the DuckDB engine talks to over a transport using Apache Arrow. The SQL client queries the engine." />
+
+In short: **VGI lets you add functions, tables, and catalogs to DuckDB from an external program, in
+any language.** No native extension to build or ship.
+
+## The big picture
+
+DuckDB is the **client**; your worker is the **server**. DuckDB launches your worker (the `LOCATION`
+in `ATTACH`) and they exchange columns of data as **Apache Arrow** record batches.
+
+<img class="lifecycle-diagram" src="/vgi/docs/diagrams/concepts-architecture.svg" alt="A SQL client exchanges SQL and results with the DuckDB engine; the engine, acting as the client, exchanges VGI calls and Arrow batches with one or more VGI workers running your code." />
+
+<Callout type="tip" title="New to Apache Arrow?">
+[Apache Arrow](https://arrow.apache.org/) is a columnar in-memory format: data moves as typed
+**arrays** (columns) rather than rows of objects, which is what keeps it fast across the process
+boundary. Your function works with **PyArrow** arrays and operates on whole columns at once. The
+[tutorial's primer](/vgi/docs/python/tutorial/scalar/) has a fuller introduction.
+
+<a href="https://arrow.apache.org/" target="_blank" rel="noopener" class="arrow-logo-link"><img src="/vgi/apache-arrow.svg" alt="Apache Arrow" class="arrow-logo" /></a>
+</Callout>
+
+## What you build
+
+You expose **functions** — grouped into a **catalog** you `ATTACH` — in one of five shapes. Pick the
+one whose input/output cardinality matches your problem; each links to a complete, runnable example.
+
+<div class="kind-gallery">
+<a class="kind-gallery__card kind-gallery--scalar" href="/vgi/docs/python/how-to/function-patterns/#scalar"><img src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><span class="kind-gallery__name">Scalar</span><code class="kind-gallery__formula">1 row → 1 value</code></a>
+<a class="kind-gallery__card kind-gallery--table" href="/vgi/docs/python/how-to/function-patterns/#table"><img src="/vgi/docs/assets/kinds/table.svg" alt="table shape" /><span class="kind-gallery__name">Table</span><code class="kind-gallery__formula">args → N rows</code></a>
+<a class="kind-gallery__card kind-gallery--table-in-out" href="/vgi/docs/python/how-to/function-patterns/#table-in-out"><img src="/vgi/docs/assets/kinds/table-in-out.svg" alt="table-in-out shape" /><span class="kind-gallery__name">Table-in-out</span><code class="kind-gallery__formula">N rows → M rows</code></a>
+<a class="kind-gallery__card kind-gallery--aggregate" href="/vgi/docs/python/how-to/function-patterns/#aggregate"><img src="/vgi/docs/assets/kinds/aggregate.svg" alt="aggregate shape" /><span class="kind-gallery__name">Aggregate</span><code class="kind-gallery__formula">N rows → 1 value</code></a>
+<a class="kind-gallery__card kind-gallery--buffering" href="/vgi/docs/python/how-to/function-patterns/#buffering"><img src="/vgi/docs/assets/kinds/buffering.svg" alt="buffering shape" /><span class="kind-gallery__name">Buffering</span><code class="kind-gallery__formula">stream → [state] → stream</code></a>
+</div>
+
+A worker can also expose **tables and views**, so you can `ATTACH` it and query it like any other
+database. Argument and result types are declared with Python type annotations, and VGI derives the
+SQL signature from them. The exact phases each shape runs through — bind, init, process, finalize —
+are diagrammed in the [Function lifecycle](/vgi/docs/python/concepts/lifecycle/) reference.
+
+## Under the hood (optional)
+
+You don't need any of this to ship a worker — but if you're curious how the calls actually travel:
+
+VGI is a **protocol**, not just a library: a fixed set of operations (bind a function, process
+batches, describe a catalog) that the engine and worker agree on. Those operations are carried by
+**[vgi-rpc](https://vgi-rpc.query.farm/)**, a transport-agnostic RPC framework that serializes every
+request and response as Apache Arrow IPC. VGI defines *what* the calls are; vgi-rpc defines *how*
+they travel — so the same worker runs unchanged over any transport, and any language with an Arrow
+library can implement either side.
+
+<img class="lifecycle-diagram" src="/vgi/docs/diagrams/concepts-protocol-stack.svg" alt="Protocol stack, top to bottom: the VGI function and catalog protocol is defined as RPC methods; vgi-rpc is the transport-agnostic RPC framework; requests and responses are serialized as Apache Arrow IPC; sent over a transport — subprocess, Unix socket, or HTTP." />
+
+- **Transports** — the same worker runs over **subprocess** (default; over stdin/stdout), a **Unix
+  domain socket**, or **HTTP** ([serve it as a network service](/vgi/docs/python/how-to/serve-http/),
+  with optional [authentication](/vgi/docs/python/how-to/authentication/)). For co-located
+  processes, vgi-rpc can also use shared memory for zero-copy transfer.
+- **The full byte-level contract** is the
+  [vgi-rpc wire protocol specification](https://vgi-rpc.query.farm/wire-protocol).
+
+<Callout type="info" title="Inspired by DuckDB's own APIs">
+The VGI surface deliberately mirrors **DuckDB's internal and extension APIs**: scalar, table,
+table-in-out, and aggregate functions; the `bind → init → execute → finalize` phasing; and catalogs
+with schemas, tables, and views. If you've written a DuckDB extension, the shapes will feel familiar
+— VGI exposes the same concepts, out-of-process and in Python.
+</Callout>
+
+## Where to go next
+
+- **Build one** → the [tutorial](/vgi/docs/python/tutorial/scalar/).
+- **Pick a shape** → [Function patterns](/vgi/docs/python/how-to/function-patterns/).
+- **The phases in detail** → [Function lifecycle](/vgi/docs/python/concepts/lifecycle/).
+- **How types cross the wire** → [Argument serialization](/vgi/docs/python/concepts/argument-serialization/).
+- **The RPC layer underneath** → [vgi-rpc](https://vgi-rpc.query.farm/) and its
+  [wire protocol](https://vgi-rpc.query.farm/wire-protocol).

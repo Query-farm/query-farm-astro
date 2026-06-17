@@ -83,6 +83,7 @@ export default defineConfig({
         Header: './src/components/starlight/Header.astro',
         ThemeProvider: './src/components/starlight/ThemeProvider.astro',
         ThemeSelect: './src/components/starlight/ThemeSelect.astro',
+        TableOfContents: './src/components/starlight/TableOfContents.astro',
       },
       // Load the site's Tailwind theme so the header's utility classes resolve,
       // then a small shell override to align Starlight with the site header.
@@ -91,23 +92,72 @@ export default defineConfig({
         './src/styles/starlight-theme.css',
         './src/styles/starlight-shell.css',
         './src/styles/starlight-api.css',
+        './src/styles/starlight-callout.css',
+        './src/styles/starlight-kinds.css',
       ],
       sidebar: [
         { label: 'Overview', slug: 'vgi/docs/python' },
         {
           label: 'Tutorial',
           items: [
-            { label: '1. Scalar function', slug: 'vgi/docs/python/tutorial/scalar' },
+            { label: 'Scalar function', slug: 'vgi/docs/python/tutorial/scalar' },
+            { label: 'Table function', slug: 'vgi/docs/python/tutorial/table' },
+          ],
+        },
+        {
+          label: 'How-to guides',
+          items: [
+            { label: 'Overview', slug: 'vgi/docs/python/how-to' },
+            { label: 'Function patterns', slug: 'vgi/docs/python/how-to/function-patterns' },
+            { label: 'Expose a catalog', slug: 'vgi/docs/python/how-to/catalogs' },
+            { label: 'Persist state across workers', slug: 'vgi/docs/python/how-to/state-storage' },
+            { label: 'Serve over HTTP', slug: 'vgi/docs/python/how-to/serve-http' },
+            { label: 'Authentication', slug: 'vgi/docs/python/how-to/authentication' },
+            { label: 'Integrate with the optimizer', slug: 'vgi/docs/python/how-to/pushdown-and-statistics' },
+            { label: 'Function metadata', slug: 'vgi/docs/python/how-to/metadata' },
+            { label: 'CLI', slug: 'vgi/docs/python/how-to/cli' },
+          ],
+        },
+        {
+          label: 'Concepts',
+          items: [
+            { label: 'Overview', slug: 'vgi/docs/python/concepts' },
+            { label: 'Function lifecycle', slug: 'vgi/docs/python/concepts/lifecycle' },
+          ],
+        },
+        {
+          label: 'Reference guides',
+          items: [
+            // API deep-dives — pair with the how-to guides.
+            { label: 'Function API', slug: 'vgi/docs/python/how-to/generator-api' },
+            { label: 'Aggregate functions', slug: 'vgi/docs/python/how-to/aggregate-functions' },
+            { label: 'Catalog interface', slug: 'vgi/docs/python/how-to/catalog-interface' },
+            // Wire / format specs — low-level contracts for porting and debugging.
+            { label: 'Shared storage', slug: 'vgi/docs/python/how-to/shared-storage' },
+            { label: 'Argument serialization', slug: 'vgi/docs/python/concepts/argument-serialization' },
+            { label: 'Filter pushdown', slug: 'vgi/docs/python/how-to/filter-pushdown' },
+            { label: 'Column statistics', slug: 'vgi/docs/python/how-to/column-statistics' },
+            { label: 'CLI reference', slug: 'vgi/docs/python/how-to/cli-reference' },
           ],
         },
         {
           label: 'API Reference',
+          // Real module names, alphabetised.
           items: [
-            { label: 'Scalar functions', slug: 'vgi/docs/python/api/vgi-scalar_function' },
-            { label: 'Table functions', slug: 'vgi/docs/python/api/vgi-table_function' },
-            { label: 'Worker', slug: 'vgi/docs/python/api/vgi-worker' },
-            { label: 'Arguments & schema', slug: 'vgi/docs/python/api/vgi-arguments' },
-            { label: 'Catalogs', slug: 'vgi/docs/python/api/vgi-catalog' },
+            { label: 'aggregate_function', slug: 'vgi/docs/python/api/vgi-aggregate_function' },
+            { label: 'arguments', slug: 'vgi/docs/python/api/vgi-arguments' },
+            { label: 'catalog', slug: 'vgi/docs/python/api/vgi-catalog' },
+            { label: 'client', slug: 'vgi/docs/python/api/vgi-client' },
+            { label: 'exceptions', slug: 'vgi/docs/python/api/vgi-exceptions' },
+            { label: 'function_storage', slug: 'vgi/docs/python/api/vgi-function_storage' },
+            { label: 'invocation', slug: 'vgi/docs/python/api/vgi-invocation' },
+            { label: 'metadata', slug: 'vgi/docs/python/api/vgi-metadata' },
+            { label: 'scalar_function', slug: 'vgi/docs/python/api/vgi-scalar_function' },
+            { label: 'table_buffering_function', slug: 'vgi/docs/python/api/vgi-table_buffering_function' },
+            { label: 'table_filter_pushdown', slug: 'vgi/docs/python/api/vgi-table_filter_pushdown' },
+            { label: 'table_function', slug: 'vgi/docs/python/api/vgi-table_function' },
+            { label: 'table_in_out_function', slug: 'vgi/docs/python/api/vgi-table_in_out_function' },
+            { label: 'worker', slug: 'vgi/docs/python/api/vgi-worker' },
           ],
         },
       ],

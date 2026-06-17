@@ -1,0 +1,62 @@
+---
+title: Serve over HTTP
+description: "Run a VGI worker as an HTTP network service: serve it with vgi-serve --http, attach from DuckDB, and call it from the Python Client."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+Run a worker as a **network service** over HTTP instead of a co-located subprocess — on another
+machine, in a container, or behind a shared endpoint.
+
+## Prerequisites
+
+- A working worker (see the [tutorial](/vgi/docs/python/tutorial/scalar/)).
+- `pip install vgi-python[http]`.
+
+## Serve it
+
+The same worker that runs over a subprocess also runs over HTTP — add `--http`:
+
+<CodeBlock code={`vgi-serve my_worker.py --http`} lang="bash" tryable={false} />
+
+By default it binds a free port and prints `PORT:<port>` to stdout for discovery; pass `--host` and
+`--port` to pin them:
+
+<CodeBlock code={`vgi-serve my_worker.py --http --host 0.0.0.0 --port 8080`} lang="bash" tryable={false} />
+
+## Attach it from DuckDB
+
+DuckDB attaches an HTTP worker the same way as a subprocess one — just point `LOCATION` at the URL:
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION 'http://localhost:8080');
+SELECT calc.double(21);`} lang="sql" tryable={false} />
+
+## Call it from Python
+
+You only need the Python **`Client`** when calling the worker *from Python* (tests, scripts, another
+service) rather than from SQL. It connects with the HTTP transport instead of spawning a subprocess,
+and exposes the same call methods:
+
+<CodeBlock code={`# illustrative — calling the worker from Python over HTTP
+from vgi.client import Client
+
+with Client(transport="http", base_url="http://localhost:8080") as client:
+    ...  # same .scalar_function() / .table_function() calls as the subprocess transport`} lang="python" tryable={false} />
+
+<Callout type="note" title="Want to require authentication?">
+HTTP is the only transport that authenticates callers (subprocess and Unix-socket workers are
+co-located and trusted). To gate the service with bearer tokens or JWT/OAuth, see
+[Authentication](/vgi/docs/python/how-to/authentication/).
+</Callout>
+
+## Going to production
+
+The HTTP layer — pre-fork hosting, response-size caps, externalized payloads, graceful drain — is
+provided by **vgi-rpc**, the RPC framework VGI runs on. For deployment specifics see vgi-rpc's
+[hosting guide](https://vgi-rpc-python.query.farm/hosting/).
+
+## Next steps
+
+- **Lock it down** → [Authentication](/vgi/docs/python/how-to/authentication/).
+- **The transport underneath** → [vgi-rpc](https://vgi-rpc-python.query.farm/).

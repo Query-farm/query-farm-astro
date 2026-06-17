@@ -1,0 +1,117 @@
+---
+title: Persist state across workers
+description: "How to give VGI functions shared, persistent state across worker processes — the default SQLite backend and cloud alternatives."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+How functions that span **multiple worker processes** — notably distributed aggregates and buffering
+functions — share and persist state across them.
+
+## Prerequisites
+
+- You've built an aggregate or multi-worker function (see
+  [Function patterns → Aggregate](/vgi/docs/python/how-to/function-patterns/#aggregate)).
+- For the Azure backend: `pip install vgi-python[azure]`. SQLite and Cloudflare Durable Objects need
+  no extra.
+
+<Callout type="note" title="`vgi-serve`">
+The commands below use `vgi-serve`, the CLI installed with `vgi-python` that runs a worker
+module as a long-lived process (the production counterpart to the tutorial's `uv run`). The
+`--http` flag serves it over HTTP instead of stdin/stdout.
+</Callout>
+
+## What shared state is for
+
+A function normally keeps its state in memory for the life of a single call. **Shared storage**
+exists for the cases where that isn't enough — state that has to be reached from *another process*
+or *another phase*:
+
+- **Combining partial results** — when a function runs across [parallel
+  workers](/vgi/docs/python/concepts/lifecycle/), each worker writes its partial output to shared
+  storage and the primary reads them all back to produce the final answer (a distributed aggregate,
+  or a buffering function's `combine`).
+- **Buffering across phases** — a [buffering
+  function](/vgi/docs/python/how-to/function-patterns/#buffering) stashes every input batch in its
+  `process` (sink) phase and reads them back in `finalize` (source); those phases can run in
+  *different* processes, so the batches can't live in memory.
+- **Coordinating work across processes** — handing data or work items between separate worker
+  processes (for example, a shared work queue).
+- **Outliving a single call** — any state that must survive beyond one RPC call.
+
+Because that state crosses process boundaries it is serialized (your aggregate/buffer state must be
+an `ArrowSerializableDataclass`) and kept in a pluggable **store** — by default a local SQLite
+database, with cloud backends for when workers run on separate hosts.
+
+## Two kinds of "state" — don't confuse them
+
+- **Generator cursor state** — the small `ArrowSerializableDataclass` a table generator keeps
+  *within one scan* (see [streaming with state](/vgi/docs/python/how-to/function-patterns/#streaming-with-state)). It
+  lives in the worker for the duration of the call.
+- **Shared storage** (this page) — state that must outlive a single call or be shared across
+  **separate worker processes**, e.g. combining partial aggregate results. This is backed by a
+  pluggable store.
+
+## The `BoundStorage` interface
+
+Inside a function you reach shared storage through **`params.storage`**, a
+[`BoundStorage`](/vgi/docs/python/api/vgi-function_storage/) handle scoped to the current call (its
+`execution_id`) and sharded per attached catalog. It offers a few storage primitives — pick whichever
+fits how your data is shaped:
+
+- **Key–value store** — `state_put` / `state_get` (plus `_many` batch variants), `state_scan`,
+  `state_drain`, `state_delete`. The general-purpose option: stash each worker's partial result under
+  a key, then scan them all back in `finalize`.
+- **Append-log** — `state_append` adds an item under a key and returns its index; `state_log_scan`
+  reads the log back in order. Good for accumulating an ordered stream of partial outputs.
+- **Counters** — `counter_add` / `counter_get` / `counter_set` / `counter_delete`: atomic integer
+  counters shared across workers (row counts, running totals).
+- **Work queue** — `queue_push` / `queue_pop` (plus batch variants): hand work items between worker
+  processes.
+- **Transaction view** — `storage.transaction(...)` returns a view whose state stays stable across
+  the statements of one SQL transaction (e.g. snapshot-isolation watermarks).
+
+Values are bytes, so serialize first — `serialize_record_batch` / `deserialize_record_batch` helpers
+are provided, and aggregate/buffer state extends `ArrowSerializableDataclass`. The full method list
+is in the [State storage API reference](/vgi/docs/python/api/vgi-function_storage/).
+
+## The default: SQLite (zero config)
+
+Under the subprocess transport, shared storage "just works" — all workers share a local SQLite
+database (WAL mode) at the platform state directory. Nothing to configure:
+
+<CodeBlock code={`vgi-serve my_worker.py`} lang="bash" tryable={false} />
+
+## Choosing a backend
+
+Select a backend with the `VGI_WORKER_SHARED_STORAGE` environment variable:
+
+<CodeBlock code={`# Local / subprocess (default)
+VGI_WORKER_SHARED_STORAGE=sqlite vgi-serve my_worker.py
+
+# Azure cloud (requires vgi-python[azure])
+VGI_WORKER_SHARED_STORAGE=azure-sql vgi-serve my_worker.py --http
+
+# Cloudflare Durable Objects (edge / multi-cloud)
+VGI_WORKER_SHARED_STORAGE=cloudflare-do vgi-serve my_worker.py --http`} lang="bash" tryable={false} />
+
+<table>
+<thead>
+<tr><th>Backend</th><th>Value</th><th>Use case</th><th>Dependencies</th></tr>
+</thead>
+<tbody>
+<tr><td>SQLite</td><td><code>sqlite</code> (default)</td><td>local / subprocess</td><td>none (stdlib)</td></tr>
+<tr><td>Azure SQL</td><td><code>azure-sql</code></td><td>Azure deployments</td><td><code>vgi-python[azure]</code></td></tr>
+<tr><td>Cloudflare Durable Objects</td><td><code>cloudflare-do</code></td><td>edge / multi-cloud</td><td>none extra — uses <code>httpx</code>, which ships with <code>vgi-python</code>; needs a Worker endpoint + token</td></tr>
+</tbody>
+</table>
+
+The per-backend setup (connection strings, credentials, table provisioning) is documented in the
+[Shared Storage reference](/vgi/docs/python/how-to/shared-storage/).
+
+## Next steps
+
+- **Aggregates** that use this → [Function patterns → Aggregate](/vgi/docs/python/how-to/function-patterns/#aggregate).
+- **Full backend setup** → [Shared Storage reference](/vgi/docs/python/how-to/shared-storage/).
+- **Exact API** → [API Reference: State storage](/vgi/docs/python/api/vgi-function_storage/).

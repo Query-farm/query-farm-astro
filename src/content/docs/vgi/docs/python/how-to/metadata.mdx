@@ -1,0 +1,126 @@
+---
+title: Function metadata
+description: "Give a function a nested Meta class for introspection — its SQL name, description, examples, and stability — across scalar, table, and aggregate functions."
+---
+
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+A function can define a nested `Meta` class to provide introspection metadata — its SQL name,
+description, examples, and more. No inheritance is required; just set the attributes you need.
+
+## Basic Usage
+
+Metadata works with all function types: `ScalarFunction`, `TableFunctionGenerator`, and `TableInOutFunction`.
+
+<CodeBlock code={`from typing import Annotated, Any
+from vgi import ScalarFunction, Param, ConstParam, Returns
+import pyarrow as pa
+import pyarrow.compute as pc
+
+class MultiplyFunction(ScalarFunction):
+    """Multiplies a value by a constant factor."""
+
+    class Meta:
+        name = "multiply"
+        description = "Multiplies a value by a constant factor"
+        categories = ["numeric", "transform"]
+
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.Int64Array, Param(doc="Integer value to multiply")],
+        factor: Annotated[int, ConstParam("Multiplication factor")],
+    ) -> Annotated[pa.Int64Array, Returns()]:
+        return pc.multiply(value, factor)`} lang="python" tryable={false} />
+
+<CodeBlock code={`from typing import Annotated, Any
+from vgi import ScalarFunction, Param, Returns
+from vgi.scalar_function import BindParameters, BindResult
+import pyarrow as pa
+import pyarrow.compute as pc
+
+class DoubleFunction(ScalarFunction):
+    """Double numeric values."""
+
+    class Meta:
+        name = "double"
+        description = "Doubles numeric values"
+        categories = ["numeric", "transform"]
+
+    @classmethod
+    def on_bind(cls, params: BindParameters) -> BindResult:
+        field = params.arguments_schema.field(0)
+        return BindResult(field.type)
+
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.Array[Any], Param(doc="Numeric value to double")],
+    ) -> Annotated[pa.Array[Any], Returns()]:
+        return pc.multiply(value, 2)`} lang="python" tryable={false} />
+
+## Accessing Metadata
+
+<CodeBlock code={`# Get resolved metadata
+meta = SumValuesFunction.get_metadata()
+print(meta.name)        # "sum_values"
+print(meta.max_workers) # 1
+print(meta.parameters)  # [ParameterInfo(name='column_name', ...)]
+
+# Get as JSON-serializable dict
+info = SumValuesFunction.describe()`} lang="python" tryable={false} />
+
+## Available Meta Attributes
+
+<table>
+<thead>
+<tr><th>Attribute</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>name</code></td><td><code>str</code></td><td>Class name → snake_case</td><td>Function registration name</td></tr>
+<tr><td><code>description</code></td><td><code>str</code></td><td>First docstring line</td><td>Human-readable description</td></tr>
+<tr><td><code>categories</code></td><td><code>list[str]</code></td><td><code>[]</code></td><td>Classification tags</td></tr>
+<tr><td><code>tags</code></td><td><code>dict[str, str]</code></td><td><code>&#123;&#125;</code></td><td>Custom key-value tags</td></tr>
+<tr><td><code>examples</code></td><td><code>list</code></td><td><code>[]</code></td><td>SQL examples (str or FunctionExample)</td></tr>
+<tr><td><code>max_workers</code></td><td><code>int|None</code></td><td><code>None</code> (unlimited)</td><td>Max parallel workers</td></tr>
+<tr><td><code>stability</code></td><td><code>FunctionStability</code></td><td><code>CONSISTENT</code></td><td>Output determinism</td></tr>
+<tr><td><code>null_handling</code></td><td><code>NullHandling</code></td><td><code>DEFAULT</code></td><td>NULL input behavior</td></tr>
+<tr><td><code>required_settings</code></td><td><code>list[str]</code></td><td><code>[]</code></td><td>Required DuckDB settings</td></tr>
+<tr><td><code>projection_pushdown</code></td><td><code>bool</code></td><td><code>True</code></td><td>Enable column pruning</td></tr>
+<tr><td><code>filter_pushdown</code></td><td><code>bool</code></td><td><code>False</code></td><td>Enable filter pushdown</td></tr>
+<tr><td><code>preserves_order</code></td><td><code>OrderPreservation</code></td><td><code>PRESERVES_ORDER</code></td><td>Row order guarantee</td></tr>
+<tr><td><code>order_dependent</code></td><td><code>OrderDependence</code></td><td><code>NOT_ORDER_DEPENDENT</code></td><td>Aggregate order sensitivity</td></tr>
+<tr><td><code>distinct_dependent</code></td><td><code>DistinctDependence</code></td><td><code>NOT_DISTINCT_DEPENDENT</code></td><td>Aggregate DISTINCT sensitivity</td></tr>
+<tr><td><code>output_type</code></td><td><code>pa.DataType|AnyArrow</code></td><td>Required for ScalarFunction</td><td>Scalar output type</td></tr>
+</tbody>
+</table>
+
+## Metadata Inheritance
+
+Meta attributes are inherited from parent classes:
+
+<CodeBlock code={`class FilterFunction(TableInOutFunction):
+    class Meta:
+        categories = ["filter"]
+        preserves_order = OrderPreservation.PRESERVES_ORDER
+
+class PositiveFilter(FilterFunction):
+    class Meta:
+        description = "Keep only positive values"
+    # Inherits categories=["filter"] from parent`} lang="python" tryable={false} />
+
+## Arrow Serialization (Worker Registration)
+
+Metadata can be serialized to Arrow for worker registration:
+
+<CodeBlock code={`from vgi import functions_to_arrow
+from vgi.metadata import arrow_to_functions
+
+# Worker sends available functions to client
+batch = functions_to_arrow([EchoFunction, SumFunction])
+
+# Client deserializes
+function_infos = arrow_to_functions(batch)
+for info in function_infos:
+    print(f"{info.name}: {info.description}")`} lang="python" tryable={false} />
+

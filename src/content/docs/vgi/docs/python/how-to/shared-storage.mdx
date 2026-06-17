@@ -1,0 +1,228 @@
+---
+title: Shared storage backends
+description: "Configure where VGI shared state is stored — SQLite (default), Azure SQL, or Cloudflare Durable Objects — and implement a custom backend."
+---
+
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+This page configures **where** shared state is stored. Your functions read and write that state
+through the [`BoundStorage`](/vgi/docs/python/api/vgi-function_storage/) handle (`params.storage`) —
+see [Persist state across workers](/vgi/docs/python/how-to/state-storage/) for what it's for and the
+storage primitives it exposes. Here we set up the **backend** behind that handle, chosen with the
+`VGI_WORKER_SHARED_STORAGE` environment variable.
+
+## Backends
+
+<table>
+<thead>
+<tr><th>Backend</th><th>Value</th><th>Use Case</th><th>Dependencies</th></tr>
+</thead>
+<tbody>
+<tr><td>SQLite</td><td><code>sqlite</code> (default)</td><td>Local / subprocess transport</td><td>None (stdlib)</td></tr>
+<tr><td>Azure SQL</td><td><code>azure-sql</code></td><td>Azure cloud deployments</td><td><code>vgi-python[azure]</code></td></tr>
+<tr><td>Cloudflare Durable Objects</td><td><code>cloudflare-do</code></td><td>Edge / multi-cloud deployments</td><td>None (stdlib)</td></tr>
+</tbody>
+</table>
+
+## SQLite (Default)
+
+Used automatically for subprocess transport. All workers share a local
+SQLite database file via WAL mode.
+
+<CodeBlock code={`# No configuration needed — this is the default
+vgi-serve my_worker.py`} lang="bash" tryable={false} />
+
+The database is stored at the platform-specific state directory
+(`~/.local/state/vgi/vgi_storage.db` on Linux). No setup required.
+
+## Azure SQL Database
+
+For Azure cloud deployments (App Service, Container Apps, AKS) where
+workers run on separate hosts.
+
+### Setup
+
+1. Install the Azure extra:
+
+<CodeBlock code={`pip install vgi-python[azure]`} lang="bash" tryable={false} />
+
+2. Create an Azure SQL Database (Serverless recommended for cost):
+
+<CodeBlock code={`az sql server create --name myserver --resource-group myrg --location eastus2 \\
+    --admin-user vgiadmin --admin-password 'MyPassword!'
+az sql db create --name vgi --server myserver --resource-group myrg \\
+    --edition GeneralPurpose --compute-model Serverless \\
+    --family Gen5 --capacity 1 --auto-pause-delay 60 --min-capacity 0.5`} lang="bash" tryable={false} />
+
+3. Create the storage tables (once, during deployment):
+
+<CodeBlock code={`from vgi.function_storage_azure_sql import FunctionStorageAzureSql
+
+storage = FunctionStorageAzureSql(
+    server="myserver.database.windows.net",
+    database="vgi",
+    user="vgiadmin",
+    password="MyPassword!",
+)
+storage.ensure_tables()`} lang="python" tryable={false} />
+
+4. Configure the worker via environment variables:
+
+<CodeBlock code={`VGI_WORKER_SHARED_STORAGE=azure-sql
+VGI_AZURE_SQL_SERVER=myserver.database.windows.net
+VGI_AZURE_SQL_DATABASE=vgi
+VGI_AZURE_SQL_USER=vgiadmin
+VGI_AZURE_SQL_PASSWORD=MyPassword!`} lang="bash" tryable={false} />
+
+For managed identity (no username/password), omit `VGI_AZURE_SQL_USER` and
+`VGI_AZURE_SQL_PASSWORD`. The client will use `DefaultAzureCredential`.
+
+### Environment Variables
+
+<table>
+<thead>
+<tr><th>Variable</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>VGI_AZURE_SQL_SERVER</code></td><td>Server hostname (required)</td></tr>
+<tr><td><code>VGI_AZURE_SQL_DATABASE</code></td><td>Database name (required)</td></tr>
+<tr><td><code>VGI_AZURE_SQL_USER</code></td><td>SQL auth username (omit for managed identity)</td></tr>
+<tr><td><code>VGI_AZURE_SQL_PASSWORD</code></td><td>SQL auth password (omit for managed identity)</td></tr>
+<tr><td><code>VGI_AZURE_SQL_DEBUG_LOG</code></td><td>File path for debug/timing logs</td></tr>
+</tbody>
+</table>
+
+### Programmatic Usage
+
+<CodeBlock code={`from vgi.function_storage_azure_sql import FunctionStorageAzureSql
+
+storage = FunctionStorageAzureSql(
+    server="myserver.database.windows.net",
+    database="vgi",
+    user="vgiadmin",
+    password="MyPassword!",
+)
+
+class MyTableFunction(TableFunctionGenerator):
+    storage = storage`} lang="python" tryable={false} />
+
+## Cloudflare Durable Objects
+
+For edge deployments and multi-cloud setups. Uses a Cloudflare Worker +
+Durable Object running SQLite internally. The DO is single-threaded, so
+all operations are inherently atomic without locking.
+
+### Setup
+
+1. Deploy the Cloudflare Worker. The Worker source lives in a separate
+   repository: [`vgi-cloudflare-durable-object-storage`](https://github.com/query-farm/vgi-cloudflare-durable-object-storage).
+
+<CodeBlock code={`git clone https://github.com/query-farm/vgi-cloudflare-durable-object-storage
+cd vgi-cloudflare-durable-object-storage
+npm install
+npx wrangler deploy`} lang="bash" tryable={false} />
+
+2. Set a bearer token for authentication:
+
+<CodeBlock code={`npx wrangler secret put VGI_STORAGE_TOKEN`} lang="bash" tryable={false} />
+
+3. Configure the worker via environment variables:
+
+<CodeBlock code={`VGI_WORKER_SHARED_STORAGE=cloudflare-do
+VGI_CF_DO_URL=https://vgi-storage.myaccount.workers.dev
+VGI_CF_DO_TOKEN=my-secret-token`} lang="bash" tryable={false} />
+
+No table creation step needed — the Durable Object creates its SQLite
+tables automatically on first request.
+
+### Environment Variables
+
+<table>
+<thead>
+<tr><th>Variable</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>VGI_CF_DO_URL</code></td><td>Cloudflare Worker URL (required)</td></tr>
+<tr><td><code>VGI_CF_DO_TOKEN</code></td><td>Bearer token for authentication (optional)</td></tr>
+<tr><td><code>VGI_CF_DO_DEBUG_LOG</code></td><td>File path for debug/timing logs</td></tr>
+</tbody>
+</table>
+
+### Programmatic Usage
+
+<CodeBlock code={`from vgi.function_storage_cf_do import FunctionStorageCfDo
+
+storage = FunctionStorageCfDo(
+    url="https://vgi-storage.myaccount.workers.dev",
+    token="my-secret-token",
+)
+
+class MyTableFunction(TableFunctionGenerator):
+    storage = storage`} lang="python" tryable={false} />
+
+### How It Works
+
+A single Durable Object instance handles all executions. Since
+`execution_id` is UUID4 (globally unique), there are no collisions between
+concurrent executions sharing the same DO. The DO uses the same SQLite
+schema as the local `FunctionStorageSqlite` backend.
+
+Cleanup is handled by an hourly alarm that removes entries older than
+24 hours.
+
+### Performance
+
+The Cloudflare DO backend adds one HTTP round-trip per storage operation.
+Latency depends on proximity to the nearest Cloudflare PoP:
+
+<table>
+<thead>
+<tr><th>Location</th><th>Approx. per-operation latency</th></tr>
+</thead>
+<tbody>
+<tr><td>Co-located (same region)</td><td>5-15ms</td></tr>
+<tr><td>Same continent</td><td>30-60ms</td></tr>
+<tr><td>Cross-continent</td><td>80-150ms</td></tr>
+</tbody>
+</table>
+
+## Custom Backends
+
+A backend implements the `FunctionStorage` protocol: a key–value store, an append-log, atomic
+counters, and a work queue — the same primitives the [`BoundStorage`](/vgi/docs/python/api/vgi-function_storage/)
+handle exposes to your functions, all keyed by `execution_id`. The methods, grouped by category:
+
+<CodeBlock code={`from vgi.function_storage import FunctionStorage
+
+class MyCustomStorage:
+    # key-value store
+    def state_put_many(self, ...): ...
+    def state_get_many(self, ...): ...
+    def state_scan(self, ...): ...
+    def state_drain(self, ...): ...
+    def state_delete(self, ...): ...
+
+    # append-log
+    def state_append(self, ...): ...
+    def state_log_scan(self, ...): ...
+
+    # atomic counters
+    def state_counter_add(self, ...): ...
+    def state_counter_get(self, ...): ...
+    def state_counter_set(self, ...): ...
+    def state_counter_delete(self, ...): ...
+
+    # work queue
+    def queue_push(self, ...): ...
+    def queue_pop(self, ...): ...
+    def queue_clear(self, ...): ...
+
+    # lifecycle
+    def execution_clear(self, ...): ...`} lang="python" tryable={false} />
+
+See the [`vgi.function_storage` API reference](/vgi/docs/python/api/vgi-function_storage/) for the
+exact signatures. Assign your backend to your function classes:
+
+<CodeBlock code={`class MyFunction(TableFunctionGenerator):
+    storage = MyCustomStorage()`} lang="python" tryable={false} />
+
