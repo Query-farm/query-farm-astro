@@ -3,8 +3,9 @@ title: 2. Add a table function
 description: Grow the worker with a table function that generates rows from an argument.
 ---
 
-import Callout from '../../../../../../components/docs/Callout.astro';
 import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
 import QueryResult from '../../../../../../components/docs/QueryResult.astro';
 import workerSrc from '../../../../../../examples/vgi-python/calc_worker.py?raw';
 
@@ -17,12 +18,13 @@ A scalar function maps one row to one row. A **table function** produces a whole
 its argument in a single pass. (Step&nbsp;3 introduces streaming state for results too large to
 build at once.)
 
+<div class="kind-banner kind-banner--table"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table.svg" alt="table shape" /><div class="kind-banner__text"><code class="kind-banner__formula">args → N rows</code><p class="kind-banner__desc">A table-valued source: scalar arguments in, a whole set of rows out — the second of the <a href="/vgi/docs/python/how-to/function-patterns/">five function shapes</a>.</p></div></div>
+
 ## Step 1 — Grow the worker
 
-Add a `Series` table function to the worker from step 1 and register it alongside `Double`. The
-full file is below; the new part is the `Series` class.
+Here's the new part — a `Series` generator that *produces* rows from its `count` argument:
 
-<CodeBlock code={workerSrc} lang="python" tryable={false} />
+<CodeBlock code={workerSrc.slice(workerSrc.indexOf('@dataclass'), workerSrc.indexOf('class CalcWorker')).trimEnd()} lang="python" title="calc_worker.py · new code" tryable={false} />
 
 What's new compared to the scalar:
 
@@ -35,20 +37,35 @@ What's new compared to the scalar:
 4. **`process` emits, then finishes.** It builds the whole column from `params.args.count`, calls
    `out.emit(batch)` once, then `out.finish()` to close the stream.
 
-<Callout type="info" title="Why “generator” and not just “function”?">
+<InfoTip label="Why “generator” and not just “function”?" title="Why “generator”?" width="32rem">
 A table function is pulled, not called: the engine asks the worker for output until it signals
 completion. `process` is the pull handler — emit a batch to yield rows, call `out.finish()` when
 there are no more. Because this one produces everything in a single `process` call, it never needs
 to remember anything between calls, which is what *stateless* means here.
-</Callout>
+</InfoTip>
+
+Register `Series` next to `Double` in the same `calc` worker and save the whole file as
+`calc_worker.py`:
+
+<Collapsible summary="calc_worker.py — full source">
+<CodeBlock code={workerSrc} lang="python" tryable={false} />
+</Collapsible>
 
 ## Step 2 — Attach and call it
 
-The catalog name is still `calc`; the new function is `series`. Table functions are called in the
-`FROM` clause:
+Start Haybarn as in [step 1](/vgi/docs/python/tutorial/scalar/#step-2--start-haybarn)
+(`npx haybarn@rc`, from the folder holding `calc_worker.py`). At the `memory H` prompt, load `vgi`
+and attach the worker:
 
-<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_worker.py');
-SELECT * FROM calc.series(3);`} lang="sql" tryable={false} />
+<CodeBlock code={`INSTALL vgi FROM community;
+LOAD vgi;
+
+ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_worker.py');`} lang="sql" tryable={false} />
+
+The catalog is still `calc`; the new function is `series`. Table functions are called in the `FROM`
+clause:
+
+<CodeBlock code={`SELECT * FROM calc.series(3);`} lang="sql" tryable={false} />
 
 <QueryResult columns={["n"]} rows={[[0], [1], [2]]} />
 
@@ -58,10 +75,13 @@ The scalar function is still there too — one worker, both functions:
 
 <QueryResult columns={["doubled"]} rows={[[0], [2], [4]]} />
 
-<Callout type="tip" title="It didn't work?">
+<InfoTip label="It didn't work?" title="Troubleshooting" width="34rem" up>
 - **`Binder Error: table function not found`** — table functions go in `FROM`, not `SELECT`:
   `SELECT * FROM calc.series(3)`, not `SELECT calc.series(3)`.
 - **`Invalid Input Error: count must be >= 0`** — that's the `ge=0` constraint doing its job;
   pass a non-negative `count`.
 - **Empty result** — `series(0)` is legitimately zero rows. Try `series(5)`.
-</Callout>
+</InfoTip>
+
+**Next:** [Explore the five function patterns →](/vgi/docs/python/how-to/function-patterns/) —
+table-in-out, aggregate, and buffering shapes, each with a runnable worker.

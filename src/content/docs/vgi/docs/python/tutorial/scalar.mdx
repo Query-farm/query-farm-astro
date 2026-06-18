@@ -5,27 +5,41 @@ description: Build and run a scalar VGI function callable from DuckDB.
 
 import Callout from '../../../../../../components/docs/Callout.astro';
 import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
 import QueryResult from '../../../../../../components/docs/QueryResult.astro';
 import workerSrc from '../../../../../../examples/vgi-python/calc_scalar_worker.py?raw';
 
 The first tutorial step: build a worker with one **scalar** function and call it from SQL — about
 **10 minutes**, for first-time VGI users with Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
-A scalar function maps one row to one row: `double(21)` → `42`.
+<InfoTip label="What's a “worker”?" title="What's a “worker”?">
+A **worker** is a small Python program DuckDB launches as a subprocess and talks to over Apache
+Arrow. It exposes one or more typed functions, and DuckDB calls them like built-ins.
+</InfoTip>
+
+<div class="kind-banner kind-banner--scalar"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><div class="kind-banner__text"><code class="kind-banner__formula">1 row → 1 value</code><p class="kind-banner__desc">Runs on each row independently and returns a single value — a pure per-row transform. This is the first of the <a href="/vgi/docs/python/how-to/function-patterns/">five function shapes</a>.</p></div></div>
+
+<Callout type="tip" title="Why this is powerful">
+`double` is intentionally trivial — DuckDB can already do `n * 2`. The point is that `compute` is
+**ordinary Python**: drop in a NumPy routine, a machine-learning model, a regex DuckDB's dialect
+lacks, or an HTTP API, and DuckDB calls it like a **native SQL function**.
+</Callout>
 
 ## Step 1 — Write the worker
 
-Create a file called `calc_scalar_worker.py`:
+The heart of the worker is the function itself — `compute` takes a whole column and returns one (the
+full file comes next):
 
-<CodeBlock code={workerSrc} lang="python" tryable={false} />
+<CodeBlock code={workerSrc.slice(workerSrc.indexOf('class Double'), workerSrc.indexOf('class CalcWorker')).trimEnd()} lang="python" title="calc_scalar_worker.py · excerpt" tryable={false} />
 
-What's going on:
+Three things to notice:
 
-1. **The `# /// script` header** is [inline script metadata](https://packaging.python.org/en/latest/specifications/inline-script-metadata/) — `uv run` provisions the dependencies, so there's no virtualenv to create.
-2. **`Double.compute` receives a whole column** (`pa.Int64Array`) and returns a column of the same length. The `Annotated[…]` types *are* the schema — VGI derives the SQL signature from them.
-3. **`CalcWorker` exposes a catalog** named `calc` containing the function.
+- **Any Python.** The body is `pc.multiply(value, 2)` today; tomorrow it's a model or an API call.
+- **A whole column at once.** `value` is a `pa.Int64Array` vector, not one row — vectorized over Apache Arrow.
+- **Types are the schema.** VGI reads the `Annotated[…]` hints to derive `double(BIGINT) → BIGINT` — no separate registration.
 
-<Callout type="tip" title="New to Apache Arrow?">
+<InfoTip label="New to Apache Arrow?" title="New to Apache Arrow?" width="34rem">
 [Apache Arrow](https://arrow.apache.org/) is a language-independent **columnar** memory format.
 Rather than rows of objects, data lives in **arrays** — also called **vectors**: a contiguous,
 typed sequence of values for a single column (here, a column of 64-bit integers). VGI hands your
@@ -41,31 +55,88 @@ DuckDB and your worker as Arrow **record batches** — a chunk of a table, i.e. 
 arrays.
 
 <a href="https://arrow.apache.org/" target="_blank" rel="noopener" class="arrow-logo-link"><img src="/vgi/apache-arrow.svg" alt="Apache Arrow" class="arrow-logo" /></a>
-</Callout>
+</InfoTip>
 
-## Step 2 — Attach and call it
+Save the whole thing as `calc_scalar_worker.py`. The full file wraps `Double` in a worker that
+publishes the `calc` catalog, plus a `# /// script` header so `uv run` installs `vgi-python` with no
+setup:
 
-Launch a DuckDB-compatible engine (Haybarn shown here), attach the worker, and call it:
+<Collapsible summary="calc_scalar_worker.py — full source">
+<CodeBlock code={workerSrc} lang="python" tryable={false} />
+</Collapsible>
 
-<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_scalar_worker.py');
-SELECT calc.double(21);`} lang="sql" tryable={false} />
+## Step 2 — Start Haybarn
+
+VGI functions run inside a DuckDB-compatible engine. We'll use **[Haybarn](/haybarn)** — start it
+from the folder holding `calc_scalar_worker.py`:
+
+<CodeBlock code={`npx haybarn@rc`} lang="bash" tryable={false} />
+
+This opens Haybarn's in-memory SQL shell — the `memory H` prompt — where the next step's SQL goes.
+(First run downloads the CLI; see [other install options](/haybarn/install).)
+
+<InfoTip label="Want to use a different engine?" title="Any DuckDB-compatible engine works">
+You don't have to use Haybarn — stock DuckDB or any DuckDB-compatible engine works. Whichever you
+use, the next step loads the `vgi` extension first.
+</InfoTip>
+
+## Step 3 — Attach and call it
+
+At the `memory H` prompt, load the `vgi` extension and attach the worker:
+
+<CodeBlock code={`INSTALL vgi FROM community;
+LOAD vgi;
+
+ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_scalar_worker.py');`} lang="sql" tryable={false} />
+
+The first `ATTACH` may pause for a few seconds while `uv` fetches `vgi-python` and PyArrow — that's
+normal on a cold run, not a hang.
+
+<InfoTip label="Prefer not to use uv?" title="Run the worker without uv">
+`LOCATION` is just the command the engine runs to launch the worker — uv only reads the script's
+inline `# /// script` header to auto-install `vgi-python`. To use plain Python instead, install the
+dependency yourself and point `LOCATION` at that interpreter:
+
+<CodeBlock code={`python3 -m venv .venv
+.venv/bin/pip install vgi-python`} lang="bash" tryable={false} />
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION '.venv/bin/python calc_scalar_worker.py');`} lang="sql" tryable={false} />
+
+Any command that starts the worker with `vgi-python` importable works — `uv run`, a venv's `python`,
+`pipx run`, or a system Python with the package installed.
+</InfoTip>
+
+Now call it:
+
+<CodeBlock code={`SELECT calc.double(21);`} lang="sql" tryable={false} />
 
 <QueryResult columns={["double(21)"]} rows={[[42]]} />
 
-Over a real column:
+…or over a whole column:
 
 <CodeBlock code={`SELECT calc.double(n) FROM (VALUES (1), (2), (3)) AS t(n);`} lang="sql" tryable={false} />
 
 <QueryResult columns={["double(n)"]} rows={[[2], [4], [6]]} />
 
+**What just happened:** `ATTACH` launched `calc_scalar_worker.py` as a subprocess and registered
+`calc.double` in your SQL session. DuckDB handed your Python the `n` column as a single Apache Arrow
+vector, `compute` ran on the whole thing at once, and the result streamed back — no row-by-row round
+trips. Swap `pc.multiply` for any Python you like and the SQL above doesn't change. That's the
+payoff: arbitrary Python, called like native SQL.
+
 You've built and run your first VGI function. 🎉
 
-<Callout type="tip" title="It didn't work?">
-- **`Catalog Error: unknown type "vgi"`** — the extension isn't loaded. On stock DuckDB run
-  `INSTALL vgi FROM community; LOAD vgi;` first; on Haybarn it's built in.
+<InfoTip label="It didn't work?" title="Troubleshooting" width="34rem" up>
+- **`Catalog Error: unknown type "vgi"`** — the extension isn't loaded. Run
+  `INSTALL vgi FROM community; LOAD vgi;` first (the first two lines above).
+- **`uv: command not found`** — uv isn't installed or isn't on the `PATH` of the shell that started
+  the engine. Install it with `curl -LsSf https://astral.sh/uv/install.sh | sh` and open a fresh
+  terminal — or skip uv entirely (see *Prefer not to use uv?* above).
 - **The `ATTACH` hangs** — run `uv run calc_scalar_worker.py` directly; the worker speaks Arrow over
   stdin/stdout, so it *looks* like it hangs waiting for input. You're checking for an import error
   on stderr.
 - **`Binder Error: function not found`** — the SQL name is the snake_case of the class name
   (`Double` → `double`), qualified by the catalog name from `ATTACH`.
-</Callout>
+</InfoTip>
+
+**Next:** [2. Add a table function →](/vgi/docs/python/tutorial/table/) — one worker, two functions.
