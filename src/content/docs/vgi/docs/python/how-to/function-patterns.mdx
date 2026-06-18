@@ -5,6 +5,8 @@ description: "The five VGI function shapes — scalar, table, table-in-out, aggr
 
 import Callout from '../../../../../../components/docs/Callout.astro';
 import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
 import QueryIO from '../../../../../../components/docs/QueryIO.astro';
 import scalarSrc from '../../../../../../examples/vgi-python/calc_scalar_worker.py?raw';
 import greetingSrc from '../../../../../../examples/vgi-python/greeting_scalar_worker.py?raw';
@@ -17,9 +19,11 @@ import rowCountSrc from '../../../../../../examples/vgi-python/row_count_worker.
 Each of the five VGI function shapes, with a complete, runnable worker for each — so you can find
 the shape that fits your problem. (Do the [tutorial](/vgi/docs/python/tutorial/scalar/) first.)
 
+<InfoTip label="Before you run these" title="Session setup">
 Each `ATTACH` below assumes you've loaded the extension once in your session with
 `INSTALL vgi FROM community;` then `LOAD vgi;`, and that [uv](https://docs.astral.sh/uv/) is on your
 `PATH` (the engine runs `uv run …` to launch each worker).
+</InfoTip>
 
 ## Which shape do I need?
 
@@ -38,7 +42,7 @@ At a glance — pick the shape whose input/output cardinality matches your probl
 <tr><th>Pattern</th><th>Shape</th><th>Use it when…</th><th>SQL</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>Scalar</strong></td><td>1 row → 1 row</td><td>you transform each row independently</td><td><code>SELECT f(col) FROM t</code></td></tr>
+<tr><td><strong>Scalar</strong></td><td>1 row → 1 value</td><td>you transform each row independently</td><td><code>SELECT f(col) FROM t</code></td></tr>
 <tr><td><strong>Table</strong></td><td>args → N rows</td><td>you generate rows from arguments</td><td><code>SELECT * FROM f(args)</code></td></tr>
 <tr><td><strong>Table-in-out</strong></td><td>N rows → M rows</td><td>you reshape/filter a streamed table</td><td><code>SELECT * FROM f((SELECT …))</code></td></tr>
 <tr><td><strong>Aggregate</strong></td><td>grouped rows → 1 row/group</td><td>you accumulate per <code>GROUP BY</code> group</td><td><code>SELECT f(col) FROM t GROUP BY k</code></td></tr>
@@ -53,7 +57,9 @@ At a glance — pick the shape whose input/output cardinality matches your probl
 One row in, one row out. Operate on the whole column with `pyarrow.compute`; the `Annotated` types
 *are* the schema.
 
+<Collapsible summary="calc_scalar_worker.py">
 <CodeBlock code={scalarSrc} lang="python" tryable={false} />
+</Collapsible>
 
 <CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_scalar_worker.py');
 SELECT calc.double(n) FROM (VALUES (1), (2), (3)) AS t(n);`} lang="sql" tryable={false} />
@@ -63,7 +69,9 @@ SELECT calc.double(n) FROM (VALUES (1), (2), (3)) AS t(n);`} lang="sql" tryable=
 Scalars aren't just for numbers — any column type works. A string transform looks the same; here
 `compute` joins `Hello, ` + name + `!` across the column:
 
+<Collapsible summary="greeting_scalar_worker.py">
 <CodeBlock code={greetingSrc} lang="python" tryable={false} />
+</Collapsible>
 
 <CodeBlock code={`SELECT greetings.greeting(name) FROM (VALUES ('Alice'), ('Bob')) AS t(name);`} lang="sql" tryable={false} />
 
@@ -78,12 +86,14 @@ Generate rows from arguments, no input table. Declare a typed args dataclass and
 decorators wire up the common single-worker lifecycle. (This is the full tutorial worker — the
 scalar `double` plus the `series` generator.)
 
+<Collapsible summary="calc_worker.py">
 <CodeBlock code={calcSrc} lang="python" tryable={false} />
+</Collapsible>
 
 <CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_worker.py');
 SELECT * FROM calc.series(3);`} lang="sql" tryable={false} />
 
-<QueryIO inLabel="Argument" inColumns={["count"]} inRows={[[3]]} outColumns={["n"]} outRows={[[0], [1], [2]]} />
+<QueryIO inColumns={["count"]} inRows={[[3]]} outColumns={["n"]} outRows={[[0], [1], [2]]} />
 
 ### Streaming with state
 
@@ -92,7 +102,9 @@ but `process` is actually called *repeatedly* until you call `out.finish()` — 
 you emit a bounded chunk per call and remember your place in a small **state** object. The state
 extends `ArrowSerializableDataclass` so it survives HTTP state round-trips:
 
+<Collapsible summary="series_streaming_worker.py">
 <CodeBlock code={streamingSrc} lang="python" tryable={false} />
+</Collapsible>
 
 <CodeBlock code={`SELECT * FROM calc.series(1000000);   -- streamed CHUNK rows per process() call`} lang="sql" tryable={false} />
 
@@ -104,7 +116,9 @@ Stream an input table through, batch by batch, emitting transformed output. `on_
 output schema; `process` receives each input `batch` and emits results. Here we keep only rows
 whose `value` column is positive.
 
+<Collapsible summary="filter_worker.py">
 <CodeBlock code={filterSrc} lang="python" tryable={false} />
+</Collapsible>
 
 <CodeBlock code={`ATTACH 'filters' (TYPE vgi, LOCATION 'uv run filter_worker.py');
 SELECT * FROM filters.filter_positive((SELECT * FROM (VALUES (-2), (5), (0), (9), (-1)) AS t(value)));`} lang="sql" tryable={false} />
@@ -119,7 +133,9 @@ Accumulate input rows into per-group state, then emit one row per group. Aggrega
 DuckDB's `GROUP BY` and run in three phases — `update` (fold a batch into per-group state),
 `combine` (merge partial states across parallel workers), and `finalize` (state → output row).
 
+<Collapsible summary="sum_worker.py">
 <CodeBlock code={sumSrc} lang="python" tryable={false} />
+</Collapsible>
 
 <CodeBlock code={`ATTACH 'aggregates' (TYPE vgi, LOCATION 'uv run sum_worker.py');
 SELECT category, aggregates.vgi_sum(value) AS total
@@ -145,7 +161,9 @@ batch), it runs in three phases: `process` (the **sink** — stash each batch, r
 Because the phases can run in different worker processes, state can't live in memory — it goes in
 `params.storage`, a shared store keyed to this call.
 
+<Collapsible summary="row_count_worker.py">
 <CodeBlock code={rowCountSrc} lang="python" tryable={false} />
+</Collapsible>
 
 <CodeBlock code={`ATTACH 'buffers' (TYPE vgi, LOCATION 'uv run row_count_worker.py');
 SELECT * FROM buffers.row_count((SELECT * FROM (VALUES (1), (2), (3), (4), (5)) AS t(x)));`} lang="sql" tryable={false} />

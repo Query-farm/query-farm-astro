@@ -3,8 +3,8 @@ title: 2. Add a table function
 description: Grow the worker with a table function that generates rows from an argument.
 ---
 
+import Callout from '../../../../../../components/docs/Callout.astro';
 import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
-import Collapsible from '../../../../../../components/docs/Collapsible.astro';
 import InfoTip from '../../../../../../components/docs/InfoTip.astro';
 import QueryResult from '../../../../../../components/docs/QueryResult.astro';
 import workerSrc from '../../../../../../examples/vgi-python/calc_worker.py?raw';
@@ -13,29 +13,40 @@ The second tutorial step: add a **table** function that *generates* rows, so one
 a scalar and a table function — about **10 minutes**, picking up from
 [step 1](/vgi/docs/python/tutorial/scalar/).
 
-A scalar function maps one row to one row. A **table function** produces a whole result set:
-`series(3)` → a three-row table `0, 1, 2`. This one is **stateless** — it computes every row from
-its argument in a single pass. (Step&nbsp;3 introduces streaming state for results too large to
-build at once.)
+<InfoTip label="What's a “worker”?" title="What's a “worker”?">
+A **worker** is a small Python program DuckDB launches as a subprocess and talks to over Apache
+Arrow. It exposes one or more typed functions, and DuckDB calls them like built-ins.
+</InfoTip>
 
 <div class="kind-banner kind-banner--table"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table.svg" alt="table shape" /><div class="kind-banner__text"><code class="kind-banner__formula">args → N rows</code><p class="kind-banner__desc">A table-valued source: scalar arguments in, a whole set of rows out — the second of the <a href="/vgi/docs/python/how-to/function-patterns/">five function shapes</a>.</p></div></div>
 
+`series(3)` → a three-row table `0, 1, 2`. This generator is **stateless** — it builds every row
+from its argument in one pass. (For results too large to build at once, the [function patterns
+guide](/vgi/docs/python/how-to/function-patterns/#streaming-with-state) shows the streaming-state
+version.)
+
+<Callout type="tip" title="Why this is powerful">
+`series` just counts, but a table function's `process` can emit rows from **anything** — a file
+format DuckDB can't read, a paginated HTTP API, a custom data source — and the rows stream straight
+into a SQL `FROM` clause.
+</Callout>
+
 ## Step 1 — Grow the worker
 
-Here's the new part — a `Series` generator that *produces* rows from its `count` argument:
+Add a `Series` generator alongside the `Double` from step 1 — it *produces* rows from a `count`
+argument. Save the whole file as `calc_worker.py`:
 
-<CodeBlock code={workerSrc.slice(workerSrc.indexOf('@dataclass'), workerSrc.indexOf('class CalcWorker')).trimEnd()} lang="python" title="calc_worker.py · new code" tryable={false} />
+<CodeBlock code={workerSrc} lang="python" title="calc_worker.py" tryable={false} />
 
-What's new compared to the scalar:
+Four things to notice about the new `Series` code:
 
-1. **Arguments are a dataclass.** `SeriesArgs` declares one positional argument, `count`, with an
-   `Arg(0, …, ge=0)` — the `0` is its position and `ge=0` rejects negatives at bind time.
-2. **`TableFunctionGenerator[SeriesArgs]`** is parameterised by the argument type. There's no second
-   type parameter because this generator keeps **no state** between calls.
-3. **`@bind_fixed_schema`** declares the output schema once, from `FIXED_SCHEMA` (one `int64`
-   column, `n`). **`@init_single_worker`** runs the generator in a single worker process.
-4. **`process` emits, then finishes.** It builds the whole column from `params.args.count`, calls
-   `out.emit(batch)` once, then `out.finish()` to close the stream.
+- **Typed arguments.** `SeriesArgs` declares `count` as positional arg `0`; `ge=0` rejects negatives at bind time.
+- **No state.** `TableFunctionGenerator[SeriesArgs]` takes just the argument type — this generator remembers nothing between calls.
+- **Schema up front.** `@bind_fixed_schema` publishes `FIXED_SCHEMA` (one `int64` column `n`); `@init_single_worker` runs it in one process.
+- **Emit, then finish.** `process` builds the column from `count`, calls `out.emit(batch)` once, then `out.finish()` to close the stream.
+
+Unlike a scalar, a table function is **pulled**: DuckDB keeps calling `process` until you signal
+`out.finish()` — that's why it's a *generator*.
 
 <InfoTip label="Why “generator” and not just “function”?" title="Why “generator”?" width="32rem">
 A table function is pulled, not called: the engine asks the worker for output until it signals
@@ -44,23 +55,31 @@ there are no more. Because this one produces everything in a single `process` ca
 to remember anything between calls, which is what *stateless* means here.
 </InfoTip>
 
-Register `Series` next to `Double` in the same `calc` worker and save the whole file as
-`calc_worker.py`:
-
-<Collapsible summary="calc_worker.py — full source">
-<CodeBlock code={workerSrc} lang="python" tryable={false} />
-</Collapsible>
-
 ## Step 2 — Attach and call it
 
-Start Haybarn as in [step 1](/vgi/docs/python/tutorial/scalar/#step-2--start-haybarn)
-(`npx haybarn@rc`, from the folder holding `calc_worker.py`). At the `memory H` prompt, load `vgi`
-and attach the worker:
+Start a **fresh** Haybarn shell as in [step 1](/vgi/docs/python/tutorial/scalar/#step-2--start-haybarn)
+(`npx haybarn@rc`, from the folder holding `calc_worker.py`) — fresh, so the `calc` name is still
+free. At the `memory H` prompt, load `vgi` and attach the grown worker:
 
 <CodeBlock code={`INSTALL vgi FROM community;
 LOAD vgi;
 
 ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_worker.py');`} lang="sql" tryable={false} />
+
+<InfoTip label="Want to use a different engine?" title="Any DuckDB-compatible engine works">
+You don't have to use Haybarn — stock DuckDB or any DuckDB-compatible engine works. The `LOAD vgi`
+line sets it up either way.
+</InfoTip>
+
+<InfoTip label="Prefer not to use uv?" title="Run the worker without uv">
+`LOCATION` is just the command the engine launches. Point it at any Python that has `vgi-python`
+installed instead of `uv run` — e.g. `.venv/bin/python calc_worker.py`. See
+[step 1](/vgi/docs/python/tutorial/scalar/#step-3--attach-and-call-it) for the venv recipe.
+</InfoTip>
+
+Continuing from the [scalar tutorial](/vgi/docs/python/tutorial/scalar/) in the same shell? Its
+`calc` is still the **scalar-only** worker, so `series` won't exist yet — run `DETACH calc;` first,
+then the attach above to load `calc_worker.py`.
 
 The catalog is still `calc`; the new function is `series`. Table functions are called in the `FROM`
 clause:
@@ -75,7 +94,17 @@ The scalar function is still there too — one worker, both functions:
 
 <QueryResult columns={["doubled"]} rows={[[0], [2], [4]]} />
 
+**What just happened:** one `calc` worker now serves two functions. `series` ran in the `FROM`
+clause — DuckDB pulled rows from your `process` method until it called `out.finish()` — and `double`
+transformed them, all in the same Python process. Point `process` at a file, an API, or a query and
+you have a custom table source DuckDB reads like any other.
+
+You've grown the worker into a two-function catalog. 🎉
+
 <InfoTip label="It didn't work?" title="Troubleshooting" width="34rem" up>
+- **`Failed to attach database: database with name "calc" already exists`** — `calc` is still
+  attached (from step 1, or you ran `ATTACH` twice). Run `DETACH calc;` and attach again, or open a
+  fresh Haybarn shell.
 - **`Binder Error: table function not found`** — table functions go in `FROM`, not `SELECT`:
   `SELECT * FROM calc.series(3)`, not `SELECT calc.series(3)`.
 - **`Invalid Input Error: count must be >= 0`** — that's the `ge=0` constraint doing its job;

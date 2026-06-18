@@ -104,11 +104,12 @@ export default defineConfig({
             { label: 'Table function', slug: 'vgi/docs/python/tutorial/table' },
           ],
         },
+        // Bridge between the tutorial and the task guides: the five shapes, pick yours.
+        { label: 'Function patterns', slug: 'vgi/docs/python/how-to/function-patterns' },
         {
           label: 'How-to guides',
           items: [
             { label: 'Overview', slug: 'vgi/docs/python/how-to' },
-            { label: 'Function patterns', slug: 'vgi/docs/python/how-to/function-patterns' },
             { label: 'Expose a catalog', slug: 'vgi/docs/python/how-to/catalogs' },
             { label: 'Persist state across workers', slug: 'vgi/docs/python/how-to/state-storage' },
             { label: 'Serve over HTTP', slug: 'vgi/docs/python/how-to/serve-http' },
