@@ -113,6 +113,7 @@ export default defineConfig({
             { label: 'Expose a catalog', slug: 'vgi/docs/python/how-to/catalogs' },
             { label: 'Persist state across workers', slug: 'vgi/docs/python/how-to/state-storage' },
             { label: 'Serve over HTTP', slug: 'vgi/docs/python/how-to/serve-http' },
+            { label: 'Use VGI from a Python app', slug: 'vgi/docs/python/how-to/python-app' },
             { label: 'Authentication', slug: 'vgi/docs/python/how-to/authentication' },
             { label: 'Integrate with the optimizer', slug: 'vgi/docs/python/how-to/pushdown-and-statistics' },
             { label: 'Function metadata', slug: 'vgi/docs/python/how-to/metadata' },
