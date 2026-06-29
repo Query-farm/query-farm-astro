@@ -3,7 +3,7 @@ title: "Building DuckDB's Community Extensions, Faster and More Consistently"
 description: "Every DuckDB engine release needs its community extensions rebuilt before they install. With data from 1,400+ PRs and a full-catalogue rebuild, we make the case for treating the catalogue as a distribution — and show Haybarn rebuilds it ~2.4× faster."
 pubDate: 2026-06-18
 author: 'Query.Farm Team'
-tags: ['duckdb', 'extensions', 'haybarn', 'build-performance', 'ci', 'distribution']
+tags: ['Distribution', 'Performance', 'Haybarn']
 ---
 
 > **Summary.** DuckDB is superb at being a database engine. But upgrading it can still break things: install a new DuckDB, run `INSTALL airport; LOAD airport;`, and you may be told the extension is not available for your version — because each community extension is a separate binary that must be rebuilt for every engine release. Building the engine and *distributing* the software around it are different problems, and the distribution side has two: at an engine release the extensions aren't built yet, and between releases it is unpredictable how long an extension update takes to ship. We argue — with data — that DuckDB's extension catalogue is best treated as a **distribution**, the way Ubuntu is a distribution of Linux. [Haybarn](https://github.com/Query-farm-haybarn) is that distribution for DuckDB — installable today with `npx haybarn@rc` or `uvx haybarn-cli` — and the findings below measure what it delivers.
