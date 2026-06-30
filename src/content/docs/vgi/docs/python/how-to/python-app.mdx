@@ -1,0 +1,49 @@
+---
+title: Use VGI from a Python app
+description: "Drive a VGI worker from your own Python program with the haybarn engine — the DuckDB-compatible package that ships the vgi extension."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+Run a worker from your **own Python program** — when your app already talks to DuckDB and you want
+VGI functions in the same process, without the Haybarn CLI.
+
+## Prerequisites
+
+- A worker you can run (see the [tutorial](/vgi/docs/python/tutorial/scalar/)).
+- `pip install haybarn vgi-python` — **`haybarn`** is the in-process engine (drop-in compatible with
+  the `duckdb` Python API) that ships the `vgi` extension; **`vgi-python`** is the worker library.
+
+## Connect and attach
+
+`haybarn.connect()` returns the same connection object as `duckdb.connect()`, so the rest is ordinary
+DuckDB SQL — load `vgi`, attach your worker, and query:
+
+<CodeBlock code={`import haybarn
+
+con = haybarn.connect()                       # in-memory; same API as duckdb.connect()
+con.execute("INSTALL vgi FROM community; LOAD vgi;")
+con.execute("ATTACH 'calc' (TYPE vgi, LOCATION 'uv run calc_worker.py')")
+
+con.execute("SELECT calc.double(21)").fetchone()        # (42,)
+con.execute("SELECT * FROM calc.series(3)").fetchall()  # [(0,), (1,), (2,)]`} lang="python" tryable={false} />
+
+<Callout type="note" title="Why haybarn, not the duckdb package?">
+The `vgi` extension is distributed through Haybarn's channel, not DuckDB's public community
+repository — so a plain `import duckdb` can't `INSTALL vgi` today. `haybarn` is DuckDB-compatible
+(`import haybarn as duckdb` works) and carries the extension, so use it as your engine.
+</Callout>
+
+## Calling a worker without an engine
+
+To invoke a worker's functions **directly from Python** — for tests or scripts, with no DuckDB engine
+in the loop — use the [`Client`](/vgi/docs/python/api/vgi-client/) instead. It speaks to the worker
+over the subprocess or HTTP transport and exposes the same calls. See
+[Serve over HTTP](/vgi/docs/python/how-to/serve-http/) for the HTTP variant.
+
+## Next steps
+
+- **Run the worker as a network service** → [Serve over HTTP](/vgi/docs/python/how-to/serve-http/).
+- **Expose tables and views, not just functions** → [Expose a catalog](/vgi/docs/python/how-to/catalogs/).
+- **The CLI path** → the [tutorial](/vgi/docs/python/tutorial/scalar/) drives the same SQL with `npx haybarn@rc`.
