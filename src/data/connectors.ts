@@ -27,6 +27,8 @@ export interface Connector {
   /** Short human price label shown on cards, e.g. "From $49/mo" or "Free". */
   priceNote: string;
   popular?: boolean;
+  /** Curated marketplace highlight — shown in the Featured row (Kafka leads). */
+  featured?: boolean;
   /** Rough monthly attach count, used to order the "Most used" nav list. */
   uses?: number;
   provider: string;
@@ -57,6 +59,7 @@ export const connectors: Connector[] = [
     pricing: 'subscription',
     priceNote: 'From $49/mo',
     popular: true,
+    featured: true,
     uses: 6900,
     provider: 'Query.Farm',
     language: 'Rust',
@@ -109,6 +112,7 @@ ORDER BY ts DESC;`,
     pricing: 'subscription',
     priceNote: 'From $29/mo',
     popular: true,
+    featured: true,
     uses: 5100,
     provider: 'Query.Farm',
     language: 'Python',
@@ -215,6 +219,7 @@ ORDER BY revenue DESC;`,
     pricing: 'subscription',
     priceNote: 'From $99/mo',
     popular: true,
+    featured: true,
     uses: 4300,
     provider: 'Query.Farm',
     language: 'Rust',
@@ -409,6 +414,11 @@ ORDER BY mag DESC;`,
 ];
 
 export const popularConnectors = connectors.filter((c) => c.popular);
+
+/** Curated Featured row — Kafka leads, then by attach count. Scales to any count. */
+export const featuredConnectors = connectors
+  .filter((c) => c.featured)
+  .sort((a, b) => Number(b.id === 'kafka') - Number(a.id === 'kafka') || (b.uses ?? 0) - (a.uses ?? 0));
 
 /** Connectors ordered by attach count — used for the "Most used" nav list. */
 export const topConnectors = [...connectors].sort((a, b) => (b.uses ?? -1) - (a.uses ?? -1));
