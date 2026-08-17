@@ -5,6 +5,31 @@
 import type { Table, Field } from "apache-arrow";
 import { formatCellValue, safeGetArrowValue } from "./format";
 
+/**
+ * SGR slots, resolved by the shell's xterm palette (see TERM_THEME in
+ * src/components/repl/ExampleShell.tsx), which mirrors the Shiki `farmTheme`.
+ *   CHROME  90  #8a7f70  rules, type row, footers, NULL — 4.6:1 on rock-900
+ *   NAME  1;34  #8fc7d8  identifiers / column names
+ *   NUM     93  #e0a44f  numerics
+ */
+const SGR_CHROME = "\x1b[90m";
+const SGR_NAME = "\x1b[1;34m";
+const SGR_NUM = "\x1b[93m";
+const SGR_OFF = "\x1b[0m";
+
+/** Unicode Box Drawing block (U+2500–U+257F) — every rule cli-table3 emits. */
+const BOX_DRAWING = /[─-╿]+/g;
+
+/**
+ * Drop the box rules back to chrome after layout. Colouring them before layout
+ * is not an option: with `wrapOnWordBoundary:false` cli-table3 measures raw
+ * string length, so escapes inside a cell inflate the width and get sliced
+ * mid-sequence. Rewriting the finished line is width-neutral.
+ */
+function dimBorders(line: string): string {
+  return line.replace(BOX_DRAWING, (run) => `${SGR_CHROME}${run}${SGR_OFF}`);
+}
+
 /** Minimal terminal output interface needed by the renderers. */
 export interface TerminalOutput {
   /** Current terminal width in columns. */
@@ -144,7 +169,7 @@ function formatFooter(numRows: number, displayRows: number, truncated: boolean, 
   const timeText = elapsedMs != null
     ? (elapsedMs < 1000 ? `${Math.round(elapsedMs)}ms` : `${(elapsedMs / 1000).toFixed(2)}s`)
     : "";
-  return `\x1b[2m${[rowText, totalCols > 1 ? colText : "", timeText].filter(Boolean).join("    ")}\x1b[0m`;
+  return `${SGR_CHROME}${[rowText, totalCols > 1 ? colText : "", timeText].filter(Boolean).join("    ")}${SGR_OFF}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -304,7 +329,9 @@ export async function printBoxTable(table: Table, out: TerminalOutput, maxDispla
   try {
     const Table = (await import("cli-table3")).default;
 
-    type CellContent = string | { content: string; hAlign: "left" | "right" | "center" };
+    type CellContent =
+      | string
+      | { content: string; hAlign: "left" | "right" | "center"; wordWrap?: boolean };
     const colWidths: number[] = [];
     const colAligns: ("left" | "right" | "center")[] = [];
     const headerRow: CellContent[] = [];
@@ -320,8 +347,11 @@ export async function printBoxTable(table: Table, out: TerminalOutput, maxDispla
       const ci = visibleIndices[vi];
       colWidths.push(idealWidths[ci] + 2);
       colAligns.push(isNumeric[ci] ? "right" : "left");
-      headerRow.push({ content: `\x1b[1m${truncStr(names[ci], idealWidths[ci])}\x1b[0m`, hAlign: "center" as const });
-      typeRow.push({ content: `\x1b[90m${truncStr(types[ci], idealWidths[ci])}\x1b[0m`, hAlign: "center" as const });
+      // Column names are identifiers, so they take the identifier blue (bold);
+      // the type row underneath is chrome. Names keep their real casing — this
+      // is a REPL and the header has to match what you'd type in a query.
+      headerRow.push({ content: `${SGR_NAME}${truncStr(names[ci], idealWidths[ci])}${SGR_OFF}`, hAlign: "center" as const });
+      typeRow.push({ content: `${SGR_CHROME}${truncStr(types[ci], idealWidths[ci])}${SGR_OFF}`, hAlign: "center" as const });
     }
     if (ellipsisPos === shownCount) {
       colWidths.push(3);
@@ -352,7 +382,7 @@ export async function printBoxTable(table: Table, out: TerminalOutput, maxDispla
     const hdrTbl = new Table({ ...tableOpts, wordWrap: false, chars: { ...tableOpts.chars, ...hdrBottomChars } });
     hdrTbl.push(headerRow);
     hdrTbl.push(typeRow);
-    for (const line of hdrTbl.toString().split("\n")) out.println(line);
+    for (const line of hdrTbl.toString().split("\n")) out.println(dimBorders(line));
 
     // Data table
     const dataTbl = new Table({
@@ -378,13 +408,35 @@ export async function printBoxTable(table: Table, out: TerminalOutput, maxDispla
         const val = grid[r][ci];
         // No manual truncation: cli-table3 wordWrap renders the full value
         // across as many lines as the column width needs (duckbox style).
-        const display = val === "NULL" ? `\x1b[2mNULL\x1b[0m` : val;
-        row.push(isNumeric[ci] ? { content: display, hAlign: "right" as const } : display);
+        //
+        // Colouring a cell means opting it out of wrapping: with
+        // `wrapOnWordBoundary:false` the wrapper measures raw string length, so
+        // the escapes would count toward the width and get cut mid-sequence.
+        // Numerics and NULL are short and their columns are sized to fit them,
+        // so nothing that gets colour here needed to wrap in the first place.
+        if (val === "NULL") {
+          row.push({
+            content: `${SGR_CHROME}NULL${SGR_OFF}`,
+            hAlign: isNumeric[ci] ? ("right" as const) : ("left" as const),
+            wordWrap: false,
+          });
+        } else if (isNumeric[ci]) {
+          // Right-aligned + monospace = tabular figures by construction, and
+          // the numeric amber matches `constant.numeric` in the Shiki theme.
+          const fits = displayWidth(val) <= idealWidths[ci];
+          row.push({
+            content: fits ? `${SGR_NUM}${val}${SGR_OFF}` : val,
+            hAlign: "right" as const,
+            ...(fits ? { wordWrap: false } : {}),
+          });
+        } else {
+          row.push(val);
+        }
       }
       if (ellipsisPos === shownCount) row.push({ content: "…", hAlign: "center" as const });
       dataTbl.push(row);
     }
-    for (const line of dataTbl.toString().split("\n")) out.println(line);
+    for (const line of dataTbl.toString().split("\n")) out.println(dimBorders(line));
 
     out.println(formatFooter(numRows, displayRows, truncated, totalCols, shownCount, elapsedMs));
   } catch {
@@ -412,17 +464,23 @@ export function printLineTable(table: Table, out: TerminalOutput, maxDisplayRows
     if (truncated && i === half) {
       const gapLabel = ` · · · ${numRows - maxDisplayRows} records omitted · · · `;
       const gapDashes = Math.max(0, lineWidth - gapLabel.length - 1);
-      out.println(`\x1b[2m─${gapLabel}${"─".repeat(gapDashes)}\x1b[0m`);
+      out.println(`${SGR_CHROME}─${gapLabel}${"─".repeat(gapDashes)}${SGR_OFF}`);
     }
     const r = indices[i];
     const label = ` RECORD ${r + 1} `;
     const dashCount = Math.max(0, lineWidth - label.length - 1);
-    out.println(`\x1b[2m─${label}${"─".repeat(dashCount)}\x1b[0m`);
+    out.println(`${SGR_CHROME}─${label}${"─".repeat(dashCount)}${SGR_OFF}`);
     for (let c = 0; c < totalCols; c++) {
       const val = formatVal(safeGetArrowValue(table.getChildAt(c), r, fields[c]), fields[c]);
       const name = names[c].padStart(maxNameLen);
-      const display = val === "NULL" ? `\x1b[2mNULL\x1b[0m` : val;
-      out.println(`${name} = ${display}`);
+      const numeric = isNumericField(fields[c]);
+      const display =
+        val === "NULL"
+          ? `${SGR_CHROME}NULL${SGR_OFF}`
+          : numeric
+            ? `${SGR_NUM}${val}${SGR_OFF}`
+            : val;
+      out.println(`${SGR_NAME}${name}${SGR_OFF}${SGR_CHROME} = ${SGR_OFF}${display}`);
     }
   }
 

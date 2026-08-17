@@ -43,7 +43,13 @@ PLATFORMS = [
     ("osx_amd64",        "macOS",        "Intel",         "duckdb_extension.gz"),
     ("osx_arm64",        "macOS",        "Apple Silicon", "duckdb_extension.gz"),
     ("windows_amd64",    "Windows",      "x86_64",        "duckdb_extension.gz"),
-    ("wasm_eh",          "WASM",         "",              "duckdb_extension.wasm"),
+    # All three WASM variants, each labelled: only `wasm_eh` was probed before,
+    # so `mvp` and `threads` never appeared in the docs even where published,
+    # and the blank architecture left the size table's Architecture cell empty
+    # for the one variant that did.
+    ("wasm_eh",          "WASM",         "eh",            "duckdb_extension.wasm"),
+    ("wasm_mvp",         "WASM",         "mvp",           "duckdb_extension.wasm"),
+    ("wasm_threads",     "WASM",         "threads",       "duckdb_extension.wasm"),
 ]
 
 # Not real installable extensions — never probed.
@@ -56,7 +62,14 @@ def probe_size(client: httpx.Client, url: str) -> tuple[int | None, bool]:
 
     Tries HEAD first (works for the gzipped artifacts). Cloudflare serves some
     artifacts (notably .wasm) without a Content-Length on HEAD, so fall back to
-    a single-byte ranged GET and read the total from Content-Range."""
+    a single-byte ranged GET and read the total from Content-Range.
+
+    For .wasm the CDN answers neither: HEAD 200 carries no Content-Length, and
+    the ranged request is ignored — it replies 200 (not 206) with no
+    Content-Range. That combination used to land on `(None, True)`, "present but
+    size unknown", which is why every WASM build showed up as a platform and
+    none of them ever produced a row in the binary-size table. When the server
+    won't state the size, stream the body and count it."""
     try:
         r = client.head(url, follow_redirects=True)
         if r.status_code == 404:
@@ -81,7 +94,22 @@ def probe_size(client: httpx.Client, url: str) -> tuple[int | None, bool]:
             cl = r.headers.get("Content-Length")
             if r.status_code == 200 and cl and cl.isdigit():
                 return int(cl), True
-            return None, True  # present, size unknown
+    except httpx.HTTPError:
+        pass
+
+    # Last resort: measure it. `iter_raw` counts the bytes as served, so this
+    # stays comparable with the Content-Length the .gz artifacts report rather
+    # than silently reporting a decompressed size.
+    try:
+        with client.stream("GET", url, follow_redirects=True) as r:
+            if r.status_code == 404:
+                return None, False
+            if r.status_code != 200:
+                return None, False
+            total = 0
+            for chunk in r.iter_raw():
+                total += len(chunk)
+            return total, True
     except httpx.HTTPError:
         pass
     return None, False

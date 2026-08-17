@@ -1,0 +1,250 @@
+---
+/**
+ * BarTable — a figure that is also its own table view.
+ *
+ * The mark sits inside a real <table>: sighted readers get bars, assistive tech
+ * and copy-paste get the numbers, and the "a table view exists" requirement is
+ * structural rather than a second rendering of the same data.
+ *
+ * Specs come from the data-viz skill's mark rules: bars capped at 24px and set
+ * to 11px here, 4px rounded data-end with a square baseline, hairline recessive
+ * rules, values direct-labelled at the tip, legend whenever there are 2+ series,
+ * and text in ink tokens — never in the series colour.
+ *
+ * Palette: series colours are validated, not chosen by eye. The default pair is
+ * sun-500 #c08e2f and #446f22 (field-700 nudged over the chroma floor), which
+ * clears CVD separation at ΔE 14.3 protan against the #f7f3ea surface. Re-run
+ * the validator before introducing a new pair.
+ */
+import type { BarRow, BarSeries } from './chart-types';
+
+interface Props {
+  title: string;
+  subtitle?: string;
+  series: BarSeries[];
+  rows: BarRow[];
+  /** Header for the annotation column; omit to hide the column. */
+  noteLabel?: string;
+  /** Header over the row-label column. */
+  rowHeader?: string;
+  /** Provenance line under the figure. */
+  source?: string;
+  /** Force the scale maximum; defaults to the largest value present. */
+  max?: number;
+  /** Decimal places for the direct labels. */
+  precision?: number;
+  class?: string;
+}
+
+const {
+  title,
+  subtitle,
+  series,
+  rows,
+  noteLabel,
+  rowHeader = '',
+  source,
+  max,
+  precision = 1,
+  class: className = '',
+} = Astro.props;
+
+const scaleMax = max ?? Math.max(...rows.flatMap(row => row.values));
+const showNotes = Boolean(noteLabel);
+const multi = series.length > 1;
+
+const fmt = (n: number) => n.toFixed(precision);
+const pct = (n: number) => `${Math.max((n / scaleMax) * 100, 0.8)}%`;
+---
+
+<figure class:list={['qf-chart', className]}>
+  <figcaption>
+    <span class="qf-chart-title">{title}</span>
+    {subtitle && <span class="qf-chart-sub">{subtitle}</span>}
+  </figcaption>
+
+  {multi && (
+    <ul class="qf-chart-legend">
+      {series.map(s => (
+        <li>
+          <span class="qf-chart-key" style={`background:${s.color}`} aria-hidden="true"></span>
+          {s.label}
+        </li>
+      ))}
+    </ul>
+  )}
+
+  <div class="qf-chart-scroll">
+    <table class="qf-chart-table">
+      <thead>
+        <tr>
+          <th scope="col">{rowHeader}</th>
+          {series.map(s => <th scope="col" data-numeric>{s.label}</th>)}
+          {showNotes && <th scope="col" data-numeric>{noteLabel}</th>}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(row => (
+          <tr>
+            <th scope="row">{row.label}</th>
+            {row.values.map((value, i) => (
+              <td>
+                <span class="qf-bar-cell">
+                  <span class="qf-bar-track">
+                    <span
+                      class="qf-bar"
+                      style={`width:${pct(value)};background:${row.color ?? series[i].color}`}
+                      title={`${row.label} — ${series[i].label}: ${fmt(value)}${series[i].unit ?? ''}`}
+                    ></span>
+                  </span>
+                  <span class="qf-bar-value qf-figure">{fmt(value)}</span>
+                </span>
+              </td>
+            ))}
+            {showNotes && <td data-numeric><span class="qf-figure qf-bar-note">{row.note}</span></td>}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+
+  {source && <p class="qf-chart-source">{source}</p>}
+</figure>
+
+<style>
+  .qf-chart {
+    margin: 0;
+    border: 1px solid var(--color-soil-300);
+    border-radius: 12px;
+    background: #fffdf7;
+    padding: 20px 20px 16px;
+  }
+
+  .qf-chart figcaption {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .qf-chart-title {
+    font-family: var(--font-display);
+    font-size: 19px;
+    line-height: 1.2;
+    color: var(--color-soil-900);
+  }
+  .qf-chart-sub {
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--color-soil-700);
+  }
+
+  /* Identity lives in the swatch beside the text, never in the text colour. */
+  .qf-chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin: 14px 0 0;
+    padding: 0;
+    list-style: none;
+    font-size: 13px;
+    color: var(--color-soil-700);
+  }
+  .qf-chart-legend li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .qf-chart-key {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    flex: none;
+  }
+
+  /* Wide figures scroll inside their own box; the page never scrolls sideways. */
+  .qf-chart-scroll {
+    margin-top: 12px;
+    overflow-x: auto;
+  }
+
+  .qf-chart-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+  }
+  .qf-chart-table th,
+  .qf-chart-table td {
+    padding: 7px 0;
+    text-align: left;
+    vertical-align: middle;
+  }
+  .qf-chart-table thead th {
+    font-weight: 500;
+    font-size: 12.5px;
+    color: var(--color-soil-500);
+    border-bottom: 1px solid var(--color-soil-300);
+    padding-bottom: 8px;
+  }
+  .qf-chart-table thead th[data-numeric] { text-align: left; }
+  .qf-chart-table tbody th {
+    font-weight: 400;
+    color: var(--color-soil-900);
+    padding-right: 16px;
+    white-space: nowrap;
+  }
+  .qf-chart-table tbody tr + tr th,
+  .qf-chart-table tbody tr + tr td {
+    border-top: 1px solid var(--color-soil-200);
+  }
+  .qf-chart-table td { padding-right: 14px; }
+  .qf-chart-table td:last-child { padding-right: 0; }
+
+  .qf-bar-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 132px;
+  }
+  .qf-bar-track {
+    position: relative;
+    flex: 1;
+    min-width: 60px;
+    height: 11px;
+    display: block;
+  }
+  /* 4px rounded data-end, square at the baseline it grows from. */
+  .qf-bar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    height: 11px;
+    border-radius: 0 4px 4px 0;
+    transition: opacity 0.15s ease;
+  }
+  .qf-chart-table tr:hover .qf-bar { opacity: 0.82; }
+  @media (prefers-reduced-motion: reduce) {
+    .qf-bar { transition: none; }
+  }
+
+  .qf-bar-value {
+    flex: none;
+    min-width: 34px;
+    text-align: right;
+    color: var(--color-soil-900);
+  }
+  .qf-bar-note {
+    color: var(--color-soil-700);
+    white-space: nowrap;
+  }
+
+  .qf-chart-source {
+    margin: 14px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--color-soil-500);
+  }
+
+  /* Forced-colours / print: the fill is the only identity channel, so give the
+     bars a border that the UA is obliged to keep. */
+  @media (forced-colors: active) {
+    .qf-bar { border: 1px solid CanvasText; background: Highlight !important; }
+  }
+</style>

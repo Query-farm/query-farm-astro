@@ -1,0 +1,583 @@
+---
+/**
+ * PlatformDiagram — how the Query.Farm offerings are organized, as one
+ * top-to-bottom stack rather than a bag of peer cards. Six bands, read
+ * downward: where you query → the engine → the extension layer → the policy
+ * hop → workers → whatever those workers reach.
+ *
+ * Two facts about the shape, both deliberate:
+ *
+ *  1. **Extensions are not inside Haybarn.** They load into Haybarn *or*
+ *     upstream DuckDB, so both engines sit side by side in their own band and
+ *     the extension band hangs beneath them off a shared bus. Nesting the
+ *     extensions inside a Haybarn box implied a dependency that doesn't exist.
+ *  2. **Everything below the extension band lives in the VGI lane** (the
+ *     right-hand column, `LANE`). Rowfence and the workers are only reachable
+ *     through the VGI extension, so they sit under it rather than spanning the
+ *     page. The DuckDB-extensions column is a deliberate dead end — that *is*
+ *     the story: in-process capability, nothing to deploy.
+ *
+ * Same drawing idiom as the VGI diagrams (BigPictureDiagram,
+ * AccessProxyDiagram): a fixed-viewBox SVG on a cream card, ink strokes for
+ * context boxes, a gold stroke for the boxes that are actual Query.Farm
+ * products, and animated packets on the wires — gold downward (the query),
+ * green upward (Arrow results). Products are real links, so the diagram
+ * doubles as navigation.
+ *
+ * Geometry is derived, not hand-placed: `ROW_H` + one `GAP` produce every band
+ * y-coordinate and the viewBox height, so changing a band's height (or adding
+ * one) re-flows the rest instead of needing every literal re-tuned by eye.
+ *
+ * Below `md` the SVG is replaced by the same bands as stacked HTML — a
+ * 1000-unit-wide viewBox squeezed into a phone puts the labels at ~5px. Both
+ * renderings walk the same `bands` array, so they can't drift.
+ */
+import { publicExtensions } from '../../data/extensions';
+import { PH, PH_VB, SI, SI_VB } from './platform-icons';
+
+// The catalog counts itself rather than carrying a number that goes stale.
+const extensionCount = publicExtensions.length;
+
+// ── Canvas ────────────────────────────────────────────────────────────────
+const VB_W = 1000;
+const RAIL_R = 140; // band labels are right-aligned to here
+const CX = 170; // content left edge
+const CW = 800; // content width
+const MID = CX + CW / 2; // 570 — the center, where the client wires converge
+
+const GAP = 44; // vertical space between bands, where the wires live
+const TOP = 18;
+const ROW_H = [88, 96, 112, 92, 126, 70];
+const rowY = ROW_H.reduce<number[]>((acc, _h, i) => {
+  acc.push(i === 0 ? TOP : acc[i - 1] + ROW_H[i - 1] + GAP);
+  return acc;
+}, []);
+const rowBottom = (i: number) => rowY[i] + ROW_H[i];
+const busY = (i: number) => rowBottom(i) + GAP / 2; // the wire bus in gap i
+const VB_H = rowBottom(ROW_H.length - 1) + TOP;
+
+// Text rhythm inside a box, from the box's own top-left corner.
+const ICON_CX = 30;
+const ICON_CY = 29;
+const ICON_S = 26;
+const TITLE_X = 54; // clears the icon
+const TITLE_DY = 36;
+const LINE_X = 22;
+const LINE_DY = [60, 80];
+const LANG_DY = 102; // the language strip in the VGI workers box
+const LANG_S = 21;
+const LANG_STEP = 34;
+
+type Icon = { src: string; w: number; h: number } | { ph: string } | { emoji: string };
+
+interface Node {
+  id: string;
+  title: string;
+  lines: string[];
+  /** Mobile copy, when `lines` are separate facts rather than one wrapped
+   *  sentence and so don't read as prose when joined. */
+  prose?: string;
+  icon: Icon;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** A Query.Farm product: gold stroke, and the box links to its page. */
+  product?: boolean;
+  href?: string;
+  badge?: string;
+  /** simple-icons keys for the language strip. */
+  langs?: { key: string; name: string }[];
+  /** The outside world, drawn as a dashed outline. */
+  dashed?: boolean;
+}
+
+// ── Column geometry ───────────────────────────────────────────────────────
+const B1_W = 252; // 3 × 252 + 2 × 22 = 800
+const b1x = [CX, CX + B1_W + 22, CX + 2 * (B1_W + 22)];
+const b1cx = b1x.map((x) => x + B1_W / 2); // 296, 570, 844
+
+const ENG_W = 300; // 2 × 300 + 40, centered in the content width
+const engX = [CX + (CW - (2 * ENG_W + 40)) / 2, CX + (CW - (2 * ENG_W + 40)) / 2 + ENG_W + 40];
+const engCx = engX.map((x) => x + ENG_W / 2); // 400, 740
+
+const HALF_W = 390; // 2 × 390 + 20 = 800 — the two-column bands
+const halfX = [CX, CX + HALF_W + 20];
+const halfCx = halfX.map((x) => x + HALF_W / 2); // 365, 775
+
+const LANE = halfCx[1]; // 775 — the VGI lane: everything below hangs off this
+const RF_W = 340;
+
+const LANGS = [
+  { key: 'python', name: 'Python' },
+  { key: 'typescript', name: 'TypeScript' },
+  { key: 'go', name: 'Go' },
+  { key: 'rust', name: 'Rust' },
+  { key: 'openjdk', name: 'Java' },
+];
+
+const bands: { rail: string; nodes: Node[] }[] = [
+  {
+    rail: 'Query surface',
+    nodes: [
+      {
+        id: 'cupola',
+        title: 'Cupola',
+        lines: ['Browse & query in the browser'],
+        icon: { src: '/cupola/cupola-icon-96.png', w: 26, h: 26 },
+        x: b1x[0], y: rowY[0], w: B1_W, h: ROW_H[0],
+        product: true,
+        href: '/products/cupola',
+      },
+      {
+        id: 'apps',
+        title: 'Your app or BI tool',
+        lines: ['DuckDB clients, ADBC, ODBC'],
+        icon: { ph: 'app-window' },
+        x: b1x[1], y: rowY[0], w: B1_W, h: ROW_H[0],
+      },
+      {
+        id: 'cli',
+        title: 'CLI & notebooks',
+        lines: ['duckdb, Python, dbt'],
+        icon: { ph: 'terminal-window' },
+        x: b1x[2], y: rowY[0], w: B1_W, h: ROW_H[0],
+      },
+    ],
+  },
+  {
+    rail: 'SQL engine',
+    nodes: [
+      {
+        id: 'haybarn',
+        title: 'Haybarn',
+        lines: ['Signed, compatible distribution'],
+        icon: { src: '/haybarn/haybarn-logo.png', w: 28, h: 28 },
+        x: engX[0], y: rowY[1], w: ENG_W, h: ROW_H[1],
+        product: true,
+        href: '/haybarn',
+      },
+      {
+        id: 'duckdb',
+        title: 'DuckDB',
+        lines: ['Upstream, unmodified'],
+        icon: { src: '/images/duckdb-icon.svg', w: 26, h: 26 },
+        x: engX[1], y: rowY[1], w: ENG_W, h: ROW_H[1],
+      },
+    ],
+  },
+  {
+    rail: 'Extension layer',
+    nodes: [
+      {
+        id: 'extensions',
+        title: 'DuckDB extensions',
+        lines: [`${extensionCount} installable SQL capabilities`, 'Run in the engine — nothing to deploy'],
+        prose: `${extensionCount} installable SQL capabilities that run inside the engine — nothing to deploy`,
+        icon: { ph: 'puzzle-piece' },
+        x: halfX[0], y: rowY[2], w: HALF_W, h: ROW_H[2],
+        product: true,
+        href: '/products/extensions',
+      },
+      {
+        id: 'vgi',
+        title: 'VGI extension',
+        lines: ['Carries the query out as Arrow IPC,', 'over pipes, sockets, or HTTP'],
+        icon: { src: '/vgi/vgi-emblem.png', w: 28, h: 21 },
+        x: halfX[1], y: rowY[2], w: HALF_W, h: ROW_H[2],
+        product: true,
+        href: '/vgi',
+      },
+    ],
+  },
+  {
+    rail: 'Access control',
+    nodes: [
+      {
+        id: 'rowfence',
+        title: 'Rowfence',
+        lines: ['Cedar policies decide which rows,', 'columns, and functions a caller sees'],
+        icon: { src: '/rowfence/rowfence-icon.svg', w: 26, h: 26 },
+        x: LANE - RF_W / 2, y: rowY[3], w: RF_W, h: ROW_H[3],
+        product: true,
+        href: '/products/rowfence',
+        badge: 'Preview',
+      },
+    ],
+  },
+  {
+    rail: 'Workers',
+    nodes: [
+      {
+        id: 'workers',
+        title: 'VGI workers',
+        lines: ['Your API, service, model, or business logic'],
+        icon: { ph: 'cube' },
+        x: halfX[0], y: rowY[4], w: HALF_W, h: ROW_H[4],
+        product: true,
+        href: '/vgi/building-a-worker',
+        langs: LANGS,
+      },
+      {
+        id: 'orchard',
+        title: 'Orchard connectors',
+        lines: ['Subscribe to a worker someone else built,', 'then ATTACH it in one line of SQL'],
+        icon: { emoji: '🌳' },
+        x: halfX[1], y: rowY[4], w: HALF_W, h: ROW_H[4],
+        product: true,
+        href: '/products/orchard',
+        badge: 'Preview',
+      },
+    ],
+  },
+  {
+    rail: 'Data & compute',
+    nodes: [
+      {
+        id: 'sources',
+        title: 'Anything a worker can reach',
+        lines: ['APIs · databases · object stores · files · models · libraries'],
+        icon: { ph: 'database' },
+        x: CX, y: rowY[5], w: CW, h: ROW_H[5],
+        dashed: true,
+      },
+    ],
+  },
+];
+
+const nodes = bands.flatMap((b) => b.nodes);
+
+// ── Wires ─────────────────────────────────────────────────────────────────
+// A bus route: down out of one box, along a shared horizontal bus, down into
+// another. Overlapping segments coincide exactly, so N routes over one bus
+// draw as one bus. Corners are rounded to match the curves elsewhere.
+const R = 10;
+const busRoute = (x1: number, y1: number, x2: number, yb: number, y2: number) => {
+  if (x1 === x2) return `M${x1} ${y1} L${x1} ${y2}`;
+  const s = Math.sign(x2 - x1);
+  return `M${x1} ${y1} L${x1} ${yb - R} Q${x1} ${yb} ${x1 + s * R} ${yb} L${x2 - s * R} ${yb} Q${x2} ${yb} ${x2} ${yb + R} L${x2} ${y2}`;
+};
+// A fan: one point curving out to another column.
+const fan = (x1: number, y1: number, x2: number, y2: number) =>
+  x1 === x2 ? `M${x1} ${y1} L${x2} ${y2}` : `M${x1} ${y1} C${x1} ${y1 + 24} ${x2} ${y2 - 24} ${x2} ${y2}`;
+
+// Every client can reach either engine, and all those routes share one bus —
+// so these four draw exactly the same picture as all six would, with fewer
+// packets riding the same segments.
+const clientRoutes: [number, number][] = [
+  [b1cx[0], engCx[0]],
+  [b1cx[1], engCx[0]],
+  [b1cx[1], engCx[1]],
+  [b1cx[2], engCx[1]],
+];
+
+const wires = [
+  // Clients → either engine, over one bus
+  ...clientRoutes.map(([cx, ex], i) => ({
+    d: busRoute(cx, rowBottom(0), ex, busY(0), rowY[1]),
+    t: i * 0.32,
+  })),
+  // Either engine → either extension, over one bus: extensions don't belong to
+  // Haybarn, they load into whichever engine you run.
+  ...engCx.flatMap((ex, i) =>
+    halfCx.map((hx, j) => ({ d: busRoute(ex, rowBottom(1), hx, busY(1), rowY[2]), t: 0.25 + i * 0.3 + j * 0.45 })),
+  ),
+  // From here down it's the VGI lane only. The extensions column stops.
+  { d: fan(LANE, rowBottom(2), LANE, rowY[3]), t: 0.2 },
+  ...halfCx.map((hx, i) => ({ d: fan(LANE, rowBottom(3), hx, rowY[4]), t: 0.4 + i * 0.4 })),
+  ...halfCx.map((hx, i) => ({ d: `M${hx} ${rowBottom(4)} L${hx} ${rowY[5]}`, t: 0.3 + i * 0.5 })),
+].map((w, i) => ({ ...w, id: `pf-wire-${i}` }));
+
+// Gap labels. The two bus gaps put their label clear of the bus's right end;
+// the lane gaps sit just left of the lane trunk.
+const gapLabels = [
+  { text: 'SQL', x: VB_W - 34, y: busY(0) - 8, anchor: 'end' },
+  { text: 'loaded into either engine', x: VB_W - 34, y: busY(1) - 10, anchor: 'end' },
+  { text: 'Arrow IPC', x: LANE - 14, y: rowY[3] - 16, anchor: 'end' },
+  { text: 'scoped scan', x: LANE - 14, y: rowY[4] - 16, anchor: 'end' },
+];
+
+// Place a viewBox-relative icon's own origin so it lands centered at (cx, cy).
+const iconTransform = (vb: { x: number; y: number; w: number; h: number }, size: number, cx: number, cy: number) => {
+  const s = size / vb.w;
+  return `translate(${(cx - (vb.w / 2) * s - vb.x * s).toFixed(2)},${(cy - (vb.h / 2) * s - vb.y * s).toFixed(2)}) scale(${s.toFixed(5)})`;
+};
+
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+const ariaLabel =
+  'Diagram: Cupola, your applications, and the DuckDB CLI issue SQL to either Haybarn or upstream DuckDB. ' +
+  'Both engines load DuckDB extensions and the VGI extension. The VGI extension reaches VGI workers — written in ' +
+  'Python, TypeScript, Go, Rust, or Java — and Orchard connectors, optionally through Rowfence, and those workers ' +
+  'wrap APIs, databases, object stores, files, and models.';
+---
+
+<div class={`${CARD} p-4 md:p-6`}>
+  <!-- ── The diagram (md and up) ────────────────────────────────────── -->
+  <svg
+    class="pf-flow hidden h-auto w-full md:block"
+    viewBox={`0 0 ${VB_W} ${VB_H}`}
+    xmlns="http://www.w3.org/2000/svg"
+    xmlns:xlink="http://www.w3.org/1999/xlink"
+    aria-labelledby="pf-diagram-title"
+  >
+    <!-- Labelled with <title>, deliberately NOT role="img": the product boxes
+         are real links, and role="img" makes every descendant presentational —
+         which would leave eight focusable elements that a screen reader never
+         announces. -->
+    <title id="pf-diagram-title">{ariaLabel}</title>
+
+    <!-- Wires, under everything -->
+    {wires.map((w) => <path id={w.id} d={w.d} fill="none" class="stroke-soil-300" stroke-width="2.5" />)}
+
+    <!-- Packets: gold down (the query), green up (Arrow results) -->
+    {wires.map((w) => (
+      <>
+        <circle r="5" class="fill-sun-400">
+          <animateMotion dur="2.4s" repeatCount="indefinite" begin={`${w.t.toFixed(2)}s`}>
+            <mpath xlink:href={`#${w.id}`} />
+          </animateMotion>
+        </circle>
+        <circle r="4" class="fill-field-600">
+          <animateMotion
+            dur="2.8s"
+            repeatCount="indefinite"
+            begin={`${(w.t + 1).toFixed(2)}s`}
+            keyPoints="1;0"
+            keyTimes="0;1"
+            calcMode="linear"
+          >
+            <mpath xlink:href={`#${w.id}`} />
+          </animateMotion>
+        </circle>
+      </>
+    ))}
+
+    {gapLabels.map((l) => (
+      <text x={l.x} y={l.y} text-anchor={l.anchor} class="fill-soil-500 font-bold" font-size="13" font-family="inherit">
+        {l.text}
+      </text>
+    ))}
+
+    <!-- "or": the two engines are alternatives, not a pipeline -->
+    <text
+      x={MID}
+      y={rowY[1] + ROW_H[1] / 2 + 5}
+      text-anchor="middle"
+      class="fill-soil-500 font-bold"
+      font-size="13"
+      font-family="inherit"
+    >
+      or
+    </text>
+
+    <!-- Band labels, in the left rail -->
+    {bands.map((b, i) => (
+      <text
+        x={RAIL_R}
+        y={rowY[i] + 26}
+        text-anchor="end"
+        class="fill-soil-500 font-bold"
+        font-size="12"
+        font-family="inherit"
+        letter-spacing="1"
+      >
+        {b.rail.toUpperCase()}
+      </text>
+    ))}
+
+    <!-- Nodes. Products are anchors, so the diagram is also navigation. -->
+    {nodes.map((n) => {
+      const Box = n.href ? 'a' : 'g';
+      const boxProps = n.href ? { href: n.href, class: 'pf-node group', 'aria-label': n.title } : {};
+      return (
+        <Box {...boxProps}>
+          <rect
+            x={n.x}
+            y={n.y}
+            width={n.w}
+            height={n.h}
+            rx="16"
+            class:list={[
+              n.product ? 'fill-[#fffdf7] stroke-sun-500' : n.dashed ? 'fill-none stroke-soil-300' : 'fill-soil-100 stroke-soil-300',
+              n.href && 'group-hover:stroke-sun-700',
+            ]}
+            stroke-width={n.product ? 2.5 : 2}
+            stroke-dasharray={n.dashed ? '7 6' : undefined}
+          />
+
+          {'ph' in n.icon ? (
+            <g
+              class="text-soil-700"
+              transform={iconTransform(PH_VB, ICON_S, n.x + ICON_CX, n.y + ICON_CY)}
+              set:html={PH[n.icon.ph]}
+            />
+          ) : 'emoji' in n.icon ? (
+            <text
+              x={n.x + ICON_CX}
+              y={n.y + ICON_CY}
+              text-anchor="middle"
+              dominant-baseline="central"
+              font-size="23"
+            >
+              {n.icon.emoji}
+            </text>
+          ) : (
+            <image
+              href={n.icon.src}
+              x={n.x + ICON_CX - n.icon.w / 2}
+              y={n.y + ICON_CY - n.icon.h / 2}
+              width={n.icon.w}
+              height={n.icon.h}
+            />
+          )}
+
+          <text x={n.x + TITLE_X} y={n.y + TITLE_DY} class="fill-soil-900 font-extrabold" font-size="17" font-family="inherit">
+            {n.title}
+          </text>
+
+          {n.badge && (
+            <text
+              x={n.x + n.w - 16}
+              y={n.y + 26}
+              text-anchor="end"
+              class="fill-sun-700 font-bold"
+              font-size="11.5"
+              font-family="inherit"
+              letter-spacing="1"
+            >
+              {n.badge.toUpperCase()}
+            </text>
+          )}
+
+          {n.lines.map((line, li) => (
+            <text x={n.x + LINE_X} y={n.y + LINE_DY[li]} class="fill-soil-700" font-size="13" font-family="inherit">
+              {line}
+            </text>
+          ))}
+
+          {/* The five SDKs, as marks. Each carries a <title> so hovering names
+              it, and the names are in the diagram's own <title> too. */}
+          {n.langs?.map((lang, li) => (
+            <g
+              class="text-soil-700"
+              transform={iconTransform(SI_VB, LANG_S, n.x + LINE_X + LANG_S / 2 + li * LANG_STEP, n.y + LANG_DY)}
+              set:html={`<title>${lang.name}</title>${SI[lang.key]}`}
+            />
+          ))}
+          {n.langs && (
+            <text
+              x={n.x + LINE_X + n.langs.length * LANG_STEP + 6}
+              y={n.y + LANG_DY + 5}
+              class="fill-soil-500"
+              font-size="12.5"
+              font-family="inherit"
+            >
+              five SDKs, one protocol
+            </text>
+          )}
+        </Box>
+      );
+    })}
+  </svg>
+
+  <!-- ── The same bands, stacked (below md) ──────────────────────────── -->
+  <div class="flex flex-col gap-1.5 md:hidden">
+    {bands.map((b, bi) => (
+      <>
+        {bi > 0 && (
+          <div class="flex items-center gap-2 pl-1 text-[12px] text-soil-500">
+            <span aria-hidden="true">↓</span>
+            <span>{['SQL', 'loaded into either engine', 'Arrow IPC', 'scoped scan', 'reads & calls'][bi - 1]}</span>
+          </div>
+        )}
+        <div>
+          <p class="qf-eyebrow text-soil-500">{b.rail}</p>
+          <div class="mt-2 flex flex-col gap-2">
+            {b.nodes.map((n) => {
+              const Tile = n.href ? 'a' : 'div';
+              const tileProps = n.href ? { href: n.href } : {};
+              return (
+                <Tile
+                  {...tileProps}
+                  class:list={[
+                    'flex items-start gap-3 rounded-xl border p-3.5 no-underline',
+                    n.product ? 'border-sun-500 bg-[#fffdf7]' : 'border-soil-300 bg-soil-100',
+                  ]}
+                >
+                  <span class="mt-0.5 flex-none">
+                    {'ph' in n.icon ? (
+                      <svg viewBox="0 0 256 256" class="h-5 w-5 text-soil-700" aria-hidden="true" set:html={PH[n.icon.ph]} />
+                    ) : 'emoji' in n.icon ? (
+                      <span class="text-[18px] leading-none" aria-hidden="true">{n.icon.emoji}</span>
+                    ) : (
+                      <img src={n.icon.src} alt="" width="20" height="20" class="h-5 w-5 object-contain" />
+                    )}
+                  </span>
+                  <span class="min-w-0">
+                    <span class="flex flex-wrap items-baseline gap-2">
+                      <span class="text-[15px] font-bold text-soil-900">{n.title}</span>
+                      {n.badge && <span class="qf-eyebrow text-sun-700">{n.badge}</span>}
+                    </span>
+                    <span class="mt-0.5 block text-[13px] leading-snug text-soil-700">{n.prose ?? n.lines.join(' ')}</span>
+                    {n.langs && (
+                      <span class="mt-2 flex items-center gap-2.5">
+                        {n.langs.map((lang) => (
+                          <svg viewBox="0 0 24 24" class="h-[17px] w-[17px] text-soil-700" role="img" aria-label={lang.name} set:html={SI[lang.key]} />
+                        ))}
+                      </span>
+                    )}
+                  </span>
+                </Tile>
+              );
+            })}
+          </div>
+        </div>
+      </>
+    ))}
+  </div>
+
+  <!-- ── Legend ─────────────────────────────────────────────────────── -->
+  <div class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-1.5 border-t border-soil-200 pt-3.5 text-[12.5px] text-soil-700">
+    <span class="flex items-center gap-2">
+      <span class="h-2.5 w-2.5 flex-none rounded-full bg-sun-400" aria-hidden="true"></span>
+      Query, down the stack
+    </span>
+    <span class="flex items-center gap-2">
+      <span class="h-2.5 w-2.5 flex-none rounded-full bg-field-600" aria-hidden="true"></span>
+      Results as Arrow, back up
+    </span>
+    <span class="flex items-center gap-2">
+      <span class="h-2.5 w-3.5 flex-none rounded-[3px] border-2 border-sun-500 bg-[#fffdf7]" aria-hidden="true"></span>
+      A Query.Farm product — every one links to its page
+    </span>
+  </div>
+</div>
+
+<style>
+  .pf-node {
+    cursor: pointer;
+  }
+  .pf-node text {
+    text-decoration: none;
+  }
+  .pf-node rect {
+    transition: stroke 160ms ease;
+  }
+  /* SVG can't take a ring utility, so focus reads on the box's own stroke. */
+  .pf-node:focus-visible {
+    outline: none;
+  }
+  .pf-node:focus-visible rect {
+    stroke: var(--color-sun-700);
+    stroke-width: 4;
+  }
+</style>
+
+<script>
+  // Reduced motion: freeze the packets. Same treatment as BigPictureDiagram.
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    document.querySelectorAll('svg.pf-flow').forEach((s) => {
+      (s as SVGSVGElement & { pauseAnimations?: () => void }).pauseAnimations?.();
+    });
+  }
+</script>

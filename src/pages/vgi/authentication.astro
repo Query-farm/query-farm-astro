@@ -1,0 +1,301 @@
+---
+import PageLayout from '../../layouts/PageLayout.astro';
+import VGISubNav from '../../components/sections/VGISubNav.astro';
+import PageHead from '../../components/ui/PageHead.astro';
+import Button from '../../components/ui/Button.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import AuthFlowDiagram from '../../components/vgi/AuthFlowDiagram.astro';
+import AuthActorsDiagram from '../../components/vgi/AuthActorsDiagram.astro';
+import VGISectionNav from '../../components/sections/VGISectionNav.astro';
+
+// ── Shared shape vocabulary (brief §10) — same tokens the other Family-C
+// VGI pages use, not a second set of names for the same things.
+const WRAP_WIDE = 'mx-auto w-full max-w-[1360px] px-6 sm:px-7';
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+const EYEBROW = 'qf-eyebrow text-sun-700';
+const P = 'mt-4 leading-relaxed text-soil-700';
+const CODE = 'rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900';
+const CURRENT = '/vgi/authentication';
+
+const toc = [
+  { id: 'why', label: 'Why identity, in a database?' },
+  { id: 'overview', label: 'Two ways in' },
+  { id: 'oauth', label: 'OAuth, picked automatically' },
+  { id: 'pkce', label: 'The PKCE flow' },
+  { id: 'device-code', label: 'The device-code flow' },
+  { id: 'refresh', label: 'Staying signed in' },
+  { id: 'wasm', label: 'In the browser' },
+  { id: 'introspection', label: 'Checking what’s connected' },
+  { id: 'next-steps', label: 'Where to next' },
+];
+
+// VERIFIED real syntax — src/vgi_extension.cpp parses `bearer_token` and
+// `oauth_refresh_token` directly as ATTACH options (mutually exclusive,
+// throws a BinderException if both are set); both are also accepted as
+// connection-string query params and redacted from AttachInfo/telemetry.
+const attachExample = `-- A static token, no flow at all
+ATTACH 'crm' (TYPE vgi, LOCATION 'https://crm.example.com', bearer_token 'sk_live_...');
+
+-- A refresh token you already have — VGI exchanges it for access tokens itself
+ATTACH 'crm' (TYPE vgi, LOCATION 'https://crm.example.com', oauth_refresh_token '...');
+
+-- Neither — VGI runs a full interactive OAuth flow on first query
+ATTACH 'crm' (TYPE vgi, LOCATION 'https://crm.example.com');`;
+
+// VERIFIED real setting — PerformAuthFlow (vgi_oauth.cpp) reads
+// vgi_oauth_flow ('auto' | 'device_code' | 'pkce') to override its own
+// automatic selection.
+const flowSettingExample = `-- Force device-code even on a machine with a browser
+SET vgi_oauth_flow = 'device_code';
+
+-- Give an interactive flow longer than the 120s default to complete
+SET vgi_oauth_timeout_seconds = 300;`;
+
+// VERIFIED real table functions (vgi_oauth.cpp) — vgi_oauth_tokens() reports
+// per-catalog token status; vgi_oauth_identity() surfaces the TLS-trusted
+// but unverified OIDC claims parsed from the current access token.
+const introspectionExample = `SELECT * FROM vgi_oauth_tokens();
+-- catalog_name | origin                    | status | expires_in | has_refresh_token
+
+SELECT * FROM vgi_oauth_identity();
+-- catalog_name | origin | authenticated | sub | email | name | issuer | claims_json`;
+
+const nextCards = [
+  { title: 'Row & Column Security', body: 'Once someone’s identity reaches the worker, restrict what they see by row and column.', href: '/vgi/row-column-security' },
+  { title: 'Architecture', body: 'Transports, lifecycle, and the wire format underneath all of this.', href: '/vgi/architecture' },
+  { title: 'Getting Started', body: 'Attach your first worker — with or without auth.', href: '/vgi/getting-started' },
+];
+
+const pageDescription =
+  'ATTACH takes a bearer token or a full OAuth flow — PKCE, device-code, and refresh-token handling all built into the VGI extension itself. No per-worker auth code, no credential store to manage.';
+---
+
+<PageLayout
+  title="VGI — Authentication"
+  description={pageDescription}
+>
+  <VGISubNav />
+
+  <!-- ── Page header ─────────────────────────────────────────── -->
+  <PageHead
+    variant="section"
+    wide
+    eyebrow="Authentication"
+    title="Bearer tokens and OAuth, built into ATTACH."
+    lede="DuckDB itself has no concept of who's asking — the closest thing was a static secret for reaching S3 or an API. VGI adds real identity: Google, Microsoft Entra ID, Auth0, or any OAuth 2.0 provider you already run, with PKCE, device-code, and refresh-token handling built into the extension itself — not a library you integrate per worker."
+  >
+    <div class="mt-6 flex flex-wrap items-center gap-3">
+      <Button href="/vgi/row-column-security" variant="primary" size="md">Row & Column Security →</Button>
+      <Button href="/vgi/getting-started" variant="secondary" size="md">Getting started</Button>
+    </div>
+  </PageHead>
+
+  <!-- ── Docs grid: section nav / content / page TOC ──────────── -->
+  <div class={`${WRAP_WIDE} grid gap-10 py-10 lg:grid-cols-[220px_minmax(0,1fr)_200px] lg:gap-11`}>
+    <aside class="hidden lg:block lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto">
+      <VGISectionNav current={CURRENT} />
+    </aside>
+
+    <!-- Not a landmark element: BaseLayout already renders the page's single main. -->
+
+    <div class="min-w-0">
+      <!-- ── Why identity, in a database? ───────────────────────── -->
+      <p class={`${EYEBROW} block`}>Where this starts</p>
+      <h2 id="why" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">DuckDB doesn't have a concept of identity</h2>
+      <p class={P}>
+        DuckDB has no built-in concept of identity — it's one process, running with whatever
+        credentials it's given. The closest thing before VGI was the Secrets Manager: one S3 key
+        or API token, applied uniformly, because the process was reaching a resource on its own
+        account, not acting on behalf of a person.
+      </p>
+      <p class={P}>
+        A VGI worker is often not a bucket — it's a real product with real customers, or an
+        internal system with real employees, and the data behind it is usually entitled: not
+        everyone should see everything. That's an authentication problem, and building an identity
+        provider is out of scope for a database. So VGI doesn't — it forwards tokens from providers
+        that already exist (Google, Microsoft Entra ID, Auth0, any OAuth 2.0 / OIDC provider)
+        straight to the worker, which validates them.
+      </p>
+
+      <div class="mt-6">
+        <AuthActorsDiagram />
+      </div>
+
+      <p class={P}>
+        <strong class="font-medium text-soil-900">Each attached catalog has its own identity —
+        there's no single VGI “identity” shared across all of them.</strong> It's scoped at the
+        same granularity as <code class={CODE}>ATTACH</code> itself: one catalog can be
+        authenticated as you against Entra ID, the next might carry a static bearer token, another
+        might need no auth at all.
+      </p>
+
+      <!-- ── Two ways in ───────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The mechanism</p>
+      <h2 id="overview" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">A token in the ATTACH, or nothing at all</h2>
+      <p class={P}>
+        A worker that requires credentials takes them the same way any other worker option
+        does — as part of <code class={CODE}>ATTACH</code>. A static <code class={CODE}>bearer_token</code>
+        goes straight onto every request. An <code class={CODE}>oauth_refresh_token</code> you
+        already have lets VGI mint access tokens itself, silently, for as long as that refresh
+        token stays valid. The two are mutually exclusive — set both and DuckDB refuses to attach.
+        Leave both out against a worker that requires OAuth, and VGI runs a full interactive flow
+        the first time a query needs it.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={attachExample} lang="sql" title="attach-with-auth.sql" />
+      </div>
+      <p class={P}>
+        Either value is redacted from <code class={CODE}>AttachInfo</code> and from telemetry —
+        it never appears in a query plan, an error message, or a log line. Tokens themselves stay
+        in memory only, scoped to that one catalog for that one DuckDB process; nothing is written
+        to disk, and it isn't the DuckDB Secrets Manager doing the holding.
+      </p>
+
+      <!-- ── OAuth, automatically ──────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>No flag to remember</p>
+      <h2 id="oauth" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">OAuth, picked automatically</h2>
+      <p class={P}>
+        When a worker needs interactive OAuth, VGI decides which flow to run rather than making
+        you choose one. If the worker's advertised metadata has no
+        <code class={CODE}>authorization_endpoint</code> at all, it goes straight to device-code —
+        there's nothing a browser-based flow could do there anyway. Otherwise it detects whether
+        it's running somewhere a browser can plausibly pop up: a CI runner, an SSH session, a
+        Docker container, a Colab notebook, or any environment with no <code class={CODE}>DISPLAY</code>
+        all route to device-code automatically. Everywhere else, it tries PKCE first — and falls
+        back to device-code on its own if it can't bind a local callback port.
+      </p>
+      <p class={P}>
+        That decision is overridable, not fixed — <code class={CODE}>vgi_oauth_flow</code> forces
+        one path, and <code class={CODE}>vgi_oauth_timeout_seconds</code> (120s by default) extends
+        how long an interactive flow is allowed to wait for you.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={flowSettingExample} lang="sql" title="oauth-settings.sql" />
+      </div>
+
+      <!-- ── PKCE ──────────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>When there's a browser</p>
+      <h2 id="pkce" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">The PKCE flow</h2>
+      <p class={P}>
+        The default path on a desktop machine. DuckDB proves it's the same client that started the
+        flow by generating a one-time secret and only ever sending its hash — so even the local
+        callback server that receives the redirect can't be tricked into handing tokens to a
+        different process.
+      </p>
+      <div class="mt-5">
+        <AuthFlowDiagram steps={[
+          { label: 'ATTACH starts a local callback server', detail: 'DuckDB opens a short-lived listener on 127.0.0.1 and generates a PKCE code_verifier / code_challenge pair (SHA-256, via OpenSSL).' },
+          { label: 'Your system browser opens', detail: 'The authorization URL carries code_challenge_method=S256 — nothing secret is in it, so it’s safe to have crossed the network.' },
+          { label: 'You log in and approve', detail: 'Authentication happens entirely on the identity provider’s own page. VGI never sees your password.' },
+          { label: 'The provider redirects back with a code', detail: 'The redirect lands on the local callback server, carrying a one-time authorization code.' },
+          { label: 'DuckDB exchanges the code for tokens', detail: 'The code plus the original code_verifier go to the token endpoint together — the verifier proves it’s the same client that started the flow.' },
+          { label: 'Query runs, authenticated', detail: 'The local server shuts down and the access token attaches to every request on that catalog.' },
+        ]} />
+      </div>
+
+      <!-- ── Device code ───────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>When there isn't</p>
+      <h2 id="device-code" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">The device-code flow</h2>
+      <p class={P}>
+        RFC 8628, in full — not a stripped-down version. Nothing about it needs a browser or an
+        open port on the machine running DuckDB, which is exactly why it's the automatic choice
+        over SSH, in CI, or inside a container.
+      </p>
+      <div class="mt-5">
+        <AuthFlowDiagram steps={[
+          { label: 'ATTACH requests a device code', detail: 'DuckDB asks the authorization server for a device_code and a short user_code — no browser or listener needed on this machine at all.' },
+          { label: 'A code and URL are printed', detail: 'The user_code and a verification URL show up wherever DuckDB is running — a terminal over SSH, a CI job log, a headless box with no display.' },
+          { label: 'You approve on any other device', detail: 'Open the URL on your phone or laptop, enter the code, log in. The machine running DuckDB never needs a browser of its own.' },
+          { label: 'DuckDB polls in the background', detail: 'The client polls the token endpoint at the interval the server sets, honoring authorization_pending and slow_down rather than hammering it.' },
+          { label: 'Once you approve, tokens arrive', detail: 'The next poll returns real tokens instead of authorization_pending, and polling stops immediately.' },
+          { label: 'Query runs, authenticated', detail: 'Same as the PKCE path from here — the access token attaches to every request on that catalog.' },
+        ]} />
+      </div>
+
+      <!-- ── Refresh ───────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>After the first login</p>
+      <h2 id="refresh" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Staying signed in</h2>
+      <p class={P}>
+        Refresh isn't proactive — VGI doesn't track an access token's expiry and race to beat it.
+        It's reactive: the worker returns a 401, and only then does VGI reach for the refresh
+        token. That keeps the common case (a token that's still valid) doing no extra work at all.
+      </p>
+      <div class="mt-5">
+        <AuthFlowDiagram steps={[
+          { label: 'A request comes back 401', detail: 'The worker rejects an expired access token on an ordinary query — nothing about the flow up to this point changes.' },
+          { label: 'The stored refresh token is used', detail: 'DuckDB exchanges it for a new access token via a grant_type=refresh_token request — no browser, no re-login.' },
+          { label: 'The original request retries automatically', detail: 'The query that triggered the 401 runs again with the new token, invisibly, from the caller’s side.' },
+          { label: 'Concurrent queries wait, not race', detail: 'If several queries hit 401 at once, only the first triggers a refresh; the rest block on it and reuse the result instead of each starting their own.' },
+        ]} />
+      </div>
+      <p class={P}>
+        If the refresh itself fails for a reason other than an expired or revoked grant, VGI falls
+        back to a full interactive flow rather than failing the query outright — the same PKCE or
+        device-code choice described above, run again from scratch.
+      </p>
+
+      <!-- ── WASM ──────────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>In the browser</p>
+      <h2 id="wasm" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">The same flows, inside WebAssembly</h2>
+      <p class={P}>
+        Everywhere on this site where you can run a query directly in the browser — the
+        <a href="/vgi#tour" class="text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">10-second tour</a>,
+        the extension docs' “Try it in your browser” buttons — that's the real VGI extension
+        compiled to WASM, and it handles OAuth there too, just not by redirecting the page. A
+        popup opens instead, the extension's Worker thread blocks on it via a
+        <code class={CODE}>SharedArrayBuffer</code> until the popup reports back a code, and the
+        redirect URI is a static page on this site (<code class={CODE}>/oauth-callback.html</code>)
+        rather than anything VGI-specific. To avoid ever holding a
+        <code class={CODE}>client_secret</code> in browser JavaScript, the WASM build prefers a
+        server-advertised PKCE token-exchange proxy for the final code-for-token exchange when the
+        provider offers one.
+      </p>
+
+      <!-- ── Introspection ─────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>What's actually connected</p>
+      <h2 id="introspection" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Checking what's connected</h2>
+      <p class={P}>
+        Two table functions expose live auth state without leaving SQL.
+        <code class={CODE}>vgi_oauth_tokens()</code> reports, per attached catalog, whether a
+        token is active, expired, or absent, how long until it expires, and whether a refresh
+        token is on file. <code class={CODE}>vgi_oauth_identity()</code> goes further and parses
+        the OIDC claims out of the current access token — subject, email, name, issuer — useful
+        for confirming <em>who</em> a worker thinks you are, not just whether you're connected.
+        Those claims come from the token as presented — TLS-trusted, not independently
+        re-verified against the identity provider on every call.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={introspectionExample} lang="sql" title="check-auth-state.sql" />
+      </div>
+
+      <!-- Next -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Keep going</p>
+      <h2 id="next-steps" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Where to next</h2>
+      <div class="mt-6 grid gap-3.5 sm:grid-cols-3">
+        {nextCards.map(c => (
+          <a
+            href={c.href}
+            class={`${CARD} block p-5 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}
+          >
+            <h3 class="text-lg text-soil-900">{c.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{c.body}</p>
+          </a>
+        ))}
+      </div>
+    </div>
+
+    <aside class="hidden xl:block xl:sticky xl:top-24 xl:self-start">
+      <h2 class="mb-2.5 text-[12.5px] font-semibold text-soil-500">On this page</h2>
+      <ul class="flex flex-col gap-0.5">
+        {toc.map((item) => (
+          <li>
+            <a
+              href={`#${item.id}`}
+              class="block border-l-2 border-soil-200 px-2.5 py-1 text-[13px] text-soil-700 no-underline transition hover:border-soil-300 hover:text-soil-900"
+            >{item.label}</a>
+          </li>
+        ))}
+      </ul>
+    </aside>
+  </div>
+</PageLayout>

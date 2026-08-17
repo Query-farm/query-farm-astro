@@ -1,0 +1,109 @@
+---
+/**
+ * Small "where does this run" diagrams for the three real ways to run a
+ * worker — local pipe, your own infrastructure, or Orchard. All three share
+ * identical inner geometry (DuckDB box, Worker box, and the wire between
+ * them never move) so they read as one comparison rather than three
+ * unrelated pictures — the only thing that changes is how many "environment"
+ * boundaries are drawn around those two fixed boxes, and what they're
+ * labeled. `local` draws one boundary around both boxes (co-located);
+ * `self-hosted` and `orchard` draw two separate boundaries with the wire
+ * crossing the gap between them (networked).
+ */
+interface Props {
+  variant: 'local' | 'self-hosted' | 'orchard';
+}
+const { variant } = Astro.props;
+
+const DUCKDB_MARK = {
+  vb: { x: 217.6, y: 10, w: 334.4, h: 334.4 },
+  body: `
+    <path fill="#000" d="M384.8,344.4L384.8,344.4c-92.5,0-167.2-74.7-167.2-167.2l0,0C217.6,84.7,292.3,10,384.8,10l0,0 C477.3,10,552,84.7,552,177.2l0,0C552,269.6,477.3,344.4,384.8,344.4z"/>
+    <path fill="#fff100" d="M474.2,152.2h-32.8v49.5h32.8c13.7,0,24.9-11.3,24.9-24.9S487.9,152.2,474.2,152.2"/>
+    <path fill="#fff100" d="M280.7,177.1c0,38.2,31.1,69.3,69.3,69.3c38.2,0,69.3-31.1,69.3-69.3s-31.1-69.3-69.3-69.3 C311.8,107.8,280.7,138.9,280.7,177.1L280.7,177.1"/>
+  `,
+};
+// Phosphor "cube" — a generic stand-in for "a worker process," the same icon
+// regardless of variant. The boundary labels do the distinguishing, not the icon.
+const CUBE_VB = { x: 0, y: 0, w: 256, h: 256 };
+const CUBE_BODY =
+  '<path fill="currentColor" d="m223.68 66.15l-88-48.15a15.88 15.88 0 0 0-15.36 0l-88 48.17a16 16 0 0 0-8.32 14v95.64a16 16 0 0 0 8.32 14l88 48.17a15.88 15.88 0 0 0 15.36 0l88-48.17a16 16 0 0 0 8.32-14V80.18a16 16 0 0 0-8.32-14.03M128 32l80.34 44L128 120L47.66 76ZM40 90l80 43.78v85.79l-80-43.75Zm96 129.57v-85.75L216 90v85.78Z"/>';
+
+const iconTransform = (vb: { x: number; y: number; w: number; h: number }, size: number, cx: number, cy: number) => {
+  const s = size / vb.w;
+  const tx = cx - (vb.w / 2) * s - vb.x * s;
+  const ty = cy - (vb.h / 2) * s - vb.y * s;
+  return `translate(${tx.toFixed(2)},${ty.toFixed(2)}) scale(${s.toFixed(5)})`;
+};
+
+// ── Fixed geometry — identical across all three variants ──
+const VB_W = 560;
+const VB_H = 220;
+const DDB_X = 50, DDB_Y = 70, DDB_W = 180, DDB_H = 90;
+const WRK_X = 330, WRK_Y = 70, WRK_W = 180, WRK_H = 90;
+const ddbCx = DDB_X + DDB_W / 2;
+const ddbCy = DDB_Y + DDB_H / 2;
+const wrkCx = WRK_X + WRK_W / 2;
+const wrkCy = WRK_Y + WRK_H / 2;
+const wireD = `M${DDB_X + DDB_W} ${ddbCy} L${WRK_X} ${wrkCy}`;
+
+const config = {
+  local: {
+    wireLabel: 'pipe (stdio)',
+    boundaries: [{ x: 30, y: 30, w: 500, h: 160, label: 'Your machine' }],
+  },
+  'self-hosted': {
+    wireLabel: 'HTTP',
+    boundaries: [
+      { x: 30, y: 30, w: 220, h: 160, label: 'Your machine' },
+      { x: 310, y: 30, w: 220, h: 160, label: 'Your infrastructure' },
+    ],
+  },
+  orchard: {
+    wireLabel: 'HTTP',
+    boundaries: [
+      { x: 30, y: 30, w: 220, h: 160, label: 'Your machine' },
+      { x: 310, y: 30, w: 220, h: 160, label: 'Orchard' },
+    ],
+  },
+}[variant];
+
+const ariaLabel =
+  variant === 'local'
+    ? 'Diagram: DuckDB and the worker run as two processes on the same machine, connected by a pipe.'
+    : `Diagram: DuckDB on your machine connects over HTTP to a worker running on ${variant === 'orchard' ? 'Orchard, hosted by Query Farm' : 'your own infrastructure'}.`;
+
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+---
+
+<div class={`${CARD} p-4`}>
+  <svg
+    class="w-full h-auto"
+    viewBox={`0 0 ${VB_W} ${VB_H}`}
+    xmlns="http://www.w3.org/2000/svg"
+    role="img"
+    aria-label={ariaLabel}
+  >
+    <!-- Environment boundary/boundaries -->
+    {config.boundaries.map(b => (
+      <>
+        <rect x={b.x} y={b.y} width={b.w} height={b.h} rx="14" fill="none" class="stroke-soil-300" stroke-width="2" stroke-dasharray="5 5" />
+        <text x={b.x + 14} y={b.y + 20} text-anchor="start" class="fill-soil-500 font-bold" font-size="11" font-family="inherit" letter-spacing="0.5">{b.label.toUpperCase()}</text>
+      </>
+    ))}
+
+    <!-- Wire + label -->
+    <path d={wireD} fill="none" class="stroke-soil-300" stroke-width="2.5" />
+    <text x={(DDB_X + DDB_W + WRK_X) / 2} y={ddbCy - 12} text-anchor="middle" class="fill-soil-500 font-bold" font-size="11" font-family="inherit">{config.wireLabel}</text>
+
+    <!-- DuckDB -->
+    <rect x={DDB_X} y={DDB_Y} width={DDB_W} height={DDB_H} rx="14" class="fill-soil-100 stroke-soil-900" stroke-width="2.5" />
+    <g transform={iconTransform(DUCKDB_MARK.vb, 30, ddbCx, ddbCy - 14)} set:html={DUCKDB_MARK.body} />
+    <text x={ddbCx} y={ddbCy + 26} text-anchor="middle" class="fill-soil-900 font-extrabold" font-size="16" font-family="inherit">DuckDB</text>
+
+    <!-- Worker -->
+    <rect x={WRK_X} y={WRK_Y} width={WRK_W} height={WRK_H} rx="14" class="fill-[#fffdf7] stroke-soil-900" stroke-width="2.5" />
+    <g class="text-soil-700" transform={iconTransform(CUBE_VB, 26, wrkCx, wrkCy - 14)} set:html={CUBE_BODY} />
+    <text x={wrkCx} y={wrkCy + 26} text-anchor="middle" class="fill-soil-900 font-extrabold" font-size="16" font-family="inherit">Worker</text>
+  </svg>
+</div>

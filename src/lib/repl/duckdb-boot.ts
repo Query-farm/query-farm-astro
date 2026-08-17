@@ -18,12 +18,17 @@
 // connection on its own `ATTACH ':memory:'` database — so tables/state created
 // in one example never leak into another. Extensions are installed once,
 // engine-wide, and are visible to every session.
+//
+// One exception: catalogs an *example's own SQL* attaches (`ATTACH ... AS
+// foo`) live in DuckDB's engine-wide catalog namespace, not the session —
+// isolation there is Session.runQuery()'s job (see attachAliasOf below),
+// not something a private `:memory:` database gets for free.
 
 import * as duckdb from "@haybarn/haybarn-wasm";
 
 // Pin to the installed @haybarn/haybarn-wasm version so the JS API surface and
 // the CDN-hosted wasm/worker artifacts stay in lockstep. Bump both together.
-const HAYBARN_WASM_VERSION = "1.5.3-rc14";
+const HAYBARN_WASM_VERSION = "1.5.5-rc2";
 // unpkg, not jsDelivr: the package's unpacked size (168 MB as of rc13) exceeds
 // jsDelivr's 150 MB limit, which makes it 403 every file in the package.
 const CDN = `https://unpkg.com/@haybarn/haybarn-wasm@${HAYBARN_WASM_VERSION}/dist`;
@@ -137,8 +142,74 @@ export function ensureExtension(
   return pending;
 }
 
+/** Split a SQL snippet into individual statements on top-level semicolons,
+ *  ignoring semicolons inside single/double-quoted strings and line comments.
+ *  Shared by every consumer that runs a multi-statement example verbatim
+ *  (the terminal shell, the map example) rather than each re-implementing it. */
+export function splitStatements(sql: string): string[] {
+  const out: string[] = [];
+  let buf = "";
+  let quote: string | null = null;
+  let lineComment = false;
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i];
+    const next = sql[i + 1];
+    if (lineComment) {
+      buf += c;
+      if (c === "\n") lineComment = false;
+      continue;
+    }
+    if (quote) {
+      buf += c;
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "-" && next === "-") {
+      lineComment = true;
+      buf += c;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      buf += c;
+      continue;
+    }
+    if (c === ";") {
+      const t = buf.trim();
+      if (t) out.push(t);
+      buf = "";
+      continue;
+    }
+    buf += c;
+  }
+  const tail = buf.trim();
+  if (tail) out.push(tail);
+  return out;
+}
+
+/** True if a split fragment is only SQL comments / whitespace — e.g. a trailing
+ *  explanatory line after an example's last statement. Nothing to run. */
+export function isCommentOnly(sql: string): boolean {
+  const stripped = sql
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/--[^\n]*/g, "")
+    .trim();
+  return stripped === "";
+}
+
 export interface Session {
   runQuery: (sql: string) => Promise<QueryResult>;
+}
+
+/** `ATTACH ... AS <alias>` registers the alias in the engine's catalog
+ *  namespace, which is global — not scoped to the connection/session that
+ *  issued it. So two independent example shells that both attach under the
+ *  same alias (two tabs on the same worker, or the same example reopened,
+ *  since nothing DETACHes on close) fail with "database with name already
+ *  exists" even though each has its own private session. */
+function attachAliasOf(sql: string): string | null {
+  const m = /^\s*ATTACH\b[\s\S]*?\bAS\s+["']?([A-Za-z_][A-Za-z0-9_]*)["']?/i.exec(sql);
+  return m ? m[1] : null;
 }
 
 let sessionCounter = 0;
@@ -161,6 +232,18 @@ export async function createSession(): Promise<Session> {
   return {
     async runQuery(sql: string): Promise<QueryResult> {
       try {
+        // Best-effort: free up the alias first so re-running an ATTACH (a
+        // different tab reusing it, or the same example run twice) is
+        // idempotent rather than a hard error. No-op, silently, if nothing
+        // was attached under that name yet.
+        const alias = attachAliasOf(sql);
+        if (alias) {
+          try {
+            await db.runQuery(connId, `DETACH ${alias}`);
+          } catch {
+            /* wasn't attached — nothing to free */
+          }
+        }
         const bytes = await db.runQuery(connId, sql);
         const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
         return { ok: true, buffer: ab };

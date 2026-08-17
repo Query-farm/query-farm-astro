@@ -1,8 +1,5 @@
 ---
 import PageLayout from '../../../layouts/PageLayout.astro';
-import Card from '../../../components/ui/Card.astro';
-import Badge from '../../../components/ui/Badge.astro';
-import Button from '../../../components/ui/Button.astro';
 import SectionHeader from '../../../components/ui/SectionHeader.astro';
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import ExtensionHero from '../../../components/products/ExtensionHero.astro';
@@ -27,7 +24,7 @@ import ExtensionPageTOC from '../../../components/docs/ExtensionPageTOC.astro';
 import Callout from '../../../components/docs/Callout.astro';
 import ExampleShellMounter from '../../../components/repl/ExampleShellMounter.tsx';
 import { parseInline } from 'marked';
-import { extensions, getExtensionsByIds } from '../../../data/extensions';
+import { extensions, getExtensionById, getExtensionsByIds } from '../../../data/extensions';
 import { getExtensionData, loadExtensionMdx, loadCookbookMdx, loadCheckFixtures } from '../../../data/extension-loader';
 
 export async function getStaticPaths() {
@@ -156,16 +153,6 @@ const sortedContentCategories = Object.keys(contentCategories).sort();
 const relatedExtensionIds = metadata.relatedExtensions || [];
 const relatedExtensions = getExtensionsByIds(relatedExtensionIds);
 
-// Hero actions - conditionally include Browse Contents
-const heroActions = [
-  // Only show Browse Contents if there are extension contents
-  ...(extensionContents.length > 0 ? [{
-    label: 'Browse Contents',
-    href: '#functions-index',
-    icon: '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />'
-  }] : [])
-];
-
 // Build TOC items based on what sections exist
 interface TOCItem {
   id: string;
@@ -175,16 +162,17 @@ interface TOCItem {
 const tocItems: TOCItem[] = [
   // Overview (Technical Overview) - always shown if it exists
   ...(technicalOverview ? [{ id: 'overview', label: 'Overview' }] : []),
+  // Technical Details (from MDX) — the rest of the "what is this and why",
+  // so it stays with the Overview rather than sitting below the SQL.
+  ...(TechnicalDetailsContent ? [{ id: 'technical-details', label: 'Technical Details' }] : []),
   // Install
   { id: 'quick-install', label: 'Install' },
   // Quick Start example(s) — string (legacy) or non-empty array of examples
   ...(((q) => (Array.isArray(q) ? q.length > 0 : !!q))((metadata as any).quickStart)
     ? [{ id: 'quick-start', label: 'Quick Start' }]
     : []),
-  // Technical Details (from MDX)
-  ...(TechnicalDetailsContent ? [{ id: 'technical-details', label: 'Technical Details' }] : []),
   // Extension Contents
-  ...(extensionContents.length > 1 ? [{ id: 'functions-index', label: 'Extension Contents' }] : []),
+  ...(extensionContents.length > 0 ? [{ id: 'functions-index', label: 'Extension Contents' }] : []),
   // Function Reference
   ...(functions.length > 0 ? [{ id: 'function-reference', label: 'Functions' }] : []),
   // Macros
@@ -230,11 +218,33 @@ const quickStartExamples: { title?: string; sql: string }[] = Array.isArray(rawQ
 const installFrom = installSource === 'community'
   ? 'FROM community'
   : installSource.toLowerCase().startsWith('from ') ? installSource : `FROM '${installSource}'`;
-const installCommand = `-- Install the extension
-INSTALL ${metadata.name} ${installFrom};
+// The Install section's SQL, one statement per line — INSTALL fetches the
+// extension once, LOAD brings it into the session every time. Rendered by the
+// same CodeBlock as every other SQL snippet on the page, but `tryable={false}`:
+// these do nothing visible in the in-page REPL (the extension is already loaded
+// there), so the block must not get a "Try it in your browser" button.
+const installSql = `INSTALL ${metadata.name} ${installFrom};\nLOAD ${metadata.name};`;
 
--- Load it into your session
-LOAD ${metadata.name};`;
+// ── Page header ──────────────────────────────────────────────────────────
+const listing = getExtensionById(extensionId);
+const loadCount = metadata.usageStats?.count ?? listing?.usageCount;
+const loadPeriod = metadata.usageStats?.period ?? listing?.usagePeriod;
+
+// Header badges are for the two facts that change what you can do with the page
+// right now: whether it costs money, and whether the examples will run in your
+// browser. Category, status and licence used to sit here too — they are
+// catalogue metadata, already listed in the Compatibility section, and three
+// static chips under every extension name said nothing a reader acts on.
+const headerBadges: { label: string; tone?: 'neutral' | 'gold' | 'field'; href?: string; title?: string }[] = [
+  ...(metadata.pricing === 'paid' ? [{ label: 'Commercial', tone: 'gold' as const, href: '#pricing' }] : []),
+];
+
+// ── Docs rail ────────────────────────────────────────────────────────────
+// One rail, on the left, listing page sections only — the same job the sidebar
+// did before the redesign. The extension's individual functions/macros/secrets
+// are deliberately not enumerated here: the Extension Contents index already
+// does that, in a form that scales past a 400-function extension.
+
 const jsonLd = [
   {
     '@context': 'https://schema.org',
@@ -300,26 +310,31 @@ const jsonLd = [
     />
   )}
 
-  <!-- Floating TOC Sidebar -->
-  {tocItems.length > 0 && (
-    <ExtensionPageTOC items={tocItems} />
-  )}
-
-  <!-- Hero Section -->
+  <!-- Page header — mark, name, badges, lede, loads. -->
   <ExtensionHero
     name={metadata.displayName}
-    icon={metadata.icon}
-    category={metadata.category}
     description={firstSentence(metadata.description)}
-    actions={heroActions}
-    image={metadata.image}
+    badges={headerBadges}
+    loads={loadCount}
+    loadsPeriod={loadPeriod}
   />
 
-  <!-- Page-top notice (deprecation, successor announcement, advisory). -->
-  {metadata.notice && (
-    <section class="py-6 bg-white border-b border-soil-200">
-      <div class="section-container">
-        <div class="max-w-4xl 2xl:max-w-6xl mx-auto [&_a]:text-harvest-700 [&_a]:underline [&_a]:underline-offset-2 [&_a]:decoration-harvest-300 hover:[&_a]:decoration-harvest-700 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:bg-soil-100 [&_code]:text-soil-900 [&_code]:font-mono [&_code]:text-[0.9em]">
+  <!-- Two columns: page TOC / prose. One under 900px — the rail drops, never
+       the content. -->
+  <div class="mx-auto grid w-full max-w-[1200px] grid-cols-1 gap-x-10 gap-y-0 px-5 pt-8 pb-16 sm:px-7 min-[900px]:grid-cols-[220px_minmax(0,1fr)]">
+    {tocItems.length > 0 && (
+      <ExtensionPageTOC items={tocItems} class="hidden min-[900px]:block" />
+    )}
+
+    <!-- ExtensionSection rules its top edge to separate itself from the section
+         before it. The first one has nothing before it but the page header,
+         which already draws its own bottom border — so the two stack into a
+         double line. `first-of-type` counts sections only, so an optional
+         notice above them doesn't shift which one is suppressed. -->
+    <div class="min-w-0 [&>section:first-of-type]:border-t-0">
+      <!-- Page-top notice (deprecation, successor announcement, advisory). -->
+      {metadata.notice && (
+        <div class="mb-8 [&_a]:text-link [&_a]:underline [&_a]:underline-offset-2 [&_a]:decoration-link/45 hover:[&_a]:decoration-link [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:bg-soil-100 [&_code]:text-soil-900 [&_code]:font-mono [&_code]:text-[0.9em]">
           <Callout type={metadata.notice.type} title={metadata.notice.title}>
             <p set:html={parseInline(metadata.notice.body)}></p>
             {metadata.notice.buttondownList && (
@@ -337,11 +352,11 @@ const jsonLd = [
                   name="email"
                   required
                   placeholder="you@example.com"
-                  class="flex-1 px-3 py-2 rounded border border-soil-300 bg-white text-soil-900 placeholder:text-soil-500 focus:outline-none focus:ring-2 focus:ring-harvest-500 focus:border-harvest-500"
+                  class="flex-1 px-3 py-2 rounded-lg border border-soil-300 bg-white text-soil-900 placeholder:text-soil-500 focus:outline-none focus:border-link focus:ring-3 focus:ring-link/20"
                 />
                 <button
                   type="submit"
-                  class="px-4 py-2 rounded bg-harvest-700 text-white font-medium hover:bg-harvest-800 focus:outline-none focus:ring-2 focus:ring-harvest-500 focus:ring-offset-1 whitespace-nowrap"
+                  class="px-4 py-2 rounded-lg bg-field-700 text-white font-medium hover:bg-soil-900 focus:outline-none focus:ring-3 focus:ring-sun-400/25 whitespace-nowrap"
                 >
                   {metadata.notice.buttondownCta ?? 'Notify me on release'}
                 </button>
@@ -349,294 +364,269 @@ const jsonLd = [
             )}
           </Callout>
         </div>
-      </div>
-    </section>
-  )}
+      )}
 
-  <!-- Technical Overview — lead with what the extension is and why, before
-       the mechanical install step. -->
-  {technicalOverview && (
-    <DuckDBExtensionTechnicalOverview
-      eyebrow={technicalOverview.eyebrow}
-      title={technicalOverview.title}
-      description={technicalOverview.description}
-      sections={technicalOverview.sections}
-    />
-  )}
+      <!-- Technical Overview — lead with what the extension is and why. -->
+      {technicalOverview && (
+        <DuckDBExtensionTechnicalOverview
+          eyebrow={technicalOverview.eyebrow}
+          title={technicalOverview.title}
+          description={technicalOverview.description}
+          sections={technicalOverview.sections}
+        />
+      )}
 
-  <!-- Install — just the standard INSTALL/LOAD. Not "tryable": running these
-       in the shell does nothing visible (the extension is already loaded). -->
-  <section id="quick-install" class="py-12 bg-white border-b border-soil-200 scroll-mt-16">
-    <div class="section-container">
-      <div class="max-w-4xl 2xl:max-w-6xl mx-auto">
-        <div class="flex items-center gap-3 mb-4">
-          <svg width="32" height="32" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" class="flex-shrink-0">
-            <circle cx="50" cy="50" r="48" fill="#111111"/>
-            <circle cx="40" cy="50" r="18" fill="#FFF000"/>
-            <ellipse cx="68" cy="50" rx="8" ry="6" fill="#FFF000"/>
-          </svg>
-          <a href="/haybarn" title="Haybarn — Query.Farm's DuckDB distribution" class="flex-shrink-0 hover:opacity-80 transition-opacity">
-            <img src="/images/haybarn-icon.png" alt="Haybarn" width="32" height="32" class="w-8 h-8 rounded-md" />
-          </a>
-          <h2 class="text-2xl font-bold text-soil-900">Install</h2>
-        </div>
-        <CodeBlock code={installCommand} lang="sql" tryable={false} />
-      </div>
-    </div>
-  </section>
+      <!-- Technical Details (from MDX) — the long-form half of "what is this
+           and why", so it belongs directly under the Technical Overview. On an
+           extension with no overview (airport, shellfs) it becomes the page's
+           opening section, which is the point: nobody should meet a new
+           extension with `INSTALL` as the first thing on the page. -->
+      {TechnicalDetailsContent && (
+        <DuckDBExtensionTechnicalDetails
+          title="Technical Details"
+        >
+          <TechnicalDetailsContent />
+        </DuckDBExtensionTechnicalDetails>
+      )}
 
-  <!-- Quick Start — each example is its own Try-able cell, so a Try click runs
-       just that example rather than the whole script. -->
-  {quickStartExamples.length > 0 && (
-    <section id="quick-start" class="py-12 bg-white border-b border-soil-200 scroll-mt-16">
-      <div class="section-container">
-        <div class="max-w-4xl 2xl:max-w-6xl mx-auto">
-          <h2 class="text-2xl font-bold text-soil-900 mb-6">Quick Start</h2>
+      <!-- Install — after the prose, not before it: what the extension is
+           earns the top of the page, and this is one line people learn once.
+           Keeps the `quick-install` id, so old deep links still land. -->
+      <ExtensionSection id="quick-install">
+        <h2 class="mb-5 text-[clamp(1.55rem,3.4vw,2.5rem)] text-soil-900">Install</h2>
+        <CodeBlock code={installSql} lang="sql" tryable={false} />
+      </ExtensionSection>
+
+      <!-- Quick Start — each example is its own Try-able cell, so a Try click
+           runs just that example rather than the whole script. -->
+      {quickStartExamples.length > 0 && (
+        <ExtensionSection id="quick-start">
+          <h2 class="mb-6 text-[clamp(1.55rem,3.4vw,2.5rem)] text-soil-900">Quick Start</h2>
           <div class="space-y-6">
             {quickStartExamples.map((example) => (
               <div>
+                {/* A caption, not a headline: it says what the query does, so
+                    it takes body Commissioner at body size. Left bare it would
+                    inherit the global h* rule — Petrona at display metrics —
+                    which is why it read as tiny serif type. */}
                 {example.title && (
-                  <h3 class="text-sm font-semibold text-soil-700 mb-2">{example.title}</h3>
+                  <h3 class="mb-2 font-sans text-[14px] font-medium leading-normal tracking-normal text-soil-700">{example.title}</h3>
                 )}
                 <CodeBlock code={example.sql} lang="sql" />
               </div>
             ))}
           </div>
-        </div>
-      </div>
-    </section>
-  )}
+        </ExtensionSection>
+      )}
 
-  <!-- Technical Details (from MDX) -->
-  {TechnicalDetailsContent && (
-    <DuckDBExtensionTechnicalDetails
-      title="Technical Details"
-    >
-      <TechnicalDetailsContent />
-    </DuckDBExtensionTechnicalDetails>
-  )}
+      <!-- Extension Contents Index. Shown whenever the extension registers
+           anything at all: the old `> 1` gate assumed a lone entry was already
+           self-describing from its own card, but on a settings-only extension
+           like shellfs that erased both the index and its TOC entry, leaving no
+           statement anywhere of what the extension actually adds. -->
+      {extensionContents.length > 0 && (
+        <DuckDBExtensionContentsTable
+          contents={extensionContents}
+          categoryOrder={sortedContentCategories}
+          categoryDescriptions={extensionData.categoryDescriptions}
+        />
+      )}
 
-  <!-- Extension Contents Index — skip when there's only one entry; the
-       function/macro/secret card alone is the index in that case. -->
-  {extensionContents.length > 1 && (
-    <DuckDBExtensionContentsTable
-      contents={extensionContents}
-      categoryOrder={sortedContentCategories}
-      categoryDescriptions={extensionData.categoryDescriptions}
-    />
-  )}
+      <!-- Function Reference -->
+      {functions && functions.length > 0 && (
+        <DuckDBExtensionFunctionReference functions={functions} slug={extensionId} />
+      )}
 
-  <!-- Function Reference -->
-  {functions && functions.length > 0 && (
-    <DuckDBExtensionFunctionReference functions={functions} slug={extensionId} />
-  )}
-
-  <!-- Extension Macros -->
-  {macros && macros.length > 0 && (
-    <ExtensionSection id="macros" background="soil">
-      <SectionHeader
-        eyebrow="SQL Macros"
-        title="Macros"
-        description="Convenience macros that simplify common cryptographic operations and provide shorthand syntax for frequently used patterns."
-        class="mb-12"
-      />
-      {macros.map((macro) => (
-        <DuckDBExtensionMacroDoc {...macro} />
-      ))}
-    </ExtensionSection>
-  )}
-
-  <!-- Extension Logging -->
-  {((logTypes && logTypes.length > 0) || (logStorageTypes && logStorageTypes.length > 0)) && (
-    <ExtensionSection id="logging" background="white">
-      <SectionHeader
-        eyebrow="Logging Integration"
-        title="Logging"
-        description="DuckDB logging subsystem integration for monitoring cryptographic operations and storing audit trails."
-        class="mb-12"
-      />
-      <div class="space-y-12">
-        {/* Log Types */}
-        {logTypes && logTypes.length > 0 && (
-          <div>
-            <h3 class="text-xl font-bold text-soil-900 mb-6 pb-2 border-b border-soil-200">Log Types</h3>
-            <div class="space-y-8">
-              {logTypes.map((logType) => (
-                <DuckDBExtensionLogTypeDoc {...logType} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Log Storage Types */}
-        {logStorageTypes && logStorageTypes.length > 0 && (
-          <div>
-            <h3 class="text-xl font-bold text-soil-900 mb-6 pb-2 border-b border-soil-200">Log Storage Types</h3>
-            <div class="space-y-8">
-              {logStorageTypes.map((logStorage) => (
-                <DuckDBExtensionLogStorageDoc {...logStorage} />
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </ExtensionSection>
-  )}
-
-  <!-- Extension Storage Extensions -->
-  {storageExtensions && storageExtensions.length > 0 && (
-    <ExtensionSection id="storage-extensions" background="white">
-      <SectionHeader
-        eyebrow="Database Storage"
-        title="Storage Extensions"
-        description="Storage extensions that enable secure database attachments with encryption, secret management, and credential rotation."
-        class="mb-12"
-      />
-      {storageExtensions.map((storage) => (
-        <DuckDBExtensionStorageDoc {...storage} />
-      ))}
-    </ExtensionSection>
-  )}
-
-  <!-- Settings/Pragmas Section -->
-  {pragmas && pragmas.length > 0 && (
-    <ExtensionSection id="settings" background="white">
-      <SectionHeader
-        eyebrow="Configuration"
-        title="Settings"
-        description={`Configure the ${metadata.displayName.toLowerCase()} extension behavior using these settings.`}
-        class="mb-12"
-      />
-      {pragmas.map((pragma) => (
-        <DuckDBExtensionPragmaDoc {...pragma} />
-      ))}
-    </ExtensionSection>
-  )}
-
-  <!-- Extension Secrets -->
-  {secrets && secrets.length > 0 && (
-    <ExtensionSection id="secrets" background="soil">
-      <SectionHeader
-        eyebrow="Security"
-        title="Secrets"
-        description={`DuckDB secrets for securely storing credentials and encryption keys used by the ${metadata.displayName.toLowerCase()} extension.`}
-        class="mb-12"
-      />
-      {secrets.map((secret) => (
-        <DuckDBExtensionSecretDoc {...secret} />
-      ))}
-    </ExtensionSection>
-  )}
-
-  <!-- Extension Filesystems -->
-  {filesystems && filesystems.length > 0 && (
-    <ExtensionSection id="filesystems" background="white">
-      <SectionHeader
-        eyebrow="Virtual Filesystems"
-        title="Filesystems"
-        description="Virtual filesystem implementations that provide transparent encryption and secure access to data storage."
-        class="mb-12"
-      />
-      {filesystems.map((filesystem) => (
-        <DuckDBExtensionFilesystemDoc {...filesystem} />
-      ))}
-    </ExtensionSection>
-  )}
-
-  <!-- Cookbook Section -->
-  {CookbookContent && (
-    <DuckDBExtensionCookbook>
-      <CookbookContent />
-    </DuckDBExtensionCookbook>
-  )}
-
-  <!-- Pricing Section -->
-  {pricing && (
-    <DuckDBExtensionPricing
-      {...pricing}
-      extensionName={metadata.displayName}
-    />
-  )}
-
-  <!-- Back to Top -->
-  <section class="py-8 bg-white border-t border-soil-200">
-    <div class="section-container">
-      <div class="text-center">
-        <a href="#" class="inline-flex items-center gap-2 text-harvest-700 hover:text-harvest-800 font-medium transition-colors group">
-          <svg class="w-5 h-5 group-hover:-translate-y-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
-          </svg>
-          Back to Top
-        </a>
-      </div>
-    </div>
-  </section>
-
-  <!-- Compatibility -->
-  <ExtensionInfo
-      githubUrl={GITHUB_URL}
-      githubStars={metadata.githubStars}
-      license={metadata.license}
-      licenseHref={/source-available/i.test(metadata.license ?? '') ? '/licenses/source-available' : undefined}
-      pricing={metadata.pricing || 'free'}
-      firstRelease={metadata.firstRelease}
-      lastRelease={metadata.lastRelease}
-      binarySize={metadata.binarySize}
-      writtenIn={metadata.writtenIn}
-      sourceAvailable={metadata.sourceAvailable}
-      dependencies={metadata.dependencies}
-      usageStats={metadata.usageStats}
-      platforms={metadata.platforms}
-      duckdbVersions={metadata.duckdbVersions}
-      binarySizes={metadata.binarySizes}
-    />
-
-  <!-- Related Extensions (if any exist) -->
-  {relatedExtensions && relatedExtensions.length > 0 && (
-    <ExtensionSection id="related-extensions" background="soil">
-      <SectionHeader
-        eyebrow="You might also like"
-        title="Related Extensions"
-        description={`Extensions that complement ${metadata.displayName.toLowerCase()} for your data workflows.`}
-        align="center"
-        class="mb-12"
-      />
-      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {relatedExtensions.map((ext) => (
-          <ExtensionCard
-            id={ext.id}
-            name={ext.name}
-            description={ext.description}
-            category={ext.category}
-            status={ext.status}
-            icon={ext.icon}
-            features={ext.features}
-            usageCount={ext.usageCount}
+      <!-- Extension Macros -->
+      {macros && macros.length > 0 && (
+        <ExtensionSection id="macros">
+          <SectionHeader
+            eyebrow="SQL Macros"
+            title="Macros"
+            description="Convenience macros that wrap common operations in shorthand syntax."
+            class="mb-10"
           />
-        ))}
-      </div>
-    </ExtensionSection>
-  )}
+          <div class="space-y-8">
+            {macros.map((macro) => (
+              <DuckDBExtensionMacroDoc {...macro} />
+            ))}
+          </div>
+        </ExtensionSection>
+      )}
 
-  <!-- CTA -->
-  <section class="py-16 lg:py-24 bg-gradient-to-br from-soil-900 to-soil-800 text-white">
-    <div class="section-container text-center">
-      <h2 class="text-3xl md:text-4xl font-bold mb-6">
-        {metadata.cta.title}
-      </h2>
-      <p class="text-xl text-soil-300 mb-8 max-w-2xl mx-auto">
-        {metadata.cta.description}
-      </p>
-      <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
-        <Button href="#quick-install" variant="primary" size="lg">
-          Install Now
-        </Button>
-        <Button href="/products/extensions" variant="secondary" size="lg">
-          View Other Extensions
-        </Button>
-      </div>
+      <!-- Extension Logging -->
+      {((logTypes && logTypes.length > 0) || (logStorageTypes && logStorageTypes.length > 0)) && (
+        <ExtensionSection id="logging">
+          <SectionHeader
+            eyebrow="Logging Integration"
+            title="Logging"
+            description="DuckDB logging subsystem integration for monitoring operations and storing audit trails."
+            class="mb-10"
+          />
+          <div class="space-y-12">
+            {/* Log Types */}
+            {logTypes && logTypes.length > 0 && (
+              <div>
+                <h3 class="mb-6 border-b border-soil-300/70 pb-2 font-display text-xl text-soil-900">Log Types</h3>
+                <div class="space-y-8">
+                  {logTypes.map((logType) => (
+                    <DuckDBExtensionLogTypeDoc {...logType} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Log Storage Types */}
+            {logStorageTypes && logStorageTypes.length > 0 && (
+              <div>
+                <h3 class="mb-6 border-b border-soil-300/70 pb-2 font-display text-xl text-soil-900">Log Storage Types</h3>
+                <div class="space-y-8">
+                  {logStorageTypes.map((logStorage) => (
+                    <DuckDBExtensionLogStorageDoc {...logStorage} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </ExtensionSection>
+      )}
+
+      <!-- Extension Storage Extensions -->
+      {storageExtensions && storageExtensions.length > 0 && (
+        <ExtensionSection id="storage-extensions">
+          <SectionHeader
+            eyebrow="Database Storage"
+            title="Storage Extensions"
+            description="Catalog implementations that attach external storage as a DuckDB database."
+            class="mb-10"
+          />
+          <div class="space-y-8">
+            {storageExtensions.map((storage) => (
+              <DuckDBExtensionStorageDoc {...storage} />
+            ))}
+          </div>
+        </ExtensionSection>
+      )}
+
+      <!-- Settings/Pragmas Section -->
+      {pragmas && pragmas.length > 0 && (
+        <ExtensionSection id="settings">
+          <SectionHeader
+            eyebrow="Configuration"
+            title="Settings"
+            description={`Configure the ${metadata.displayName.toLowerCase()} extension behavior using these settings.`}
+            class="mb-10"
+          />
+          <div class="space-y-8">
+            {pragmas.map((pragma) => (
+              <DuckDBExtensionPragmaDoc {...pragma} />
+            ))}
+          </div>
+        </ExtensionSection>
+      )}
+
+      <!-- Extension Secrets -->
+      {secrets && secrets.length > 0 && (
+        <ExtensionSection id="secrets">
+          <SectionHeader
+            eyebrow="Security"
+            title="Secrets"
+            description={`DuckDB secrets for storing the credentials and keys used by the ${metadata.displayName.toLowerCase()} extension.`}
+            class="mb-10"
+          />
+          <div class="space-y-8">
+            {secrets.map((secret) => (
+              <DuckDBExtensionSecretDoc {...secret} />
+            ))}
+          </div>
+        </ExtensionSection>
+      )}
+
+      <!-- Extension Filesystems -->
+      {filesystems && filesystems.length > 0 && (
+        <ExtensionSection id="filesystems">
+          <SectionHeader
+            eyebrow="Virtual Filesystems"
+            title="Filesystems"
+            description="Filesystem implementations this extension registers, usable anywhere a path is accepted."
+            class="mb-10"
+          />
+          <div class="space-y-8">
+            {filesystems.map((filesystem) => (
+              <DuckDBExtensionFilesystemDoc {...filesystem} />
+            ))}
+          </div>
+        </ExtensionSection>
+      )}
+
+      <!-- Cookbook Section -->
+      {CookbookContent && (
+        <DuckDBExtensionCookbook>
+          <CookbookContent />
+        </DuckDBExtensionCookbook>
+      )}
+
+      <!-- Pricing Section -->
+      {pricing && (
+        <DuckDBExtensionPricing
+          {...pricing}
+          extensionName={metadata.displayName}
+        />
+      )}
+
+      <!-- Compatibility -->
+      <ExtensionInfo
+        githubUrl={GITHUB_URL}
+        githubStars={metadata.githubStars}
+        license={metadata.license}
+        licenseHref={/source-available/i.test(metadata.license ?? '') ? '/licenses/source-available' : undefined}
+        pricing={metadata.pricing || 'free'}
+        firstRelease={metadata.firstRelease}
+        lastRelease={metadata.lastRelease}
+        binarySize={metadata.binarySize}
+        writtenIn={metadata.writtenIn}
+        sourceAvailable={metadata.sourceAvailable}
+        dependencies={metadata.dependencies}
+        usageStats={metadata.usageStats}
+        platforms={metadata.platforms}
+        duckdbVersions={metadata.duckdbVersions}
+        binarySizes={metadata.binarySizes}
+      />
+
+      <!-- Related Extensions (if any exist) -->
+      {relatedExtensions && relatedExtensions.length > 0 && (
+        <ExtensionSection id="related-extensions">
+          <SectionHeader
+            eyebrow="You might also like"
+            title="Related Extensions"
+            description={`Extensions that complement ${metadata.displayName.toLowerCase()}.`}
+            class="mb-10"
+          />
+          <div class="grid gap-4 sm:grid-cols-2">
+            {relatedExtensions.map((ext) => (
+              <ExtensionCard
+                id={ext.id}
+                name={ext.name}
+                description={ext.description}
+                category={ext.category}
+                status={ext.status}
+                icon={ext.icon}
+                features={ext.features}
+                usageCount={ext.usageCount}
+                usagePeriod={ext.usagePeriod}
+              />
+            ))}
+          </div>
+        </ExtensionSection>
+      )}
+
+      <!-- No closing CTA. It restated the lede in different words and offered
+           two links the page already carries: Install is a section above, and
+           "All extensions" sits in the subnav on every scroll position. The
+           `cta` field survives in metadata.json and the Zod schema — nothing
+           renders it now. -->
     </div>
-  </section>
+  </div>
 
   <!-- Record this visit for the "Recently viewed" list in the Products nav. -->
   <script is:inline define:vars={{ extId: extensionId, extName: metadata.displayName }}>

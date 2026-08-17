@@ -1,0 +1,170 @@
+---
+/**
+ * CodeTabs — one snippet, several languages, switched in place.
+ *
+ * Tabs are pills above the block rather than a joined tab-strip: CodeBlock owns
+ * its own rounded border on rock-900, and butting a light tab bar against it
+ * means fighting that border on every corner. Pills also reuse the shape
+ * vocabulary the rest of the site already uses (DESIGN_BRIEF §10).
+ *
+ * Panels are all rendered — hidden ones are `hidden`, not removed — so Prism
+ * highlights every language once on load and switching is instant, and so
+ * browser find-in-page still reaches the code a reader can't currently see.
+ *
+ * `group` syncs every CodeTabs on the page: pick Go once and every comparison
+ * on the page follows, which is the behaviour readers expect from language
+ * tabs in docs. The choice is remembered per group in localStorage.
+ */
+import CodeBlock from './CodeBlock.astro';
+import { Icon } from 'astro-icon/components';
+
+interface Tab {
+  /** Stable key — also the value persisted for `group`. */
+  id: string;
+  label: string;
+  /** Iconify name, e.g. `simple-icons:python`. */
+  icon?: string;
+  code: string;
+  lang: string;
+  title?: string;
+  /** Draw a rule after this pill — for a set where one tab is the odd one out
+   *  (a "before" implementation among the alternatives, say). */
+  dividerAfter?: boolean;
+}
+
+interface Props {
+  tabs: Tab[];
+  /** Tab sets sharing a group switch together and share a stored preference. */
+  group?: string;
+  ariaLabel?: string;
+}
+
+const { tabs, group = 'lang', ariaLabel = 'Choose a language' } = Astro.props;
+
+// Unique per instance so ids stay distinct when a page renders several sets.
+const uid = Math.random().toString(36).slice(2, 9);
+
+const TAB_BASE =
+  'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[12.5px] font-medium transition ' +
+  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sun-400';
+const TAB_ON = 'border-sun-400 bg-sun-400/12 text-sun-700';
+const TAB_OFF = 'border-soil-300 bg-[#fffdf7] text-soil-700 hover:border-soil-400 hover:text-soil-900';
+---
+
+<div class="code-tabs" data-group={group}>
+  <div class="mb-2.5 flex flex-wrap items-center gap-1.5" role="tablist" aria-label={ariaLabel}>
+    {tabs.map((t, i) => (
+      <>
+      <button
+        type="button"
+        role="tab"
+        id={`ct-${uid}-${t.id}`}
+        data-tab={t.id}
+        aria-controls={`cp-${uid}-${t.id}`}
+        aria-selected={i === 0 ? 'true' : 'false'}
+        tabindex={i === 0 ? 0 : -1}
+        class:list={[TAB_BASE, i === 0 ? TAB_ON : TAB_OFF]}
+        data-class-on={TAB_ON}
+        data-class-off={TAB_OFF}
+      >
+        {t.icon && <Icon name={t.icon} class="h-3.5 w-3.5" aria-hidden="true" />}
+        {t.label}
+      </button>
+      {t.dividerAfter && <span class="mx-1 h-5 w-px bg-soil-300" aria-hidden="true"></span>}
+      </>
+    ))}
+  </div>
+
+  {tabs.map((t, i) => (
+    <div
+      role="tabpanel"
+      id={`cp-${uid}-${t.id}`}
+      data-tab={t.id}
+      aria-labelledby={`ct-${uid}-${t.id}`}
+      hidden={i !== 0}
+    >
+      <CodeBlock code={t.code} lang={t.lang} title={t.title} tryable={false} />
+    </div>
+  ))}
+</div>
+
+<script>
+  // One handler for every CodeTabs on the page (Astro hoists this module once).
+  const STORAGE_PREFIX = 'qf-codetabs:';
+
+  function select(root: HTMLElement, id: string) {
+    const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    if (!tabs.some((t) => t.dataset.tab === id)) return false;
+
+    tabs.forEach((tab) => {
+      const on = tab.dataset.tab === id;
+      tab.setAttribute('aria-selected', on ? 'true' : 'false');
+      tab.tabIndex = on ? 0 : -1;
+      const add = (on ? tab.dataset.classOn : tab.dataset.classOff) ?? '';
+      const remove = (on ? tab.dataset.classOff : tab.dataset.classOn) ?? '';
+      remove.split(' ').filter(Boolean).forEach((c) => tab.classList.remove(c));
+      add.split(' ').filter(Boolean).forEach((c) => tab.classList.add(c));
+    });
+
+    root.querySelectorAll<HTMLElement>('[role="tabpanel"]').forEach((panel) => {
+      panel.hidden = panel.dataset.tab !== id;
+    });
+    return true;
+  }
+
+  // Every set in the group moves together — a reader who picks Rust once
+  // shouldn't have to pick it again further down the page.
+  function selectGroup(group: string, id: string) {
+    document
+      .querySelectorAll<HTMLElement>(`.code-tabs[data-group="${group}"]`)
+      .forEach((root) => select(root, id));
+    try {
+      localStorage.setItem(STORAGE_PREFIX + group, id);
+    } catch {
+      // Private mode / storage disabled — switching still works, it just
+      // doesn't survive a reload.
+    }
+  }
+
+  document.querySelectorAll<HTMLElement>('.code-tabs').forEach((root) => {
+    const group = root.dataset.group ?? 'lang';
+    const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+
+    tabs.forEach((tab, i) => {
+      tab.addEventListener('click', () => selectGroup(group, tab.dataset.tab!));
+      tab.addEventListener('keydown', (event) => {
+        const keys: Record<string, number> = {
+          ArrowRight: i + 1,
+          ArrowLeft: i - 1,
+          Home: 0,
+          End: tabs.length - 1,
+        };
+        const next = keys[event.key];
+        if (next === undefined) return;
+        event.preventDefault();
+        const target = tabs[(next + tabs.length) % tabs.length];
+        target.focus();
+        selectGroup(group, target.dataset.tab!);
+      });
+    });
+  });
+
+  // Restore the remembered language, if that tab still exists in this set.
+  new Set(
+    Array.from(document.querySelectorAll<HTMLElement>('.code-tabs')).map(
+      (root) => root.dataset.group ?? 'lang',
+    ),
+  ).forEach((group) => {
+    let stored: string | null = null;
+    try {
+      stored = localStorage.getItem(STORAGE_PREFIX + group);
+    } catch {
+      stored = null;
+    }
+    if (stored) {
+      document
+        .querySelectorAll<HTMLElement>(`.code-tabs[data-group="${group}"]`)
+        .forEach((root) => select(root, stored!));
+    }
+  });
+</script>

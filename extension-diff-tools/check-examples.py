@@ -65,6 +65,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -851,6 +852,35 @@ def report(results_by_ext: dict[str, list[Result]], *, strict: bool, verbose: bo
     return 0 if not failures else 1
 
 
+def _run_isolated(slug: str, args) -> int:
+    """Run one extension's checks in a child process.
+
+    Some extensions segfault DuckDB's native layer — as of this writing
+    `bitfilters` crashes mid-run and `radio` crashes during teardown *after*
+    passing every snippet. In a single process that takes the whole suite down
+    with exit 139 and NO output, so one broken extension hides the state of
+    every other one. Running each in a child turns a fatal crash into one
+    reported CRASH line and lets the rest of the run finish.
+    """
+    cmd = [sys.executable, "-u", str(Path(__file__).resolve()), "--slug", slug]
+    if args.no_install:
+        cmd.append("--no-install")
+    if args.strict:
+        cmd.append("--strict")
+    if args.verbose:
+        cmd.append("--verbose")
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    sys.stdout.write(proc.stdout)
+    if proc.stderr.strip():
+        sys.stderr.write(proc.stderr)
+    if proc.returncode < 0 or proc.returncode == 139:
+        sig = -proc.returncode if proc.returncode < 0 else 11
+        print(f"  [CRASH] {slug}: DuckDB died with signal {sig} — "
+              f"native crash in the extension, not a snippet failure.")
+        return 2
+    return proc.returncode
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--slug", help="Only check this extension")
@@ -860,6 +890,9 @@ def main() -> None:
                     help="Fail on EXEC-SKIP entries — useful when you've added fixtures")
     ap.add_argument("--verbose", action="store_true",
                     help="Show every snippet, not just failures")
+    ap.add_argument("--no-isolate", action="store_true",
+                    help="Run every extension in this process. Faster, but one "
+                         "native crash kills the whole run (see _run_isolated).")
     args = ap.parse_args()
 
     if args.slug:
@@ -869,6 +902,27 @@ def main() -> None:
             d.name for d in EXT_DIR.iterdir()
             if d.is_dir() and d.name not in NON_EXTENSION_SLUGS
         )
+
+    # A full sweep isolates by default so a crasher can't zero out the run.
+    # --slug runs in-process (it IS the child when we recurse).
+    if not args.slug and not args.no_isolate:
+        slugs = list(slugs)
+        crashed: list[str] = []
+        failed: list[str] = []
+        for slug in slugs:
+            rc = _run_isolated(slug, args)
+            if rc == 2:
+                crashed.append(slug)
+            elif rc != 0:
+                failed.append(slug)
+        print("\n" + "=" * 70)
+        print(f"suite: {len(slugs)} extensions checked, "
+              f"{len(failed)} with failures, {len(crashed)} crashed")
+        if crashed:
+            print(f"  crashed: {', '.join(crashed)}")
+        if failed:
+            print(f"  failed:  {', '.join(failed)}")
+        sys.exit(1 if (failed or crashed) else 0)
 
     results_by_ext: dict[str, list[Result]] = {}
     for slug in slugs:

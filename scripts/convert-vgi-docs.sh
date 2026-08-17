@@ -6,15 +6,22 @@ SRC=/Users/rusty/Development/vgi-python/docs
 D=src/content/docs/vgi/docs/python
 conv() { python3 scripts/mkdocs_to_starlight.py "$SRC/$1" "$D/$2" "$3"; }
 
-# how-to guides (source already under how-to/)
-conv how-to/catalogs.md                 how-to/catalogs.mdx                 how-to
-conv how-to/pushdown-and-statistics.md  how-to/pushdown-and-statistics.mdx  how-to
+# NOTE (2026-08-14): how-to/catalogs.mdx, how-to/pushdown-and-statistics.mdx and
+# how-to/index.mdx USED to be auto-converted and no longer are. They have since
+# been hand-edited here — InfoTips, site lead-ins, and a recipe list that links
+# to /how-to/serve-http/ + /how-to/python-app/, which exist only on this site.
+# Re-converting them silently reverted all of that and reintroduced a link to
+# /how-to/http-auth/, which is a 404 here. Upstream has not touched their
+# sources since, so there is nothing to re-import; edit them by hand.
+#
 # NOTE: how-to/state-storage.mdx is hand-authored (expanded "what state is for" +
 # the BoundStorage interface). Do not auto-convert it.
-conv how-to/index.md                    how-to/index.mdx                    how-to
 # NOTE: how-to/serve-http.mdx and how-to/authentication.mdx are hand-authored
 # (split apart, and deliberately defer the auth model to vgi-rpc). They have no
 # 1:1 MkDocs source here — do not auto-convert http-auth.md / authentication.md.
+
+# Pages with a live 1:1 MkDocs source and no site-specific edits.
+conv global-functions.md                how-to/global-functions.mdx         how-to
 
 # NOTE: the reference pages (generator-api, aggregate-functions, catalog-interface,
 # shared-storage, filter-pushdown, column-statistics, metadata, cli) are now

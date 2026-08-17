@@ -1,8 +1,10 @@
 ---
 import PageLayout from '../../layouts/PageLayout.astro';
-import Hero from '../../components/sections/Hero.astro';
+import PageHead from '../../components/ui/PageHead.astro';
 import PostCard from '../../components/blog/PostCard.astro';
+import NewsletterForm from '../../components/forms/NewsletterForm.astro';
 import { getCollection } from 'astro:content';
+import { getTagGroups } from '../../lib/blog-tags';
 
 // Get all blog posts
 const allPosts = await getCollection('blog');
@@ -10,101 +12,148 @@ const publishedPosts = allPosts
   .filter(post => !post.data.draft)
   .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
 
-// Unique tags, deduped case-insensitively (keep the first casing seen) so
-// "DuckDB"/"duckdb" or "Haybarn"/"haybarn" don't both show up in the filter.
-const tagMap = new Map<string, string>();
-for (const tag of publishedPosts.flatMap(post => post.data.tags)) {
-  const key = tag.toLowerCase();
-  if (!tagMap.has(key)) tagMap.set(key, tag);
-}
-const allTags = [...tagMap.values()].sort((a, b) => a.localeCompare(b));
+// Read time, from the raw markdown body. 200 wpm, floored at one minute.
+const readingTime = (body: string | undefined) =>
+  Math.max(1, Math.round((body ?? '').trim().split(/\s+/).length / 200));
+
+const [featured, ...rest] = publishedPosts;
+
+const featuredMeta = featured
+  ? {
+      topic: featured.data.tags[0],
+      minutes: readingTime(featured.body),
+      date: featured.data.pubDate.toLocaleDateString('en-US', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      }),
+      iso: featured.data.pubDate.toISOString().slice(0, 10),
+    }
+  : null;
+
+// Unique tags, deduped on slug (so "DuckDB"/"duckdb" collapse to one chip) and
+// each linking to its archive at /blog/tags/<slug>.
+const tagGroups = await getTagGroups(publishedPosts);
 
 // Hold the topic filter back until the archive is big enough to justify it —
 // a wall of chips above a handful of posts implies an archive that isn't there.
+// The archives themselves exist regardless; posts link to them from their foot.
 const FILTER_MIN_POSTS = 8;
-const showTagFilter = publishedPosts.length >= FILTER_MIN_POSTS && allTags.length > 0;
+const showTagFilter = publishedPosts.length >= FILTER_MIN_POSTS && tagGroups.length > 0;
+
+// The newsletter panel is not about any one post, so it keeps the stage run.
+const ART_BANDS = ['bg-pipe-1', 'bg-pipe-2', 'bg-pipe-3', 'bg-pipe-4', 'bg-pipe-5', 'bg-pipe-6'];
 ---
 
 <PageLayout
   title="Blog"
   description="Latest updates, releases, and insights from the Query.Farm team about DuckDB, data infrastructure, and modern analytics."
 >
-  <!-- Hero Section -->
-  <Hero
-    title="Query.Farm Blog"
-    subtitle="Latest updates on DuckDB extensions, data infrastructure insights, and product releases from our team."
+  <PageHead
+    title="Notes from the farm"
+    lede="Release notes, product thinking, and technical write-ups — mostly about DuckDB extensions, Arrow transport, and what breaks at scale."
   />
 
-  <!-- Blog Posts Section -->
-  <section class="py-16 lg:py-24 bg-white">
-    <div class="section-container">
-      <!-- Tag Filter -->
-      {showTagFilter && (
-        <div class="mb-12">
-          <h3 class="text-sm font-semibold text-soil-700 uppercase tracking-wider mb-4">Filter by Topic</h3>
-          <div class="flex flex-wrap gap-2">
-            <button class="px-4 py-2 rounded-lg bg-harvest-100 text-harvest-800 text-sm font-medium hover:bg-harvest-200 transition-colors">
-              All Posts
-            </button>
-            {allTags.map(tag => (
-              <button class="px-4 py-2 rounded-lg bg-soil-100 text-soil-700 text-sm font-medium hover:bg-soil-200 transition-colors capitalize">
-                {tag}
-              </button>
-            ))}
+  <div class="section-container">
+    {/* No artwork on this page for now: the only candidates were the posts'
+        social cards (cropped past recognition) and crops of their own figures,
+        which read as decoration out of context. Type and the topic strip carry
+        the page instead. */}
+    {featured && featuredMeta && (
+      <article class="border-b border-soil-300 pt-8 pb-10">
+        <div class="max-w-[62ch]">
+          <div class="flex flex-wrap items-baseline gap-x-3.5 gap-y-1.5 text-[13px] font-medium text-soil-500">
+            <span class="text-sun-700">Featured</span>
+            {featuredMeta.topic && <span>{featuredMeta.topic}</span>}
+            <span class="qf-figure">{featuredMeta.minutes} min read</span>
+            <time datetime={featuredMeta.iso} class="qf-figure">{featuredMeta.date}</time>
+          </div>
+
+          <h2 class="mt-3 text-[clamp(1.75rem,3.8vw,2.75rem)] tracking-[-0.028em]">
+            <a href={`/blog/${featured.id}`} class="no-underline transition-colors hover:text-link">
+              {featured.data.title}
+            </a>
+          </h2>
+
+          <p class="mt-3 max-w-[58ch] text-[17.5px] leading-relaxed text-soil-700">
+            {featured.data.description}
+          </p>
+
+          <div class="mt-5">
+            <a
+              href={`/blog/${featured.id}`}
+              class="inline-block rounded-lg border border-soil-900 px-4 py-2 text-[12.5px] font-medium no-underline transition hover:-translate-y-px hover:border-link hover:text-link motion-reduce:hover:translate-y-0"
+            >
+              Read the post →
+            </a>
           </div>
         </div>
-      )}
 
-      <!-- Posts Grid -->
-      {publishedPosts.length > 0 ? (
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          {publishedPosts.map(post => (
-            <PostCard
-              title={post.data.title}
-              excerpt={post.data.description}
-              date={post.data.pubDate}
-              author={post.data.author}
-              tags={post.data.tags}
-              slug={post.id}
-              heroImage={post.data.heroImage}
-            />
+      </article>
+    )}
+
+    {showTagFilter && (
+      <div class="pt-8">
+        <h2 class="text-[13px] font-medium text-soil-500">Filter by topic</h2>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <span
+            aria-current="page"
+            class="rounded-full border border-sun-400 bg-sun-400/12 px-3 py-1 text-[12.5px] font-medium text-sun-700"
+          >
+            All posts
+          </span>
+          {tagGroups.map(group => (
+            <a
+              href={`/blog/tags/${group.slug}`}
+              class="rounded-full border border-soil-300 px-3 py-1 text-[12.5px] font-medium text-soil-600 no-underline transition hover:border-sun-400 hover:text-link"
+            >
+              {group.label}
+            </a>
           ))}
         </div>
-      ) : (
-        <div class="text-center py-12">
-          <p class="text-xl text-soil-600">No blog posts yet. Check back soon!</p>
-        </div>
-      )}
-    </div>
-  </section>
+      </div>
+    )}
 
-  <!-- Newsletter CTA -->
-  <section class="py-16 lg:py-24 bg-soil-50">
-    <div class="section-container">
-      <div class="max-w-2xl mx-auto text-center">
-        <h2 class="text-3xl md:text-4xl font-bold text-soil-900 mb-4">
-          Never Miss an Update
-        </h2>
-        <p class="text-lg text-soil-600 mb-8">
-          Subscribe to our newsletter for the latest DuckDB extensions, product releases, and data infrastructure insights.
-        </p>
-        <form class="flex flex-col sm:flex-row gap-4 max-w-md mx-auto">
-          <input
-            type="email"
-            placeholder="Enter your email"
-            required
-            class="flex-1 px-4 py-3 rounded-lg border border-soil-300 focus:border-harvest-500 focus:ring-2 focus:ring-harvest-500 focus:outline-none"
+    {rest.length > 0 && (
+      <div class="grid grid-cols-1 gap-4 pt-8 pb-5 md:grid-cols-2 lg:grid-cols-3">
+        {rest.map(post => (
+          <PostCard
+            title={post.data.title}
+            excerpt={post.data.description}
+            date={post.data.pubDate}
+            author={post.data.author}
+            tags={post.data.tags}
+            slug={post.id}
+            heroImage={post.data.heroImage}
+            readingTime={readingTime(post.body)}
           />
-          <button
-            type="submit"
-            class="px-8 py-3 bg-harvest-600 hover:bg-harvest-700 text-white font-medium rounded-lg transition-colors"
-          >
-            Subscribe
-          </button>
-        </form>
-        <p class="text-sm text-soil-500 mt-4">
-          Join 1,000+ developers building with DuckDB. Unsubscribe anytime.
-        </p>
+        ))}
+      </div>
+    )}
+
+    {publishedPosts.length === 0 && (
+      <p class="py-16 text-center text-[17.5px] text-soil-700">No posts published yet. Check back soon.</p>
+    )}
+  </div>
+
+  <section class="pt-12 pb-20">
+    <div class="section-container">
+      <div class="overflow-hidden rounded-2xl border border-soil-300 bg-[#fffdf7]">
+        <!-- The card strip: this family's only use of the stage palette (brief §5). -->
+        <div class="grid h-1.5 grid-cols-6" aria-hidden="true">
+          {ART_BANDS.map(band => <i class={band}></i>)}
+        </div>
+        <div class="grid gap-8 px-8 py-9 md:grid-cols-[1fr_1.1fr] md:items-center">
+          <div>
+            <span class="text-[13.5px] font-medium text-sun-700">The dispatch</span>
+            <h2 class="mt-3 text-[29px]">New posts, in your inbox</h2>
+            <p class="mt-3 max-w-[46ch] leading-relaxed text-soil-700">
+              Extension releases, VGI updates, and the occasional deep dive. Sent when there's
+              something worth sending — not on a schedule.
+            </p>
+          </div>
+          <NewsletterForm id="newsletter-blog-index" />
+        </div>
       </div>
     </div>
   </section>

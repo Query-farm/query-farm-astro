@@ -1,82 +1,76 @@
 ---
 import PageLayout from '../../layouts/PageLayout.astro';
-import Hero from '../../components/sections/Hero.astro';
 import ExtensionsSubNav from '../../components/sections/ExtensionsSubNav.astro';
-import SectionHeader from '../../components/ui/SectionHeader.astro';
 import ExtensionCard from '../../components/products/ExtensionCard.astro';
 import ExtensionIcon from '../../components/products/ExtensionIcon.astro';
 import Button from '../../components/ui/Button.astro';
-import Card from '../../components/ui/Card.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
 import { publicExtensions } from '../../data/extensions';
 import { usageSummary } from '../../data/usage-summary';
 
 interface SubBucket { title?: string; slugs: string[] }
 interface Bucket {
   id: string;
+  /** Long form, used for the section blurb and the pill's title attribute. */
   title: string;
+  /** Short form for the filter pill. */
+  pill: string;
   blurb: string;
-  icon: string;
-  /** Tailwind class fragments for the section's color theme. */
-  theme: { iconBg: string; iconText: string; titleText: string; sectionBg: string; sectionBorder: string };
   subs: SubBucket[];
 }
 
+// The intent taxonomy. It is curated, not derived: it says what a reader is
+// trying to *do*, which the per-extension `category` field does not. The
+// coverage check below fails the build if an extension is added without being
+// placed here, so the pills can never silently under-report the catalog.
 const TAXONOMY: Bucket[] = [
-  { id:'connect', icon:'🔌',
+  { id:'connect', pill:'Connectors',
     title:'Connect to external systems',
     blurb:'Read from, write to, or stand alongside another system.',
-    theme:{ iconBg:'bg-sky-200',     iconText:'text-sky-800',     titleText:'text-sky-900',     sectionBg:'bg-sky-50',     sectionBorder:'border-sky-200' },
     subs: [
       { title:'Databases',           slugs:['adbc_scanner','airport','redis','vgi'] },
       { title:'Messaging & streams', slugs:['tributary','radio'] },
       { title:'HTTP & shell',        slugs:['http_client','httpserver','shellfs'] },
     ]},
-  { id:'json', icon:'🧩',
+  { id:'json', pill:'JSON',
     title:'Work with JSON',
     blurb:'Query, reshape, and validate JSON columns.',
-    theme:{ iconBg:'bg-cyan-200',    iconText:'text-cyan-800',    titleText:'text-cyan-900',    sectionBg:'bg-cyan-50',    sectionBorder:'border-cyan-200' },
     subs: [{ slugs:['jsonata','json_schema'] }]},
-  { id:'text', icon:'🔤',
+  { id:'text', pill:'Text & IDs',
     title:'Work with text & identifiers',
     blurb:'Hash, match, transform strings, and mint stable IDs.',
-    theme:{ iconBg:'bg-violet-200',  iconText:'text-violet-800',  titleText:'text-violet-900',  sectionBg:'bg-violet-50',  sectionBorder:'border-violet-200' },
     subs: [
       { title:'Hashing',           slugs:['crypto','hashfuncs'] },
       { title:'Matching & casing', slugs:['rapidfuzz','inflector'] },
       { title:'Identifiers',       slugs:['tsid'] },
     ]},
-  { id:'analytics', icon:'🧠',
+  { id:'analytics', pill:'Analytics',
     title:'Make analytics approximate or fast',
     blurb:'Sketches, probabilistic filters, distributions, and lookup indices.',
-    theme:{ iconBg:'bg-fuchsia-200', iconText:'text-fuchsia-800', titleText:'text-fuchsia-900', sectionBg:'bg-fuchsia-50', sectionBorder:'border-fuchsia-200' },
     subs: [
       { title:'Sketches',      slugs:['datasketches','bitfilters'] },
       { title:'Distributions', slugs:['stochastic'] },
       { title:'Indexing',      slugs:['marisa'] },
     ]},
-  { id:'geo', icon:'🗺️',
+  { id:'geo', pill:'Geospatial',
     title:'Index or compress geospatial data',
     blurb:'Pentagonal cell indexes, compact geometry, space-filling curves.',
-    theme:{ iconBg:'bg-emerald-200', iconText:'text-emerald-800', titleText:'text-emerald-900', sectionBg:'bg-emerald-50', sectionBorder:'border-emerald-200' },
     subs: [{ slugs:['a5','geosilo','lindel'] }]},
-  { id:'render', icon:'📝',
+  { id:'render', pill:'Scripting',
     title:'Render or execute code from rows',
     blurb:'Templates, scripting engines, URL-loaded macros.',
-    theme:{ iconBg:'bg-rose-200',    iconText:'text-rose-800',    titleText:'text-rose-900',    sectionBg:'bg-rose-50',    sectionBorder:'border-rose-200' },
     subs: [
       { title:'Templates',       slugs:['minijinja','tera'] },
       { title:'Scripting',       slugs:['quickjs','evalexpr_rhai'] },
       { title:'Macros from URL', slugs:['webmacro'] },
     ]},
-  { id:'operate', icon:'⏰',
+  { id:'operate', pill:'Operations',
     title:'Operate your DuckDB process',
     blurb:'Schedule queries; capture and forward events.',
-    theme:{ iconBg:'bg-amber-200',   iconText:'text-amber-800',   titleText:'text-amber-900',   sectionBg:'bg-amber-50',   sectionBorder:'border-amber-200' },
     subs: [{ slugs:['cronjob','events'] }]},
-  { id:'ergonomics', icon:'✨',
+  { id:'ergonomics', pill:'Ergonomics',
     title:'SQL ergonomics',
     blurb:'Make the CLI nicer, make output prettier.',
-    theme:{ iconBg:'bg-slate-200',   iconText:'text-slate-800',   titleText:'text-slate-900',   sectionBg:'bg-slate-50',   sectionBorder:'border-slate-200' },
     subs: [{ slugs:['textplot','fuzzycomplete'] }]},
 ];
 
@@ -97,6 +91,18 @@ if (missingFromTaxonomy.length || slugsNotFound.length) {
   );
 }
 
+// slug → bucket, for the pill filter and the table's category column.
+const bucketOf: Record<string, Bucket> = {};
+for (const bucket of TAXONOMY) {
+  for (const sub of bucket.subs) {
+    for (const slug of sub.slugs) bucketOf[slug] = bucket;
+  }
+}
+const bucketCounts = TAXONOMY.map(b => ({
+  ...b,
+  count: b.subs.reduce((n, s) => n + s.slugs.filter(slug => bySlug[slug]).length, 0),
+}));
+
 // Compact-format large counts: 1,234,567 → "1.2M".
 function compactCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
@@ -113,14 +119,35 @@ function weekLabel(ymd: string): string {
 
 // Bar-chart geometry — viewBox-driven so the SVG scales fluidly.
 const CHART_VW = 600;
-const CHART_VH = 200;
-const CHART_PAD = { top: 24, right: 8, bottom: 32, left: 8 };
+const CHART_VH = 150;
+const CHART_PAD = { top: 18, right: 2, bottom: 20, left: 2 };
 const buckets = usageSummary?.weeklyBuckets ?? [];
 const maxLoads = buckets.reduce((m, b) => Math.max(m, b.loads), 0);
 const innerW = CHART_VW - CHART_PAD.left - CHART_PAD.right;
 const innerH = CHART_VH - CHART_PAD.top - CHART_PAD.bottom;
-const barGap = 6;
+// Gap was 5 against a ~45px bar: the twelve bars fused into one gold slab and
+// the week-to-week shape stopped reading. 10 separates them without making the
+// bars look like tally marks.
+const barGap = 10;
 const barW = buckets.length > 0 ? (innerW - barGap * (buckets.length - 1)) / buckets.length : 0;
+// A label above every bar was noise. The two numbers worth stating go in the
+// header instead, and the bars carry the shape.
+const peakLoads = buckets.reduce((m, b) => Math.max(m, b.loads), 0);
+const latestLoads = buckets.length ? buckets[buckets.length - 1].loads : 0;
+
+// Ordering: loads descending, unknown loads last, then name. The first slice
+// gets cards; the tail goes into the dense table.
+const ranked = [...publicExtensions].sort(
+  (a, b) => (b.usageCount ?? -1) - (a.usageCount ?? -1) || a.name.localeCompare(b.name),
+);
+const CARD_COUNT = 12;
+const featured = ranked.slice(0, CARD_COUNT);
+const tail = ranked.slice(CARD_COUNT);
+const maxUsageCount = ranked[0]?.usageCount;
+const usagePeriodLabel = ranked.find(e => e.usagePeriod)?.usagePeriod ?? 'last 90 days';
+
+const searchKey = (e: (typeof publicExtensions)[number]) =>
+  `${e.name} ${e.id} ${e.description} ${bucketOf[e.id]?.pill ?? ''} ${bucketOf[e.id]?.title ?? ''}`.toLowerCase();
 
 // SEO: structured data. This collection page + a machine-readable ItemList of
 // every extension, the breadcrumb trail, and an FAQ. Mirrors the per-extension
@@ -189,13 +216,11 @@ const jsonLd = [
   },
 ];
 
-// Flat rows for the sortable/filterable table view. Initial order matches the
-// table's default sort (loads desc, unknown loads last, then name) so the
-// server-rendered markup is already correct before the sort script loads.
-const titleCase = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-const tableRows = [...publicExtensions].sort(
-  (a, b) => (b.usageCount ?? -1) - (a.usageCount ?? -1) || a.name.localeCompare(b.name),
-);
+const installSnippet = `-- Install an extension
+INSTALL airport FROM community;
+
+-- Load it into your session
+LOAD airport;`;
 ---
 
 <PageLayout
@@ -204,411 +229,462 @@ const tableRows = [...publicExtensions].sort(
   jsonLd={jsonLd}
 >
   <ExtensionsSubNav
-    highlightLoads
     breadcrumbs={[
       { name: 'Products', href: '/products' },
       { name: 'DuckDB Extensions', href: '/products/extensions' }
     ]}
   />
 
-  <!-- Hero -->
-  <Hero
-    title="DuckDB Extensions"
-    logo={{ src: "/images/duckdb-icon.svg", alt: "DuckDB" }}
-    subtitle="Add-ons that load inside DuckDB and give it abilities it doesn't ship with — grouped by the job you're trying to do."
-    primaryCTA={{ text: "Browse extensions ↓", href: "#connect" }}
-  />
-
-  <!-- What an extension is / why Query.Farm builds them -->
-  <section class="py-16 lg:py-24 bg-white border-b border-soil-200">
-    <div class="section-container">
-      <div class="max-w-5xl mx-auto">
-        <SectionHeader
-          eyebrow="What is a DuckDB extension?"
-          title="Where DuckDB ends, extensions begin."
-        />
-        <p class="text-lg text-soil-600 max-w-3xl mt-6">
+  <div class="mx-auto w-full max-w-[1360px] px-5 sm:px-7">
+    <!-- What an extension is / how to install one -->
+    <div class="grid gap-10 pt-12 lg:grid-cols-[minmax(0,1fr)_420px]">
+      <div>
+        <p class="qf-eyebrow text-sun-700">What is a DuckDB extension?</p>
+        <h1 class="mt-3 font-display text-4xl text-soil-900 md:text-5xl">Where DuckDB ends, extensions begin.</h1>
+        <p class="mt-4 max-w-[62ch] text-soil-700">
           An extension is native code that loads inside DuckDB and runs as part of it — the fastest way
-          to add features DuckDB doesn't ship with, with no separate service to run. It's also the right
-          home for capabilities that are too specialized to land in DuckDB itself but that data engineers,
-          analysts, and data scientists need anyway.
+          to add features DuckDB doesn't ship with, with no separate service to run. It is also the right
+          home for capabilities too specialized to land in DuckDB itself but that data engineers,
+          analysts, and scientists need anyway.
         </p>
-        <p class="text-lg text-soil-600 max-w-3xl mt-4">
+        <p class="mt-4 max-w-[62ch] text-soil-700">
           Query.Farm is one of the foremost builders of them. We ship and maintain dozens, available both
           through DuckDB's community extension channel and through
-          <a href="/haybarn" class="text-harvest-700 font-medium underline underline-offset-2 hover:text-harvest-800">Haybarn</a>,
+          <a href="/haybarn" class="text-link underline decoration-link/45 underline-offset-2 hover:decoration-link">Haybarn</a>,
           Query.Farm's own distribution of DuckDB.
         </p>
 
-        <div class="grid sm:grid-cols-3 gap-6 mt-12">
-          <Card padding="md">
-            <h3 class="text-lg font-bold text-soil-900">Runs inside DuckDB</h3>
-            <p class="text-soil-600 mt-2">
-              Extensions execute as native code alongside your query — no network round-trip, no separate
-              service, no added latency.
-            </p>
-          </Card>
-          <Card padding="md">
-            <h3 class="text-lg font-bold text-soil-900">Fills the gaps</h3>
-            <p class="text-soil-600 mt-2">
-              When a capability is too niche or too complex for DuckDB itself, an extension delivers it
-              without bending your pipeline around the gap.
-            </p>
-          </Card>
-          <Card padding="md">
-            <h3 class="text-lg font-bold text-soil-900">Expert-built</h3>
-            <p class="text-soil-600 mt-2">
-              Each one is built and maintained by Query.Farm, available through DuckDB's community channel
-              and through Haybarn, our DuckDB distribution.
-            </p>
-          </Card>
-        </div>
+        <dl class="mt-8 grid gap-6 sm:grid-cols-3">
+          <div>
+            <dt class="font-display text-lg text-soil-900">Runs inside DuckDB</dt>
+            <dd class="mt-1.5 text-sm text-soil-700">
+              Native code alongside your query — no network round-trip, no separate service, no added latency.
+            </dd>
+          </div>
+          <div>
+            <dt class="font-display text-lg text-soil-900">Fills the gaps</dt>
+            <dd class="mt-1.5 text-sm text-soil-700">
+              When a capability is too niche for DuckDB itself, an extension delivers it without bending
+              your pipeline around the gap.
+            </dd>
+          </div>
+          <div>
+            <dt class="font-display text-lg text-soil-900">Expert-built</dt>
+            <dd class="mt-1.5 text-sm text-soil-700">
+              Each one is built and maintained by Query.Farm, signed and published to the community channel.
+            </dd>
+          </div>
+        </dl>
 
-        <div class="mt-12 flex flex-col sm:flex-row sm:items-center gap-4">
-          <p class="text-soil-600">Need something that doesn't exist yet? We can build it.</p>
-          <Button variant="primary" href="/consulting">Commission a custom extension →</Button>
+        <div class="mt-9 rounded-2xl border border-soil-300/70 bg-white/70 p-6 sm:p-7">
+          <p class="qf-eyebrow text-sun-700">Not in the catalog?</p>
+          <p class="mt-2 font-display text-2xl text-soil-900">
+            Need something that doesn't exist yet? We can build it.
+          </p>
+          <p class="mt-3 max-w-[56ch] text-soil-700">
+            From a single scalar function to a full catalog integration — built, signed, and published
+            under a licence you choose, in a repo you own.
+          </p>
+          <div class="mt-5">
+            <Button variant="primary" href="/consulting">Commission a custom extension →</Button>
+          </div>
         </div>
+      </div>
+
+      <div>
+        <p class="qf-eyebrow text-sun-700">Getting started</p>
+        <h2 class="mt-3 font-display text-2xl text-soil-900">Install one in two statements</h2>
+        <p class="mt-3 text-sm text-soil-700">
+          Query.Farm publishes to DuckDB's community repository, so you install these the same way you
+          install any community extension — no extra setup, no custom repository.
+        </p>
+        <div class="mt-4">
+          <CodeBlock code={installSnippet} lang="sql" tryable={false} />
+        </div>
+        {usageSummary && (
+          <div class="mt-8 rounded-2xl border border-soil-300/70 bg-white/70 p-6">
+            <div class="qf-figure text-[38px] leading-none text-sun-700">
+              {usageSummary.annualizedLoads.toLocaleString()}
+            </div>
+            <div class="mt-2 text-[13px] font-medium text-soil-700">Loads per year · all extensions</div>
+            <div class="mt-1 text-[12.5px] text-soil-500">
+              Annualized from the <span class="qf-figure">{usageSummary.windowDays}</span>-day snapshot
+            </div>
+          </div>
+        )}
       </div>
     </div>
-  </section>
 
-  {usageSummary && buckets.length > 0 && (
-    <section class="py-12 lg:py-16 bg-soil-50 border-b border-soil-200">
-      <div class="section-container">
-        <div class="max-w-5xl mx-auto">
-          <div class="text-xs uppercase tracking-wider text-harvest-600 font-semibold mb-8 text-center md:text-left">
-            Used in production, everywhere
-          </div>
-        <div class="grid md:grid-cols-[auto_1fr] gap-8 md:gap-12 items-center">
-          <div class="text-center md:text-left">
-            <div class="text-5xl lg:text-6xl font-bold text-harvest-600 leading-none">
-              {compactCount(usageSummary.annualizedLoads)}+
-            </div>
-            <div class="mt-2 text-sm uppercase tracking-wide text-soil-600 font-medium">
-              extension loads per year
-            </div>
-            <div class="mt-1 text-xs text-soil-500">
-              Annualized from the last {usageSummary.windowDays} days · across {totalExtensions} Query.Farm extensions
-            </div>
-          </div>
+    <p class="mt-14 border-t border-soil-300 pt-10 text-[13.5px] text-soil-600">
+      Load counts come from the DuckDB community extension registry over a rolling
+      {' '}{usageSummary?.windowDays ?? 90}-day window, refreshed at build time.
+    </p>
 
-          <div>
-            <div class="text-xs uppercase tracking-wide text-soil-600 font-medium mb-2">
-              Weekly loads · last {buckets.length} complete weeks
-            </div>
-            <svg
-              viewBox={`0 0 ${CHART_VW} ${CHART_VH}`}
-              role="img"
-              aria-label={`Bar chart of weekly extension loads over the last ${buckets.length} complete weeks`}
-              class="w-full h-auto"
-              preserveAspectRatio="xMidYMid meet"
-            >
-              {buckets.map((b, i) => {
-                const h = maxLoads === 0 ? 0 : (b.loads / maxLoads) * innerH;
-                const x = CHART_PAD.left + i * (barW + barGap);
-                const y = CHART_PAD.top + (innerH - h);
-                return (
-                  <g>
-                    <text
-                      x={x + barW / 2}
-                      y={y - 6}
-                      text-anchor="middle"
-                      class="fill-soil-700"
-                      style="font-size: 11px; font-weight: 600;"
-                    >
-                      {compactCount(b.loads)}
-                    </text>
-                    <rect
-                      x={x}
-                      y={y}
-                      width={barW}
-                      height={h}
-                      rx="3"
-                      class="fill-harvest-500"
-                    />
-                    <text
-                      x={x + barW / 2}
-                      y={CHART_PAD.top + innerH + 18}
-                      text-anchor="middle"
-                      class="fill-soil-600"
-                      style="font-size: 10px;"
-                    >
-                      {weekLabel(b.weekStarting)}
-                    </text>
-                  </g>
-                );
-              })}
-            </svg>
-          </div>
+    <!-- Weekly loads — measured, not modelled. Every bar keeps its own value
+         and week label: this is the evidence behind the annual figure, and
+         summarising it away costs the reader the shape AND the numbers. The
+         restraint comes from weight — hairline gridlines, light label colour,
+         the latest week emphasised — not from removing data.
+
+         Chrome and data are deliberately on different scales. Everything
+         structural (gridlines, baseline, tick and value labels) is neutral
+         `rock` grey; gold is reserved for the bars themselves. The earlier
+         version drew the axis in soil-200/300/500, which is the same warm
+         hue as the sun bars: soil-500 labels sat ΔE76 19 from the sun-600
+         emphasis bar and soil-200 gridlines ΔE76 33 from the sun-300 bars,
+         so the axis read as a washed-out copy of the data rather than as a
+         separate layer. rock-700 against the same sun-600 bar is ΔE76 45.
+
+         preserveAspectRatio must stay xMidYMid meet: "none" stretches the
+         viewBox to the container and distorts every text label with it. -->
+    {usageSummary && buckets.length > 0 && (
+      <figure class="mt-5 max-w-[860px] overflow-hidden rounded-xl border border-soil-300/70 bg-white/70">
+        <figcaption class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-soil-300/70 px-4 py-2.5">
+          <span class="text-[13px] font-medium text-soil-700">
+            Weekly loads · last <span class="qf-figure">{buckets.length}</span> complete weeks
+          </span>
+          <span class="text-[12.5px] text-soil-500">
+            peak <span class="qf-figure text-soil-700">{compactCount(peakLoads)}</span>
+            <span aria-hidden="true"> · </span>
+            latest <span class="qf-figure text-soil-700">{compactCount(latestLoads)}</span>
+          </span>
+        </figcaption>
+        <div class="px-4 pb-3 pt-3">
+          <svg
+            viewBox={`0 0 ${CHART_VW} ${CHART_VH}`}
+            role="img"
+            aria-label={`Weekly extension loads over the last ${buckets.length} complete weeks. Peak ${compactCount(peakLoads)}, most recent ${compactCount(latestLoads)}.`}
+            class="h-auto w-full"
+            preserveAspectRatio="xMidYMid meet"
+          >
+            {/* Quarter lines, not [0.5, 1]: the 1.0 line landed exactly on the
+                peak bar's top edge, so it read as an accident rather than a
+                reference. Evenly spaced quarters give the height comparison
+                across twelve bars and never coincide with a bar top. */}
+            {[0.25, 0.5, 0.75].map(f => (
+              <line
+                x1={CHART_PAD.left} x2={CHART_VW - CHART_PAD.right}
+                y1={CHART_PAD.top + innerH - innerH * f} y2={CHART_PAD.top + innerH - innerH * f}
+                class="stroke-rock-700/20" stroke-width="1" shape-rendering="crispEdges"
+              />
+            ))}
+            <line
+              x1={CHART_PAD.left} x2={CHART_VW - CHART_PAD.right}
+              y1={CHART_PAD.top + innerH + 0.5} y2={CHART_PAD.top + innerH + 0.5}
+              class="stroke-rock-700/55" stroke-width="1" shape-rendering="crispEdges"
+            />
+            {buckets.map((b, i) => {
+              const h = maxLoads === 0 ? 0 : Math.max((b.loads / maxLoads) * innerH, 1.5);
+              const x = CHART_PAD.left + i * (barW + barGap);
+              const y = CHART_PAD.top + (innerH - h);
+              const isLast = i === buckets.length - 1;
+              return (
+                <g>
+                  <text
+                    x={x + barW / 2} y={y - 5} text-anchor="middle"
+                    class={isLast ? 'qf-figure fill-rock-900' : 'qf-figure fill-rock-700'}
+                    style={`font-size: 9.5px; ${isLast ? 'font-weight: 600;' : ''}`}
+                  >{compactCount(b.loads)}</text>
+                  <rect
+                    x={x} y={y} width={barW} height={h} rx="1.5"
+                    class={isLast ? 'fill-sun-600' : 'fill-sun-400'}
+                  >
+                    <title>{`${weekLabel(b.weekStarting)} · ${b.loads.toLocaleString()} loads`}</title>
+                  </rect>
+                  <text
+                    x={x + barW / 2} y={CHART_PAD.top + innerH + 13} text-anchor="middle"
+                    class="qf-figure fill-rock-700/75" style="font-size: 9.5px;"
+                  >{weekLabel(b.weekStarting)}</text>
+                </g>
+              );
+            })}
+          </svg>
         </div>
-        </div>
-      </div>
-    </section>
-  )}
+      </figure>
+    )}
 
-  <!-- Bucket sections -->
-  <section class="py-16 lg:py-24 bg-soil-50">
-    <div class="section-container">
-      <SectionHeader
-        align="center"
-        eyebrow="Browse by intent"
-        title="What are you trying to do?"
-        description="Pick an intent below. Each section groups the extensions that solve that class of problem, with finer-grained sub-buckets where useful."
-        class="mb-12"
-      />
+    <div class="mt-14 border-t border-soil-300 pt-10">
+      <p class="qf-eyebrow text-sun-700">Browse by intent</p>
+      <h2 class="mt-3 font-display text-3xl text-soil-900">What are you trying to do?</h2>
+      <p class="mt-4 max-w-[62ch] text-soil-700">
+        Each section groups the extensions that solve one class of problem, with finer-grained
+        sub-groups where they help. Filter by intent or search by name.
+      </p>
+    </div>
 
-      <!-- View toggle: Cards (default, browse by intent) / Table (find & compare) -->
-      <div class="flex justify-center mb-12">
-        <div role="tablist" aria-label="Extension view" class="inline-flex rounded-lg border border-soil-300 bg-white p-1 shadow-sm">
-          <button id="view-cards-btn" type="button" role="tab" aria-selected="true"
-            class="px-4 py-2 text-sm font-medium rounded-md transition-colors bg-harvest-600 text-white">
-            <span aria-hidden="true">▣</span> Cards
+  </div>
+
+  <!-- Filters. Full-bleed so the tinted bands below can run edge to edge and
+       still scroll cleanly under the sticky bar. -->
+  <div
+    class="sticky z-30 border-b border-soil-300 bg-soil-50/95 backdrop-blur"
+    style="top: calc(var(--qf-nav-h) + 45px)"
+  >
+    <!-- Two zones that never reflow into one another: the intent chips scroll
+         sideways on one line, the search box holds its place on the right. As a
+         single wrapping flex row this bar grew to three lines and 113px tall by
+         1180px — a sticky header that eats a third of the viewport, and the
+         search field ended up on its own orphan row. -->
+    <div class="mx-auto flex w-full max-w-[1360px] items-center gap-3 px-5 py-3 sm:px-7">
+      <div class="qf-chiprow flex min-w-0 flex-1 items-center gap-2.5 overflow-x-auto">
+        <button type="button" class="qf-pill flex-none" data-bucket="all" aria-pressed="true">All {totalExtensions}</button>
+        {bucketCounts.map((bucket) => (
+          <button type="button" class="qf-pill flex-none" data-bucket={bucket.id} aria-pressed="false" title={bucket.title}>
+            {bucket.pill} <span class="qf-figure">{bucket.count}</span>
           </button>
-          <button id="view-table-btn" type="button" role="tab" aria-selected="false"
-            class="px-4 py-2 text-sm font-medium rounded-md transition-colors text-soil-700 hover:text-soil-900">
-            <span aria-hidden="true">☰</span> Table
-          </button>
-        </div>
+        ))}
       </div>
 
-      <!-- Cards view -->
-      <div id="cards-view">
-      <div class="space-y-20">
-        {TAXONOMY.map((bucket) => (
-          <section id={bucket.id} class="scroll-mt-24">
-            <div class={`flex items-start gap-4 mb-10 p-6 rounded-2xl border ${bucket.theme.sectionBg} ${bucket.theme.sectionBorder}`}>
-              <div class={`w-12 h-12 rounded-xl ${bucket.theme.iconBg} ${bucket.theme.iconText} flex items-center justify-center text-2xl shrink-0`}>
-                {bucket.icon}
+      <span class="hidden flex-none text-[13px] font-medium text-soil-500 xl:inline">
+        Sort: loads &#8595;
+      </span>
+
+      <span class="flex w-[190px] flex-none items-center gap-2 rounded-full border border-soil-300 bg-white px-3.5 py-1.5 focus-within:border-link">
+        <label for="ext-filter" class="sr-only">Filter extensions</label>
+        <input
+          id="ext-filter"
+          type="search"
+          autocomplete="off"
+          placeholder="Filter&#8230;"
+          class="w-full min-w-0 border-0 bg-transparent text-sm text-soil-900 placeholder:text-soil-500 focus:outline-none"
+        />
+        <kbd class="hidden flex-none rounded border border-soil-300 px-1.5 font-mono text-[9.5px] text-soil-500 sm:inline">/</kbd>
+      </span>
+    </div>
+  </div>
+
+  <!-- Browse by intent: every extension, grouped. Restored from the
+       pre-redesign catalog — ranking the top 12 and dumping the rest into an
+       "everything else" table lost the thing that made this page useful, which
+       is that it answers "what am I trying to do?".
+
+       Each group is a full-bleed band carrying its own ground tint, the way the
+       homepage stages do. The colour change IS the separator, so the headers
+       need no chrome — no panel, no icon chip. -->
+  <div id="ext-buckets">
+    {TAXONOMY.map(bucket => {
+      const items = bucket.subs.flatMap(sub => sub.slugs.map(slug => bySlug[slug]).filter(Boolean));
+      return (
+        <section
+          id={bucket.id}
+          class="ext-bucket scroll-mt-32"
+          data-bucket={bucket.id}
+        >
+          <div class="mx-auto w-full max-w-[1360px] px-5 py-11 sm:px-7">
+            {/* The heading block is held to a reading measure and marked with a
+                short gold rule. Full-bleed across 1360px it was a run of very
+                wide, very plain text with the count marooned at the far right —
+                the eye had nothing to catch on between one section and the next.
+                The count now sits with the title it counts. */}
+            <div class="max-w-[62ch]">
+              <span class="mb-3 block h-[3px] w-9 rounded-full bg-sun-400" aria-hidden="true"></span>
+              <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <h2 class="font-display text-2xl text-soil-900 md:text-[28px]">{bucket.title}</h2>
+                <span class="band-count text-[13px]">
+                  <span class="qf-figure">{items.length}</span> extensions
+                </span>
               </div>
-              <div class="flex-1">
-                <h2 class={`text-2xl md:text-3xl font-bold leading-tight ${bucket.theme.titleText}`}>
-                  {bucket.title}
-                </h2>
-                <p class="text-soil-600 mt-1">{bucket.blurb}</p>
-              </div>
+              <p class="band-blurb mt-1.5">{bucket.blurb}</p>
             </div>
 
-            <div class="space-y-14">
-              {bucket.subs.map((sub) => (
-                <div>
+            <div class="mt-8 space-y-10">
+              {bucket.subs.map(sub => (
+                <div class="ext-sub">
                   {sub.title && (
-                    <h3 class="text-xl md:text-2xl font-bold text-soil-900 mt-6 mb-6">
+                    <h3 class="mb-5 flex items-center gap-2.5 font-display text-xl text-soil-900">
                       {sub.title}
+                      <span class="h-px flex-1 bg-soil-300/70" aria-hidden="true"></span>
                     </h3>
                   )}
-                  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {sub.slugs.map((slug) => {
+                  <div class="grid grid-cols-[repeat(auto-fill,minmax(288px,1fr))] gap-3.5">
+                    {sub.slugs.map(slug => {
                       const e = bySlug[slug];
-                      return e && <ExtensionCard {...e} />;
+                      return e && (
+                        <div class="ext-item" data-bucket={bucket.id} data-search={searchKey(e)}>
+                          <ExtensionCard
+                            id={e.id}
+                            name={e.name}
+                            description={e.description}
+                            category={e.category}
+                            status={e.status}
+                            icon={e.icon}
+                            usageCount={e.usageCount}
+                            usagePeriod={e.usagePeriod}
+                            maxUsageCount={maxUsageCount}
+                          />
+                        </div>
+                      );
                     })}
                   </div>
                 </div>
               ))}
             </div>
-          </section>
-        ))}
-      </div>
-      </div>
-
-      <!-- Table view (hidden until toggled) -->
-      <div id="table-view" hidden>
-        <div class="max-w-5xl mx-auto">
-          <label class="sr-only" for="ext-filter">Filter extensions</label>
-          <input id="ext-filter" type="search" autocomplete="off"
-            placeholder="Filter by name, description, or category…"
-            class="w-full mb-6 px-4 py-3 rounded-lg border border-soil-300 bg-white text-soil-900 placeholder-soil-400 focus:outline-none focus:ring-2 focus:ring-harvest-400 focus:border-harvest-400" />
-
-          <div class="overflow-x-auto rounded-xl border border-soil-200 bg-white shadow-sm">
-            <table class="w-full text-left border-collapse">
-              <thead class="bg-soil-100 text-soil-700 text-xs uppercase tracking-wide">
-                <tr>
-                  <th scope="col" data-sort="name" aria-sort="none" class="js-sort px-4 py-3 font-semibold cursor-pointer select-none hover:text-soil-900">
-                    Extension <span data-arrow class="text-harvest-600"></span>
-                  </th>
-                  <th scope="col" data-sort="category" aria-sort="none" class="js-sort px-4 py-3 font-semibold cursor-pointer select-none hover:text-soil-900">
-                    Category <span data-arrow class="text-harvest-600"></span>
-                  </th>
-                  <th scope="col" data-sort="loads" aria-sort="descending" class="js-sort px-4 py-3 font-semibold cursor-pointer select-none hover:text-soil-900 text-right">
-                    Loads <span data-arrow class="text-harvest-600">▼</span>
-                  </th>
-                  <th scope="col" data-sort="status" aria-sort="none" class="js-sort px-4 py-3 font-semibold cursor-pointer select-none hover:text-soil-900">
-                    Status <span data-arrow class="text-harvest-600"></span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody id="ext-tbody" class="divide-y divide-soil-100">
-                {tableRows.map((e) => {
-                  const cat = titleCase(e.category);
-                  const search = `${e.name} ${e.id} ${e.description} ${cat}`.toLowerCase();
-                  return (
-                    <tr
-                      data-name={e.name.toLowerCase()}
-                      data-category={cat.toLowerCase()}
-                      data-loads={e.usageCount ?? -1}
-                      data-status={e.status}
-                      data-search={search}
-                      class="hover:bg-soil-50 transition-colors"
-                    >
-                      <td class="px-4 py-3 align-top">
-                        <a href={`/products/extensions/${e.id}`} class="font-semibold text-soil-900 hover:text-harvest-700">
-                          {e.icon && <ExtensionIcon icon={e.icon} category={e.category} class="inline-block align-[-0.15em] mr-1.5 text-base" />}{e.name}
-                        </a>
-                        <code class="block text-xs text-soil-500 font-mono">{e.id}</code>
-                      </td>
-                      <td class="px-4 py-3 align-top text-soil-700 whitespace-nowrap">{cat}</td>
-                      <td class="px-4 py-3 align-top text-right tabular-nums whitespace-nowrap"
-                        title={typeof e.usageCount === 'number' ? `${e.usageCount.toLocaleString()} loads${e.usagePeriod ? ` · ${e.usagePeriod}` : ''}` : 'Just released'}>
-                        {typeof e.usageCount === 'number'
-                          ? <span class="text-soil-900 font-medium">{compactCount(e.usageCount)}</span>
-                          : <span class="text-sky-700">New</span>}
-                      </td>
-                      <td class="px-4 py-3 align-top">
-                        <span class:list={[
-                          'inline-block px-2 py-0.5 rounded-full text-xs font-medium capitalize',
-                          e.status === 'stable' && 'bg-emerald-100 text-emerald-800',
-                          e.status === 'beta' && 'bg-amber-100 text-amber-800',
-                          e.status === 'experimental' && 'bg-rose-100 text-rose-800',
-                        ]}>{e.status}</span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
           </div>
-          <p id="ext-empty" hidden class="text-center text-soil-500 py-8">No extensions match your filter.</p>
-          <p class="mt-4 text-xs text-soil-500 text-center">Click a column header to sort · {totalExtensions} extensions</p>
-        </div>
-      </div>
-    </div>
-  </section>
+        </section>
+      );
+    })}
+  </div>
 
-  <script>
-    // View toggle + client-side sort/filter for the extensions table. No React;
-    // both views are server-rendered, this only shows/hides and reorders rows.
-    const cardsBtn = document.getElementById('view-cards-btn');
-    const tableBtn = document.getElementById('view-table-btn');
-    const cardsView = document.getElementById('cards-view');
-    const tableView = document.getElementById('table-view');
+  <div class="mx-auto w-full max-w-[1360px] px-5 sm:px-7">
+    <p id="ext-empty" hidden class="py-10 text-center text-soil-600">
+      No extensions match that filter.
+    </p>
 
-    function setView(view: 'cards' | 'table') {
-      const isTable = view === 'table';
-      if (tableView) tableView.hidden = !isTable;
-      if (cardsView) cardsView.hidden = isTable;
-      for (const [btn, active] of [[tableBtn, isTable], [cardsBtn, !isTable]] as const) {
-        if (!btn) continue;
-        btn.setAttribute('aria-selected', String(active));
-        btn.classList.toggle('bg-harvest-600', active);
-        btn.classList.toggle('text-white', active);
-        btn.classList.toggle('text-soil-700', !active);
-      }
-    }
-    cardsBtn?.addEventListener('click', () => setView('cards'));
-    tableBtn?.addEventListener('click', () => setView('table'));
-
-    // Filter
-    const filterInput = document.getElementById('ext-filter') as HTMLInputElement | null;
-    const tbody = document.getElementById('ext-tbody');
-    const emptyMsg = document.getElementById('ext-empty');
-    const rows = tbody ? Array.from(tbody.querySelectorAll('tr')) : [];
-
-    function applyFilter() {
-      const q = (filterInput?.value || '').trim().toLowerCase();
-      let visible = 0;
-      for (const r of rows) {
-        const show = !q || (r.getAttribute('data-search') || '').includes(q);
-        (r as HTMLElement).hidden = !show;
-        if (show) visible++;
-      }
-      if (emptyMsg) emptyMsg.hidden = visible !== 0;
-    }
-    filterInput?.addEventListener('input', applyFilter);
-
-    // Sort — initial state mirrors the server-rendered order (loads, descending).
-    let sortKey = 'loads';
-    let sortDir = -1;
-    const heads = Array.from(document.querySelectorAll<HTMLElement>('th.js-sort'));
-
-    function valFor(r: Element, key: string): number | string {
-      if (key === 'loads') return Number(r.getAttribute('data-loads'));
-      return r.getAttribute('data-' + key) || '';
-    }
-    function sortBy(key: string) {
-      if (sortKey === key) sortDir *= -1;
-      else { sortKey = key; sortDir = key === 'loads' ? -1 : 1; }
-      const sorted = rows.slice().sort((a, b) => {
-        const av = valFor(a, key), bv = valFor(b, key);
-        let cmp = typeof av === 'number'
-          ? (av as number) - (bv as number)
-          : String(av).localeCompare(String(bv));
-        if (cmp === 0) cmp = (a.getAttribute('data-name') || '').localeCompare(b.getAttribute('data-name') || '');
-        return cmp * sortDir;
-      });
-      for (const r of sorted) tbody?.appendChild(r);
-      for (const h of heads) {
-        const k = h.getAttribute('data-sort');
-        const arrow = h.querySelector('[data-arrow]');
-        const active = k === sortKey;
-        if (arrow) arrow.textContent = active ? (sortDir === 1 ? '▲' : '▼') : '';
-        h.setAttribute('aria-sort', active ? (sortDir === 1 ? 'ascending' : 'descending') : 'none');
-      }
-    }
-    for (const h of heads) {
-      h.addEventListener('click', () => sortBy(h.getAttribute('data-sort') || 'name'));
-    }
-  </script>
-
-  <!-- Installation Section -->
-  <section class="py-16 lg:py-24 bg-white">
-    <div class="section-container">
-      <div class="max-w-4xl mx-auto">
-        <SectionHeader
-          align="center"
-          eyebrow="Getting Started"
-          title="How to install a DuckDB extension"
-          description="Install any Query.Farm extension in seconds with DuckDB's built-in extension system."
-          class="mb-12"
-        />
-
-        <Card padding="lg" class="!bg-soil-900 text-soil-50 !border-soil-800">
-          <h3 class="text-lg font-semibold mb-4 text-white">Install from the DuckDB Community repository</h3>
-          <pre class="bg-black/40 p-5 rounded-lg overflow-x-auto mb-4 text-sm leading-relaxed font-mono ring-1 ring-soil-700/50"><code><span class="text-soil-500">-- Install an extension</span>
-<span class="text-sky-400">INSTALL</span> <span class="text-harvest-300">extension_name</span> <span class="text-sky-400">FROM</span> <span class="text-harvest-300">community</span><span class="text-soil-400">;</span>
-
-<span class="text-soil-500">-- Load the extension</span>
-<span class="text-sky-400">LOAD</span> <span class="text-harvest-300">extension_name</span><span class="text-soil-400">;</span>
-
-<span class="text-soil-500">-- Start using it!</span>
-<span class="text-sky-400">SELECT</span> <span class="text-soil-300">*</span> <span class="text-sky-400">FROM</span> <span class="text-harvest-300">your_function</span><span class="text-soil-400">();</span></code></pre>
-
-          <p class="text-sm text-soil-300">
-            Query.Farm publishes its extensions to DuckDB's community repository, so you install them
-            the same way you install any community extension — no extra setup or custom repository.
-            Every extension is signed and verified; full documentation and examples live on each
-            extension's page.
-          </p>
-        </Card>
-      </div>
-    </div>
-  </section>
-
-  <!-- CTA Section -->
-  <section class="py-16 lg:py-24 bg-gradient-to-br from-harvest-600 to-grain-600 text-white">
-    <div class="section-container text-center">
-      <h2 class="text-3xl md:text-4xl lg:text-5xl font-bold mb-6">
+    <div class="mt-16 mb-20 rounded-2xl border border-soil-300/70 bg-soil-100 px-6 py-12 text-center sm:px-10">
+      <p class="qf-eyebrow text-sun-700">Expert help</p>
+      <h2 class="mx-auto mt-3 max-w-[20ch] font-display text-3xl text-soil-900">
         Need a custom DuckDB extension?
       </h2>
-      <p class="text-xl md:text-2xl text-harvest-50 mb-8 max-w-3xl mx-auto">
-        Our team can build custom DuckDB extensions tailored to your specific needs.
+      <p class="mx-auto mt-4 max-w-[56ch] text-lg text-soil-700">
+        We build extensions for teams that need a capability DuckDB doesn't have yet &#8212; from a single
+        function to a full catalog integration.
       </p>
-      <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
-        <Button href="/company/schedule" variant="secondary" size="lg">
-          Schedule Consultation
-        </Button>
-        <Button href="/consulting" variant="ghost" size="lg" class="bg-white/10 hover:bg-white/20 text-white border-white/30">
-          Learn About Consulting
-        </Button>
+      <div class="mt-7 flex flex-wrap justify-center gap-3">
+        <Button href="/company/schedule" variant="primary">Schedule a consultation</Button>
+        <Button href="/consulting" variant="secondary">Learn about consulting</Button>
       </div>
     </div>
-  </section>
+  </div>
+
+  <script>
+    // Catalog filtering. Cards carry `.ext-item` + `data-bucket` / `data-search`.
+    // Because the catalog is grouped by intent, filtering also has to collapse
+    // any sub-group and bucket left with nothing in it — otherwise a search
+    // leaves a page of orphaned headings above empty grids.
+    const pills = Array.from(document.querySelectorAll<HTMLButtonElement>('.qf-pill'));
+    const items = Array.from(document.querySelectorAll<HTMLElement>('.ext-item'));
+    const subs = Array.from(document.querySelectorAll<HTMLElement>('.ext-sub'));
+    const bucketEls = Array.from(document.querySelectorAll<HTMLElement>('.ext-bucket'));
+    const input = document.getElementById('ext-filter') as HTMLInputElement | null;
+    const empty = document.getElementById('ext-empty');
+
+    let activeBucket = 'all';
+
+    const anyVisible = (root: HTMLElement) =>
+      Array.from(root.querySelectorAll<HTMLElement>('.ext-item')).some(i => !i.hidden);
+
+    function apply() {
+      const q = (input?.value || '').trim().toLowerCase();
+      let visible = 0;
+      for (const item of items) {
+        const okBucket = activeBucket === 'all' || item.dataset.bucket === activeBucket;
+        const okQuery = !q || (item.dataset.search || '').includes(q);
+        const show = okBucket && okQuery;
+        item.hidden = !show;
+        if (show) visible++;
+      }
+      for (const sub of subs) sub.hidden = !anyVisible(sub);
+      for (const b of bucketEls) b.hidden = !anyVisible(b);
+      if (empty) empty.hidden = visible !== 0;
+    }
+
+    for (const pill of pills) {
+      pill.addEventListener('click', () => {
+        activeBucket = pill.dataset.bucket || 'all';
+        for (const p of pills) p.setAttribute('aria-pressed', String(p === pill));
+        apply();
+      });
+    }
+
+    input?.addEventListener('input', apply);
+
+    // `/` focuses the filter, the way every catalog people already use does.
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+      event.preventDefault();
+      input?.focus();
+    });
+  </script>
+
+  <style>
+    /* Table rows are `display: table-row`; `hidden` on a <tr> is honoured, but
+       Tailwind's preflight sets `display` on some elements — force it. */
+    .ext-item[hidden], .ext-sub[hidden], .ext-bucket[hidden] { display: none !important; }
+
+    /* Section bands — a stepped progression, the homepage model.
+
+       The run walks soil-50 to pipe-3 in eight even steps. Both ends are real
+       brand tokens: paper at the top, the MID stage band at the bottom. It
+       stops at pipe-3 because that is the last band the white catalog cards
+       can sit on — pipe-4 and darker would need the homepage's whole .on-dark
+       card treatment, and rendering the same 32 peer objects two different
+       ways depending on scroll position is worse than a shorter run.
+
+       Steps are ~1.15:1 apart, so each boundary reads without any one band
+       looking tinted on its own, and the cards gain separation on the way
+       down (1.11:1 on paper to 3.04:1 on pipe-3).
+
+       Text follows the §3 MID-band law rather than a special case: soil-700
+       blurbs fail from band 6 (3.99:1) and soil-600 counts from band 4
+       (4.18:1), so both go to ink from band 4, where the worst case is
+       5.66:1 on pipe-3. Headings were already ink. */
+    .ext-bucket:nth-of-type(1) { background: #f7f3ea; }
+    .ext-bucket:nth-of-type(2) { background: #e7e6d8; }
+    .ext-bucket:nth-of-type(3) { background: #d8dac6; }
+    .ext-bucket:nth-of-type(4) { background: #c8cdb4; }
+    .ext-bucket:nth-of-type(5) { background: #b9c0a1; }
+    .ext-bucket:nth-of-type(6) { background: #a9b38f; }
+    .ext-bucket:nth-of-type(7) { background: #9aa77d; }
+    .ext-bucket:nth-of-type(8) { background: #8a9a6b; }
+
+    .ext-bucket {
+      border-top: 1px solid color-mix(in srgb, var(--color-soil-300) 45%, transparent);
+    }
+    .band-blurb { color: var(--color-soil-700); }
+    .band-count { color: var(--color-soil-600); }
+    .ext-bucket:nth-of-type(n+4) .band-blurb,
+    .ext-bucket:nth-of-type(n+4) .band-count { color: var(--color-soil-900); }
+  </style>
 </PageLayout>
+
+<style is:global>
+  /* The chip strip scrolls sideways instead of wrapping. Its scrollbar is
+     hidden the same way the section subnav hides its own — a visible bar under
+     a single row of pills is noise, and the row is short enough that the
+     overflow is obvious from the clipped chip at the edge. */
+  .qf-chiprow {
+    scrollbar-width: none;
+  }
+  .qf-chiprow::-webkit-scrollbar {
+    display: none;
+  }
+
+  .qf-pill {
+    font-weight: 500;
+    font-size: 13.5px;
+    letter-spacing: 0;
+    color: var(--color-soil-700);
+    background: #fff;
+    border: 1px solid var(--color-soil-300);
+    border-radius: 999px;
+    padding: 6px 13px;
+    cursor: pointer;
+    transition: 0.18s;
+  }
+  .qf-pill:hover {
+    border-color: var(--color-soil-400);
+    color: var(--color-soil-900);
+  }
+  .qf-pill[aria-pressed='true'] {
+    background: var(--color-soil-900);
+    border-color: var(--color-soil-900);
+    color: var(--color-soil-50);
+  }
+  .qf-pill:focus-visible {
+    outline: 2px solid var(--color-link);
+    outline-offset: 2px;
+  }
+
+  .qf-th {
+    font-weight: 600;
+    font-size: 12.5px;
+    letter-spacing: 0;
+    color: var(--color-soil-600);
+    background: var(--color-soil-50);
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--color-soil-300);
+    text-align: left;
+  }
+</style>

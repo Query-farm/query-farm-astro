@@ -2,20 +2,36 @@
 // An inviting "Star on GitHub" button. The live star count is fetched at build time
 // from the GitHub API and baked in (refreshes on each docs build); the button links to
 // the repo so a visitor can star in one click. Falls back to no count if the fetch fails.
+//
+// The fetch is memoised per repo for the life of the process, and deliberately
+// stores the in-flight promise rather than the resolved value, so concurrent
+// page renders share one request. Without this the call ran on every render: a
+// network round trip in the middle of each dev-server response (most of the
+// second-plus it took /vgi/docs/python/ to come back), one request per page in
+// a build, and — since unauthenticated GitHub allows 60 an hour — a silent slide
+// into `null` counts once a build crosses that. The 4s timeout is the other half:
+// a slow API should cost the page nothing but its star count.
 interface Props {
   repo?: string;
 }
 const { repo = 'Query-farm/vgi-python' } = Astro.props;
 
-let stars: number | null = null;
-try {
-  const res = await fetch(`https://api.github.com/repos/${repo}`, {
+const starCache: Map<string, Promise<number | null>> =
+  ((globalThis as Record<string, unknown>).__qfGitHubStars as Map<string, Promise<number | null>>) ??
+  ((globalThis as Record<string, unknown>).__qfGitHubStars = new Map());
+
+function fetchStars(slug: string): Promise<number | null> {
+  return fetch(`https://api.github.com/repos/${slug}`, {
     headers: { Accept: 'application/vnd.github+json' },
-  });
-  if (res.ok) stars = (await res.json()).stargazers_count ?? null;
-} catch {
-  stars = null;
+    signal: AbortSignal.timeout(4000),
+  })
+    .then((res) => (res.ok ? res.json() : null))
+    .then((json) => json?.stargazers_count ?? null)
+    .catch(() => null);
 }
+
+if (!starCache.has(repo)) starCache.set(repo, fetchStars(repo));
+const stars: number | null = await starCache.get(repo)!;
 const fmtStars = (n: number) =>
   n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'k' : String(n);
 ---

@@ -29,7 +29,7 @@ import DuckDBExtensionFunctionDoc from '../components/docs/DuckDBExtensionFuncti
   id="crypto_sha256"
   name="crypto_sha256"
   type="scalar"
-  signature={`<span class="text-harvest-700">crypto_sha256</span>(<span class="text-duck-700">input</span>: <span class="text-blue-600">VARCHAR</span>) → <span class="text-blue-600">VARCHAR</span>`}
+  signature={`<span class="font-semibold text-soil-900">crypto_sha256</span>(<span class="text-field-700">input</span>: <span class="text-sun-700">VARCHAR</span>) → <span class="text-sun-700">VARCHAR</span>`}
   parameters={[
     {
       name: 'input',
@@ -52,7 +52,7 @@ SELECT crypto_sha256('Hello, World!') AS hash;`}
   id="crypto_bcrypt"
   name="crypto_bcrypt"
   type="scalar"
-  signature={`<span class="text-harvest-700">crypto_bcrypt</span>(<span class="text-duck-700">password</span>: <span class="text-blue-600">VARCHAR</span>, <span class="text-purple-600">cost</span> := <span class="text-blue-600">INTEGER</span> = 10) → <span class="text-blue-600">VARCHAR</span>`}
+  signature={`<span class="font-semibold text-soil-900">crypto_bcrypt</span>(<span class="text-field-700">password</span>: <span class="text-sun-700">VARCHAR</span>, <span class="text-soil-600">cost</span> := <span class="text-sun-700">INTEGER</span> = 10) → <span class="text-sun-700">VARCHAR</span>`}
   parameters={[
     {
       name: 'password',
@@ -82,7 +82,7 @@ VALUES ('alice', crypto_bcrypt('secret_password', cost := 12));`}
   id="crypto_generate_keys"
   name="crypto_generate_keys"
   type="table"
-  signature={`<span class="text-harvest-700">crypto_generate_keys</span>(<span class="text-duck-700">count</span>: <span class="text-blue-600">INTEGER</span>) → TABLE(...)`}
+  signature={`<span class="font-semibold text-soil-900">crypto_generate_keys</span>(<span class="text-field-700">count</span>: <span class="text-sun-700">INTEGER</span>) → TABLE(...)`}
   parameters={[
     {
       name: 'count',
@@ -108,7 +108,7 @@ VALUES ('alice', crypto_bcrypt('secret_password', cost := 12));`}
   id="crypto_hash_agg"
   name="crypto_hash_agg"
   type="aggregate"
-  signature={`<span class="text-harvest-700">crypto_hash_agg</span>(<span class="text-duck-700">value</span>: <span class="text-blue-600">VARCHAR</span>) → <span class="text-blue-600">VARCHAR</span>`}
+  signature={`<span class="font-semibold text-soil-900">crypto_hash_agg</span>(<span class="text-field-700">value</span>: <span class="text-sun-700">VARCHAR</span>) → <span class="text-sun-700">VARCHAR</span>`}
   parameters={[
     {
       name: 'value',

@@ -1,0 +1,385 @@
+---
+import PageLayout from '../../layouts/PageLayout.astro';
+import VGISubNav from '../../components/sections/VGISubNav.astro';
+import PageHead from '../../components/ui/PageHead.astro';
+import Button from '../../components/ui/Button.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import VGISectionNav from '../../components/sections/VGISectionNav.astro';
+import { Icon } from 'astro-icon/components';
+
+// ── Shared shape vocabulary (brief §10) ──
+const WRAP_WIDE = 'mx-auto w-full max-w-[1360px] px-6 sm:px-7';
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+const EYEBROW = 'qf-eyebrow text-sun-700';
+const LEDE = 'text-[17.5px] leading-relaxed text-soil-700';
+const P = 'mt-4 leading-relaxed text-soil-700';
+const CODE = 'rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900';
+const LINK = 'text-link underline decoration-link/40 underline-offset-2 hover:decoration-link';
+const NAV_LINK = 'block border-l-2 px-2.5 py-1 text-sm no-underline transition';
+const NAV_REST = 'border-soil-200 text-soil-700 hover:border-soil-300 hover:text-soil-900';
+
+const CURRENT = '/vgi/distributing-a-worker';
+
+const toc: { id: string; label: string }[] = [
+  { id: 'routes', label: 'Three ways to share' },
+  { id: 'process-or-service', label: 'A process or a service' },
+  { id: 'github', label: 'Publishing on GitHub' },
+  { id: 'orchard', label: 'Listing on the Orchard' },
+  { id: 'checklist', label: 'Before you publish' },
+];
+
+// ── The three audiences, in order of how much you take on.
+const routes = [
+  {
+    name: 'Keep it internal',
+    icon: 'ph:buildings',
+    audience: 'Your team',
+    body: 'Run the worker on your own infrastructure and hand colleagues the ATTACH line, or check the script into the repo they already clone. Nothing is published; access is whatever your network and auth already enforce.',
+    effort: 'No release process. You own hosting and support.',
+  },
+  {
+    name: 'Publish on GitHub',
+    icon: 'simple-icons:github',
+    audience: 'Anyone',
+    body: 'Put the source in a public repo, tag releases, and ship an artifact people can run — a package, a binary, or a container image. Users supply their own compute, so you host nothing.',
+    effort: 'You own the code and the docs. Users own the running.',
+  },
+  {
+    name: 'List it on the Orchard',
+    icon: 'ph:tree',
+    audience: 'Customers',
+    body: 'Submit the worker to Query.Farm’s connector marketplace. It gets a listing, a catalog entry, and managed credentials — and you can charge for it, with billing handled for you.',
+    effort: 'You host the worker; Query.Farm handles billing and distribution.',
+  },
+];
+
+const attachForms = `-- Distributed as a process: users run it themselves.
+--   A published package, launched on demand …
+ATTACH 'my_worker' AS mw (TYPE vgi, LOCATION 'uvx my-worker@1.2.0');
+
+--   … or a container image, over the same pipe transport.
+ATTACH 'my_worker' AS mw (TYPE vgi, LOCATION 'docker run --rm -i ghcr.io/you/my-worker:1.2.0');
+
+-- Distributed as a service: you run it, they attach a URL. Needs HTTP.
+ATTACH 'my_worker' AS mw (TYPE vgi, LOCATION 'https://my-worker.example.com/');`;
+
+// ── What a GitHub release actually has to contain to be attachable by a
+// stranger. Ordered by what breaks first when it's missing.
+const githubItems = [
+  {
+    name: 'A runnable artifact, not just source',
+    body: 'Publish to the registry your language already uses — PyPI, npm, crates.io, Maven Central, Go modules — or push a container image to GHCR. That is what makes `LOCATION \'uvx my-worker\'` or a `docker run` command work without a clone-and-build step.',
+  },
+  {
+    name: 'The ATTACH line in the README, first',
+    body: 'The first thing a reader needs is the exact statement that makes your worker appear as SQL, followed by one query that returns rows. Everything else can come after.',
+  },
+  {
+    name: 'Tagged releases, pinned versions',
+    body: 'Cut a GitHub release per version and let users pin it. A worker they attach in a scheduled job should not change under them because you pushed to main.',
+  },
+  {
+    name: 'Version the schema, not just the code',
+    body: 'The catalog you expose is an interface. Renaming a column or changing a type breaks somebody’s query as surely as changing a function signature — treat it as a breaking change and say so in the release notes.',
+  },
+  {
+    name: 'A way to self-host it',
+    body: 'If the worker serves HTTP, include a Dockerfile and a deploy config (Fly, Cloud Run, Lambda, or plain systemd) so a user can stand up their own copy instead of trusting yours.',
+  },
+  {
+    name: 'Docs for every table, function, and credential',
+    body: 'Descriptions travel over the protocol and show up in DuckDB’s own introspection, so writing them once pays off in the SQL client too.',
+  },
+];
+
+// ── What Query.Farm takes on when a connector is listed. Kept aligned with
+// /products/orchard/submit — that page is the authority on the process.
+const orchardHandles = [
+  'Billing and subscriptions, with a revenue share paid back to you.',
+  'Credentials — users get an Orchard token instead of hand-managed secrets.',
+  'Distribution and discovery: a catalog listing beside every other connector.',
+  'Review for correctness, security, and a clean, stable schema before it goes live.',
+];
+
+const orchardNeeds = [
+  'A worker that runs as a hosted service — so an SDK that serves HTTP.',
+  'A stable schema that will not change without versioning.',
+  'Auth through DuckDB secrets or Orchard tokens, never hard-coded.',
+  'A runnable example query that returns rows.',
+  'Clear docs for each table, function, and required credential.',
+];
+
+const checklist = [
+  {
+    name: 'Errors a stranger can act on',
+    body: 'A failure inside your worker surfaces in the middle of somebody’s query. “Upstream API returned 429, retry after 30s” is useful; a stack trace is not.',
+  },
+  {
+    name: 'Limits and timeouts',
+    body: 'Decide what happens when a query asks for far more than you expected — cap it, page it, or fail fast. A shared worker is a shared resource.',
+  },
+  {
+    name: 'Auth at the source',
+    body: 'If different callers should see different rows, enforce it in the worker rather than documenting it. Row and column security is part of the protocol.',
+  },
+  {
+    name: 'An example that actually runs',
+    body: 'One query, real output. It is both your smoke test and the thing that convinces someone to attach it.',
+  },
+];
+
+const nextCards = [
+  { title: 'Building a Worker', body: 'Scope, capabilities, and choosing a language.', href: '/vgi/building-a-worker', external: false },
+  { title: 'Publish on the Orchard', body: 'The listing process, manifest, and requirements.', href: '/products/orchard/submit', external: false },
+  { title: 'Data-as-a-Service', body: 'Selling access to data as an attachable catalog.', href: '/vgi/data-as-a-service', external: false },
+  { title: 'Authentication', body: 'Tokens, secrets, and identity on the way in.', href: '/vgi/authentication', external: false },
+];
+---
+
+<PageLayout
+  title="VGI — Distributing a Worker"
+  description="Share a VGI worker: keep it internal, publish releases on GitHub for anyone to run, or list it on the Orchard and charge for it. Includes what HTTP support changes."
+>
+  <VGISubNav />
+
+  <!-- ── Page header ─────────────────────────────────────────── -->
+  <PageHead
+    variant="section"
+    wide
+    eyebrow="Guide"
+    title="Distributing a worker"
+  >
+    <Fragment slot="lede">
+      Your worker runs. Now decide who else gets to <code class={CODE}>ATTACH</code> it — your
+      team, anyone with a GitHub link, or paying customers on the Orchard — and what you have to
+      ship for each.
+    </Fragment>
+
+    <div class="mt-6 flex flex-wrap items-center gap-3">
+      <Button href="#routes" variant="primary" size="md">Three ways to share →</Button>
+      <Button href="/products/orchard/submit" variant="secondary" size="md">Publish on the Orchard →</Button>
+    </div>
+  </PageHead>
+
+  <!-- ── Docs grid: section nav / content / page TOC ──────────── -->
+  <div class={`${WRAP_WIDE} grid gap-10 py-10 lg:grid-cols-[220px_minmax(0,1fr)_200px] lg:gap-11`}>
+    <aside class="hidden lg:block lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto">
+      <VGISectionNav current={CURRENT} />
+      <h2 class="mt-7 mb-2.5 text-[12.5px] font-semibold text-soil-500">Reference</h2>
+      <ul class="flex flex-col gap-0.5">
+        <li><a href="/products/orchard" class={`${NAV_LINK} ${NAV_REST}`}>The Orchard</a></li>
+        <li><a href="/products/orchard/submit" class={`${NAV_LINK} ${NAV_REST}`}>Publishing a connector</a></li>
+      </ul>
+    </aside>
+
+    <!-- Not a landmark element: BaseLayout already renders the page's single main. -->
+
+    <div class="min-w-0 max-w-[78ch]">
+      <p class={LEDE}>
+        A worker is useful the moment it runs on your machine. It becomes infrastructure when
+        somebody else can attach it without asking you how. That step is a packaging and hosting
+        decision, and it's the same decision whichever
+        <a href="/vgi/languages" class={LINK}>language</a> you built it in.
+      </p>
+
+      <!-- ── Three ways to share ───────────────────────────────── -->
+      <p class={`${EYEBROW} mt-10 block`}>The decision</p>
+      <h2 id="routes" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Three ways to share a worker</h2>
+      <p class={P}>
+        They aren't exclusive — plenty of workers start internal, go open source, and end up
+        listed. Each one asks more of you and gives the user more in return.
+      </p>
+      <div class="mt-6 grid gap-3.5 md:grid-cols-3">
+        {routes.map((r) => (
+          <div class={`${CARD} flex flex-col p-5`}>
+            <div class="flex items-center gap-3">
+              <span class="flex h-10 w-10 flex-none items-center justify-center rounded-lg border border-soil-300 bg-soil-100 text-soil-900">
+                <Icon name={r.icon} class="h-5 w-5" />
+              </span>
+              <div class="min-w-0">
+                <h3 class="text-[17px] text-soil-900">{r.name}</h3>
+                <p class="mt-0.5 text-[12.5px] text-soil-500">Audience: {r.audience}</p>
+              </div>
+            </div>
+            <p class="mt-3 text-sm leading-relaxed text-soil-700">{r.body}</p>
+            <p class="mt-auto pt-4 text-[13px] leading-relaxed text-soil-500">{r.effort}</p>
+          </div>
+        ))}
+      </div>
+
+      <!-- ── A process or a service ────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Packaging</p>
+      <h2 id="process-or-service" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Ship a process, or run a service</h2>
+      <p class={P}>
+        Underneath all three routes there are only two shapes, and they differ in who runs the
+        worker.
+      </p>
+      <p class={P}>
+        <strong class="font-medium text-soil-900">As a process</strong>, you publish an artifact and
+        the user's DuckDB spawns it locally over pipes. You host nothing, there is no uptime to
+        keep, and their data never leaves their machine — but they need the runtime installed, and
+        every user runs their own copy.
+      </p>
+      <p class={P}>
+        <strong class="font-medium text-soil-900">As a service</strong>, you deploy the worker once
+        and hand out a URL. Users attach it with no install at all, you can update it without
+        anyone upgrading, and you can authenticate, meter, and rate-limit callers — in exchange for
+        owning the hosting bill and the pager.
+      </p>
+      <div class="mt-5"><CodeBlock code={attachForms} lang="sql" title="what the user runs" tryable={false} /></div>
+      <p class={P}>
+        The worker source is the same in both cases; only the transport it's started with changes.
+        See <a href="/vgi/architecture" class={LINK}>Architecture</a> for the hosting options — load
+        balancers, Cloudflare Workers, Cloud Run, Lambda — and
+        <a href="/vgi/connect-to-a-worker" class={LINK}>Connect to a worker</a> for every
+        <code class={CODE}>LOCATION</code> form a user can type.
+      </p>
+
+      <!-- ── Publishing on GitHub ──────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Open source</p>
+      <h2 id="github" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Publishing on GitHub</h2>
+      <p class={P}>
+        The simplest way to share a worker with the world is a public repository and tagged
+        releases. There is no registry to apply to and no review to pass — a VGI worker is just a
+        program, so whatever your language already uses for distribution works here.
+      </p>
+      <div class="mt-6 flex flex-col gap-3.5">
+        {githubItems.map((item, i) => (
+          <div class={`${CARD} p-5`}>
+            <div class="flex items-baseline gap-3">
+              <span class="qf-figure flex-none text-[13px] text-sun-700">{String(i + 1).padStart(2, '0')}</span>
+              <h3 class="text-[17px] text-soil-900">{item.name}</h3>
+            </div>
+            <p
+              class="mt-2 pl-[30px] text-sm leading-relaxed text-soil-700 [&_code]:rounded [&_code]:bg-soil-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.88em] [&_code]:text-soil-900"
+              set:html={item.body.replace(/`([^`]+)`/g, '<code>$1</code>')}
+            ></p>
+          </div>
+        ))}
+      </div>
+      <p class={P}>
+        Published something? <a href="/company/contact" class={LINK}>Tell us</a> — we're happy to
+        point people at it, and to help if you'd rather it were listed and billed for you.
+      </p>
+
+      <!-- ── The Orchard ───────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Monetize</p>
+      <h2 id="orchard" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Listing it on the Orchard</h2>
+      <p class={P}>
+        The <a href="/products/orchard" class={LINK}>Orchard</a> is Query.Farm's connector
+        marketplace: workers a DuckDB user can subscribe to and attach with one line of SQL. If
+        what you've built is worth paying for — a proprietary dataset, an expensive-to-run model, a
+        service you already sell — listing it turns the worker into a product without you building
+        a billing system, a credential store, or a distribution channel.
+      </p>
+      <p class={P}>
+        You keep running the worker. Query.Farm handles the commercial side and pays out a revenue
+        share on subscriptions.
+      </p>
+
+      <div class="mt-6 grid gap-3.5 md:grid-cols-2">
+        <div class={`${CARD} p-6`}>
+          <h3 class="text-lg text-soil-900">What Query.Farm handles</h3>
+          <ul class="mt-4 flex flex-col gap-3">
+            {orchardHandles.map((item) => (
+              <li class="flex items-start gap-2.5">
+                <span class="mt-[3px] flex-none text-sm text-field-700" aria-hidden="true">✓</span>
+                <span class="text-[14.5px] leading-relaxed text-soil-700">{item}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div class={`${CARD} p-6`}>
+          <h3 class="text-lg text-soil-900">What a listing needs</h3>
+          <ul class="mt-4 flex flex-col gap-3">
+            {orchardNeeds.map((item) => (
+              <li class="flex items-start gap-2.5">
+                <span class="mt-[3px] flex-none text-sm text-soil-500" aria-hidden="true">→</span>
+                <span class="text-[14.5px] leading-relaxed text-soil-700">{item}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+
+      <div class="mt-5 rounded-r-lg border-l-[3px] border-sun-400 bg-[#fffdf7] px-5 py-4">
+        <div class="text-[12.5px] font-medium text-sun-700">In preview</div>
+        <p class="mt-1.5 text-sm leading-relaxed text-soil-700">
+          The Orchard is in preview, so exact revenue-share terms are agreed during onboarding and
+          the listing manifest is still changing. The
+          <a href="/products/orchard/submit" class={LINK}>publishing guide</a> has the current
+          process, the manifest format, and the review checklist.
+        </p>
+      </div>
+
+      <div class="mt-6 flex flex-wrap items-center gap-3">
+        <Button href="/products/orchard/submit" variant="primary" size="md">How to publish →</Button>
+        <Button href="/products/orchard" variant="secondary" size="md">Browse the Orchard</Button>
+      </div>
+
+      <!-- ── Checklist ─────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Before you publish</p>
+      <h2 id="checklist" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">What changes when other people attach it</h2>
+      <p class={P}>
+        A worker you use yourself can be forgiving. One other people attach is an interface with
+        users who can't read your code and won't file a good bug report. Four things are worth
+        doing before you hand out the URL, whichever route you take.
+      </p>
+      <div class="mt-6 grid gap-3.5 sm:grid-cols-2">
+        {checklist.map((item) => (
+          <div class={`${CARD} p-5`}>
+            <h3 class="text-[17px] text-soil-900">{item.name}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{item.body}</p>
+          </div>
+        ))}
+      </div>
+      <p class={P}>
+        If the worker exposes data with per-customer rules, do that work in the worker rather than
+        in documentation — see <a href="/vgi/row-column-security" class={LINK}>row & column security</a>
+        and <a href="/vgi/authentication" class={LINK}>authentication</a>.
+      </p>
+
+      <!-- ── Next ──────────────────────────────────────────────── -->
+      <h2 class="mt-12 scroll-mt-32 border-t border-soil-300 pt-6 text-2xl md:text-3xl text-soil-900">Where to from here</h2>
+      <div class="mt-6 grid gap-3.5 sm:grid-cols-2">
+        {nextCards.map((item) => (
+          <a
+            href={item.href}
+            class={`${CARD} block p-5 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}
+            {...(item.external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+          >
+            <h3 class="text-lg text-soil-900">{item.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{item.body}</p>
+          </a>
+        ))}
+      </div>
+
+      <div class={`mt-8 ${CARD} flex flex-wrap items-center justify-between gap-5 px-6 py-6`}>
+        <div class="max-w-[48ch]">
+          <h3 class="text-xl text-soil-900">Want it built, hosted, or listed for you?</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">
+            We build and operate VGI workers for clients, and we run the Orchard.
+          </p>
+        </div>
+        <div class="flex flex-wrap gap-3">
+          <Button href="/company/contact" variant="primary" size="md">Get in touch</Button>
+          <Button href="/consulting" variant="secondary" size="md">Consulting</Button>
+        </div>
+      </div>
+    </div>
+
+    <aside class="hidden xl:block xl:sticky xl:top-24 xl:self-start">
+      <h2 class="mb-2.5 text-[12.5px] font-semibold text-soil-500">On this page</h2>
+      <ul class="flex flex-col gap-0.5">
+        {toc.map((item) => (
+          <li>
+            <a
+              href={`#${item.id}`}
+              class="block border-l-2 border-soil-200 px-2.5 py-1 text-[13px] text-soil-700 no-underline transition hover:border-soil-300 hover:text-soil-900"
+            >{item.label}</a>
+          </li>
+        ))}
+      </ul>
+    </aside>
+  </div>
+</PageLayout>

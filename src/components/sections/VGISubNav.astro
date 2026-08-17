@@ -1,71 +1,157 @@
 ---
-// Section subnav for the VGI area, styled to match HaybarnSubNav: a white,
-// sticky bar with the VGI logo + wordmark on the left and the section's pages
-// as earth-toned pill tabs on the right. Sticks below the global header so the
-// in-section navigation stays available while scrolling long pages.
+// Section bar for the VGI area — the `.subnav` shape: sticky beneath the
+// global nav, soil-100 ground, section mark + name behind a rule, then tabs.
+import { Icon } from 'astro-icon/components';
+import { LANGUAGES, rootOf } from '../../lib/vgi-docs';
+
 const currentPath = Astro.url.pathname;
 
-const tabs = [
-  { name: 'Overview', href: '/vgi' },
-  { name: 'Getting Started', href: '/vgi/getting-started' },
-  { name: 'Building a Worker', href: '/vgi/building-a-worker' },
-  { name: 'Architecture', href: '/vgi/architecture' },
-  { name: 'Languages', href: '/vgi/languages' }
+// Derived from the shared language table, not restated. Every SDK now has a
+// full in-site section under /vgi/docs/<language>/; these used to point at the
+// vgi-rpc-<language>.query.farm sites, which document the RPC layer underneath
+// rather than the SDK — correct back when Python was the only one with docs
+// here, and wrong since. C++ isn't a shipped SDK, so it isn't in the table.
+const languageDocs = LANGUAGES.map(l => ({
+  name: l.name,
+  href: rootOf(l),
+  icon: l.icon,
+  external: false
+}));
+
+// Architecture's own panel — the pages under that umbrella today. Unlike
+// Languages, this one doesn't need a "see everything" footer link:
+// "Overview" already points at /vgi/architecture itself, so the panel's
+// items are the whole list, not a preview of a longer one.
+const architectureDocs = [
+  { name: 'Overview', href: '/vgi/architecture', external: false },
+  { name: 'Connect to a Worker', href: '/vgi/connect-to-a-worker', external: false },
+  { name: 'Data-as-a-Service', href: '/vgi/data-as-a-service', external: false },
+  { name: 'Authentication', href: '/vgi/authentication', external: false },
+  { name: 'Row & Column Security', href: '/vgi/row-column-security', external: false }
 ];
 
-function isActive(tab: { href: string }): boolean {
-  const href = tab.href;
+// Building a Worker's panel — the two halves of shipping one: writing it, and
+// then getting it to other people. Same pattern as Architecture: "Overview"
+// points at the tab's own page, so the panel is the whole list.
+const buildDocs = [
+  { name: 'Overview', href: '/vgi/building-a-worker', external: false },
+  { name: 'Distributing a Worker', href: '/vgi/distributing-a-worker', external: false }
+];
+
+interface SubNavTab {
+  name: string;
+  href: string;
+  panel?: boolean;
+  // `icon` is optional: only the Language SDKs panel carries brand marks, so
+  // the other panels render exactly as before.
+  items?: { name: string; href: string; external?: boolean; icon?: string }[];
+  footerHref?: string;
+  footerLabel?: string;
+}
+
+const tabs: SubNavTab[] = [
+  { name: 'Overview', href: '/vgi' },
+  { name: 'Getting Started', href: '/vgi/getting-started' },
+  { name: 'Building a Worker', href: '/vgi/building-a-worker', panel: true, items: buildDocs },
+  { name: 'Architecture', href: '/vgi/architecture', panel: true, items: architectureDocs },
+  {
+    name: 'Language SDKs',
+    href: '/vgi/languages',
+    panel: true,
+    items: languageDocs,
+    footerHref: '/vgi/languages',
+    footerLabel: 'All language SDKs →'
+  }
+];
+
+function matches(href: string): boolean {
   // Overview is the section root — match it exactly so it isn't highlighted on
   // every /vgi/* page.
   if (href === '/vgi') return currentPath === '/vgi' || currentPath === '/vgi/';
-  return currentPath === href || currentPath.startsWith(href + '/');
+  const base = href.endsWith('/') ? href.slice(0, -1) : href;
+  return currentPath === base || currentPath.startsWith(base + '/');
 }
+
+// A tab with a panel (Architecture, Languages) should also read as active
+// when the current page is one of its own panel items — Data-as-a-Service
+// is grouped under Architecture, not a sibling of it, so its own page
+// shouldn't leave every tab unhighlighted.
+function isActive(tab: SubNavTab): boolean {
+  if (matches(tab.href)) return true;
+  return (tab.items ?? []).some(item => !item.external && matches(item.href));
+}
+
+const tabClass = 'whitespace-nowrap border-b-2 px-3.5 py-[11px] text-sm no-underline transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-link';
+const panelLink = 'block rounded px-2 py-1.5 text-sm text-soil-700 no-underline transition-colors hover:bg-soil-100 hover:text-soil-900';
 ---
 
-<div class="sticky top-16 lg:top-20 z-40 bg-white border-b border-soil-200">
+<div class="sticky z-40 border-b border-soil-300 bg-soil-100" style="top: var(--qf-nav-h)">
   <div class="section-container">
-    <div class="flex items-center justify-between gap-4 py-3">
-      <!-- Left: logo + wordmark -->
-      <a href="/vgi" class="flex items-center gap-3 flex-shrink-0 group">
-        <img
-          src="/vgi/vgi-logo.png"
-          alt=""
-          class="w-8 h-8 rounded-md object-contain"
-          width="32"
-          height="32"
-        />
-        <span class="hidden sm:flex items-center gap-2">
-          <span class="font-display font-bold text-soil-900 group-hover:text-earth-700 transition-colors">VGI</span>
-          <span class="hidden md:inline text-xs text-soil-500">Vector Gateway Interface</span>
-        </span>
+    {/* overflow-x-auto (for narrow viewports, where the tab row itself needs
+        to scroll) forces overflow-y to compute as auto too — the CSS overflow
+        spec doesn't allow one axis visible and the other not — which clips
+        any dropdown panel that hangs below a tab, since it's a descendant of
+        this row. lg:overflow-visible lifts that at the width where hover
+        panels are actually the interaction (mobile doesn't really "hover"),
+        and by then the row fits without needing to scroll anyway. */}
+    <nav class="qf-subnav-row flex items-center overflow-x-auto lg:overflow-visible" aria-label="VGI section">
+      <a
+        href="/vgi"
+        class="mr-1.5 flex flex-none items-center gap-[9px] whitespace-nowrap border-r border-soil-300 py-[11px] pr-[18px] font-display text-[17px] font-semibold tracking-[-0.018em] text-soil-900 no-underline transition-colors hover:text-link"
+      >
+        <img src="/vgi/vgi-logo.png" alt="" aria-hidden="true" width="22" height="22" class="h-[22px] w-[22px] object-contain" />
+        <span>VGI</span>
       </a>
 
-      <!-- Right: section tabs (horizontally scrollable on narrow screens) -->
-      <nav class="flex items-center gap-1 overflow-x-auto -mx-2 px-2 vgi-subnav-tabs" aria-label="VGI section">
-        {tabs.map(tab => (
+      {tabs.map(tab => (
+        <div class="group relative flex-none">
           <a
             href={tab.href}
             class:list={[
-              'whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
-              isActive(tab)
-                ? 'bg-earth-50 text-earth-700'
-                : 'text-soil-600 hover:text-earth-700 hover:bg-soil-50'
+              tabClass,
+              isActive(tab) ? 'border-link text-link' : 'border-transparent text-soil-700 hover:text-soil-900'
             ]}
             aria-current={isActive(tab) ? 'page' : undefined}
           >
             {tab.name}
           </a>
-        ))}
-      </nav>
-    </div>
+
+          {tab.panel && tab.items && (
+            <div class="invisible absolute left-0 top-full z-10 w-56 pt-1 opacity-0 transition-all duration-150 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
+              <div class="rounded-xl border border-soil-300 bg-white p-2 shadow-xl">
+                <ul class="space-y-0.5">
+                  {tab.items.map(item => (
+                    <li>
+                      <a
+                        href={item.href}
+                        class:list={[panelLink, item.icon && 'flex items-center gap-2']}
+                        {...(item.external ? { target: '_blank', rel: 'noopener' } : {})}
+                      >
+                        {item.icon && <Icon name={item.icon} class="h-4 w-4 flex-none text-soil-500" />}
+                        <span>{item.name}{item.external ? ' ↗' : ''}</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+                {tab.footerHref && (
+                  <a href={tab.footerHref} class="mt-1 block border-t border-soil-200 px-2 pt-2 text-sm font-medium text-link no-underline transition-colors hover:text-link-hover">
+                    {tab.footerLabel}
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+    </nav>
   </div>
 </div>
 
 <style>
-  .vgi-subnav-tabs {
+  .qf-subnav-row {
     scrollbar-width: none;
   }
-  .vgi-subnav-tabs::-webkit-scrollbar {
+  .qf-subnav-row::-webkit-scrollbar {
     display: none;
   }
 </style>

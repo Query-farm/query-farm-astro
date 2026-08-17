@@ -1,0 +1,452 @@
+---
+import PageLayout from '../../../layouts/PageLayout.astro';
+import RowfenceSubNav from '../../../components/sections/RowfenceSubNav.astro';
+import Button from '../../../components/ui/Button.astro';
+import PageHead from '../../../components/ui/PageHead.astro';
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import AccessProxyDiagram from '../../../components/vgi/AccessProxyDiagram.astro';
+
+// ── Shared shape vocabulary (brief §10) ──
+const WRAP = 'mx-auto w-full max-w-[1200px] px-6 sm:px-7';
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+const EYEBROW = 'qf-eyebrow text-sun-700';
+const LEDE = 'text-[17.5px] leading-relaxed text-soil-700';
+const CODE = 'rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900';
+const LINK = 'text-link underline decoration-link/40 underline-offset-2 hover:decoration-link';
+const DOCS_HREF = '/vgi/row-column-security';
+
+// Illustrative Cedar policy — same example already verified and shown on
+// the full technical docs page (real syntax and entity names, not
+// reproduced from any customer's actual policy set).
+const policyExample = `permit(
+  principal in Vgi::Group::"analysts",
+  action == Vgi::Action::"Read",
+  resource in Vgi::Table::"main.customers"
+);
+
+forbid(
+  principal,
+  action == Vgi::Action::"Read",
+  resource
+)
+when { resource.pii == true }
+unless { principal in Vgi::Group::"compliance" };`;
+
+const features = [
+  {
+    icon: 'policy',
+    title: 'Cedar policies',
+    description: 'Access control in Cedar — the same open policy language AWS built for Verified Permissions — against an entity model that mirrors your catalog: servers, schemas, tables, columns, functions.',
+  },
+  {
+    icon: 'rows',
+    title: 'Row-level filtering',
+    description: 'Ordered branches inject a WHERE clause built from the caller’s own identity. Entitlements can resolve from a static list or a live query against another VGI worker — a subscriber list, a geographic boundary, anything.',
+  },
+  {
+    icon: 'columns',
+    title: 'Column-level enforcement',
+    description: 'A forbidden column is removed from the schema DuckDB is told about, not just filtered from results — there’s no column to select. Column-level statistics are denied outright under a column policy.',
+  },
+  {
+    icon: 'functions',
+    title: 'Function-level access',
+    description: 'VGI workers expose functions as well as tables — an LLM call, a scoring model, a metered API. The same permit/forbid model gates Execute on a function exactly like it gates Read on a table.',
+  },
+  {
+    icon: 'adversarial',
+    title: 'Doesn’t trust the worker',
+    description: 'The proxy discovers the real schema itself and enforces against that discovery, not whatever the worker advertises. Every error path denies by default — none of them fall through to “allow.”',
+  },
+  {
+    icon: 'audit',
+    title: 'Audit logging',
+    description: 'JSONL, one line per event — every row filter injected, every column denied, every entitlement resolved. An optional decision journal makes past decisions replayable offline.',
+  },
+];
+
+// Four real situations, each with the actual policy that solves it — not
+// abstract feature bullets. Grounded in the same examples already verified
+// on the technical docs (row-column-security.astro): the region-filtered
+// earthquakes example from Data-as-a-Service, the PII and finance-schema
+// rules, and the premium-tier function gate.
+const scenarios = [
+  {
+    title: 'Selling the same table to different customers',
+    body: 'A subscriber in California doesn’t need Alaska’s rows, and shouldn’t be able to query outside what they bought — same schema, same SQL, different rows per caller.',
+    code: `# row-filters.yaml
+branches:
+  - scope: "earthquakes"
+    when: 'context.claim.region == "california"'
+    expr: "region = \${claim.region}"
+
+  - scope: "*"
+    grant: none   # fail closed — no match, zero rows`,
+    lang: 'yaml',
+  },
+  {
+    title: 'Keeping PII out of reach by default',
+    body: 'Give analysts the table, not the personally identifiable columns — unless they’re on the compliance team.',
+    code: `forbid(
+  principal,
+  action == Vgi::Action::"Read",
+  resource
+)
+when { resource.pii == true }
+unless { principal in Vgi::Group::"compliance" };`,
+    lang: 'cedar',
+  },
+  {
+    title: 'Splitting finance and sales by role, not by table',
+    body: 'One unified schema — what a person can see still depends on their department, not which table they happened to query.',
+    code: `forbid(principal, action, resource)
+when { context.schema == "finance" }
+unless { principal in Vgi::Group::"finance-managers" };`,
+    lang: 'cedar',
+  },
+  {
+    title: 'Gating an expensive function call',
+    body: 'A geocoder or LLM-backed function that costs real money per call shouldn’t be open to every caller — meter it the same way you’d meter a table.',
+    code: `forbid(
+  principal,
+  action == Vgi::Action::"Execute",
+  resource in Vgi::Function::"geocode"
+)
+unless { principal in Vgi::Group::"premium-tier" };`,
+    lang: 'cedar',
+  },
+];
+
+const comparisons = [
+  {
+    old: { label: 'Warehouse-native governance platforms', body: 'Immuta, Satori, and similar tools connect to a fixed list of warehouses and databases — Snowflake, Databricks, BigQuery, and the like — through native integrations, and are primarily sold as SaaS.' },
+    vgi: { label: 'Rowfence', body: 'Sits in front of any VGI worker — a live API, a custom service, a warehouse, anything the protocol reaches — because enforcement happens at the protocol layer, not against a connector list. Hosted or fully on-prem, your choice.' },
+  },
+  {
+    old: { label: 'A proprietary policy builder', body: 'Most platforms in this category express rules through their own UI-driven builder or a vendor-specific rule format, portable only within that product.' },
+    vgi: { label: 'Cedar', body: 'The same open policy language AWS built for Verified Permissions — not invented for this page. permit/forbid over principals, actions, and resources, not a bespoke syntax.' },
+  },
+];
+
+const neighbours = [
+  {
+    href: '/vgi',
+    img: '/vgi/vgi-logo.png',
+    title: 'VGI',
+    body: 'The protocol Rowfence enforces policy on top of — any worker, any language, reachable through one proxy.',
+  },
+  {
+    href: '/vgi/authentication',
+    icon: 'key',
+    title: 'Authentication',
+    body: 'Bearer tokens and OAuth — how a caller’s identity reaches Rowfence in the first place.',
+  },
+  {
+    href: '/vgi/data-as-a-service',
+    icon: 'service',
+    title: 'Data-as-a-Service',
+    body: 'The broader case for full SQL access instead of a copy of your data — Rowfence is how you keep it governed.',
+  },
+];
+
+const pageDescription =
+  'Rowfence: row- and column-level security for any VGI worker, enforced by a Cedar policy engine that never trusts the worker to police itself. Hosted or on-prem, not open source.';
+---
+
+<PageLayout
+  title="Rowfence — Row & Column Security for VGI"
+  description={pageDescription}
+  jsonLd={[
+    {
+      '@context': 'https://schema.org',
+      '@type': 'SoftwareApplication',
+      name: 'Rowfence',
+      description: pageDescription,
+      url: 'https://query.farm/products/rowfence',
+      applicationCategory: 'SecurityApplication',
+      operatingSystem: 'Hosted or self-hosted',
+      publisher: { '@type': 'Organization', name: 'Query.Farm', url: 'https://query.farm' },
+    },
+    {
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://query.farm/' },
+        { '@type': 'ListItem', position: 2, name: 'Products', item: 'https://query.farm/products' },
+        { '@type': 'ListItem', position: 3, name: 'Rowfence', item: 'https://query.farm/products/rowfence' },
+      ],
+    },
+  ]}
+>
+  <RowfenceSubNav />
+
+  <!-- ── Page header ─────────────────────────────────────────── -->
+  <PageHead
+    variant="section"
+    eyebrow="Row & column security for VGI"
+    title="Row- and column-level security, enforced adversarially."
+    icon={{
+      src: '/rowfence/rowfence-icon.svg',
+      width: 34,
+      height: 34,
+      imgClass: 'h-[34px] w-[34px] object-contain'
+    }}
+    ledeClass="mt-3.5 max-w-[62ch] text-[17.5px] leading-relaxed text-soil-700"
+    lede="Rowfence is a policy-driven proxy that sits in front of any VGI worker and decides, on every single query, which rows, columns, and functions a caller is allowed to touch — without asking the worker to police itself. Part of the VGI suite; a Query Farm product."
+    hairband
+  >
+    <div class="mt-6 flex flex-wrap items-center gap-3">
+      <Button href="/company/contact" variant="primary" size="md">Talk to us →</Button>
+      <Button href={DOCS_HREF} variant="secondary" size="md">Read the technical docs →</Button>
+    </div>
+  </PageHead>
+
+  <!-- ── What is Rowfence ────────────────────────────────────── -->
+  <section class="py-16 lg:py-[70px]">
+    <div class={WRAP}>
+      <div class="grid items-start gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:gap-12">
+        <div>
+          <span class={EYEBROW}>What is Rowfence?</span>
+          <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">A dedicated hop between DuckDB and the worker</h2>
+          <p class={`mt-4 ${LEDE}`}>
+            A VGI worker doesn’t have to implement access control itself to get it. Point
+            <code class={CODE}>ATTACH</code> at Rowfence instead of the worker directly, and every
+            query — every row, every column, every function call — passes through Cedar policy
+            evaluation before the worker ever sees it. There’s no passthrough mode: enforcement is
+            always on.
+          </p>
+          <p class={`mt-4 ${LEDE}`}>
+            It’s sold as part of the VGI suite, not bundled into it — a standalone Query Farm
+            product, hosted for you or run entirely on your own infrastructure. It isn’t open
+            source, and there’s no repository to self-host from.
+          </p>
+
+          <div class="mt-7 rounded-r-lg border-l-[3px] border-sun-400 bg-[#fffdf7] px-5 py-4">
+            <div class="text-[11px] font-medium text-sun-700">New to VGI? Start there first.</div>
+            <p class="mt-1.5 text-sm leading-relaxed text-soil-700">
+              Rowfence enforces policy on top of VGI — it isn’t useful on its own. If you haven’t
+              met the protocol yet, <a href="/vgi" class={LINK}>start with VGI</a> to see what a
+              worker is and how <code class={CODE}>ATTACH</code> reaches one.
+            </p>
+          </div>
+        </div>
+
+        <div class="flex flex-col gap-5">
+          <AccessProxyDiagram variant="hosted" />
+          <div class={`${CARD} p-5`}>
+            <p class="text-[12.5px] font-medium text-soil-500">policies.cedar</p>
+            <div class="mt-2">
+              <CodeBlock code={policyExample} lang="cedar" tryable={false} />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Features ────────────────────────────────────────────── -->
+  <section id="features" class="scroll-mt-32 border-y border-soil-300 bg-soil-100 py-16 lg:py-[70px]">
+    <div class={WRAP}>
+      <span class={EYEBROW}>What it enforces</span>
+      <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">Not just tables — rows, columns, and functions</h2>
+      <p class={`mt-3 max-w-[64ch] ${LEDE}`}>
+        Everything below is the same Cedar model, applied at a different grain. Full detail on
+        each of these — including how row rules can pull a live boundary from another VGI worker
+        and cache it — is in the <a href={DOCS_HREF} class={LINK}>technical docs</a>.
+      </p>
+
+      <div class="mt-8 grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+        {features.map((f) => (
+          <div class={`${CARD} p-6 transition duration-200 hover:-translate-y-1 hover:border-sun-400`}>
+            <span class="mb-3.5 flex h-10 w-10 items-center justify-center rounded-[9px] border border-soil-300 bg-soil-100 text-soil-700">
+              {f.icon === 'policy' && (
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z" />
+                </svg>
+              )}
+              {f.icon === 'rows' && (
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M4 6h16M4 12h16M4 18h10" />
+                </svg>
+              )}
+              {f.icon === 'columns' && (
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M4 4h16v16H4zM10 4v16M16 4v16" />
+                </svg>
+              )}
+              {f.icon === 'functions' && (
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M8 4c-2 0-2 2-2.5 5S4 14 4 14s2 0 1.5 5S8 20 8 20M16 4c2 0 2 2 2.5 5S20 14 20 14s-2 0-1.5 5S16 20 16 20" />
+                </svg>
+              )}
+              {f.icon === 'adversarial' && (
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z M9.5 12l1.8 1.8L15 10" />
+                </svg>
+              )}
+              {f.icon === 'audit' && (
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M8 4h8a2 2 0 012 2v14l-3-2-3 2-3-2-3 2V6a2 2 0 012-2zM9 9h6M9 13h6" />
+                </svg>
+              )}
+            </span>
+            <h3 class="text-lg text-soil-900">{f.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{f.description}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Why you need this ───────────────────────────────────── -->
+  <section id="scenarios" class="scroll-mt-32 py-16 lg:py-[70px]">
+    <div class={WRAP}>
+      <span class={EYEBROW}>Why you need this</span>
+      <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">The moment more than one person can query it, someone has to decide who sees what</h2>
+      <p class={`mt-3 max-w-[64ch] ${LEDE}`}>
+        “The worker will just be careful” isn’t a policy. These are the situations that come up
+        almost immediately once real customers or colleagues start attaching to something you
+        built — and the actual policy that handles each one.
+      </p>
+
+      <div class="mt-8 grid gap-4 md:grid-cols-2">
+        {scenarios.map((s) => (
+          <div class={`${CARD} p-6`}>
+            <h3 class="text-lg text-soil-900">{s.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{s.body}</p>
+            <div class="mt-4">
+              <CodeBlock code={s.code} lang={s.lang} tryable={false} />
+            </div>
+          </div>
+        ))}
+      </div>
+      <p class="mt-6 text-sm leading-relaxed text-soil-500">
+        All four are real syntax, shown in full (with the row-level mechanism explained in
+        depth) in the <a href={DOCS_HREF} class={LINK}>technical docs →</a>
+      </p>
+    </div>
+  </section>
+
+  <!-- ── Deployment ──────────────────────────────────────────── -->
+  <section id="deployment" class="scroll-mt-32 py-16 lg:py-[70px]">
+    <div class={WRAP}>
+      <span class={EYEBROW}>Running it</span>
+      <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">Hosted or on-prem</h2>
+      <p class={`mt-3 max-w-[64ch] ${LEDE}`}>
+        Query Farm sells Rowfence two ways — running it for you, or running entirely inside your
+        own network so the proxy never leaves your infrastructure.
+      </p>
+
+      <div class="mt-8 grid gap-6 md:grid-cols-2">
+        <div>
+          <AccessProxyDiagram variant="hosted" />
+          <h3 class="mt-4 text-lg text-soil-900">Hosted</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">
+            Query Farm runs Rowfence for you, in front of a worker you already run yourself or
+            one hosted on Orchard.
+          </p>
+        </div>
+        <div>
+          <AccessProxyDiagram variant="on-prem" />
+          <h3 class="mt-4 text-lg text-soil-900">On-prem</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">
+            Run it inside your own network, in front of a worker that never has to leave your
+            infrastructure either.
+          </p>
+        </div>
+      </div>
+      <p class="mt-6 text-sm leading-relaxed text-soil-700">
+        Both shapes support a single worker behind stateless, load-balanced replicas, and a
+        multi-tenant gateway mode for routing many different backends behind one proxy — the
+        shape for a vendor brokering access to more than one downstream source. A compliance
+        bundle — canned access-review reports and decision-replay summaries built on the audit
+        log — is on the roadmap, not shipped yet.
+      </p>
+    </div>
+  </section>
+
+  <!-- ── Compare ─────────────────────────────────────────────── -->
+  <section id="compare" class="scroll-mt-32 border-y border-soil-300 bg-soil-100 py-16 lg:py-[70px]">
+    <div class={WRAP}>
+      <span class={EYEBROW}>In context</span>
+      <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">How this compares</h2>
+      <p class={`mt-3 max-w-[64ch] ${LEDE}`}>
+        Row- and column-level security itself isn’t the differentiator — Immuta, Satori, and
+        others in that category already do it well. What’s different is what it’s enforced in
+        front of, and how it’s deployed.
+      </p>
+
+      <div class="mt-8 flex flex-col gap-3.5">
+        {comparisons.map((row) => (
+          <div class={`${CARD} grid gap-0 sm:grid-cols-2`}>
+            <div class="p-5 sm:border-r sm:border-soil-300">
+              <p class="text-[11px] font-semibold uppercase tracking-wide text-soil-500">{row.old.label}</p>
+              <p class="mt-1.5 text-sm leading-relaxed text-soil-700">{row.old.body}</p>
+            </div>
+            <div class="bg-link/5 p-5">
+              <p class="text-[11px] font-semibold uppercase tracking-wide text-link">{row.vgi.label}</p>
+              <p class="mt-1.5 text-sm leading-relaxed text-soil-700">{row.vgi.body}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Where it fits ───────────────────────────────────────── -->
+  <section class="py-16 lg:py-[70px]">
+    <div class={WRAP}>
+      <span class={EYEBROW}>Where it fits</span>
+      <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">Rowfence and the rest of the data farm</h2>
+      <p class={`mt-3 max-w-[64ch] ${LEDE}`}>
+        Rowfence doesn’t stand alone — it enforces policy on top of VGI, using the same identity
+        VGI’s own authentication support carries.
+      </p>
+
+      <div class="mt-8 grid gap-3.5 md:grid-cols-3">
+        {neighbours.map((n) => (
+          <a
+            href={n.href}
+            class={`${CARD} block p-6 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}
+          >
+            <span class="mb-3.5 flex h-10 w-10 items-center justify-center overflow-hidden rounded-[9px] border border-soil-300 bg-soil-100 text-soil-700">
+              {n.img && <img src={n.img} alt="" width="24" height="24" class="h-6 w-6 object-contain" />}
+              {n.icon === 'key' && (
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M15 7a4 4 0 10-4.9 3.9L4 17v3h3l1-1v-2h2v-2h2l1.1-1.1A4 4 0 0015 7z" />
+                </svg>
+              )}
+              {n.icon === 'service' && (
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <ellipse cx="12" cy="6" rx="7" ry="3" stroke-width="2.2" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6" />
+                </svg>
+              )}
+            </span>
+            <h3 class="text-lg text-soil-900">{n.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{n.body}</p>
+          </a>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- ── CTA ─────────────────────────────────────────────────── -->
+  <section class="py-16 lg:py-[70px]">
+    <div class={WRAP}>
+      <div class={`${CARD} flex flex-wrap items-center justify-between gap-6 px-8 py-9`}>
+        <div class="max-w-[52ch]">
+          <h2 class="text-2xl md:text-3xl text-soil-900">Get Rowfence in front of a real worker</h2>
+          <p class="mt-3 text-[17.5px] leading-relaxed text-soil-700">
+            Hosted or on-prem — tell us about your worker and your policy needs, and we’ll get
+            you set up.
+          </p>
+        </div>
+        <div class="flex flex-wrap gap-3">
+          <Button href="/company/contact" variant="primary" size="md">Talk to us</Button>
+          <Button href="/company/schedule" variant="secondary" size="md">Schedule a call</Button>
+        </div>
+      </div>
+    </div>
+  </section>
+</PageLayout>

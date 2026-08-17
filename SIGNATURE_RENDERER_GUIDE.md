@@ -33,11 +33,11 @@ The component automatically generates:
 crypto_sha256(input: VARCHAR) → VARCHAR
 ```
 
-With proper color styling:
-- Function name: harvest-700 (green)
-- Positional params: duck-700 (yellow)
-- Named params: purple-600 (purple)
-- Types: blue-600 (blue)
+With proper color styling (Strata Sun palette — see DESIGN_BRIEF.md §3/§4):
+- Function name: soil-900, semibold (ink)
+- Positional params: field-700 (the one cool note)
+- Named params: soil-600 — the `:=` separator carries the real distinction
+- Types (arguments and return): sun-700 (the only gold that carries text on paper)
 
 ## How It Works
 
@@ -173,11 +173,15 @@ For each function in `crypto-functions.ts`:
 ## Color Reference
 
 From the FunctionSignatureRenderer component:
-- **Function Name**: `text-harvest-700` (green)
-- **Positional Parameters**: `text-duck-700` (yellow)
-- **Named Parameters**: `text-purple-600` (purple)
-- **Types**: `text-blue-600` (blue)
-- **Background**: `bg-soil-50` (light beige)
+- **Function Name**: `font-semibold text-soil-900`
+- **Positional Parameters**: `text-field-700`
+- **Named Parameters**: `text-soil-600`
+- **Types**: `text-sun-700`
+- **Background**: `bg-soil-50` inside a `border-soil-200` rule
+
+The same four inks are reproduced by the lazy client-side renderer in
+`DuckDBExtensionFunctionReference.astro` (`renderCard`). Change one and change
+the other, or hydrated cards stop matching server-rendered ones.
 
 ## Current Status
 

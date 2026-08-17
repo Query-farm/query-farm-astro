@@ -1,101 +1,129 @@
 ---
 import { parseInline } from 'marked';
-import Button from '../ui/Button.astro';
-import ExtensionIcon from './ExtensionIcon.astro';
-import type { ExtensionCategory } from '../../data/extensions';
+
+/**
+ * Page header for an extension detail page (family C — docs).
+ *
+ * No colour band: paper, a hairline rule, one gold accent. Name → badges →
+ * lede, with the load count as a tabular figure in the right aside.
+ *
+ * Four things are deliberately absent. The trail back up the tree is the job of
+ * ExtensionsSubNav, which sits directly above this header — a second textual
+ * crumb here only repeated it. The repository link belongs to the Compatibility
+ * section further down, which lists it alongside stars, licence, and release
+ * dates. The INSTALL/LOAD SQL is a CodeBlock in the body, below the technical
+ * overview: what the extension *is* earns the top of the page, and
+ * INSTALL … FROM community is a step people learn once. And there is no mark
+ * tile: the per-extension icons come from mixed sources at mixed weights, so a
+ * 56px square of them never read as one set.
+ *
+ * Badges are limited to facts that change what you can do here — currently only
+ * "Commercial", which links to Pricing. Category, status and licence are
+ * catalogue metadata and live in Compatibility.
+ *
+ * The page still emits BreadcrumbList structured data from `[slug].astro`, so
+ * search engines keep the trail either way.
+ */
+
+interface Badge {
+  label: string;
+  /** `gold` = the one accent; `field` = a positive state; default = neutral. */
+  tone?: 'neutral' | 'gold' | 'field';
+  href?: string;
+  title?: string;
+}
 
 interface Props {
   name: string;
-  icon: string;
-  category?: ExtensionCategory;
   /** Markdown (inline): supports links, `code`, and emphasis. */
   description: string;
-  actions?: { label: string; href: string; icon?: string }[];
-  image?: string; // Optional detailed image for the extension
+  badges?: Badge[];
+  /** Load count for the snapshot window (already a raw number). */
+  loads?: number;
+  /** Window label from the snapshot, e.g. "last 90 days". */
+  loadsPeriod?: string;
 }
 
-const { name, icon, category, description, actions = [], image } = Astro.props;
+const {
+  name,
+  description,
+  badges = [],
+  loads,
+  loadsPeriod,
+} = Astro.props;
 
 // The description is authored as inline markdown (links, `code`, emphasis).
 // parseInline avoids wrapping it in a block-level <p> — the markup below
 // already provides the paragraph.
 const descriptionHtml = await parseInline(description);
 
-// Simple hash function to generate a consistent number from a string
-function hashString(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
-  }
-  return Math.abs(hash);
-}
-
-// Generate hue from extension name (0-360)
-const hash = hashString(name);
-const hue = hash % 360;
-
-// Create OKLCH colors with the generated hue for the background gradient
-const color1 = `oklch(0.65 0.15 ${hue})`;
-const color2 = `oklch(0.55 0.12 ${(hue + 30) % 360})`;
-const gradientStyle = `background: linear-gradient(135deg, ${color1}, ${color2});`;
+const toneClass = (tone: Badge['tone']) =>
+  tone === 'gold'
+    ? 'border-sun-400 text-sun-700 bg-sun-400/12'
+    : tone === 'field'
+      ? 'border-field-600/45 text-field-700 bg-field-600/10'
+      : 'border-soil-300 text-soil-700 bg-transparent';
 ---
 
-<section class="text-white" style={gradientStyle}>
-  <div class="section-container py-12">
-    <div class="flex items-center gap-6">
-      <div class="flex-shrink-0 w-24 h-24 rounded-xl bg-white/95 backdrop-blur flex items-center justify-center shadow-sm overflow-hidden">
-        {image ? (
-          <img src={image} alt={`${name} icon`} class="w-full h-full object-cover" />
-        ) : (
-          <ExtensionIcon icon={icon} category={category} class="text-5xl" />
+<header class="qf-pagehead border-b border-soil-300 bg-gradient-to-b from-white to-soil-50">
+  <div class="mx-auto w-full max-w-[1200px] px-5 pt-10 pb-8 sm:px-7">
+    <div class="flex flex-wrap items-start gap-x-8 gap-y-5">
+      <div class="min-w-[16rem] flex-1">
+        <h1 class="font-display text-4xl md:text-5xl text-soil-900">{name}</h1>
+
+        {badges.length > 0 && (
+          <div class="mt-3 flex flex-wrap gap-2">
+            {badges.map((badge) => {
+              const cls = `inline-block rounded-full border px-2.5 py-0.5 text-[12.5px] font-medium ${toneClass(badge.tone)}`;
+              return badge.href ? (
+                <a href={badge.href} title={badge.title} class={`${cls} transition-colors hover:border-sun-400 hover:text-link`}>
+                  {badge.label}
+                </a>
+              ) : (
+                <span class={cls} title={badge.title}>{badge.label}</span>
+              );
+            })}
+          </div>
         )}
+
+        <p
+          class="hero-description mt-4 max-w-[58ch] text-lg text-soil-700"
+          set:html={descriptionHtml}
+        ></p>
       </div>
-      <div class="flex-1 min-w-0">
-        <div class="flex items-center gap-3 flex-wrap">
-          <h1 class="text-3xl font-bold font-mono drop-shadow-sm">
-            {name}
-          </h1>
-        </div>
-        <p class="hero-description text-lg text-white/90 mt-2 max-w-2xl" set:html={descriptionHtml}></p>
-      </div>
-      {actions.length > 0 && (
-        <div class="flex-shrink-0">
-          {actions.map((action) => (
-            <Button href={action.href} variant="primary" size="md" class="!bg-gray-900 !text-white hover:!bg-gray-800">
-              {action.icon && (
-                <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" set:html={action.icon} />
-              )}
-              {action.label}
-            </Button>
-          ))}
+
+      {typeof loads === 'number' && (
+        <div class="ml-auto text-right">
+          <div class="load-count text-4xl leading-none text-sun-700">
+            {loads.toLocaleString()}
+          </div>
+          <div class="mt-1.5 text-[12.5px] font-medium text-soil-600">
+            extension loads{loadsPeriod ? ` · ${loadsPeriod}` : ''}
+          </div>
         </div>
       )}
     </div>
   </div>
-</section>
+</header>
 
 <style>
-  /* Markdown rendered into the hero description, styled to read on the colored
-     gradient (white-on-color). Scoped to this component. */
+  /* Markdown rendered into the header lede. */
   .hero-description :global(a) {
-    color: white;
-    text-decoration: underline;
-    text-underline-offset: 2px;
-    text-decoration-thickness: 1px;
-    text-decoration-color: rgba(255, 255, 255, 0.5);
-    transition: text-decoration-color 120ms ease;
+    color: var(--color-link);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(69, 99, 47, 0.4);
   }
   .hero-description :global(a:hover) {
-    text-decoration-color: white;
+    color: var(--color-link-hover);
+    border-bottom-color: var(--color-link-hover);
   }
   .hero-description :global(code) {
     font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
     font-size: 0.875em;
     padding: 0.1em 0.35em;
-    border-radius: 0.25rem;
-    background: rgba(255, 255, 255, 0.18);
+    border-radius: 0.3rem;
+    background: var(--color-soil-100);
+    color: var(--color-soil-900);
     white-space: nowrap;
   }
 </style>

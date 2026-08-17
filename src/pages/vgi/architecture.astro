@@ -1,230 +1,776 @@
 ---
 import PageLayout from '../../layouts/PageLayout.astro';
 import VGISubNav from '../../components/sections/VGISubNav.astro';
-import SectionHeader from '../../components/ui/SectionHeader.astro';
+import PageHead from '../../components/ui/PageHead.astro';
 import Button from '../../components/ui/Button.astro';
-import CodeBlock from '../../components/ui/CodeBlock.astro';
+import CodeTabs from '../../components/ui/CodeTabs.astro';
+import BigPictureDiagram from '../../components/vgi/BigPictureDiagram.astro';
+import VGISectionNav from '../../components/sections/VGISectionNav.astro';
+import { Icon } from 'astro-icon/components';
+
+// ── Shared shape vocabulary (brief §10) ──
+const WRAP_WIDE = 'mx-auto w-full max-w-[1360px] px-6 sm:px-7';
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+const EYEBROW = 'qf-eyebrow text-sun-700';
+const LEDE = 'text-[17.5px] leading-relaxed text-soil-700';
+const P = 'mt-4 leading-relaxed text-soil-700';
+const CODE = 'rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900';
+const LINK = 'text-link underline decoration-link/40 underline-offset-2 hover:decoration-link';
+// Inline <code> styling for prose rendered through set:html (the `md()` helper
+// below) — the same chrome as CODE, applied from the container.
+const PROSE_CODE =
+  '[&_code]:rounded [&_code]:bg-soil-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.88em] [&_code]:text-soil-900';
+
+// Backticks → <code> so the data tables below stay readable as data rather
+// than as hand-tagged HTML. Only used on strings authored in this file.
+const md = (s: string) => s.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+const CURRENT = '/vgi/architecture';
+
+const toc = [
+  { id: 'why', label: 'Why VGI exists' },
+  { id: 'out-of-process', label: 'The idea' },
+  { id: 'latency', label: 'Isn’t that slow?' },
+  { id: 'airport', label: 'Airport → VGI' },
+  { id: 'c-api', label: 'The same API' },
+  { id: 'shapes', label: 'Function shapes' },
+  { id: 'transports', label: 'Transports' },
+  { id: 'distribution', label: 'Running a worker' },
+  { id: 'catalogs', label: 'Catalogs & pushdown' },
+  { id: 'wire-format', label: 'Wire format' },
+  { id: 'compare', label: 'How it compares' },
+  { id: 'next-steps', label: 'Where to next' },
+];
+
+// ── The two costs of a native extension. Deliberately free of API symbols:
+// this is the ease-in section, and the reader who hasn't written an extension
+// should still recognise both costs. The symbols show up in §c-api, where
+// they're the point.
+const costs = [
+  {
+    title: 'The cognitive load',
+    body: "Most of the work isn't your logic. It's learning how DuckDB thinks: how a vector of values is laid out, how nulls are tracked beside it, which callback owns which piece of state, and what has to be freed and when. That knowledge is specific to DuckDB, and everyone who touches the code pays for it before writing anything useful.",
+  },
+  {
+    title: 'The release latency',
+    body: 'Not query latency — the wait between changing a line and everyone having it. A compiled extension is tied to one DuckDB version on one platform, so shipping means building for every platform you support, getting them signed, and publishing — then doing it again on the next DuckDB release, whether your code changed or not.',
+  },
+];
+
+// ── What falls out of moving the extension out of the process. These are the
+// consequences that actually change how a team works, not a feature list.
+const consequences = [
+  {
+    title: 'One extension, installed once',
+    body: "There's one VGI binary, and we maintain it. `INSTALL vgi FROM community` is the last build-and-sign cycle anyone runs — after that, your functionality ships when you ship it, with no DuckDB release to wait for.",
+  },
+  {
+    title: 'Ordinary code, ordinary tooling',
+    body: 'A worker is a normal program in a normal language. Your debugger, your test runner, your dependency manager, your CI — all of it works, and none of it is pinned to a DuckDB version.',
+  },
+  {
+    title: 'Failure stays outside',
+    body: "A segfault, a runaway allocation, or a hung third-party client takes down a worker, not the database. The worker is also a separate process with its own credentials and its own network access, which is a security boundary you don't get in-process.",
+  },
+  {
+    title: 'An agent can write one',
+    body: 'We think building a DuckDB extension should be within reach of a coding agent, and out-of-process is what puts it there. A worker is typed code with a test you can run in seconds — the loop agents are good at. Manual memory ownership, an ABI to match, and a signed cross-platform release are not.',
+  },
+];
+
+// ── The objection everyone raises, answered before the details start.
+const objections = [
+  {
+    title: 'The unit is a batch, not a row',
+    body: 'DuckDB is vectorized: it hands over thousands of rows per call, not one. A round trip is amortized across the whole vector, so the boundary shows up as a fixed cost per batch rather than a tax on every row.',
+  },
+  {
+    title: 'Arrow on both sides means no conversion',
+    body: "DuckDB's execution format and the worker's are the same columnar layout, so there's no serialize / deserialize step in the middle — the buffers go on the wire as they already are. On one host, shared memory moves them with no copy at all.",
+  },
+  {
+    title: 'Fewer calls, not just cheaper ones',
+    body: 'Projection, filter, `ORDER BY` + `LIMIT`, and distinct join-key pushdown mean the worker sends back less. Catalogs load lazily instead of up front, and subprocess workers are pooled and reused rather than spawned per query.',
+  },
+  {
+    title: 'What it measures',
+    body: 'Roughly <span class="qf-figure">450 million</span> rows/second across the boundary. Fast enough that for the overwhelming majority of workloads, the hop stops being the thing you tune.',
+  },
+];
+
+// ── `upper_case(VARCHAR) -> VARCHAR` in six forms. The C version is DuckDB's
+// own C extension API; the five worker versions are drawn from each SDK's real
+// examples (README quickstarts and the shared conformance fixtures), not
+// written for this page, so they stay honest about what each SDK looks like.
+const cExample = `/* DuckDB C extension API — upper_case(VARCHAR) -> VARCHAR: the
+   compute callback and the registration that publishes it. */
+static void upper_case(duckdb_function_info info,
+                       duckdb_data_chunk input,
+                       duckdb_vector output) {
+  idx_t count             = duckdb_data_chunk_get_size(input);
+  duckdb_vector in        = duckdb_data_chunk_get_vector(input, 0);
+  duckdb_string_t *in_data = (duckdb_string_t *) duckdb_vector_get_data(in);
+  uint64_t *in_valid      = duckdb_vector_get_validity(in);
+
+  duckdb_vector_ensure_validity_writable(output);
+  uint64_t *out_valid = duckdb_vector_get_validity(output);
+
+  for (idx_t row = 0; row < count; row++) {
+    if (!duckdb_validity_row_is_valid(in_valid, row)) {
+      duckdb_validity_set_row_invalid(out_valid, row);
+      continue;
+    }
+
+    /* Strings up to 12 bytes live inside the struct; longer ones are behind a
+       pointer — you have to know which before you can read one. */
+    duckdb_string_t str = in_data[row];
+    const char *bytes   = duckdb_string_is_inlined(str) ? str.value.inlined.inlined
+                                                        : str.value.pointer.ptr;
+    uint32_t len        = duckdb_string_is_inlined(str) ? str.value.inlined.length
+                                                        : str.value.pointer.length;
+
+    char *upper = (char *) malloc(len);   /* ASCII fast path only */
+    for (uint32_t i = 0; i < len; i++) {
+      upper[i] = (char) toupper((unsigned char) bytes[i]);
+    }
+    duckdb_vector_assign_string_element_len(output, row, upper, len);
+    free(upper);
+  }
+}
+
+DUCKDB_EXTENSION_ENTRYPOINT(duckdb_connection conn,
+                            duckdb_extension_info info,
+                            struct duckdb_extension_access *access) {
+  duckdb_logical_type varchar = duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR);
+  duckdb_scalar_function fn   = duckdb_create_scalar_function();
+
+  duckdb_scalar_function_set_name(fn, "upper_case");
+  duckdb_scalar_function_add_parameter(fn, varchar);
+  duckdb_scalar_function_set_return_type(fn, varchar);
+  duckdb_scalar_function_set_function(fn, upper_case);
+  duckdb_register_scalar_function(conn, fn);
+
+  duckdb_destroy_scalar_function(&fn);
+  duckdb_destroy_logical_type(&varchar);
+  return true;
+}`;
+
+// C leads the set as the "before" — divided off from the five worker SDKs by a
+// rule in the tab strip. It's also by far the longest panel, which is exactly
+// why it's a tab: nobody should have to scroll past it to reach a comparison.
+const implTabs = [
+  {
+    id: 'c',
+    label: 'C (native)',
+    icon: 'simple-icons:c',
+    lang: 'c',
+    title: 'extension.c — a native DuckDB extension',
+    code: cExample,
+    dividerAfter: true,
+  },
+  {
+    id: 'python',
+    label: 'Python',
+    icon: 'simple-icons:python',
+    lang: 'python',
+    title: 'worker.py',
+    code: `from typing import Annotated
+
+import pyarrow as pa
+import pyarrow.compute as pc
+
+from vgi import Param, Returns, ScalarFunction, Worker
+from vgi.catalog import Catalog, Schema
+
+
+class UpperCase(ScalarFunction):
+    """Converts string values to uppercase."""
+
+    class Meta:
+        name = "upper_case"
+        description = "Converts string values to uppercase"
+
+    @classmethod
+    def compute(
+        cls,
+        value: Annotated[pa.StringArray, Param(doc="String value to uppercase")],
+    ) -> Annotated[pa.StringArray, Returns()]:
+        return pc.utf8_upper(value)
+
+
+class DemoWorker(Worker):
+    catalog = Catalog(
+        name="demo",
+        schemas=[Schema(name="main", functions=[UpperCase])],
+    )
+
+
+if __name__ == "__main__":
+    DemoWorker().run()`,
+  },
+  {
+    id: 'typescript',
+    label: 'TypeScript',
+    icon: 'simple-icons:typescript',
+    lang: 'typescript',
+    title: 'worker.ts',
+    code: `import { Worker, defineScalarFunction, str } from "@query-farm/vgi";
+
+const upperCase = defineScalarFunction({
+  name: "upper_case",
+  description: "Convert a string to uppercase",
+
+  // Declares the argument types and order. DuckDB calls scalar functions
+  // positionally, so inside compute you read columns by position.
+  params: { value: str },
+  returns: str,
+
+  // compute runs once per input batch: one output value per row (null ok).
+  compute: (batch) => {
+    const values = batch.getChildAt(0)!;     // first positional argument
+    return Array.from(values, (v) =>
+      v == null ? null : String(v).toUpperCase(),
+    );
+  },
+});
+
+// Functions are served through a catalog — that's what DuckDB ATTACHes to.
+new Worker({
+  catalog: { name: "demo", schemas: [{ name: "main", functions: [upperCase] }] },
+}).run();`,
+  },
+  {
+    id: 'go',
+    label: 'Go',
+    icon: 'simple-icons:go',
+    lang: 'go',
+    title: 'main.go',
+    code: `package main
+
+import (
+	"context"
+	"strings"
+
+	"github.com/Query-farm/vgi-go/vgi"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+)
+
+// UpperCaseFunction converts string values to uppercase.
+type UpperCaseFunction struct{}
+
+func (f *UpperCaseFunction) Name() string { return "upper_case" }
+
+func (f *UpperCaseFunction) Metadata() vgi.FunctionMetadata {
+	return vgi.FunctionMetadata{
+		Description: "Converts string values to uppercase",
+		Stability:   vgi.StabilityConsistent,
+		ReturnType:  arrow.BinaryTypes.String,
+	}
+}
+
+func (f *UpperCaseFunction) ArgumentSpecs() []vgi.ArgSpec {
+	return []vgi.ArgSpec{
+		{Name: "value", Position: 0, ArrowType: "varchar", Doc: "String value to uppercase"},
+	}
+}
+
+func (f *UpperCaseFunction) OnBind(params *vgi.BindParams) (*vgi.BindResponse, error) {
+	return vgi.BindResult(arrow.BinaryTypes.String)
+}
+
+func (f *UpperCaseFunction) Process(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) (arrow.RecordBatch, error) {
+	get := vgi.StringAccessor(batch.Column(0)) // hoist the type switch out of the row loop
+	return vgi.MapColumn(params, batch, 0, array.NewStringBuilder,
+		func(_ arrow.Array, i int) string {
+			return strings.ToUpper(get(i))
+		})
+}
+
+func main() {
+	w := vgi.NewWorker(vgi.WithCatalogName("demo"))
+	w.RegisterScalar(&UpperCaseFunction{})
+	w.RunStdio()
+}`,
+  },
+  {
+    id: 'rust',
+    label: 'Rust',
+    icon: 'simple-icons:rust',
+    lang: 'rust',
+    title: 'src/main.rs',
+    code: `use std::sync::Arc;
+
+use arrow_array::{cast::AsArray, ArrayRef, RecordBatch, StringArray};
+use arrow_schema::DataType;
+use vgi::{ArgSpec, FunctionMetadata, ProcessParams, ScalarFunction, Worker};
+use vgi_rpc::{Result, RpcError};
+
+/// \`upper_case(s)\` — uppercase a string column.
+struct UpperCase;
+
+impl ScalarFunction for UpperCase {
+    fn name(&self) -> &str {
+        "upper_case"
+    }
+
+    fn metadata(&self) -> FunctionMetadata {
+        FunctionMetadata {
+            description: "Convert string values to uppercase".into(),
+            return_type: Some(DataType::Utf8),
+            ..Default::default()
+        }
+    }
+
+    fn argument_specs(&self) -> Vec<ArgSpec> {
+        vec![ArgSpec::column("value", 0, "varchar", "String to uppercase")]
+    }
+
+    fn process(&self, params: &ProcessParams, batch: &RecordBatch) -> Result<RecordBatch> {
+        let col = batch.column(0).as_string::<i32>();
+        let upper: StringArray = col.iter().map(|v| v.map(str::to_uppercase)).collect();
+        let out: ArrayRef = Arc::new(upper);
+        RecordBatch::try_new(params.output_schema.clone(), vec![out])
+            .map_err(|e| RpcError::runtime_error(e.to_string()))
+    }
+}
+
+fn main() {
+    let mut worker = Worker::new();
+    worker.register_scalar(UpperCase);
+    worker.run(); // serves stdio (default), --unix <path>, or --http
+}`,
+  },
+  {
+    id: 'java',
+    label: 'Java',
+    icon: 'simple-icons:openjdk',
+    lang: 'java',
+    title: 'DemoWorker.java',
+    code: `import farm.query.vgi.Worker;
+import farm.query.vgi.scalar.ScalarFn;
+import farm.query.vgi.scalar.Vector;
+import org.apache.arrow.vector.VarCharVector;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+
+public final class DemoWorker {
+
+    /** {@code upper_case(value: utf8) -> utf8} */
+    static final class UpperCase extends ScalarFn {
+        @Override public String name() { return "upper_case"; }
+        @Override public String description() { return "Converts string values to uppercase"; }
+
+        public void compute(@Vector VarCharVector value, VarCharVector result) {
+            int rows = value.getValueCount();
+            for (int i = 0; i < rows; i++) {
+                if (value.isNull(i)) { result.setNull(i); continue; }
+                byte[] up = new String(value.get(i), StandardCharsets.UTF_8)
+                        .toUpperCase(Locale.ROOT)
+                        .getBytes(StandardCharsets.UTF_8);
+                result.setSafe(i, up, 0, up.length);
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        Worker worker = Worker.builder()
+                .catalogName("demo")
+                .registerScalar(new UpperCase());
+        worker.runFromArgs(args); // stdio by default; --unix / --http via flags
+    }
+}`,
+  },
+];
+
+// ── The five function shapes. Glyphs are the same SVGs the Python docs use
+// (public/vgi/docs/assets/kinds/) rather than redrawn here, so the shape
+// vocabulary is identical wherever a reader meets it.
+//
+// Each shape also carries its accent hue, and it is the *same* hue the docs
+// use: the glyph fills baked into those SVGs are literally the `cat-*-ink`
+// tokens (slate/field/plum/gold/clay — see starlight-kinds.css, which must
+// move with the artwork). So a reader meets scalar-is-slate here and again in
+// the Python how-to. Colour is carrying the shape distinction, which is the
+// sanctioned use for the category tints (DESIGN_BRIEF §10); classes are
+// written out in full rather than composed, since Tailwind scans source text.
+const shapes = [
+  {
+    name: 'Scalar',
+    glyph: '/vgi/docs/assets/kinds/scalar.svg',
+    edge: 'border-l-[3px] border-l-cat-slate-ink',
+    chip: 'border-cat-slate-ink/25 bg-cat-slate',
+    pill: 'bg-cat-slate text-cat-slate-ink',
+    formula: '1 row → 1 value',
+    sql: 'SELECT f(col) FROM t',
+    duckdb: "DuckDB's scalar function (`duckdb_create_scalar_function`)",
+    body: 'Transform each row independently. You receive the whole column as an Arrow array and return one — the vectorized shape, not a per-row callback.',
+    href: '/vgi/docs/python/how-to/function-patterns/#scalar',
+  },
+  {
+    name: 'Table',
+    glyph: '/vgi/docs/assets/kinds/table.svg',
+    edge: 'border-l-[3px] border-l-cat-field-ink',
+    chip: 'border-cat-field-ink/25 bg-cat-field',
+    pill: 'bg-cat-field text-cat-field-ink',
+    formula: 'args → N rows',
+    sql: 'SELECT * FROM f(args)',
+    duckdb: "DuckDB's table function (`duckdb_create_table_function`)",
+    body: 'Generate rows from scalar arguments, with no input relation. Bind declares the schema; process is called repeatedly, so large results stream a bounded batch at a time.',
+    href: '/vgi/docs/python/how-to/function-patterns/#table',
+  },
+  {
+    name: 'Table-in-out',
+    glyph: '/vgi/docs/assets/kinds/table-in-out.svg',
+    edge: 'border-l-[3px] border-l-cat-plum-ink',
+    chip: 'border-cat-plum-ink/25 bg-cat-plum',
+    pill: 'bg-cat-plum text-cat-plum-ink',
+    formula: 'N rows → M rows',
+    sql: 'SELECT * FROM f((SELECT …))',
+    duckdb: "DuckDB's in-out table function",
+    body: 'Consume a relation and stream a transformed relation back, batch by batch. Filter, enrich, reshape — nothing is held, so input size is unbounded.',
+    href: '/vgi/docs/python/how-to/function-patterns/#table-in-out',
+  },
+  {
+    name: 'Aggregate',
+    glyph: '/vgi/docs/assets/kinds/aggregate.svg',
+    edge: 'border-l-[3px] border-l-cat-gold-ink',
+    chip: 'border-cat-gold-ink/25 bg-cat-gold',
+    pill: 'bg-cat-gold text-cat-gold-ink',
+    formula: 'N rows → 1 value',
+    sql: 'SELECT f(col) FROM t GROUP BY k',
+    duckdb: "DuckDB's aggregate function (`duckdb_create_aggregate_function`)",
+    body: 'Fold rows into per-group state, then emit a row per group. `combine` merges partial states, which is what lets DuckDB run your aggregate in parallel.',
+    href: '/vgi/docs/python/how-to/function-patterns/#aggregate',
+  },
+  {
+    name: 'Buffering',
+    glyph: '/vgi/docs/assets/kinds/buffering.svg',
+    edge: 'border-l-[3px] border-l-cat-clay-ink',
+    chip: 'border-cat-clay-ink/25 bg-cat-clay',
+    pill: 'bg-cat-clay text-cat-clay-ink',
+    formula: 'stream → [state] → stream',
+    sql: 'SELECT * FROM f((SELECT …))',
+    duckdb: "DuckDB's in-out function with a final flush",
+    body: 'For functions that must see every row before emitting any — a global sort, top-k, a full reduction. Sink, combine, then source the result back out.',
+    href: '/vgi/docs/python/how-to/function-patterns/#buffering',
+  },
+];
 
 const transports = [
   {
     name: 'Pipes',
     icon: 'pipes',
-    tone: 'bg-duck-100',
-    detail: 'OS pipes between processes on the same machine. Lowest setup cost. The default for the spawned-subprocess case.'
+    detail: 'OS pipes between processes on the same machine. Lowest setup cost. The default for the spawned-subprocess case — including a worker that lives inside a container.'
   },
   {
     name: 'Unix sockets',
     icon: 'socket',
-    tone: 'bg-grain-100',
     detail: 'Local domain sockets when the worker is already running. Same performance envelope as pipes; survives independently of the DuckDB process.'
   },
   {
     name: 'Shared memory',
     icon: 'shm',
-    tone: 'bg-harvest-100',
     detail: 'Zero-copy Arrow IPC over a memory region. Highest throughput for very large batches on the same host. Opt-in.'
   },
   {
     name: 'HTTP',
     icon: 'http',
-    tone: 'bg-earth-100',
-    detail: 'Workers anywhere on the network. Trades latency for reach — useful for shared inference services and remote teams.'
+    detail: 'Workers anywhere on the network — and the transport that makes ordinary web infrastructure work: proxies, load balancers, serverless runtimes.'
   }
 ];
 
-const lifecycle = [
+// ── Where a worker comes from (launch) and where it lives (hosting). Two
+// different questions that get conflated: `LOCATION` is either a command
+// DuckDB runs or a URL it calls.
+const launchModes = [
   {
-    phase: 'bind',
-    description: 'DuckDB asks the worker what types it returns and validates argument types. Type bounds (`type_bound=...`) are enforced here, before any data moves. Errors at this stage are reported as SQL plan errors.'
+    name: 'A local process',
+    icon: 'ph:terminal-window',
+    detail: '`LOCATION \'uv run worker.py\'` — DuckDB spawns it, talks over pipes, and pools the subprocess for reuse. Nothing is deployed and nothing touches the network.',
   },
   {
-    phase: 'process',
-    description: 'For each Arrow record batch DuckDB hands the worker, the worker runs `compute()` and returns the result batch. The vectorized engine on both sides keeps this loop tight.'
+    name: 'A container',
+    icon: 'simple-icons:docker',
+    detail: '`LOCATION \'docker run --rm -i ghcr.io/you/worker\'` — the same pipe transport, with stdio wired into the container. The worker ships as an image; its dependencies are its own problem.',
   },
   {
-    phase: 'finalize',
-    description: 'Aggregates and table-in/out functions get a final call to flush state — emit the running aggregate, close the cursor, release resources.'
-  }
+    name: 'A remote host',
+    icon: 'ph:cloud-arrow-up',
+    detail: 'The command can be an `ssh` invocation, so the worker runs next to the data on another machine and still speaks over the launcher\'s pipes. See [connect to a worker](/vgi/connect-to-a-worker#ssh).',
+  },
+  {
+    name: 'A URL',
+    icon: 'ph:globe',
+    detail: '`LOCATION \'https://worker.example.com/\'` — the worker is a service you deployed. Any number of DuckDB sessions attach to the same one.',
+  },
 ];
 
-const pyExample = `class RowCount(AggregateFunction):
-    @classmethod
-    def initialize(cls) -> int:
-        return 0
-
-    @classmethod
-    def update(cls, state: int, batch: pa.RecordBatch) -> int:
-        return state + batch.num_rows
-
-    @classmethod
-    def finalize(cls, state: int) -> int:
-        return state`;
-
-// Animated flow diagram geometry. Sources (left) → VGI gateway (center) →
-// DuckDB (right), the merge.dev orientation: many systems becoming SQL.
-// Each wire is drawn in its forward-flow direction so a plain animateMotion
-// carries the "response" packet; a second packet with keyPoints 1;0 carries
-// the "request" the other way.
-const sources = [
-  { label: 'REST / gRPC APIs', cy: 63 },
-  { label: 'ML models',        cy: 155 },
-  { label: 'Services',         cy: 247 },
-  { label: 'Python · Go · Rust', cy: 339 },
+const hosting = [
+  {
+    name: 'Behind a load balancer',
+    icon: 'ph:tree-structure',
+    detail: 'A pool of identical workers behind nginx, HAProxy, or an ALB, scaled like any other tier. The usual shape for a shared model or inference service.',
+  },
+  {
+    name: 'Cloudflare Workers',
+    icon: 'simple-icons:cloudflareworkers',
+    detail: 'Plain HTTP with a binary body is exactly what an edge runtime serves. No gRPC stack to bring along, no HTTP/2 trailers to negotiate.',
+  },
+  {
+    name: 'Google Cloud Run',
+    icon: 'simple-icons:googlecloud',
+    detail: 'Your container, scaled to zero between queries. The worker you tested locally over pipes is the same image, listening on a port.',
+  },
+  {
+    name: 'AWS Lambda',
+    icon: 'simple-icons:awslambda',
+    detail: 'Behind a function URL or API Gateway. Each call is a self-contained request, which is the property a function-as-a-service runtime actually requires.',
+  },
 ];
-const fanWires = sources.map((s, i) => ({
-  id: `vgi-wire-${i}`,
-  d: `M240 ${s.cy} C 312 ${s.cy} 330 210 400 210`,
-  begin: `${(i * 0.45).toFixed(2)}s`,
-  revBegin: `${(i * 0.45 + 0.9).toFixed(2)}s`,
-}));
 
 const nextCards = [
-  { icon: 'start',     title: 'Getting Started', body: 'Hands-on walkthrough.',                href: '/vgi/getting-started', external: false },
-  { icon: 'languages', title: 'Languages',       body: 'SDKs in your language.',               href: '/vgi/languages',       external: false },
-  { icon: 'rpc',       title: 'vgi-rpc',         body: 'Benchmarks and the full wire spec.',   href: 'https://vgi-rpc.query.farm', external: true },
+  { title: 'Building a Worker', body: 'Scope one, and pick a language SDK.',   href: '/vgi/building-a-worker', external: false },
+  { title: 'Language SDKs',     body: 'SDKs in your language.',                href: '/vgi/languages',        external: false },
 ];
 ---
 
 <PageLayout
   title="VGI — Architecture"
-  description="How VGI works: transports, the Apache Arrow IPC wire format, and the bind / process / finalize lifecycle that connects DuckDB to remote workers."
+  description="Why VGI exists: DuckDB's extension interfaces without the C project or the release matrix. The function shapes, transports, worker hosting, and the Apache Arrow IPC wire underneath."
 >
   <VGISubNav />
 
-  <!-- Hero -->
-  <section class="relative overflow-hidden bg-gradient-to-br from-harvest-100 via-harvest-50 to-white py-14 font-display lg:py-20">
-    <div class="absolute inset-0 opacity-40">
-      <svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <pattern id="vgi-arch-pattern" x="0" y="0" width="100" height="100" patternUnits="userSpaceOnUse">
-            <circle cx="50" cy="50" r="1.5" fill="currentColor" class="text-earth-300" />
-            <circle cx="25" cy="75" r="1" fill="currentColor" class="text-soil-300" />
-            <circle cx="75" cy="25" r="1" fill="currentColor" class="text-soil-300" />
-          </pattern>
-        </defs>
-        <rect width="100%" height="100%" fill="url(#vgi-arch-pattern)" />
-      </svg>
+  <!-- ── Page header ─────────────────────────────────────────── -->
+  <PageHead
+    variant="section"
+    wide
+    eyebrow="Architecture"
+    title="DuckDB extensions, without the DuckDB internals."
+    lede="Write the extension in a language you already use and run it as an ordinary process. DuckDB calls it through the same interfaces it uses for native ones — functions, catalogs, pushdown — over Apache Arrow IPC."
+  >
+    <div class="mt-6 flex flex-wrap items-center gap-3">
+      <Button href="https://vgi-rpc.query.farm/wire-protocol" variant="primary" size="md" external>Wire protocol spec →</Button>
+      <Button href="/vgi/getting-started" variant="secondary" size="md">Getting started</Button>
     </div>
+  </PageHead>
 
-    <div class="section-container relative z-10">
-      <div class="max-w-3xl mx-auto text-center">
-        <div class="mb-5 inline-flex items-center gap-2 rounded-full border-2 border-soil-900 bg-white px-4 py-2 text-sm font-bold text-soil-900 shadow-sm">
-          <img src="/vgi/vgi-logo.png" alt="" class="h-6 w-6 object-contain" width="24" height="24" />
-          Architecture
-        </div>
-        <h1 class="text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-normal text-soil-900 leading-tight">
-          Apache Arrow over a
-          <span class="inline-block rounded-2xl border-2 border-soil-900 bg-grain-300 px-3 pb-1 text-soil-900 shadow-sm">pluggable wire.</span>
-        </h1>
-        <p class="mt-6 text-lg md:text-xl text-soil-700 leading-relaxed">
-          A DuckDB-side extension, your worker, and a transport between them — with a bind / process / finalize lifecycle that maps cleanly onto DuckDB's vectorized engine.
-        </p>
-        <div class="mt-8 flex justify-center">
-          <Button href="https://vgi-rpc.query.farm/wire-protocol" variant="accent" size="lg" external>Wire protocol spec →</Button>
-        </div>
+  <!-- ── Docs grid: section nav / content / page TOC ──────────── -->
+  <div class={`${WRAP_WIDE} grid gap-10 py-10 lg:grid-cols-[220px_minmax(0,1fr)_200px] lg:gap-11`}>
+    <aside class="hidden lg:block lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto">
+      <VGISectionNav current={CURRENT} />
+    </aside>
+
+    <!-- Not a landmark element: BaseLayout already renders the page's single main. -->
+
+    <div class="min-w-0">
+      <!-- Deliberately not a restatement of the hero lede, which already says
+           what VGI does. This paragraph's only job is orientation: what the
+           page covers, in the order it covers it. -->
+      <p class={LEDE}>
+        The program on the far end is called a <strong class="font-medium text-soil-900">worker</strong>,
+        and it is ordinary code — no DuckDB headers, no build against its internals. This page works
+        top down: why that's worth doing, the five shapes a worker's functions can take, how it's
+        reached and hosted, and finally the wire itself.
+      </p>
+
+      <!-- Why VGI exists -->
+      <p class={`${EYEBROW} mt-10 block`}>Where this came from</p>
+      <h2 id="why" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Extensions are how DuckDB grows — and the hardest thing to ship</h2>
+      <p class={P}>
+        Parquet, cloud storage, geospatial, half a dozen other databases: nearly everything DuckDB
+        can reach arrives as an extension, and the interface for writing one is genuinely good.
+        What's hard is everything around writing it. Two costs in particular land before your code
+        ever answers a query.
+      </p>
+      <div class="mt-6 grid gap-3.5 md:grid-cols-2">
+        {costs.map(c => (
+          <div class={`${CARD} p-5`}>
+            <h3 class="text-lg text-soil-900">{c.title}</h3>
+            <p class={`mt-2 text-sm leading-relaxed text-soil-700 ${PROSE_CODE}`} set:html={md(c.body)}></p>
+          </div>
+        ))}
       </div>
-    </div>
+      <p class={P}>
+        Neither is a complaint about DuckDB. Both are the honest price of running <em>inside</em>
+        the engine's process, and if you're building one extension, it's a price worth paying. We
+        wanted to build them <em>at scale</em> — dozens of them, maintained by people who shouldn't
+        have to learn DuckDB's internals first, and increasingly written with the help of coding
+        agents. Paid once, that price is fine. Paid per extension, it doesn't divide.
+      </p>
 
-    <div class="absolute bottom-0 left-0 right-0">
-      <svg viewBox="0 0 1440 120" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-full h-auto">
-        <path d="M0 0L60 10C120 20 240 40 360 46.7C480 53 600 47 720 43.3C840 40 960 40 1080 46.7C1200 53 1320 67 1380 73.3L1440 80V120H1380C1320 120 1200 120 1080 120C960 120 840 120 720 120C600 120 480 120 360 120C240 120 120 120 60 120H0V0Z" fill="white" fill-opacity="0.5"/>
-      </svg>
-    </div>
-  </section>
+      <!-- The idea -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The idea</p>
+      <h2 id="out-of-process" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Let the extension live outside DuckDB</h2>
+      <p class={P}>
+        So we wrote one extension, generically, and gave it nothing to do but talk. It's an
+        ordinary DuckDB extension — compiled, signed, distributed, all of it — and its only job is
+        to carry DuckDB's requests to a program running <em>outside</em> the database, then bring
+        the answers back. That program is a
+        <strong class="font-medium text-soil-900">worker</strong>: your code, in whatever language
+        you like, answering in Apache Arrow.
+      </p>
+      <p class={P}>
+        From the SQL side, nothing looks unusual. You <code class={CODE}>ATTACH</code> a worker,
+        DuckDB sees catalogs, schemas, tables, and functions — its own objects, with its own
+        semantics — and it plans queries against them the way it plans anything else.
+      </p>
 
-  <!-- Animated flow diagram -->
-  <section class="py-16 lg:py-24 bg-white font-display">
-    <div class="section-container">
-      <SectionHeader
-        eyebrow="Big picture"
-        title="Your systems, arriving as SQL"
-        description="DuckDB issues an Arrow IPC request through the transport; the worker dispatches to the matching method and streams an Arrow IPC response back. The wire is the same whether the worker is a subprocess or a service across the network."
-        align="center"
-        class="mb-12"
-      />
-
-      <div class="max-w-5xl mx-auto rounded-2xl border-2 border-soil-900 bg-white p-4 md:p-8 shadow-lg">
-        <svg class="vgi-flow w-full h-auto" viewBox="0 0 1000 420" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" role="img" aria-label="Animated diagram: external APIs, models, services, and code connect through the VGI Arrow IPC gateway to a DuckDB SQL session.">
-          <!-- Wires (drawn first, under the nodes) -->
-          {fanWires.map(w => (
-            <path id={w.id} d={w.d} fill="none" class="stroke-soil-300" stroke-width="2.5" />
-          ))}
-          <path id="vgi-wire-main" d="M600 210 L760 210" fill="none" class="stroke-soil-300" stroke-width="2.5" />
-
-          <!-- Flow packets: response (→ DuckDB) and request (→ worker) -->
-          {fanWires.map(w => (
-            <>
-              <circle r="5.5" class="fill-harvest-500">
-                <animateMotion dur="2.6s" repeatCount="indefinite" begin={w.begin}>
-                  <mpath xlink:href={`#${w.id}`} />
-                </animateMotion>
-              </circle>
-              <circle r="4" class="fill-duck-500">
-                <animateMotion dur="3s" repeatCount="indefinite" begin={w.revBegin} keyPoints="1;0" keyTimes="0;1" calcMode="linear">
-                  <mpath xlink:href={`#${w.id}`} />
-                </animateMotion>
-              </circle>
-            </>
-          ))}
-          <circle r="6" class="fill-harvest-600">
-            <animateMotion dur="1.8s" repeatCount="indefinite" begin="0.3s">
-              <mpath xlink:href="#vgi-wire-main" />
-            </animateMotion>
-          </circle>
-          <circle r="4.5" class="fill-duck-500">
-            <animateMotion dur="2.2s" repeatCount="indefinite" begin="1s" keyPoints="1;0" keyTimes="0;1" calcMode="linear">
-              <mpath xlink:href="#vgi-wire-main" />
-            </animateMotion>
-          </circle>
-
-          <!-- Source nodes (left) -->
-          {sources.map(s => (
-            <g>
-              <rect x="30" y={s.cy - 26} width="210" height="52" rx="12" class="fill-white stroke-soil-900" stroke-width="2.5" />
-              <text x="135" y={s.cy + 5} text-anchor="middle" class="fill-soil-900 font-bold" font-size="19" font-family="inherit">{s.label}</text>
-            </g>
-          ))}
-
-          <!-- VGI gateway (center) -->
-          <rect x="400" y="150" width="200" height="120" rx="18" class="fill-grain-50 stroke-soil-900" stroke-width="3" />
-          <text x="500" y="184" text-anchor="middle" class="fill-harvest-700 font-bold" font-size="14" font-family="inherit" letter-spacing="1.5">VGI GATEWAY</text>
-          <text x="500" y="223" text-anchor="middle" class="fill-soil-900 font-extrabold" font-size="32" font-family="inherit">Arrow IPC</text>
-          <text x="500" y="249" text-anchor="middle" class="fill-soil-700 font-bold" font-size="15" font-family="inherit">over any transport</text>
-
-          <!-- DuckDB / SQL (right) -->
-          <rect x="760" y="150" width="210" height="120" rx="18" class="fill-duck-50 stroke-soil-900" stroke-width="3" />
-          <text x="865" y="198" text-anchor="middle" class="fill-soil-900 font-extrabold" font-size="30" font-family="inherit">DuckDB</text>
-          <text x="865" y="226" text-anchor="middle" class="fill-soil-700 font-bold" font-size="16" font-family="inherit">SQL session · Haybarn</text>
-        </svg>
-
-        <div class="mt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm">
-          <span class="inline-flex items-center gap-2 font-semibold text-soil-700">
-            <span class="h-3 w-3 rounded-full bg-harvest-500"></span> Arrow response → DuckDB
-          </span>
-          <span class="inline-flex items-center gap-2 font-semibold text-soil-700">
-            <span class="h-3 w-3 rounded-full bg-duck-500"></span> request → worker
-          </span>
-        </div>
+      <div id="big-picture" class="mt-6 scroll-mt-32">
+        <BigPictureDiagram flip />
       </div>
-    </div>
-  </section>
 
-  <!-- Transports -->
-  <section class="py-16 lg:py-24 bg-soil-50 font-display">
-    <div class="section-container">
-      <SectionHeader
-        eyebrow="The transport layer"
-        title="Same protocol, your choice of pipe"
-        description="vgi-rpc abstracts the wire so you can switch transports without changing your worker."
-        align="center"
-        class="mb-12"
-      />
+      <p class={`${P} mt-6`}>
+        That one move takes care of both costs, and a few other things along with them:
+      </p>
+      <div class="mt-5 grid gap-3.5 md:grid-cols-2">
+        {consequences.map(c => (
+          <div class={`${CARD} p-5`}>
+            <h3 class="text-lg text-soil-900">{c.title}</h3>
+            <p class={`mt-2 text-sm leading-relaxed text-soil-700 ${PROSE_CODE}`} set:html={md(c.body)}></p>
+          </div>
+        ))}
+      </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 max-w-6xl mx-auto">
+      <!-- The latency objection -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The obvious objection</p>
+      <h2 id="latency" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">“Isn't leaving the process slow?”</h2>
+      <p class={P}>
+        It's the first question everyone asks, and it deserves a real answer rather than a
+        benchmark screenshot. Four things make that boundary far cheaper than it sounds. Then
+        there's the one case where the worry is justified.
+      </p>
+      <div class="mt-6 grid gap-3.5 md:grid-cols-2">
+        {objections.map(o => (
+          <div class={`${CARD} p-5`}>
+            <h3 class="text-lg text-soil-900">{o.title}</h3>
+            <p class={`mt-2 text-sm leading-relaxed text-soil-700 ${PROSE_CODE}`} set:html={md(o.body)}></p>
+          </div>
+        ))}
+      </div>
+      <p class={P}>
+        And the case where it's justified: a scalar function on a genuinely hot path — called a
+        billion-plus times a second, doing almost nothing per call — runs faster in-process, and no
+        amount of batching closes that gap. A chatty pattern that can't be expressed
+        set-at-a-time pays the boundary over and over for the same reason. For those, a native
+        extension is still the right tool, and we'd rather
+        <a href="#compare" class={LINK}>say so</a> than sell you around it.
+      </p>
+
+      <!-- Airport lineage -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Lineage</p>
+      <h2 id="airport" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Airport, retooled for the web</h2>
+      <p class={P}>
+        VGI is not the first attempt at this. We built
+        <a href="https://airport.query.farm" target="_blank" rel="noopener" class={LINK}>Airport</a>
+        first — a DuckDB extension that reaches remote services over
+        <strong class="font-medium text-soil-900">Arrow Flight</strong> and exposes them as
+        catalogs, tables, and functions. Airport proved the idea works, and it is still the right
+        answer if you already speak Flight.
+      </p>
+      <p class={P}>
+        What it inherited from Flight was the constraint. Flight is gRPC and Protocol Buffers:
+        excellent inside a data center, awkward everywhere else. Requiring end-to-end HTTP/2 with
+        trailer support rules out a lot of ordinary web infrastructure — CDNs, proxies, edge and
+        function-as-a-service runtimes — and Flight's verbs describe a narrower slice of DuckDB
+        than an extension can actually register.
+      </p>
+      <p class={P}>
+        <strong class="font-medium text-soil-900">VGI is that idea retooled.</strong> Same premise,
+        different wire: Apache Arrow IPC over a transport you choose, with plain HTTP as the
+        web-friendly default. That bought back the entire hosting story below, along with a wider
+        surface — five function shapes, per-column statistics, pushdown, and transactional catalog
+        semantics. It's faster, too.
+      </p>
+
+      <!-- The C API mapping -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The interface</p>
+      <h2 id="c-api" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">The same API, one hop out of the process</h2>
+      <p class={P}>
+        Here's the part that matters if you've written against
+        <code class={CODE}>duckdb.h</code>: VGI deliberately mirrors DuckDB's own extension
+        interfaces rather than inventing a friendlier abstraction on top of them. If you know what
+        <code class={CODE}>bind</code> does, or why an aggregate needs
+        <code class={CODE}>combine</code>, you already know how a worker is structured — the
+        concepts are DuckDB's, and only the plumbing underneath them changed.
+      </p>
+      <p class={P}>
+        Take <code class={CODE}>upper_case(VARCHAR) → VARCHAR</code>, about as small as a function
+        gets. The first tab is what it takes to write natively, in C; the rest are the same
+        function as a VGI worker, one per SDK. Each one is a whole program, not an excerpt, and
+        each registers <code class={CODE}>upper_case</code> in a catalog DuckDB can
+        <code class={CODE}>ATTACH</code>.
+      </p>
+      <div class="mt-5">
+        <CodeTabs tabs={implTabs} group="vgi-lang" ariaLabel="Implementation language" />
+      </div>
+      <p class="mt-5 text-sm leading-relaxed text-soil-700">
+        In the C version, everything that isn't uppercasing is the work of knowing DuckDB: which
+        vector holds the argument, where the nulls are tracked, and the fact that short strings sit
+        inside the string struct while longer ones live behind a pointer. In the workers, all of
+        that belongs to the SDK, and what's left is the part only you can write. The point isn't
+        that C is bad — it's that this interface doesn't have to live in DuckDB's process to
+        <em>be</em> the interface.
+        <a href="/vgi/languages" class={LINK}>All six SDKs →</a>
+      </p>
+
+      <!-- Function shapes -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Function shapes</p>
+      <h2 id="shapes" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Five shapes, matching DuckDB's own</h2>
+      <p class={P}>
+        Every function a worker exposes takes one of five shapes, and the extension registers each
+        one in the matching DuckDB position. Those positions are DuckDB's own: scalars and
+        aggregates appear in expressions, table functions appear in
+        <code class={CODE}>FROM</code>, and the in-out shapes consume a relation. All that changes
+        is where the implementation runs.
+      </p>
+      <div class="mt-6 flex flex-col gap-3.5">
+        {shapes.map(s => (
+          <div class={`${CARD} ${s.edge} flex flex-col gap-4 p-5 sm:flex-row sm:items-start`}>
+            <!-- Tints sit only ~1.15:1 against paper, so the glyph chip keeps a
+                 hairline in its own ink to read as a shape, not a smudge. -->
+            <div class={`flex h-16 w-28 flex-none items-center justify-center rounded-xl border p-3 ${s.chip}`}>
+              <!-- Native height is 40px for all five; widths differ (64–102), so
+                   fix the height and let width follow rather than stretching. -->
+              <img src={s.glyph} alt={`${s.name} function shape`} class="h-10 w-auto max-w-full" loading="lazy" />
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <h3 class="text-lg text-soil-900">{s.name}</h3>
+                <code class={`rounded-md px-2 py-0.5 font-mono text-[13px] font-medium ${s.pill}`}>{s.formula}</code>
+              </div>
+              <p class="mt-2 text-sm leading-relaxed text-soil-700" set:html={md(s.body)}></p>
+              <p class={`mt-2.5 text-[13px] leading-relaxed text-soil-500 ${PROSE_CODE} [&_code]:bg-soil-100/70`}>
+                <span set:html={md(s.duckdb)} /> · <code class={CODE}>{s.sql}</code>
+              </p>
+              <a href={s.href} class="mt-2.5 inline-block text-[13px] font-medium text-link no-underline transition-colors hover:text-link-hover">
+                {s.name} worker, end to end →
+              </a>
+            </div>
+          </div>
+        ))}
+      </div>
+      <p class="mt-5 text-sm leading-relaxed text-soil-700">
+        Each shape's hooks — what bind receives, when process is called again, how state is carried
+        between phases — are documented per language, because the contracts are expressed in that
+        language's type system.
+        <a href="/vgi/docs/python/how-to/function-patterns/" class={LINK}>Python function patterns →</a>
+      </p>
+
+      <!-- Transports -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The transport layer</p>
+      <h2 id="transports" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Same protocol, your choice of pipe</h2>
+      <p class={P}>
+        The SDKs own the wire, so the transport is a deployment decision rather than a code one:
+        move a worker from a pipe to HTTP and the worker itself doesn't change — only the
+        <code class={CODE}>LOCATION</code> you attach to does.
+      </p>
+      <div class="mt-6 grid gap-3.5 sm:grid-cols-2">
         {transports.map(t => (
-          <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
-            <div class={`mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl border-2 border-soil-900 ${t.tone} text-soil-900`}>
-              <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div class={`${CARD} p-5`}>
+            <div class="flex h-11 w-11 items-center justify-center rounded-xl border border-soil-300 bg-soil-100 text-soil-700">
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 {t.icon === 'pipes' && (
                   <>
                     <rect x="2.5" y="8" width="6.5" height="8" rx="1.5" stroke-width="2.1" />
@@ -249,192 +795,156 @@ const nextCards = [
                 )}
               </svg>
             </div>
-            <h3 class="text-lg font-bold text-soil-900 mb-2">{t.name}</h3>
-            <p class="text-sm text-soil-700 leading-relaxed">{t.detail}</p>
+            <h3 class="mt-4 text-lg text-soil-900">{t.name}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{t.detail}</p>
+          </div>
+        ))}
+      </div>
+      <p class="mt-5 text-sm leading-relaxed text-soil-700">
+        Benchmarks and a comparison matrix live on the dedicated RPC site.
+        <a href="https://vgi-rpc.query.farm" target="_blank" rel="noopener" class={LINK}>vgi-rpc.query.farm →</a>
+      </p>
+
+      <!-- Distribution & hosting -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Distribution &amp; hosting</p>
+      <h2 id="distribution" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Where a worker actually runs</h2>
+      <p class={P}>
+        Transports are how the bytes move. The other half of the question is how the worker gets
+        there in the first place, and <code class={CODE}>LOCATION</code> is where you answer it:
+        either a command DuckDB runs for you, or a URL it calls.
+      </p>
+      <div class="mt-6 grid gap-3.5 sm:grid-cols-2">
+        {launchModes.map(m => (
+          <div class={`${CARD} p-5`}>
+            <div class="flex h-11 w-11 items-center justify-center rounded-xl border border-soil-300 bg-soil-100">
+              <Icon name={m.icon} class="h-5 w-5 text-soil-700" aria-hidden="true" />
+            </div>
+            <h3 class="mt-4 text-lg text-soil-900">{m.name}</h3>
+            <p
+              class={`mt-2 text-sm leading-relaxed text-soil-700 ${PROSE_CODE} [&_a]:text-link [&_a]:underline [&_a]:decoration-link/40 [&_a]:underline-offset-2`}
+              set:html={md(m.detail).replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')}
+            ></p>
           </div>
         ))}
       </div>
 
-      <p class="text-center text-sm text-soil-600 mt-8 max-w-2xl mx-auto">
-        Benchmarks and a comparison matrix live on the dedicated RPC site.
-        <a href="https://vgi-rpc.query.farm" target="_blank" rel="noopener" class="text-harvest-700 underline ml-1">vgi-rpc.query.farm →</a>
+      <h3 class="mt-9 text-xl text-soil-900">Once it's a URL, it's just a web service</h3>
+      <p class={P}>
+        We kept the protocol deliberately light: one request per call, Arrow IPC in the body, no
+        HTTP/2 requirement, no trailers, and no long-lived connection to keep alive. When a call
+        needs to be resumed, the worker hands back a continuation token rather than holding a
+        session open, so the <em>next</em> call can land on a different instance and still be
+        correct. That one property is what makes everything below possible.
       </p>
-    </div>
-  </section>
-
-  <!-- Catalogs & performance -->
-  <section class="py-16 lg:py-24 bg-white font-display">
-    <div class="section-container">
-      <SectionHeader
-        eyebrow="Catalogs & performance"
-        title="Lazy catalogs, pushdown, and the cost of the hop"
-        description="Workers are first-class DuckDB catalogs. VGI keeps the process boundary cheap — but it's an honest tradeoff."
-        align="center"
-        class="mb-12"
-      />
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-6xl mx-auto">
-        <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
-          <h3 class="text-lg font-bold text-soil-900 mb-2">Lazy catalogs</h3>
-          <p class="text-sm text-soil-700 leading-relaxed">Workers expose schemas, tables, and views; DuckDB loads metadata and per-column statistics on demand and supports multi-branch (<code class="font-mono text-xs bg-soil-100 px-1 py-0.5 rounded">UNION ALL</code>) tables. An eager-load threshold controls bulk vs. per-object loading.</p>
-        </div>
-        <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
-          <h3 class="text-lg font-bold text-soil-900 mb-2">Pushdown &amp; pooling</h3>
-          <p class="text-sm text-soil-700 leading-relaxed">Workers can opt into projection, filter, <code class="font-mono text-xs bg-soil-100 px-1 py-0.5 rounded">ORDER BY</code> + <code class="font-mono text-xs bg-soil-100 px-1 py-0.5 rounded">LIMIT</code>, and distinct join-key pushdown; subprocess workers are pooled and reused. A co-located worker can use POSIX shared memory to move batches with no copy.</p>
-        </div>
-        <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
-          <h3 class="text-lg font-bold text-soil-900 mb-2">The tradeoff</h3>
-          <p class="text-sm text-soil-700 leading-relaxed">Each call is a cross-process Arrow round trip — cheap per <em>batch</em>, not free per <em>call</em>. Set-oriented queries amortize it well; chatty per-row patterns don't, and tight hot scalar work still favors a native in-process extension.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Lifecycle -->
-  <section class="py-16 lg:py-24 bg-soil-50 font-display">
-    <div class="section-container">
-      <div class="max-w-4xl mx-auto">
-        <SectionHeader
-          eyebrow="Function lifecycle"
-          title="bind → process → finalize"
-          description="Every VGI function (scalar, table, aggregate) follows the same lifecycle, just with different hooks."
-          align="center"
-          class="mb-12"
-        />
-
-        <div class="space-y-4">
-          {lifecycle.map((step, i) => (
-            <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
-              <div class="flex items-start gap-4">
-                <div class="flex-shrink-0 w-12 h-12 rounded-full border-2 border-soil-900 bg-grain-300 text-soil-900 flex items-center justify-center font-extrabold text-lg shadow-sm">
-                  {i + 1}
-                </div>
-                <div class="flex-1">
-                  <h3 class="text-xl font-bold text-soil-900 mb-2 font-mono">{step.phase}</h3>
-                  <p class="text-soil-700 leading-relaxed">{step.description}</p>
-                </div>
-              </div>
+      <div class="mt-6 grid gap-3.5 sm:grid-cols-2">
+        {hosting.map(h => (
+          <div class={`${CARD} p-5`}>
+            <div class="flex h-11 w-11 items-center justify-center rounded-xl border border-soil-300 bg-soil-100">
+              <Icon name={h.icon} class="h-5 w-5 text-soil-700" aria-hidden="true" />
             </div>
-          ))}
-        </div>
-
-        <div class="mt-10">
-          <p class="text-soil-700 leading-relaxed mb-4">
-            For aggregates this maps to <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">initialize</code> / <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">update</code> / <code class="text-sm bg-soil-100 px-1.5 py-0.5 rounded">finalize</code> on the Python class:
-          </p>
-          <CodeBlock code={pyExample} lang="python" title="row_count.py" />
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Wire format -->
-  <section class="py-16 lg:py-24 bg-white font-display">
-    <div class="section-container">
-      <div class="max-w-3xl mx-auto">
-        <SectionHeader
-          eyebrow="Wire format"
-          title="Apache Arrow IPC, all the way down"
-          align="center"
-          class="mb-8"
-        />
-        <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 md:p-8 shadow-sm">
-          <div class="mb-5 inline-flex h-12 w-12 items-center justify-center rounded-xl border-2 border-soil-900 bg-grain-100 text-soil-900">
-            <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M5 7l5 5-5 5M12 7l5 5-5 5" />
-            </svg>
+            <h3 class="mt-4 text-lg text-soil-900">{h.name}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{h.detail}</p>
           </div>
-          <p class="text-soil-700 leading-relaxed mb-4">
-            Every request and response is an Arrow IPC stream — a self-describing schema followed by record batches. That's it. There's no bespoke serialization, no JSON envelope, no language-specific wire types. If you can read Arrow, you can implement a worker.
-          </p>
-          <p class="text-soil-700 leading-relaxed mb-6">
-            The full byte-level specification — opcodes, framing, error handling — is published on the RPC site.
-          </p>
-          <Button href="https://vgi-rpc.query.farm/wire-protocol" variant="primary" size="lg" external>
-            Read the Wire Protocol Spec →
-          </Button>
+        ))}
+      </div>
+      <p class="mt-5 text-sm leading-relaxed text-soil-700">
+        The honest caveat: scale-to-zero platforms add a cold start to the first call. A catalog
+        scan absorbs that easily; a tight scalar loop doesn't. When per-call latency matters more
+        than idle cost, keep a warm pool behind a load balancer instead.
+      </p>
+
+      <!-- Catalogs & pushdown -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Catalogs &amp; pushdown</p>
+      <h2 id="catalogs" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Workers are first-class catalogs</h2>
+      <p class={P}>
+        A worker doesn't have to stop at functions — it can expose a whole database. DuckDB then
+        plans against it with the same kind of information it would have about a local table.
+      </p>
+      <div class="mt-6 grid gap-3.5 md:grid-cols-2">
+        <div class={`${CARD} p-5`}>
+          <h3 class="text-lg text-soil-900">Lazy catalogs</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">Workers expose schemas, tables, and views; DuckDB loads metadata and per-column statistics on demand and supports multi-branch (<code class={CODE}>UNION ALL</code>) tables. An eager-load threshold controls bulk vs. per-object loading.</p>
+        </div>
+        <div class={`${CARD} p-5`}>
+          <h3 class="text-lg text-soil-900">Pushdown</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">Workers can opt into projection, filter, <code class={CODE}>ORDER BY</code> + <code class={CODE}>LIMIT</code>, and distinct join-key pushdown. The planner tells the worker what the query actually needs, so the work happens where the data is and the answer comes back smaller than the table.</p>
         </div>
       </div>
-    </div>
-  </section>
 
-  <!-- How VGI compares -->
-  <section class="py-16 lg:py-24 bg-soil-50 font-display">
-    <div class="section-container">
-      <SectionHeader
-        eyebrow="How it compares"
-        title="VGI vs. native extensions, Airport &amp; ADBC"
-        description="VGI overlaps with a few other ways to reach data from DuckDB. Reach for it when you want to run your own code, in any language, as SQL functions and tables."
-        align="center"
-        class="mb-12"
-      />
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl mx-auto">
-        <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
-          <h3 class="text-lg font-bold text-soil-900 mb-2">vs. a native C++ extension</h3>
-          <p class="text-sm text-soil-700 leading-relaxed">A native extension runs in-process, so it wins the truly <strong>hot, fine-grained</strong> paths — scalar functions that must be called a billion-plus rows a second. VGI runs in a separate process yet still benchmarks at roughly <strong>450 million rows/second</strong>, which covers the vast majority of real workloads. The price of that native speed is steep: writing C++, pinning to a DuckDB version, and a slow build / sign / distribute cycle for every release — painfully so for wide DuckDB distribution.</p>
+      <!-- Wire format -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Wire format</p>
+      <h2 id="wire-format" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Apache Arrow IPC, all the way down</h2>
+      <p class={P}>
+        Every request and response is an Arrow IPC stream — a self-describing schema followed by
+        record batches. That's it. There's no bespoke serialization, no JSON envelope, no
+        language-specific wire types, and nothing to generate from a schema file. If you can read
+        Arrow, you can implement a worker.
+      </p>
+      <p class={P}>
+        The full byte-level specification — opcodes, framing, error handling — is published on
+        the RPC site.
+      </p>
+      <div class="mt-5">
+        <Button href="https://vgi-rpc.query.farm/wire-protocol" variant="primary" size="md" external>
+          Read the wire protocol spec →
+        </Button>
+      </div>
+
+      <!-- How it compares -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>How it compares</p>
+      <h2 id="compare" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">VGI vs. native extensions, Airport &amp; ADBC</h2>
+      <p class={P}>
+        VGI overlaps with a few other ways of reaching data from DuckDB. Use it when you want your
+        own code — in any language — to show up as SQL functions and tables.
+      </p>
+      <div class="mt-6 grid gap-3.5 md:grid-cols-2">
+        <div class={`${CARD} p-5`}>
+          <h3 class="text-lg text-soil-900">vs. a native C++ extension</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">A native extension runs in-process, so it wins the truly <strong class="font-medium text-soil-900">hot, fine-grained</strong> paths — scalar functions that must be called a billion-plus rows a second. VGI runs in a separate process yet still benchmarks at roughly <strong class="font-medium text-soil-900"><span class="qf-figure">450 million</span> rows/second</strong>, which covers the vast majority of real workloads. The price of that native speed is the bill <a href="#why" class={LINK}>above</a>: C or C++, a DuckDB version pin, and a build / sign / distribute cycle per release.</p>
         </div>
-        <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
-          <h3 class="text-lg font-bold text-soil-900 mb-2">vs. Airport</h3>
-          <p class="text-sm text-soil-700 leading-relaxed">Both move data across a boundary as Arrow. <a href="/products/extensions/airport" class="text-harvest-700 underline">Airport</a> speaks Arrow <strong>Flight</strong>, an open standard. <strong>VGI</strong> speaks its own protocol over Apache Arrow IPC — <a href="https://vgi-rpc.query.farm" target="_blank" rel="noopener" class="text-harvest-700 underline">VGI-RPC</a>, a general-purpose RPC framework — which it uses to model the full range of function shapes (scalar, aggregate, window, table, streaming&nbsp;/&nbsp;buffered) and catalog semantics, plus local subprocess and launcher transports Flight doesn't cover.</p>
+        <div class={`${CARD} p-5`}>
+          <h3 class="text-lg text-soil-900">vs. Airport</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">Both move data across a boundary as Arrow, and <a href="#airport" class={LINK}>VGI came out of Airport</a>. <a href="/products/extensions/airport" class={LINK}>Airport</a> speaks Arrow <strong class="font-medium text-soil-900">Flight</strong>, an open standard, and remains the right call when Flight is already your wire. <strong class="font-medium text-soil-900">VGI</strong> speaks <a href="https://vgi-rpc.query.farm" target="_blank" rel="noopener" class={LINK}>VGI-RPC</a> over Arrow IPC — which reaches further (all five function shapes, richer catalog semantics, local and launcher transports) and deploys onto ordinary web infrastructure.</p>
         </div>
-        <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
-          <h3 class="text-lg font-bold text-soil-900 mb-2">vs. ADBC</h3>
-          <p class="text-sm text-soil-700 leading-relaxed"><a href="/products/extensions/adbc_scanner" class="text-harvest-700 underline">ADBC Scanner</a> is a <strong>database client</strong> — you connect to Postgres, Snowflake, or another engine and <em>issue SQL statements</em> to it. VGI is broader and closer to the metal: remote code shows up as DuckDB's own objects — <strong>tables, functions, macros, and views</strong> — because it carries DuckDB's extension interfaces over RPC rather than acting as a database driver. Use ADBC to query a database; use VGI to make remote code <em>part of</em> DuckDB.</p>
+        <div class={`${CARD} p-5`}>
+          <h3 class="text-lg text-soil-900">vs. ADBC</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700"><a href="/products/extensions/adbc_scanner" class={LINK}>ADBC Scanner</a> is a <strong class="font-medium text-soil-900">database client</strong> — you connect to Postgres, Snowflake, or another engine and <em>issue SQL statements</em> to it. VGI is broader and closer to the metal: remote code shows up as DuckDB's own objects — <strong class="font-medium text-soil-900">tables, functions, macros, and views</strong> — because it carries DuckDB's extension interfaces over RPC rather than acting as a database driver. Use ADBC to query a database; use VGI to make remote code <em>part of</em> DuckDB.</p>
         </div>
-        <div class="rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm">
-          <h3 class="text-lg font-bold text-soil-900 mb-2">When not to use it</h3>
-          <p class="text-sm text-soil-700 leading-relaxed">Reach for a native in-process extension only when you genuinely need its throughput — the billion-plus-rows-a-second scalar hot paths where VGI's ~450M rows/second isn't enough. Otherwise, use ADBC to connect to a standard database, and skip VGI when you can't run or host a worker at all.</p>
+        <div class={`${CARD} p-5`}>
+          <h3 class="text-lg text-soil-900">When not to use it</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">Reach for a native in-process extension only when you genuinely need its throughput — the billion-plus-rows-a-second scalar hot paths where VGI's ~<span class="qf-figure">450M</span> rows/second isn't enough. Otherwise, use ADBC to connect to a standard database, and skip VGI when you can't run or host a worker at all.</p>
         </div>
       </div>
-    </div>
-  </section>
 
-  <!-- Next -->
-  <section class="py-16 lg:py-24 bg-white font-display">
-    <div class="section-container">
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-5xl mx-auto">
+      <!-- Next -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Keep going</p>
+      <h2 id="next-steps" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Where to next</h2>
+      <div class="mt-6 grid gap-3.5 sm:grid-cols-2">
         {nextCards.map(c => (
           <a
             href={c.href}
-            class="group block rounded-2xl border-2 border-soil-900 bg-white p-6 shadow-sm transition-all hover:-translate-y-1 hover:bg-grain-50 hover:shadow-xl"
+            class={`${CARD} block p-5 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}
             {...(c.external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
           >
-            <div class="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-xl border-2 border-soil-900 bg-grain-100 text-soil-900">
-              <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                {c.icon === 'start' && (
-                  <>
-                    <circle cx="12" cy="12" r="9" stroke-width="2.1" />
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.1" d="M10 8.5l6 3.5-6 3.5z" />
-                  </>
-                )}
-                {c.icon === 'languages' && (
-                  <>
-                    <circle cx="12" cy="12" r="9" stroke-width="2.1" />
-                    <path stroke-linecap="round" stroke-width="2.1" d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" />
-                  </>
-                )}
-                {c.icon === 'rpc' && (
-                  <>
-                    <circle cx="12" cy="8" r="2" stroke-width="2.1" />
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.1" d="M12 10v10M8 20h8M7 11a7 7 0 0110 0M4.5 9a10.5 10.5 0 0115 0" />
-                  </>
-                )}
-              </svg>
-            </div>
-            <h3 class="text-lg font-bold text-soil-900 mb-1">{c.title}</h3>
-            <p class="text-sm text-soil-700">{c.body}</p>
+            <h3 class="text-lg text-soil-900">{c.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{c.body}</p>
           </a>
         ))}
       </div>
     </div>
-  </section>
-</PageLayout>
 
-<script>
-  // Respect reduced-motion: pause the SMIL packet animations.
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    document.querySelectorAll('svg.vgi-flow').forEach((s) => {
-      const svg = s as SVGSVGElement & { pauseAnimations?: () => void };
-      svg.pauseAnimations?.();
-    });
-  }
-</script>
+    <aside class="hidden xl:block xl:sticky xl:top-24 xl:self-start">
+      <h2 class="mb-2.5 text-[12.5px] font-semibold text-soil-500">On this page</h2>
+      <ul class="flex flex-col gap-0.5">
+        {toc.map((item) => (
+          <li>
+            <a
+              href={`#${item.id}`}
+              class="block border-l-2 border-soil-200 px-2.5 py-1 text-[13px] text-soil-700 no-underline transition hover:border-soil-300 hover:text-soil-900"
+            >{item.label}</a>
+          </li>
+        ))}
+      </ul>
+    </aside>
+  </div>
+</PageLayout>

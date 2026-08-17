@@ -1,9 +1,17 @@
 ---
-import Card from '../ui/Card.astro';
 import { parseInline } from 'marked';
 import ExtensionIcon from './ExtensionIcon.astro';
-import { categoryIconTheme } from '../../data/category-theme';
 import type { ExtensionCategory } from '../../data/extensions';
+
+/**
+ * Catalog card for one extension (family B). Icon, name, category, blurb, and
+ * the load count as a tabular figure with a share meter.
+ *
+ * The meter is the extension's load count as a fraction of the busiest
+ * extension in the catalog — real measured data. Per-extension weekly series
+ * don't exist in the usage snapshot, so there is no sparkline to draw and we
+ * don't invent one.
+ */
 
 interface Props {
   id: string;
@@ -12,9 +20,14 @@ interface Props {
   category: ExtensionCategory;
   status?: 'stable' | 'beta' | 'experimental';
   icon?: string;
+  /** Accepted for call-site compatibility; the card intentionally omits them. */
   features?: string[];
   usageCount?: number;
   usagePeriod?: string;
+  /** 1-based position in the catalog ordering, shown as a corner figure. */
+  rank?: number;
+  /** Load count of the busiest extension, for the share meter. */
+  maxUsageCount?: number;
 }
 
 const {
@@ -23,16 +36,53 @@ const {
   description,
   category,
   icon,
-  features,
   usageCount,
   usagePeriod,
+  rank,
+  maxUsageCount,
 } = Astro.props;
 
-const tileBg = categoryIconTheme[category]?.tile ?? 'bg-earth-100';
+const CATEGORY_LABEL: Record<string, string> = {
+  connectors: 'Connector',
+  transformation: 'Transformation',
+  analytics: 'Analytics',
+  performance: 'Performance',
+  devtools: 'Developer tools',
+  quality: 'Data quality',
+};
+const categoryLabel = CATEGORY_LABEL[category] ?? category;
 
-const usageLabel = typeof usageCount === 'number'
-  ? usageCount.toLocaleString()
-  : null;
+// Load counts print in full, with separators. Compacting them to "265K" vs
+// "1.2M" made the one thing this row exists for — comparing extensions — a
+// mental arithmetic exercise, and rounded away the difference between 265K and
+// 349K entirely. `.load-count` is Commissioner tabular, so full figures still
+// align down the column (DESIGN_BRIEF §2).
+const fullCount = (n: number): string => n.toLocaleString('en-US');
+
+// The meter is log-scaled. Loads span roughly four orders of magnitude across
+// the catalogue, so a linear share pinned all but the top few extensions to the
+// 3% floor: every bar looked empty and identical, which is worse than no bar.
+// Log turns "how many times bigger" into a readable length.
+//
+// Anchored at 1,000 loads rather than at zero — log10(0) is -Infinity, and
+// below ~1K the differences are noise. An extension under the anchor still gets
+// a visible stub via the 4% floor.
+const LOAD_ANCHOR = 1_000;
+const logShare = (count: number, max: number): number => {
+  const top = Math.log10(Math.max(max, LOAD_ANCHOR * 10));
+  const base = Math.log10(LOAD_ANCHOR);
+  const value = Math.log10(Math.max(count, 1));
+  return Math.min(1, Math.max(0.04, (value - base) / (top - base)));
+};
+
+// Meter fill vs track has to be far apart on the scale. soil-300 on soil-200
+// measured 1.26:1 and the bar read as empty; soil-600 is 4.96:1. Hover goes to
+// sun-700 (4.71:1) rather than sun-400 — gold that light is 1.64:1 on the
+// track, so hovering would have made the bar less visible, not more.
+const share =
+  typeof usageCount === 'number' && typeof maxUsageCount === 'number' && maxUsageCount > 0
+    ? logShare(usageCount, maxUsageCount)
+    : null;
 
 // Descriptions may contain inline markdown — `code`, **bold**, *em*, and
 // [links](url). Render as inline-only — no block-level <p> wrapping — so
@@ -49,55 +99,57 @@ const descriptionHtml = parseInline(description).replace(
 );
 ---
 
-<a href={`/products/extensions/${id}`} class="block h-full group">
-  <Card padding="md" class="h-full flex flex-col transition-colors group-hover:border-harvest-400">
-    <div class="flex items-start gap-3 mb-3">
-      {icon && (
-        <div class={`flex-shrink-0 w-10 h-10 rounded-lg ${tileBg} flex items-center justify-center`}>
-          <ExtensionIcon icon={icon} category={category} class="text-2xl" />
-        </div>
-      )}
-      <div class="min-w-0">
-        <h3 class="font-display font-semibold text-lg text-soil-900 group-hover:text-harvest-700 transition-colors">
-          {name}
-        </h3>
-        <code class="text-xs text-soil-500 font-mono truncate block">{id}</code>
+<a
+  href={`/products/extensions/${id}`}
+  class="group relative flex h-full flex-col overflow-hidden rounded-xl border border-soil-300 bg-white px-5 pb-4.5 pt-5 no-underline transition duration-[260ms] ease-[cubic-bezier(.2,.8,.3,1)] hover:-translate-y-1 hover:border-sun-400 hover:shadow-[0_20px_40px_-28px_rgba(33,26,18,.55)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-link"
+>
+  {typeof rank === 'number' && (
+    <span class="qf-figure absolute right-0 top-0 rounded-bl-lg bg-soil-100 px-2.5 py-1.5 text-[10px] text-soil-500">
+      {String(rank).padStart(2, '0')}
+    </span>
+  )}
+
+  <div class="flex items-start gap-3">
+    {icon && (
+      <span class="flex h-9.5 w-9.5 flex-none items-center justify-center rounded-[9px] border border-soil-300 bg-soil-100 text-soil-700">
+        <ExtensionIcon icon={icon} category={category} class="text-xl" />
+      </span>
+    )}
+    <div class="min-w-0">
+      <h3 class="font-display text-xl text-soil-900 transition-colors group-hover:text-link">{name}</h3>
+      <div class="mt-0.5 text-[12.5px] font-medium text-soil-500">
+        {categoryLabel}
       </div>
     </div>
+  </div>
 
-    <p class="text-soil-700 text-sm leading-relaxed mb-4 flex-1 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:bg-soil-100 [&_code]:text-xs [&_code]:font-mono" set:html={descriptionHtml}></p>
+  <p
+    class="mt-3 flex-1 text-sm leading-[1.55] text-soil-700 [&_code]:rounded [&_code]:bg-soil-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs"
+    set:html={descriptionHtml}
+  ></p>
 
-    {features && features.length > 0 && (
-      <ul class="space-y-2 mb-4">
-        {features.map(feature => (
-          <li class="flex items-start text-xs text-soil-600">
-            <svg class="w-4 h-4 mr-2 text-earth-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-            </svg>
-            {feature}
-          </li>
-        ))}
-      </ul>
+  <div class="mt-4 flex items-center gap-2.5 border-t border-soil-200 pt-3">
+    {typeof usageCount === 'number' ? (
+      <>
+        <span class="load-count text-[15px] text-sun-700">{fullCount(usageCount)}</span>
+        <span class="text-[12px] font-medium text-soil-500">
+          loads{usagePeriod ? ` · ${usagePeriod.replace(/^last /, '')}` : ''}
+        </span>
+      </>
+    ) : (
+      <span class="text-[12px] font-medium text-sun-700">Just released</span>
     )}
-
-    <div class="mt-auto pt-3 border-t border-soil-200">
-      {usageLabel ? (
-        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gradient-to-r from-harvest-100 to-grain-100 text-harvest-800 text-xs font-medium ring-1 ring-harvest-200">
-          <svg class="w-3.5 h-3.5 text-harvest-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-          </svg>
-          <strong class="font-bold tabular-nums">{usageLabel}</strong>
-          <span class="text-harvest-700/80">loads{usagePeriod ? ` · ${usagePeriod}` : ''}</span>
-        </span>
-      ) : (
-        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gradient-to-r from-duck-100 to-sky-100 text-sky-800 text-xs font-medium ring-1 ring-sky-200">
-          <svg class="w-3.5 h-3.5 text-sky-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-          </svg>
-          <strong class="font-bold">New</strong>
-          <span class="text-sky-700/80">· just released</span>
-        </span>
-      )}
-    </div>
-  </Card>
+    {share !== null && (
+      <span
+        class="ml-auto block h-1.5 w-14 flex-none overflow-hidden rounded-full bg-soil-200"
+        title={`${fullCount(usageCount as number)} loads — bar is log-scaled against the most-loaded extension`}
+        aria-hidden="true"
+      >
+        <span
+          class="block h-full rounded-full bg-soil-600 transition-colors group-hover:bg-sun-700"
+          style={`width:${(share * 100).toFixed(1)}%`}
+        ></span>
+      </span>
+    )}
+  </div>
 </a>

@@ -1,7 +1,11 @@
 ---
 import { getCollection, render } from 'astro:content';
 import type { CollectionEntry } from 'astro:content';
-import BlogPostLayout from '../../layouts/BlogPostLayout.astro';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import BarTable from '../../components/charts/BarTable.astro';
+import { readingTime, tagSlug } from '../../lib/blog-tags';
+import { topicBands } from '../../lib/blog-topics';
+import { blogFigure } from '../../data/blog-figures';
 
 export async function getStaticPaths() {
   const blogPosts = await getCollection('blog');
@@ -17,8 +21,347 @@ interface Props {
 
 const { entry } = Astro.props;
 const { Content } = await render(entry);
+
+const { title, description, pubDate, author, tags, heroImage } = entry.data;
+
+const formattedDate = new Date(pubDate).toLocaleDateString('en-US', {
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+});
+const isoDate = new Date(pubDate).toISOString().slice(0, 10);
+
+const minutes = readingTime(entry.body);
+
+// The kicker carries the primary topic ONLY. Read time moved down to the
+// byline, which is the line that answers "who / when / how long" — printing it
+// in both places was the duplication half of the old meta block.
+const topic = tags[0];
+const tagLinks = tags.map(tag => ({ label: tag, href: `/blog/tags/${tagSlug(tag)}` }));
+
+const figure = blogFigure(entry.id);
+
+// Article structured data for rich results (E-E-A-T: named author, dates).
+const canonicalURL = new URL(Astro.url.pathname, Astro.site);
+const articleImage = heroImage ? new URL(heroImage, Astro.site).href : undefined;
+const jsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'BlogPosting',
+  headline: title,
+  description,
+  datePublished: new Date(pubDate).toISOString(),
+  author: { '@type': 'Organization', name: author, url: 'https://query.farm' },
+  publisher: {
+    '@type': 'Organization',
+    name: 'Query.Farm',
+    logo: { '@type': 'ImageObject', url: new URL('/Query_Farm_Logo.png', Astro.site).href },
+  },
+  mainEntityOfPage: { '@type': 'WebPage', '@id': canonicalURL.href },
+  ...(tags.length ? { keywords: tags.join(', ') } : {}),
+  ...(articleImage ? { image: articleImage } : {}),
+};
+
+const shareUrl = canonicalURL.href;
 ---
 
-<BlogPostLayout entry={entry}>
-  <Content />
-</BlogPostLayout>
+<BaseLayout title={title} description={description} ogType="article" ogImage={heroImage} jsonLd={jsonLd}>
+  <article>
+    <div class="mx-auto max-w-[720px] px-6 pt-11 pb-5">
+      {topic && (
+        <div class="text-[13.5px] font-medium text-link">
+          <a
+            href={`/blog/tags/${tagSlug(topic)}`}
+            class="no-underline transition-colors hover:text-link-hover"
+          >{topic}</a>
+        </div>
+      )}
+
+      <h1 class="mt-3.5 text-[clamp(2rem,4.6vw,3.5rem)] leading-[1.04] tracking-[-0.03em]">{title}</h1>
+
+      {/* Byline: one voice. Commissioner throughout, figures tabular via
+          .qf-figure (brief §2). Sentence case, no tracking — the kicker and
+          the footer chips are the same face, separated by colour and weight
+          rather than by a second family. Tags are NOT repeated here; the
+          primary topic already leads the kicker and the full set is filed at
+          the foot of the article. */}
+      <div class="mt-4.5 flex flex-wrap items-baseline gap-x-2.5 gap-y-1 border-t border-b border-soil-300 py-3.5 text-sm text-soil-500">
+        {author && <span class="font-medium text-soil-900">{author}</span>}
+        {author && <span aria-hidden="true" class="text-soil-400">·</span>}
+        <time datetime={isoDate} class="qf-figure">{formattedDate}</time>
+        <span aria-hidden="true" class="text-soil-400">·</span>
+        <span class="qf-figure">{minutes} min read</span>
+      </div>
+
+      {description && (
+        <p class="mt-5 text-[17.5px] leading-relaxed text-soil-700">{description}</p>
+      )}
+    </div>
+
+    {/* The lead figure is the post's own data, drawn (src/data/blog-figures.ts).
+        heroImage is NOT rendered here: those files are 1200×630 social cards,
+        and cropping one into a page-width slot loses its subject and, on the
+        WASM post, prints a second headline that contradicts the real title.
+        They stay in the <head> as og:image, which is what they're built for.
+        A post with no measured data gets the topic panel instead — we don't
+        invent a chart to fill the slot. */}
+    <div class="mx-auto max-w-[720px] px-6 pb-2">
+      {figure ? (
+        <BarTable
+          title={figure.title}
+          subtitle={figure.subtitle}
+          rowHeader={figure.rowHeader}
+          series={figure.series}
+          rows={figure.rows}
+          noteLabel={figure.noteLabel}
+          source={figure.source}
+          precision={figure.precision}
+        />
+      ) : (
+        <div class="flex h-28 overflow-hidden rounded-xl border border-soil-300" aria-hidden="true">
+          {topicBands(topic).map(band => (
+            <i class="flex-1" style={`background:${band}`}></i>
+          ))}
+        </div>
+      )}
+    </div>
+
+    <div class="qf-prose px-6 pt-6 pb-14">
+      <Content />
+    </div>
+
+    {/* Filed under — the full tag set, once, at the foot of the piece, where
+        Medium/Ghost/dev.to put it: a reader who finished the article is the
+        one who wants more like it. Chips are links to the tag archives. */}
+    {tagLinks.length > 0 && (
+      <div class="mx-auto max-w-[720px] px-6 pb-2">
+        <div class="border-t border-soil-300 pt-6">
+          <h2 class="text-[13px] font-medium text-soil-500">Filed under</h2>
+          <ul class="mt-3 flex flex-wrap gap-2">
+            {tagLinks.map(tag => (
+              <li>
+                <a
+                  href={tag.href}
+                  class="inline-block rounded-full border border-soil-300 px-3 py-1 text-[12.5px] font-medium text-soil-600 no-underline transition hover:border-sun-400 hover:text-link"
+                >{tag.label}</a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    )}
+
+    <div class="mx-auto max-w-[720px] px-6 pt-8 pb-20">
+      <div class="h-px bg-soil-300"></div>
+      <div class="mt-5 flex flex-wrap items-center justify-between gap-4">
+        <a
+          href="/blog"
+          class="inline-block rounded-lg border border-soil-900 px-4 py-2 text-[12.5px] font-medium no-underline transition hover:-translate-y-px hover:border-link hover:text-link motion-reduce:hover:translate-y-0"
+        >
+          ← All posts
+        </a>
+        <div class="flex items-center gap-4 text-[13px] font-medium text-soil-500">
+          <span>Share</span>
+          <a
+            href={`https://twitter.com/intent/tweet?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(title)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="no-underline transition-colors hover:text-link"
+          >X</a>
+          <a
+            href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(shareUrl)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="no-underline transition-colors hover:text-link"
+          >LinkedIn</a>
+        </div>
+      </div>
+    </div>
+  </article>
+</BaseLayout>
+
+<style is:global>
+  /* Editorial prose — family E. 720px measure, Fraunces doing more work here
+     than anywhere else on the site. Global because <Content /> renders markdown
+     outside this component's scope; every selector is fenced behind .qf-prose. */
+  .qf-prose {
+    max-width: 720px;
+    margin: 0 auto;
+    font-size: 17px;
+    line-height: 1.75;
+  }
+  .qf-prose > * + * { margin-top: 20px; }
+  .qf-prose p,
+  .qf-prose li { color: var(--color-soil-700); }
+  .qf-prose strong { color: var(--color-soil-900); font-weight: 600; }
+
+  .qf-prose h2 {
+    margin-top: 46px;
+    padding-top: 22px;
+    border-top: 1px solid var(--color-soil-300);
+    font-size: clamp(1.5rem, 3.4vw, 2.25rem);
+  }
+  .qf-prose h3 { margin-top: 32px; font-size: clamp(1.2rem, 2.2vw, 1.5rem); }
+  .qf-prose h4 { margin-top: 26px; }
+
+  /* Drop cap — only when the post actually opens on prose. */
+  .qf-prose > p:first-child::first-letter {
+    font-family: 'Petrona', Georgia, serif;
+    font-weight: 500;
+    float: left;
+    font-size: 66px;
+    line-height: 0.78;
+    padding: 6px 12px 0 0;
+    color: var(--color-sun-700);
+  }
+
+  /* Links are green (interaction), not gold (identity) — and the underline is
+     load-bearing, not decoration. This palette cannot satisfy WCAG F73's 3:1
+     link-vs-body-text rule: no green dark enough for the cat-gold chip also
+     clears 3:1 against #211a12. So colour never distinguishes a link on its
+     own here. Weight 400 because Commissioner 300 is optically thin and loses
+     effective contrast the flat-patch model doesn't capture. */
+  .qf-prose a:not(.btn) {
+    color: var(--color-link);
+    font-weight: 400;
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.18em;
+    text-decoration-color: color-mix(in srgb, var(--color-link) 45%, transparent);
+  }
+  .qf-prose a:not(.btn):hover {
+    color: var(--color-link-hover);
+    text-decoration-thickness: 2px;
+    text-decoration-color: currentColor;
+  }
+  .qf-prose a:not(.btn):focus-visible {
+    outline: 2px solid var(--color-link);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* External-link marker now lives in global.css as a site-wide standard,
+     scoped to `main` + running-text containers. Nothing blog-specific left. */
+
+  .qf-prose ul, .qf-prose ol { padding-left: 22px; }
+  .qf-prose ul { list-style: disc; }
+  .qf-prose ol { list-style: decimal; }
+  .qf-prose li { margin-top: 6px; }
+  .qf-prose li::marker { color: var(--color-soil-400); }
+
+  /* Blockquote = ABSTRACT, not pull quote.
+     Every blockquote in the corpus is a long prose callout — the two that
+     exist run 934 and 711 characters, and one of them opens a post. Setting
+     that at display size in Fraunces produced ten lines of oversized wonky
+     serif as the first thing on the page. So the markdown default is a
+     readable abstract: body face, body measure, tinted ground, sun-400 rule.
+     A genuine pull quote is a different device and has to be asked for —
+     see .is-pullquote below. */
+  .qf-prose blockquote {
+    font-family: 'Commissioner', ui-sans-serif, system-ui, sans-serif;
+    font-weight: 300;
+    font-size: 1.0625rem;
+    line-height: 1.7;
+    letter-spacing: normal;
+    color: var(--color-soil-800);
+    background: color-mix(in srgb, var(--color-sun-400) 7%, var(--color-soil-50));
+    border-left: 3px solid var(--color-sun-400);
+    border-radius: 0 8px 8px 0;
+    padding: 18px 22px;
+    margin: 30px 0;
+  }
+  .qf-prose blockquote p { color: inherit; }
+  .qf-prose blockquote > * + * { margin-top: 12px; }
+  /* The leading "Summary." / "Note." run-in reads as the callout's label. */
+  .qf-prose blockquote > p:first-child > strong:first-child {
+    font-weight: 600;
+    font-size: 0.86em;
+    letter-spacing: 0;
+    color: var(--color-sun-700);
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  /* Pull quote — opt in with <blockquote class="is-pullquote">. Fraunces at
+     SOFT 30 / WONK 1, the only place WONK returns outside the wordmark. Meant
+     for a short lifted line; it will look absurd past ~200 characters. */
+  .qf-prose blockquote.is-pullquote {
+    font-family: 'Petrona', Georgia, serif;
+    font-weight: 500;
+    font-size: clamp(1.2rem, 2.4vw, 1.5rem);
+    line-height: 1.32;
+    letter-spacing: -0.018em;
+    color: var(--color-soil-900);
+    background: none;
+    border-radius: 0;
+    padding: 4px 0 4px 22px;
+  }
+  .qf-prose blockquote.is-pullquote > p:first-child > strong:first-child {
+    font-family: inherit; font-size: inherit; letter-spacing: inherit;
+    text-transform: none; color: inherit; display: inline; margin-bottom: 0;
+  }
+
+  /* Inline code on paper; block code ALWAYS on rock-900 (brief §3) — Shiki
+     paints the ground, this supplies the frame. */
+  .qf-prose :not(pre) > code {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.86em;
+    background: var(--color-soil-100);
+    padding: 2px 6px;
+    border-radius: 5px;
+    color: var(--color-soil-900);
+  }
+  .qf-prose pre {
+    background: var(--color-rock-900);
+    color: #e9e1d3;
+    border-radius: 12px;
+    padding: 20px;
+    overflow-x: auto;
+    font-size: 12.8px;
+    line-height: 1.9;
+  }
+  .qf-prose pre code { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+  /* table.qf, applied to whatever the markdown emits. */
+  .qf-prose table {
+    display: block;
+    overflow-x: auto;
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14.5px;
+  }
+  .qf-prose th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 12.5px;
+    letter-spacing: 0;
+    color: var(--color-soil-600);
+    padding: 10px 14px;
+    background: #fbf7ee;
+    border-bottom: 1px solid var(--color-soil-300);
+    white-space: nowrap;
+  }
+  .qf-prose td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--color-soil-200);
+    color: var(--color-soil-700);
+  }
+  .qf-prose tr:last-child td { border-bottom: 0; }
+  /* Numeric columns: tabular Commissioner, never Fraunces (brief §2). */
+  .qf-prose td[align='right'],
+  .qf-prose th[align='right'] {
+    font-family: 'Commissioner', ui-sans-serif, system-ui, sans-serif;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums lining-nums;
+    letter-spacing: -0.03em;
+  }
+
+  .qf-prose img { border-radius: 10px; max-width: 100%; height: auto; }
+  .qf-prose figure { margin-top: 30px; margin-bottom: 30px; }
+  .qf-prose figcaption {
+    font-size: 13px;
+    letter-spacing: 0;
+    color: var(--color-soil-500);
+    margin-top: 10px;
+  }
+  .qf-prose hr { border: 0; border-top: 1px solid var(--color-soil-300); margin: 40px 0; }
+</style>

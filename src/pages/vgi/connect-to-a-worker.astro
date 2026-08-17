@@ -1,0 +1,355 @@
+---
+import PageLayout from '../../layouts/PageLayout.astro';
+import VGISubNav from '../../components/sections/VGISubNav.astro';
+import PageHead from '../../components/ui/PageHead.astro';
+import Button from '../../components/ui/Button.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import TransportDiagram from '../../components/vgi/TransportDiagram.astro';
+import WorkerFanoutDiagram from '../../components/vgi/WorkerFanoutDiagram.astro';
+import VGISectionNav from '../../components/sections/VGISectionNav.astro';
+import { Icon } from 'astro-icon/components';
+
+// ── Shared shape vocabulary (brief §10) — same tokens the other Family-C
+// VGI pages use, not a second set of names for the same things.
+const WRAP_WIDE = 'mx-auto w-full max-w-[1360px] px-6 sm:px-7';
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+const EYEBROW = 'qf-eyebrow text-sun-700';
+const P = 'mt-4 leading-relaxed text-soil-700';
+const CODE = 'rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900';
+const LINK = 'text-link underline decoration-link/40 underline-offset-2 hover:decoration-link';
+// Inline <code>/<strong> for prose rendered through set:html (the `md()` helper
+// below) — the same chrome as CODE, applied from the container.
+const PROSE_CODE =
+  '[&_code]:rounded [&_code]:bg-soil-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.88em] [&_code]:text-soil-900';
+
+// Backticks → <code>, **bold** → <strong>, so the table below stays readable as
+// data rather than as hand-tagged HTML. Only used on strings authored here.
+//
+// Angle brackets are escaped first: these strings carry placeholders like
+// `launch:<command>`, and set:html would otherwise swallow them as tags — the
+// row would silently render as "launch:" with the placeholder gone.
+const md = (s: string) =>
+  s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-medium text-soil-900">$1</strong>');
+
+const CURRENT = '/vgi/connect-to-a-worker';
+
+const toc = [
+  { id: 'local-or-distributed', label: 'Local or distributed?' },
+  { id: 'ssh', label: 'Running a worker elsewhere' },
+  { id: 'location', label: 'What LOCATION accepts' },
+  { id: 'who-operates', label: 'Who operates it?' },
+  { id: 'attaching', label: 'Attaching connectors' },
+  { id: 'next-steps', label: 'Where to next' },
+];
+
+// Four connectors, four LOCATION forms, one session. The hosted pair is
+// Orchard's actual subscribe flow (products/orchard/subscribe.astro): CREATE
+// SECRET carrying a token, then ATTACH a hosted URL. The other three forms are
+// the ones documented in the table below.
+const connectorExample = `-- Local: DuckDB spawns a Python worker as a subprocess
+ATTACH 'calc' AS calc (TYPE vgi, LOCATION 'uv run calc_worker.py');
+
+-- Container: pulled from a registry and run for you, nothing to install
+ATTACH 'sklearn' AS sk (TYPE vgi, LOCATION 'oci://ghcr.io/query-farm/vgi-sklearn:latest');
+
+-- Another machine: LOCATION is a command, and ssh is a command
+ATTACH 'metrics' AS metrics (TYPE vgi, LOCATION 'ssh gpu-box -- uv run metrics_worker.py');
+
+-- Hosted: a URL, plus a token from Orchard
+CREATE SECRET orchard (TYPE vgi, TOKEN 'orch_live_...');
+ATTACH 'kafka' AS kafka (TYPE vgi, LOCATION 'https://orchard.query.farm/kafka');
+
+-- Four workers, four transports, one SQL surface
+SELECT * FROM kafka.main.messages LIMIT 10;`;
+
+const sshExample = `ATTACH 'metrics' AS metrics (
+  TYPE vgi,
+  LOCATION 'ssh gpu-box -- uv run metrics_worker.py'
+);
+
+SELECT * FROM metrics.main.gpu_utilization;`;
+
+// ── Every LOCATION form the extension accepts, from its own transport
+// detection (vgi/src/include/vgi_transport.hpp + vgi_transport.cpp, plus
+// vgi_github.hpp for the release schemes). Anything not matching a scheme
+// below is treated as a command and spawned as a subprocess — that fallback is
+// the first row. The internal `container-shared:` token is deliberately absent:
+// it's synthesized at ATTACH and never typed by hand.
+const locationForms = [
+  {
+    form: '`uv run worker.py`  — any command',
+    icon: 'ph:terminal-window',
+    detail: '**Subprocess.** DuckDB spawns the command and speaks Arrow IPC over its stdin/stdout. This is the fallback for anything without a scheme, which is why `ssh gpu-box -- …` works: it is a command like any other.',
+  },
+  {
+    form: '`launch:<command>`',
+    icon: 'ph:rocket-launch',
+    detail: '**Launcher.** The same command, spawned once and reused — worth it when startup is expensive (a JVM, a loaded model). The worker outlives the session that started it, and later attaches connect to the running one over a Unix socket. It doesn\'t have to handle those one at a time, either: the launcher protocol also supports workers that serve multiple attaches concurrently via threads in that same process, instead of queuing behind a single connection.',
+  },
+  {
+    form: '`unix:///path/to/worker.sock`',
+    icon: 'ph:plugs-connected',
+    detail: '**Connect-only.** A worker already listening on a Unix domain socket, started and supervised by something other than DuckDB.',
+  },
+  {
+    form: '`tcp://host:port`',
+    icon: 'ph:network',
+    detail: '**Connect-only.** A worker already listening on a raw TCP socket, for a runtime or network where a Unix socket is not an option. No HTTP in front of it, so keep it to loopback or a trusted network.',
+  },
+  {
+    form: '`https://worker.example.com/`',
+    icon: 'ph:globe',
+    detail: '**HTTP.** A worker deployed as a service (`http://` too). Any number of DuckDB sessions attach to the same one, and it sits behind ordinary web infrastructure.',
+  },
+  {
+    form: '`oci://ghcr.io/org/image:tag`',
+    icon: 'ph:shipping-container',
+    detail: '**Container.** Pulled and run through your container runtime, wired over stdin/stdout exactly like a subprocess and pooled the same way. `docker://` is an alias; any registry works.',
+  },
+  {
+    form: '`github://owner/repo@tag/asset`',
+    icon: 'simple-icons:github',
+    detail: '**GitHub release.** Downloads that release asset, verifies its SHA-256, caches it, and runs it as a subprocess — a container-free way to ship a worker. Pin the hash with `#sha256=…`. POSIX only.',
+  },
+  {
+    form: '`github-auto://owner/repo@tag`',
+    icon: 'simple-icons:github',
+    detail: 'The same thing with the asset name built from your platform by convention, so there is no filename to write out.',
+  },
+  {
+    form: '`worker:/workers/example.js`',
+    icon: 'simple-icons:webassembly',
+    detail: '**Web Worker.** In-browser DuckDB-WASM only: the worker runs as a Web Worker, reached over a SharedArrayBuffer ring instead of a socket.',
+  },
+];
+
+const nextCards = [
+  { title: 'Architecture', body: 'The transports underneath these forms, and the Arrow IPC wire itself.', href: '/vgi/architecture' },
+  { title: 'Data-as-a-Service', body: 'Why you’d want a distributed, shareable worker in the first place.', href: '/vgi/data-as-a-service' },
+  { title: 'Browse Orchard', body: 'The catalog of workers someone has already built and hosted.', href: '/products/orchard' },
+];
+
+const pageDescription =
+  'Where a VGI worker runs and how DuckDB connects to it: local subprocess or distributed service, self-hosted or Orchard, and every LOCATION form the extension accepts — command, launch:, unix://, tcp://, http(s)://, oci://, github://, and worker:.';
+---
+
+<PageLayout
+  title="VGI — Connect to a Worker"
+  description={pageDescription}
+>
+  <VGISubNav />
+
+  <!-- ── Page header ─────────────────────────────────────────── -->
+  <PageHead
+    variant="section"
+    wide
+    eyebrow="Connect to a worker"
+    title="One ATTACH, wherever it runs."
+  >
+    <Fragment slot="lede">
+      A VGI worker is a normal program, in any language, that answers SQL queries over Arrow IPC —
+      <code class={CODE}>ATTACH</code> is how DuckDB reaches one (more on the protocol itself:
+      <a href="/vgi/architecture" class={LINK}>Architecture →</a>). Where that worker actually runs
+      is your decision: a process on your laptop, a container pulled from a registry, a command run
+      over ssh, or a service someone else operates. The SQL that connects to it doesn't change.
+    </Fragment>
+    <div class="mt-6 flex flex-wrap items-center gap-3">
+      <Button href="#location" variant="primary" size="md">What LOCATION accepts →</Button>
+      <Button href="/vgi/building-a-worker" variant="secondary" size="md">Build one first</Button>
+    </div>
+  </PageHead>
+
+  <!-- ── Docs grid: section nav / content / page TOC ──────────── -->
+  <div class={`${WRAP_WIDE} grid gap-10 py-10 lg:grid-cols-[220px_minmax(0,1fr)_200px] lg:gap-11`}>
+    <aside class="hidden lg:block lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto">
+      <VGISectionNav current={CURRENT} />
+    </aside>
+
+    <!-- Not a landmark element: BaseLayout already renders the page's single main. -->
+
+    <div class="min-w-0">
+      <p class="text-[17.5px] leading-relaxed text-soil-700">
+        Before you can attach to a worker, something has to decide where it runs — and that's
+        really two questions, not one. First: does it run locally, tied to a single DuckDB session,
+        or as a distributed service other sessions can share? Second — only if you picked
+        distributed — who operates it: your own infrastructure, or Orchard, Query Farm's hosted
+        VGI platform?
+      </p>
+
+      <!-- ── Local or distributed ──────────────────────────────── -->
+      <p class={`${EYEBROW} mt-10 block`}>The first decision</p>
+      <h2 id="local-or-distributed" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Local or distributed?</h2>
+      <p class={P}>
+        <strong class="font-medium text-soil-900">Local — your machine, your session.</strong>
+        <code class={CODE}>ATTACH</code> spawns the worker as a subprocess —
+        <code class={CODE}>uv run</code> for Python, <code class={CODE}>npx</code> for TypeScript,
+        or a Docker/OCI image VGI pulls and runs itself — talking to DuckDB over a pipe on the same
+        machine. Simplest setup, zero infrastructure, free. The tradeoff: the worker starts and
+        stops with that one DuckDB session, so it's not something two people or two services share.
+        It's still parallel, though — DuckDB can spawn more than one local worker process for a
+        single query and split the work across them, the same way it parallelizes any other scan.
+      </p>
+      <div class="mt-5 max-w-xl">
+        <WorkerFanoutDiagram variant="local" />
+      </div>
+      <p class={`${P} mt-8`}>
+        <strong class="font-medium text-soil-900">Distributed — a persistent service, reachable
+        over HTTP.</strong> For anything beyond one person on one machine — a data vendor's
+        subscribers, a company-wide catalog, anything meant to stay running — the worker runs as a
+        long-lived HTTP service instead, and any DuckDB instance with network access can
+        <code class={CODE}>ATTACH</code> to it. That's what makes one worker shareable across a
+        team, or sellable to a subscriber base, at all. What DuckDB reaches doesn't have to be a
+        single process, either — a load balancer can front several replicas of the same worker,
+        scaling it out the same way any other HTTP backend does, invisibly from DuckDB's side.
+      </p>
+      <div class="mt-5 max-w-xl">
+        <WorkerFanoutDiagram variant="distributed" />
+      </div>
+
+      <!-- ── SSH ────────────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Still local, just not nearby</p>
+      <h2 id="ssh" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Running a worker elsewhere over SSH</h2>
+      <p class={P}>
+        <code class={CODE}>LOCATION</code> is just a command, so “local” doesn't have to mean
+        “this machine.” Nothing about a subprocess worker requires the command to launch
+        something on the same host — it only has to be a command whose standard input and output
+        carry the VGI wire protocol back and forth, and <code class={CODE}>ssh</code> does exactly
+        that: run a command on a remote host and tunnel its stdio back to you.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={sshExample} lang="sql" title="attach-over-ssh.sql" />
+      </div>
+      <p class={P}>
+        DuckDB doesn't know the difference. It launched a process, that process speaks VGI, and
+        where the bytes actually come from — this machine or one reachable over your SSH config —
+        is a detail the command line carries, not something the protocol needs to understand.
+        Whatever you'd normally rely on for SSH access — host aliases, an agent, a bastion —
+        applies exactly as it would for any other command you'd run that way. It's a distributed
+        query without standing up an HTTP service at all.
+      </p>
+
+      <!-- ── LOCATION reference ────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Reference</p>
+      <h2 id="location" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">What <code class="font-mono text-[0.82em] text-sun-700">LOCATION</code> accepts</h2>
+      <p class={P}>
+        The scheme in front decides how DuckDB reaches the worker. Everything below is the full
+        set.
+      </p>
+      <div class="mt-5 overflow-x-auto">
+        <table class="w-full min-w-[620px] border-collapse text-left text-sm">
+          <thead>
+            <tr class="border-b-2 border-soil-300">
+              <th class="w-[46%] py-2.5 pr-5 align-bottom font-semibold text-soil-900">Form</th>
+              <th class="py-2.5 align-bottom font-semibold text-soil-900">How the worker is reached</th>
+            </tr>
+          </thead>
+          <tbody>
+            {locationForms.map(row => (
+              <tr class="border-b border-soil-200 align-top">
+                <td class="py-3 pr-5 leading-relaxed text-soil-700">
+                  <div class="flex items-start gap-3">
+                    <span class="mt-px flex h-8 w-8 flex-none items-center justify-center rounded-lg border border-soil-300 bg-soil-100">
+                      <Icon name={row.icon} class="h-4 w-4 text-soil-700" aria-hidden="true" />
+                    </span>
+                    <span class={`min-w-0 ${PROSE_CODE} [&_code]:text-[0.82em]`} set:html={md(row.form)} />
+                  </div>
+                </td>
+                <td
+                  class={`py-3 leading-relaxed text-soil-700 ${PROSE_CODE}`}
+                  set:html={md(row.detail)}
+                ></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="mt-4 text-sm leading-relaxed text-soil-500">
+        <code class={CODE}>LOCATION</code> is dynamically typed: where a form takes options — a
+        container runtime or volume mounts, say — pass a struct carrying the address and its
+        options together instead of a plain string.
+      </p>
+
+      <!-- ── Who operates it ───────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The second decision</p>
+      <h2 id="who-operates" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Who operates it?</h2>
+      <p class={P}>
+        Once a worker is a network service rather than a subprocess, the next question is who
+        keeps it running.
+      </p>
+      <div class="mt-6 grid gap-6 sm:grid-cols-2">
+        <div>
+          <TransportDiagram variant="self-hosted" />
+          <h3 class="mt-4 text-lg text-soil-900">Your infrastructure</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">
+            Your own servers, Kubernetes, or cloud account. Full control, and your data never
+            leaves your network — but you own the operations: deploys, scaling, uptime.
+          </p>
+        </div>
+        <div>
+          <TransportDiagram variant="orchard" />
+          <h3 class="mt-4 flex items-center gap-1.5 text-lg text-soil-900">
+            <span aria-hidden="true">🌳</span> Orchard
+          </h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">
+            Query Farm's VGI platform as a service. Subscribe, get a token, attach a URL — the
+            worker is already running, patched, and someone else's problem to keep up.
+            <a href="/products/orchard" class={LINK}>Browse connectors →</a>. Orchard is in early
+            access — <a href="/company/contact" class={LINK}>reach out</a> to get set up.
+          </p>
+        </div>
+      </div>
+      <p class="mt-5 text-sm leading-relaxed text-soil-700">
+        Cloud Run, Lambda, Cloudflare Workers, or a warm pool behind a load balancer all work for
+        the self-hosted half — the protocol was built to survive being load-balanced.
+        <a href="/vgi/architecture#distribution" class={LINK}>How the hosting side works →</a>
+      </p>
+
+      <!-- ── Attaching ─────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>In one session</p>
+      <h2 id="attaching" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Every one of them attaches the same way</h2>
+      <p class={P}>
+        Whichever path a worker came from, adding it is one <code class={CODE}>ATTACH</code>. Only
+        the <code class={CODE}>LOCATION</code> changes, and the catalogs land side by side in the
+        same session — so a container, a laptop process, and a hosted URL join to each other in one
+        query.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={connectorExample} lang="sql" title="connectors.sql" />
+      </div>
+
+      <!-- Next -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Keep going</p>
+      <h2 id="next-steps" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Where to next</h2>
+      <div class="mt-6 grid gap-3.5 sm:grid-cols-3">
+        {nextCards.map(c => (
+          <a
+            href={c.href}
+            class={`${CARD} block p-5 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}
+          >
+            <h3 class="text-lg text-soil-900">{c.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{c.body}</p>
+          </a>
+        ))}
+      </div>
+    </div>
+
+    <aside class="hidden xl:block xl:sticky xl:top-24 xl:self-start">
+      <h2 class="mb-2.5 text-[12.5px] font-semibold text-soil-500">On this page</h2>
+      <ul class="flex flex-col gap-0.5">
+        {toc.map((item) => (
+          <li>
+            <a
+              href={`#${item.id}`}
+              class="block border-l-2 border-soil-200 px-2.5 py-1 text-[13px] text-soil-700 no-underline transition hover:border-soil-300 hover:text-soil-900"
+            >{item.label}</a>
+          </li>
+        ))}
+      </ul>
+    </aside>
+  </div>
+</PageLayout>

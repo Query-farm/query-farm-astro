@@ -1,0 +1,101 @@
+---
+/**
+ * One table, many places — a single logical table resolving to several physical
+ * sources, with the arms a query doesn't need visibly skipped.
+ *
+ * The business claim it carries: your storage layout stops being a
+ * customer-facing contract. It must NOT try to show the UNION ALL rewrite,
+ * partitioning, or how overlapping branch filters behave — that's the
+ * multi-branch reference material, and drawing it here would turn a one-glance
+ * argument into a study.
+ *
+ * Mechanically: `table_scan_branches_get` returns one branch per source, each
+ * naming a DuckDB scan function plus a `branch_filter`; the extension AND's
+ * that filter into the arm, and standard filter pushdown drops arms that can't
+ * match. The dimmed arms in this figure are that elimination — a consequence of
+ * ordinary planning, not a trusted hint from the worker.
+ */
+interface Props {
+  ariaLabel?: string;
+}
+const {
+  ariaLabel = 'One readings table backed by three sources — an operational store, Parquet on S3, and cold archive. A query for the last seven days touches only the operational store; the other two are skipped.',
+} = Astro.props;
+
+const VB_W = 1000;
+const VB_H = 400;
+
+const TABLE = { x: 330, y: 108, w: 340, h: 76 };
+
+const sources = [
+  {
+    title: 'Last 7 days',
+    detail: 'Operational store',
+    x: 24,
+    active: true,
+  },
+  {
+    title: '8–90 days',
+    detail: 'Parquet on S3',
+    x: 356,
+    active: false,
+  },
+  {
+    title: '90 days and older',
+    detail: 'Cold archive',
+    x: 688,
+    active: false,
+  },
+];
+
+const SRC = { y: 268, w: 288, h: 92 };
+const srcCx = (x: number) => x + SRC.w / 2;
+const tableCx = TABLE.x + TABLE.w / 2;
+---
+
+<div class="rounded-xl border border-soil-300 bg-[#fffdf7] p-4 md:p-6">
+  <svg
+    class="w-full h-auto"
+    viewBox={`0 0 ${VB_W} ${VB_H}`}
+    xmlns="http://www.w3.org/2000/svg"
+    role="img"
+    aria-label={ariaLabel}
+  >
+    <!-- The query the customer wrote -->
+    <rect x="252" y="16" width="496" height="52" rx="12" class="fill-rock-900" />
+    <text x="500" y="48" text-anchor="middle" fill="#e9e1d3" font-size="17" font-family="'JetBrains Mono', monospace">WHERE ts &gt; now() - interval 7 day</text>
+
+    <!-- Wires: table → each source. The two skipped arms are dashed and dimmed. -->
+    {sources.map(s => (
+      <path
+        d={`M${tableCx} ${TABLE.y + TABLE.h} C ${tableCx} ${TABLE.y + TABLE.h + 60} ${srcCx(s.x)} ${SRC.y - 60} ${srcCx(s.x)} ${SRC.y}`}
+        fill="none"
+        class={s.active ? 'stroke-field-600' : 'stroke-soil-300'}
+        stroke-width={s.active ? 6 : 2.5}
+        stroke-dasharray={s.active ? undefined : '7 7'}
+        stroke-linecap="round"
+      />
+    ))}
+
+    <!-- The one logical table -->
+    <rect x={TABLE.x} y={TABLE.y} width={TABLE.w} height={TABLE.h} rx="16" class="fill-[#fffdf7] stroke-soil-900" stroke-width="3" />
+    <text x={tableCx} y={TABLE.y + 34} text-anchor="middle" class="fill-soil-900 font-extrabold" font-size="24" font-family="inherit">readings</text>
+    <text x={tableCx} y={TABLE.y + 58} text-anchor="middle" class="fill-soil-700" font-size="15" font-family="inherit">one table, to the customer</text>
+
+    <!-- The physical sources -->
+    {sources.map(s => (
+      <g>
+        <rect
+          x={s.x} y={SRC.y} width={SRC.w} height={SRC.h} rx="14"
+          class={s.active ? 'fill-soil-100 stroke-soil-900' : 'fill-[#fffdf7] stroke-soil-300'}
+          stroke-width={s.active ? 3 : 2}
+        />
+        <text x={srcCx(s.x)} y={SRC.y + 36} text-anchor="middle" class={s.active ? 'fill-soil-900 font-bold' : 'fill-soil-500 font-bold'} font-size="19" font-family="inherit">{s.title}</text>
+        <text x={srcCx(s.x)} y={SRC.y + 60} text-anchor="middle" class={s.active ? 'fill-soil-700' : 'fill-soil-500'} font-size="15" font-family="inherit">{s.detail}</text>
+        {!s.active && (
+          <text x={srcCx(s.x)} y={SRC.y + 84} text-anchor="middle" class="fill-soil-500" font-size="13.5" font-family="inherit" font-style="italic">skipped for this query</text>
+        )}
+      </g>
+    ))}
+  </svg>
+</div>

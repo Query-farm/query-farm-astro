@@ -1,0 +1,687 @@
+---
+import PageLayout from '../../layouts/PageLayout.astro';
+import VGISubNav from '../../components/sections/VGISubNav.astro';
+import PageHead from '../../components/ui/PageHead.astro';
+import Button from '../../components/ui/Button.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import DaaSDiagram from '../../components/vgi/DaaSDiagram.astro';
+import DirectReadDiagram from '../../components/vgi/DirectReadDiagram.astro';
+import MultiSourceDiagram from '../../components/vgi/MultiSourceDiagram.astro';
+import VGISectionNav from '../../components/sections/VGISectionNav.astro';
+
+// ── Shared shape vocabulary (brief §10) — same tokens the other Family-C
+// VGI pages use, not a second set of names for the same things.
+const WRAP_WIDE = 'mx-auto w-full max-w-[1360px] px-6 sm:px-7';
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+const EYEBROW = 'qf-eyebrow text-sun-700';
+const P = 'mt-4 leading-relaxed text-soil-700';
+const CODE = 'rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900';
+const LINK = 'text-link underline decoration-link/40 underline-offset-2 hover:decoration-link';
+// Inline <code>/<strong> for prose rendered through set:html (the `md()` helper
+// below) — the same chrome as CODE, applied from the container.
+const PROSE_CODE =
+  '[&_code]:rounded [&_code]:bg-soil-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.88em] [&_code]:text-soil-900';
+const md = (s: string) =>
+  s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-medium text-soil-900">$1</strong>');
+const CURRENT = '/vgi/data-as-a-service';
+
+const toc = [
+  { id: 'problem', label: 'Where you are now' },
+  { id: 'service', label: 'What you’re selling' },
+  { id: 'direct-read', label: 'Your worker doesn’t move the bytes' },
+  { id: 'how-it-works', label: 'How it works' },
+  { id: 'in-practice', label: 'What this looks like in practice' },
+  { id: 'customer-side', label: 'What your customers install' },
+  { id: 'charge', label: 'What you can charge for' },
+  { id: 'internal', label: 'The same thing, pointed inward' },
+  { id: 'two-paths', label: 'Where the worker runs' },
+  { id: 'operating', label: 'What it costs you to run' },
+  { id: 'live-proof', label: 'See it live' },
+  { id: 'compare', label: 'What changes' },
+  { id: 'when-not', label: 'When a bucket is right' },
+  { id: 'faq', label: 'FAQ' },
+  { id: 'next-steps', label: 'Where to next' },
+];
+
+// VERIFIED real syntax — src/vgi_extension.cpp in the vgi extension parses
+// `bearer_token` and `oauth_refresh_token` as ATTACH options directly (they
+// are mutually exclusive), instantiating a BearerTokenCatalogAuth or a real
+// refresh-token OAuthCatalogAuth (vgi_oauth.cpp — includes a browser-based
+// auth-code path for the WASM case). Not invented for this page.
+const oauthExample = `-- A static token, handled by the protocol itself
+ATTACH 'crm' (TYPE vgi, LOCATION 'https://crm.example.com', bearer_token 'sk_live_...');
+
+-- Or a full OAuth refresh-token flow — no per-worker auth code required
+ATTACH 'crm' (TYPE vgi, LOCATION 'https://crm.example.com', oauth_refresh_token '...');`;
+
+// Exactly what a consumer of your data has to do. Kept to three lines on
+// purpose: this was the single biggest gap two reviewers found — the page
+// argued for a service without ever saying the customer needs DuckDB and an
+// extension, and both of them worked it out late and re-read everything else
+// more suspiciously as a result.
+const customerSetup = `INSTALL vgi FROM community;
+LOAD vgi;
+
+ATTACH 'eq' (TYPE vgi, LOCATION 'https://data.yourcompany.com/', bearer_token '\u0024TOKEN');`;
+
+// A folder against a service, capability by capability. This started life as a
+// diagram (one box fanning out to four cards) and became a table for two
+// reasons: the fan crossed its own lines, and the content is a comparison —
+// two columns per row is what a comparison *is*.
+//
+// Row order matters. "Get the raw data" is first because a service can still do
+// it (direct read), which is what makes the right-hand column a superset rather
+// than a different product. The rows below it are the things a file cannot do
+// at all, in increasing order of what they're worth.
+const capabilities = [
+  {
+    want: 'Get the raw data',
+    folder: 'The whole folder, identical for every customer.',
+    service: 'The same files, read straight from your bucket at full speed — with a scoped, short-lived credential instead of a permanent one.',
+  },
+  {
+    want: 'Get only their rows',
+    folder: 'Pre-materialize a copy per customer, per tier, and backfill it whenever an entitlement changes.',
+    service: 'One table. The caller\'s identity decides the rows, on every query.',
+  },
+  {
+    want: 'Find out what\'s in it',
+    folder: 'Read your documentation, or ask you. Your directory naming convention is the API.',
+    service: '`DESCRIBE` it. The schema, the columns, and the types answer for themselves.',
+  },
+  {
+    want: 'Use your methodology',
+    folder: 'Not possible — you would have to ship them the code.',
+    service: 'Call it as a function. The scorer, the matcher, the model stays on your infrastructure.',
+  },
+];
+
+// What a catalog lets you sell that a folder can't. Each of these is a
+// consequence of entitlements being evaluated per query rather than baked into
+// a copy — not a feature list. The honest-limits note beside them on the page
+// is not optional: VGI meters nothing today.
+const revenue = [
+  {
+    title: 'Rows as a price axis',
+    body: 'Geography, sector, ticker set, time window. A tier stops being a pipeline and becomes a policy branch, so shipping twenty of them costs about what shipping three costs today.',
+  },
+  {
+    title: 'Columns as a price axis',
+    body: 'Base columns in the standard tier, enriched or scored columns above it. Your sample dataset stops being a separate artifact you maintain and becomes the same table with fewer columns.',
+  },
+  {
+    title: 'Freshness tiers',
+    body: 'The same table at T+0, T+1, or T+30. The implementation is a filter on a timestamp — this is the cheapest new SKU on the list, and the one file vendors already fake with a delayed bucket.',
+  },
+  {
+    title: 'Compute as a product',
+    body: 'The matcher, the geocoder, the scorer, the model. A function call is a discrete, priceable unit, and it is the one thing on this page that files structurally cannot carry.',
+  },
+  {
+    title: 'Bundled joins',
+    body: 'Charge for the composite — your data joined against a partner\'s, delivered as one table, with neither side shipping the other a copy. With files that needs a third party to do ETL, and that third party takes the margin.',
+  },
+  {
+    title: 'Trials that expire on their own',
+    body: 'A 14-day, three-column, one-region trial is a policy. With files a trial is a permanent copy, which is why file vendors under-offer trials and starve their own funnel.',
+  },
+];
+
+// The teardown: the buyer's own sentences, not a product-vs-product grid.
+// The middle column has to read as *structural* — a vendor who believes the
+// problem is their naming convention will go fix their naming convention and
+// never come back.
+const teardown = [
+  {
+    today: 'Adding a customer means adding a bucket prefix and a pipeline.',
+    why: 'A file is the smallest unit of access, so every entitlement has to be pre-materialized. N customers x M tiers is a copy explosion, and changing one is a backfill.',
+    instead: 'One table, one policy set. The caller\'s identity selects the rows. A new customer is a policy branch, not a pipeline.',
+  },
+  {
+    today: 'Half my support tickets are “which file do I read?”',
+    why: 'Your directory naming convention is your public API, and it is undocumented. Every customer writes their own loader against it.',
+    instead: '`SELECT * FROM eq.public.earthquakes`. The schema is self-describing, and your data dictionary becomes `DESCRIBE`.',
+  },
+  {
+    today: 'I have no idea what they actually query.',
+    why: 'Bucket access logs record byte ranges. They do not record questions.',
+    instead: 'One log line per query, including which filter was applied and which columns were withheld. You find out what your customers actually ask.',
+  },
+  {
+    today: 'I can\'t charge for usage, because I can\'t see usage.',
+    why: 'All-you-can-eat is a property of files, not a pricing decision. One SKU: an annual dataset license.',
+    instead: 'A per-query event stream you can price against — though see the note above: that is an input to a meter, not a meter.',
+  },
+  {
+    today: 'There is nowhere to put the premium thing.',
+    why: 'A bucket holds files. A file is a file. There is no surface to merchandise on.',
+    instead: 'Schemas and functions. A premium schema sits beside the standard one; a scoring function is a SKU with its own price.',
+  },
+  {
+    today: 'I can\'t reorganize storage without emailing forty accounts.',
+    why: 'Customers hardcode paths, so your physical layout became a customer-facing contract the day you shipped it.',
+    instead: 'The catalog is the contract. Repartition or tier to cold storage and the next query picks up the new layout — nobody downstream rewrites a path. (On the direct path your object keys do reach the client, so treat them as visible, not as an interface.)',
+  },
+  {
+    today: 'Adding a column breaks half of them and the other half never notice.',
+    why: 'There is no deprecation channel and no per-tier projection — everyone gets the same files.',
+    instead: 'Columns are projected per caller. Ship a column to one tier before the rest, and deprecate by policy instead of by email.',
+  },
+  {
+    today: 'When a contract ends, they still have everything.',
+    why: 'Revoking a copy is a legal instrument, not a technical one.',
+    instead: 'Access ends on the next query — or, on the direct path, when the credential expires minutes later. Honestly: they keep whatever they already read. Nothing changes that.',
+  },
+];
+
+const faqs = [
+  {
+    q: 'How is this different from Delta Sharing or an Iceberg catalog?',
+    a: 'Those grant access to a table by handing over the table. What VGI takes away isn’t the bytes — with direct read the bytes still come straight from your bucket — it’s unconditional, permanent, unaudited access. Rows and columns are decided per caller on every query, entitlements change by editing a policy rather than rebuilding a share, and access ends on the next query — or, where a credential was vended for a direct read, when that credential expires. What a customer already read, they keep; nothing changes that, in any system.',
+  },
+  {
+    q: 'Is this actually live, or is it cached?',
+    a: 'Both, by design. Every query is live by default — there’s no batch sync to fall behind. When a worker advertises a freshness window (the live train departures example uses 30 seconds), VGI’s client-side result cache can serve a repeat query from that window without hitting the source again, so you get freshness without hammering the API underneath it.',
+  },
+  {
+    q: 'What about rate limits and authentication?',
+    a: 'ATTACH itself carries a bearer token or a full OAuth refresh-token flow — credentials are handled by the protocol, not hand-rolled per worker. Rate limiting is up to the source; result caching and filter pushdown both reduce how often a worker has to ask it for anything.',
+  },
+  {
+    q: 'Can our data stay entirely on our own infrastructure?',
+    a: 'Yes — self-host any worker (a local process, your own server, a container you run) and nothing has to touch Query Farm’s infrastructure at all. Hosting through Orchard is a convenience, not a requirement.',
+  },
+  {
+    q: 'Can we restrict who sees which rows or columns?',
+    a: 'Yes — as a managed service we offer directly, not a DIY config: policy-driven, enforced adversarially, down to a single column. See “Row- and column-level security” below, and get in touch.',
+  },
+  {
+    q: 'What if the source we need doesn’t have a worker yet?',
+    a: 'Build one — SDKs exist for Python, TypeScript, Go, Rust, and Java, and the pattern is the same regardless of language — or ask us to build it for you.',
+  },
+];
+
+const nextCards = [
+  { title: 'Talk to us', body: 'What you\'re selling, who to, and whether this is the right shape for it.', href: '/company/contact' },
+  { title: 'Row & column security', body: 'The hop that enforces per-customer entitlements, hosted or on-prem.', href: '/vgi/row-column-security' },
+  { title: 'Orchard pricing', body: 'What a hosted worker costs, and what the free tier covers.', href: '/products/orchard' },
+];
+
+const pageDescription =
+  'Sell data as a catalog, not a folder. Per-customer rows and columns, a log of every query, and compute functions you can price separately — with the bytes still read straight from your own S3 or R2.';
+---
+
+<PageLayout
+  title="VGI — Data as a Service"
+  description={pageDescription}
+>
+  <VGISubNav />
+
+  <!-- ── Page header ─────────────────────────────────────────── -->
+  <PageHead
+    variant="section"
+    wide
+    eyebrow="Data as a Service"
+    title="Keep the bucket. Add a control plane."
+    lede="VGI puts a SQL front door on the data you already store. Different rows and columns per customer, a log of every query, and functions you can charge for — without moving a byte out of S3."
+  >
+    <div class="mt-6 flex flex-wrap items-center gap-3">
+      <Button href="/company/contact" variant="primary" size="md">Talk to us →</Button>
+      <Button href="/vgi#tour" variant="secondary" size="md">See it live</Button>
+    </div>
+  </PageHead>
+
+  <!-- ── Docs grid: section nav / content / page TOC ──────────── -->
+  <div class={`${WRAP_WIDE} grid gap-10 py-10 lg:grid-cols-[220px_minmax(0,1fr)_200px] lg:gap-11`}>
+    <aside class="hidden lg:block lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto">
+      <VGISectionNav current={CURRENT} />
+    </aside>
+
+    <!-- Not a landmark element: BaseLayout already renders the page's single main. -->
+
+    <div class="min-w-0">
+      <!-- ── The problem ───────────────────────────────────────── -->
+      <p class={`${EYEBROW} block`}>Where you are now</p>
+      <h2 id="problem" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Right now, your product is a folder and a set of credentials</h2>
+      <p class={P}>
+        You already sell or provision access to data. In practice that means Parquet in a bucket, a
+        prefix per customer, and a credential handed out at signup. It works — it's why you haven't
+        replaced it — but the shape of it decides what you're able to sell. A file is the smallest
+        unit of access, so every entitlement is a copy, every tier is a pipeline, and every
+        question your customer asks about the data is a support ticket.
+      </p>
+      <p class={P}>
+        What you can't do is the interesting part. You can't see which questions they ask. You
+        can't ship a column to one tier and not another. You can't reorganize your own storage
+        without emailing forty accounts. And when a contract ends, the last copy is still theirs.
+      </p>
+      <p class={P}>
+        VGI doesn't replace any of that. It puts a control plane in front of it: the bucket stays,
+        the bytes keep flowing straight out of it, and what changes is that every read becomes a
+        decision you make — at query time, per caller, on the record.
+      </p>
+
+      <!-- ── The ladder ────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>What you're selling</p>
+      <h2 id="service" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">A folder can do one thing. A service can do several</h2>
+      <p class={P}>
+        A file has exactly one behaviour: it can be fetched, whole, by anyone holding the
+        credential. Everything a data vendor wishes it could do — return only this customer's rows,
+        describe itself, run something — isn't a missing feature of files. It's a thing files
+        can't have, because nothing is running.
+      </p>
+      <p class={P}>
+        Put a service in front of the same bucket and those all arrive together. They aren't tiers
+        you climb or sell in sequence; they're what falls out of there being a process on the other
+        end of the request.
+      </p>
+      <div class="mt-6 overflow-x-auto">
+        <table class="w-full min-w-[680px] border-collapse text-left text-sm">
+          <thead>
+            <tr class="border-b-2 border-soil-300">
+              <th class="w-[28%] py-2.5 pr-5 align-bottom font-semibold text-soil-900">What a customer wants</th>
+              <th class="w-[34%] py-2.5 pr-5 align-bottom font-semibold text-soil-500">A folder in a bucket</th>
+              <th class="py-2.5 align-bottom font-semibold text-soil-900">A service in front of it</th>
+            </tr>
+          </thead>
+          <tbody>
+            {capabilities.map(row => (
+              <tr class="border-b border-soil-200 align-top">
+                <td class="py-3.5 pr-5 leading-relaxed font-medium text-soil-900">{row.want}</td>
+                <td class="py-3.5 pr-5 leading-relaxed text-soil-500">{row.folder}</td>
+                <td class={`py-3.5 leading-relaxed text-soil-700 ${PROSE_CODE}`} set:html={md(row.service)}></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class={P}>
+        The first row is the one that surprises people: a service can still hand back the raw
+        files, at full speed, straight from your bucket. That's
+        <a href="#direct-read" class={LINK}>direct read</a>, and it's what makes this an addition
+        to what you have rather than a replacement for it.
+      </p>
+      <p class={P}>
+        The one worth the most, though, is your own code. Rows are a commodity — someone will
+        always undercut you on rows. A matcher, a geocoder, a scorer, a model: that's methodology,
+        it's what customers actually pay a premium for, and until now you couldn't sell it without
+        shipping it. As a <a href="/vgi/architecture#shapes" class={LINK}>function on your
+        worker</a> it stays yours, runs on your infrastructure, and gets called by name.
+      </p>
+      <p class="mt-4 text-sm leading-relaxed text-soil-500">
+        Not a new idea, exactly — Query Farm's own <a href="https://airport.query.farm/data_as_a_service.html" class={LINK}>Airport extension proposed it first</a>,
+        over Arrow Flight. VGI takes the premise further: any language can implement a worker, a
+        worker runs over a local pipe as easily as HTTP, and a single query can join across more
+        than one worker at once.
+      </p>
+
+      <!-- ── Direct read ───────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The part people don't expect</p>
+      <h2 id="direct-read" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Your worker doesn't move the bytes</h2>
+      <p class={P}>
+        The obvious objection to putting a SQL layer in front of your data is that everything your
+        customers read now flows through a server you run and pay for. It doesn't have to. When the
+        data is already Parquet, Iceberg, or Delta in object storage, the worker can answer with a
+        <em>plan</em> instead of rows — which files, and a short-lived credential to read them —
+        and the customer's DuckDB fetches them itself.
+      </p>
+      <div class="mt-6">
+        <DirectReadDiagram />
+      </div>
+      <p class={P}>
+        Three things follow from that. You don't pay to move the bytes twice — no egress to your
+        server and then out again, just the one hop you already pay for today, and on R2 that hop
+        is free. Your customers read at object-storage speed, so you are not a bottleneck you have
+        to capacity-plan. And your control plane stops being sized by your data volume:
+        <strong class="font-medium text-soil-900">a worker that answers which-files-for-whom does
+        the same work whether the table behind it holds a gigabyte or a petabyte, because it never
+        touches either.</strong>
+      </p>
+      <div class="mt-5 rounded-r-lg border-l-[3px] border-sun-400 bg-[#fffdf7] px-5 py-4">
+        <div class="text-[12.5px] font-medium text-sun-700">What direct read can and can't enforce</div>
+        <p class="mt-1.5 text-sm leading-relaxed text-soil-700">
+          <strong class="font-medium text-soil-900">Direct read enforces at file granularity, not
+          row granularity.</strong> The customer's DuckDB ends up holding your file list and a
+          credential scoped to those files — so whatever you can express as a prefix scope is
+          enforced, and anything finer is not. A per-caller <code class={CODE}>WHERE</code> clause
+          in the plan you hand back runs on their machine, which is fine for an honest query and
+          worth nothing against a determined one.
+        </p>
+        <p class="mt-3 text-sm leading-relaxed text-soil-700">
+          So it's a per-table decision, and most vendors end up running both.
+          <strong class="font-medium text-soil-900">Bulk tables go direct</strong> — the whole
+          dataset, or a tier whose prefix already <em>is</em> the entitlement boundary — at object
+          storage speed. <strong class="font-medium text-soil-900">Entitled tables stream through
+          the worker</strong>, where rows and columns are decided per caller and every read is
+          yours to log. Same interface, same <code class={CODE}>ATTACH</code>; you choose per
+          table.
+        </p>
+        <p class="mt-3 text-sm leading-relaxed text-soil-700">
+          Two consequences worth knowing before you design around it. On the direct path your log
+          records what you <em>authorized</em>, not what was read. And revocation is bounded by the
+          credential's own lifetime rather than instant — the extension never serves a token past
+          its expiry, so the window is short, but it isn't zero.
+        </p>
+      </div>
+
+      <h3 class="mt-10 text-xl text-soil-900">One table, many places</h3>
+      <p class={P}>
+        A table doesn't have to live in one place either. Last week's rows in your operational
+        store, last quarter's in Parquet on S3, everything older in cold archival storage — one
+        table to the customer. The worker declares which source covers which range, and a query
+        that only asks for recent rows never touches the other two.
+      </p>
+      <div class="mt-6">
+        <MultiSourceDiagram />
+      </div>
+      <p class={P}>
+        The business version of that: <strong class="font-medium text-soil-900">your storage
+        economics stop being a customer-facing contract.</strong> With files, moving last year's
+        data to colder storage is a migration email to forty accounts, all of whom hardcoded your
+        paths. With a catalog, it's a decision you make on a Tuesday and nobody downstream notices.
+      </p>
+      <p class="mt-4 text-sm leading-relaxed text-soil-500">
+        Worth knowing before you build on it: multi-source tables are read paths.
+        <code class={CODE}>INSERT</code> routes to a single nominated source, and
+        <code class={CODE}>UPDATE</code>, <code class={CODE}>DELETE</code>, and time travel are
+        refused rather than half-supported. Sources are expected not to overlap — if two claim the
+        same rows you get duplicates — obvious in a row count, invisible inside a
+        <code class={CODE}>SUM()</code> — so keeping the ranges apart is on you.
+      </p>
+
+      <!-- ── How it works ──────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The mechanism</p>
+      <h2 id="how-it-works" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Your consumers, your services, one SQL layer between them</h2>
+      <p class={P}>
+        SQL clients, Excel, ODBC drivers, and browsers can all already talk to DuckDB directly —
+        that's DuckDB's own client ecosystem, and none of it is VGI-specific. VGI is strictly the
+        other leg: DuckDB reaching your services. <code class={CODE}>ATTACH</code> a worker and
+        query it like any other catalog — the same pattern whether it hands back rows, a scalar
+        function, or a live-refreshing feed.
+      </p>
+
+      <div class="mt-6">
+        <DaaSDiagram />
+      </div>
+
+      <div class="mt-5 rounded-r-lg border-l-[3px] border-sun-400 bg-[#fffdf7] px-5 py-4">
+        <div class="text-[12.5px] font-medium text-sun-700">Note</div>
+        <p class="mt-1.5 text-sm leading-relaxed text-soil-700">
+          “Your access control policies” is deliberately generic — a worker can implement its own,
+          or sit behind <a href="/vgi/row-column-security" class="text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">Row & Column Security</a>,
+          a Query Farm product (hosted or on-prem) that enforces row- and column-level security in
+          front of any VGI worker without the worker having to implement any of it itself.
+        </p>
+      </div>
+
+      <p class={P}>
+        Underneath, DuckDB talks to the worker over <a href="https://vgi-rpc.query.farm">VGI-RPC</a>
+        — Apache Arrow IPC, carried over a local pipe or plain HTTP. The worker runs outside DuckDB's
+        own process, so it's never tied to the extension ABI that forces a native extension to
+        recompile on every DuckDB release.
+      </p>
+      <p class="mt-4 text-sm leading-relaxed text-soil-500">
+        More on the protocol itself: <a href="/vgi/architecture" class="text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">Architecture →</a>
+      </p>
+
+      <!-- ── In practice ───────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>In practice</p>
+      <h2 id="in-practice" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Same data, different access for different people</h2>
+      <p class={P}>
+        Say you're a data vendor — earthquake data, for instance. A subscriber in California
+        doesn't need Alaska's rows, and shouldn't be able to query outside what they bought. With
+        access tied to who's asking, the same <code class={CODE}>earthquakes</code> table serves a
+        California-only subscription and an Alaska-only subscription — same schema, same SQL,
+        different rows, enforced on every query, not just checked once at signup.
+      </p>
+      <p class={P}>
+        None of this is limited to a single source, either. Because DuckDB and VGI speak the same
+        SQL regardless of where a table actually lives, a query can join your own data against a
+        customer's, or against a partner's — the benefit of SQL over a data dump is that it
+        composes.
+      </p>
+
+      <!-- ── What the customer installs ────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The other side of the boundary</p>
+      <h2 id="customer-side" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">What your customers install</h2>
+      <p class={P}>
+        DuckDB, and one extension. That's the whole ask.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={customerSetup} lang="sql" title="what your customer runs, once" />
+      </div>
+      <p class={P}>
+        DuckDB is the reason this is a small ask rather than a platform decision. It's a single
+        embedded binary with no server to stand up, and it connects to whatever your customer
+        already works in — Python, R, Java, Node, Go, Rust, the CLI, a notebook, the browser, or
+        anything speaking <a href="https://duckdb.org/docs/stable/clients/odbc/overview" class={LINK}>ODBC</a>
+        and <a href="https://duckdb.org/docs/stable/clients/adbc" class={LINK}>ADBC</a>. Wherever
+        they can already read your Parquet, they can run DuckDB, and your catalog shows up as
+        ordinary SQL objects inside it.
+      </p>
+      <p class={P}>
+        And they don't have to. Customers who can't or won't add a dependency keep pulling files
+        from the bucket exactly as they do now — that path never goes away, and
+        <a href="#direct-read" class={LINK}>direct read</a> means the ones who do adopt are
+        reading the same objects anyway.
+      </p>
+
+      <!-- ── Monetization ──────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The commercial part</p>
+      <h2 id="charge" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">What you can charge for</h2>
+      <p class={P}>
+        With files, a tier is a pipeline, so most vendors ship two or three of them. When a tier is
+        a policy branch instead, the arithmetic changes — and the money usually isn't in the
+        premium tier. It's in the narrow, cheap tier you can't afford to build today.
+      </p>
+      <div class="mt-6 grid gap-3.5 md:grid-cols-2">
+        {revenue.map(item => (
+          <div class={`${CARD} p-5`}>
+            <h3 class="text-lg text-soil-900">{item.title}</h3>
+            <p class={`mt-2 text-sm leading-relaxed text-soil-700 ${PROSE_CODE}`} set:html={md(item.body)}></p>
+          </div>
+        ))}
+      </div>
+      <div class="mt-6 rounded-r-lg border-l-[3px] border-sun-400 bg-[#fffdf7] px-5 py-4">
+        <div class="text-[12.5px] font-medium text-sun-700">Before you plan a price sheet around this</div>
+        <p class="mt-1.5 text-sm leading-relaxed text-soil-700">
+          <strong class="font-medium text-soil-900">VGI does not meter or bill anyone today.</strong>
+          The per-query decision log comes from
+          <a href="/vgi/row-column-security" class={LINK}>row &amp; column security</a>, which is a
+          separate product we operate rather than part of the extension — and that log is an
+          <em>input</em> to a meter. It is not a meter, a quota, a rate limit, or an invoice. If
+          your pricing depends on counting, you are building the counter.
+        </p>
+        <p class="mt-3 text-sm leading-relaxed text-soil-700">
+          Two related honesties. A query is a poor billing unit — one that scans ten rows and one
+          that scans ten billion are both one query — so rows or bytes are more defensible and less
+          predictable for the customer. And usage pricing is a sales problem before it's a
+          technical one: plenty of procurement departments would rather have a fixed line item.
+        </p>
+      </div>
+
+      <!-- ── Internal ──────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The other direction</p>
+      <h2 id="internal" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">The same thing, pointed inward</h2>
+      <p class={P}>
+        Everything above describes selling to customers. Point it at your own company and nothing
+        about the mechanism changes: one SQL surface over finance and sales, where what a person
+        sees depends on their region or job function rather than which export they were sent.
+      </p>
+      <p class={P}>
+        The connection is worth stating plainly, because it runs in both directions. A platform
+        team that unifies internal sources behind one SQL surface has already built the thing you
+        would need to sell data to a partner — same worker, same policy engine, same log. The only
+        difference is whether the caller's identity resolves to an employee in an SSO group or to a
+        customer account. Most companies build the internal one first and find out later that it
+        was the pilot.
+      </p>
+
+      <!-- ── How to run it ─────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>However you want to run it</p>
+      <h2 id="two-paths" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Where the worker runs</h2>
+      <p class={P}>
+        Selling access changes where a worker lives. A local subprocess serves one DuckDB session
+        on one machine; a subscriber base needs a long-lived HTTP service that any session can
+        reach — and then someone has to operate it, either you or Orchard. Either way the consumer
+        side is unchanged: one <code class={CODE}>ATTACH</code>, and the only thing that differs is
+        the <code class={CODE}>LOCATION</code>.
+      </p>
+      <p class={P}>
+        That choice — where a worker runs, and every <code class={CODE}>LOCATION</code> form
+        DuckDB can connect through — is covered in full here:
+      </p>
+      <div class="mt-5">
+        <Button href="/vgi/connect-to-a-worker" variant="secondary" size="md">Connect to a worker →</Button>
+      </div>
+
+      <!-- ── What it costs you to run ──────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>What it costs you</p>
+      <h2 id="operating" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">What you actually have to run</h2>
+      <p class={P}>
+        A worker is a normal service in a normal language — Python, TypeScript, Go, Rust, or
+        Java — so “we need a source nobody has built a worker for” is an afternoon, not a blocker.
+        Run it on your own infrastructure and nothing touches Query Farm at all, or let
+        <a href="/products/orchard" class={LINK}>Orchard</a> run it for you.
+      </p>
+      <div class="mt-6 grid gap-3.5 md:grid-cols-3">
+        <div class={`${CARD} p-5`}>
+          <h3 class="text-lg text-soil-900">Filter pushdown</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">On the streamed path a <code class={CODE}>WHERE</code> clause reaches the source before a byte crosses the wire, so a careless query doesn't become your egress bill — and a worker can refuse an unfiltered scan outright. On the direct path the filter runs in the customer's DuckDB, so it stops an honest mistake at plan time and nothing more.</p>
+        </div>
+        <div class={`${CARD} p-5`}>
+          <h3 class="text-lg text-soil-900">Result caching</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">Client-side and TTL-based, surviving across queries and worker restarts. A worker declares how fresh its data needs to be, and repeats inside that window never reach you.</p>
+        </div>
+        <div class={`${CARD} p-5`}>
+          <h3 class="text-lg text-soil-900">Auth you don't write</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700"><code class={CODE}>ATTACH</code> carries a bearer token or a full OAuth refresh-token flow. The extension handles it and redacts tokens from telemetry; you don't hand-roll auth per worker.</p>
+          <div class="mt-3">
+            <CodeBlock code={oauthExample} lang="sql" title="attach-with-oauth.sql" />
+          </div>
+        </div>
+      </div>
+      <p class="mt-5 text-sm leading-relaxed text-soil-700">
+        <strong class="font-medium text-soil-900">On licensing.</strong> VGI is
+        <a href="/licenses/source-available" class={LINK}>source-available</a>, not open source.
+        The restriction exists to stop someone repackaging VGI itself as a competing gateway
+        product — not to stop you selling data through it, which is what this page is about. The
+        clause is written broadly, so if you're building something where the line isn't obvious,
+        <a href="/company/contact" class={LINK}>ask us and we'll put the answer in writing</a>.
+      </p>
+      <p class="mt-4 text-sm leading-relaxed text-soil-700">
+        Row- and column-level enforcement is a separate hop we operate — hosted or on-prem — that
+        doesn't trust the worker behind it.
+        <a href="/vgi/row-column-security" class={LINK}>Row &amp; column security →</a>
+        Workers other people have already built and hosted live in
+        <a href="/products/orchard" class={LINK}>Orchard</a>.
+      </p>
+
+      <!-- ── Live proof ────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Not a screenshot</p>
+      <h2 id="live-proof" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">See it live, right now</h2>
+      <p class={P}>
+        Weather, earthquakes, a self-refreshing train departure board, a map of real locations —
+        every example on the VGI tour runs against a real, hosted worker, live, in your browser.
+        We could have faked that demo. We didn't.
+      </p>
+      <div class="mt-5">
+        <Button href="/vgi#tour" variant="primary" size="md">Try it on the tour →</Button>
+      </div>
+
+      <!-- ── Compare ───────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>In context</p>
+      <h2 id="compare" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">What changes</h2>
+      <p class={P}>
+        Sentences you have probably said out loud in the last month, and what replaces each one.
+        The middle column matters most: none of these is something a better naming convention
+        fixes, because a file is the smallest unit of access there is.
+      </p>
+      <div class="mt-6 overflow-x-auto">
+        <table class="w-full min-w-[720px] border-collapse text-left text-sm">
+          <thead>
+            <tr class="border-b-2 border-soil-300">
+              <th class="w-[34%] py-2.5 pr-5 align-bottom font-semibold text-soil-900">What today looks like</th>
+              <th class="w-[33%] py-2.5 pr-5 align-bottom font-semibold text-soil-900">Why files can't fix it</th>
+              <th class="py-2.5 align-bottom font-semibold text-soil-900">What replaces it</th>
+            </tr>
+          </thead>
+          <tbody>
+            {teardown.map(row => (
+              <tr class="border-b border-soil-200 align-top">
+                <td class="py-3.5 pr-5 leading-relaxed text-soil-900">“{row.today}”</td>
+                <td class="py-3.5 pr-5 leading-relaxed text-soil-500">{row.why}</td>
+                <td class={`py-3.5 leading-relaxed text-soil-700 ${PROSE_CODE}`} set:html={md(row.instead)}></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ── When not to ───────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The other side of it</p>
+      <h2 id="when-not" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">When a bucket is the right answer</h2>
+      <p class={P}>
+        Some datasets don't need any of this.
+      </p>
+      <p class={P}>
+        If your data is small, static, and identical for every customer, a bucket and a signed URL
+        is the correct architecture. Don't add a control plane to it.
+      </p>
+      <p class={P}>
+        If every one of your customers already lives in the same warehouse, use that warehouse's
+        sharing. It will be less work and they will be happier.
+      </p>
+      <p class={P}>
+        And if you have one customer, you don't have an entitlements problem yet. You have a
+        customer. Come back when you have twelve.
+      </p>
+
+      <!-- ── FAQ ───────────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Questions</p>
+      <h2 id="faq" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">FAQ</h2>
+      <div class="mt-6 flex flex-col gap-5">
+        {faqs.map((item) => (
+          <div>
+            <h3 class="text-base font-medium text-soil-900">{item.q}</h3>
+            <p class="mt-1.5 text-sm leading-relaxed text-soil-700">{item.a}</p>
+          </div>
+        ))}
+      </div>
+
+      <!-- Next -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Keep going</p>
+      <h2 id="next-steps" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Where to next</h2>
+      <div class="mt-6 grid gap-3.5 sm:grid-cols-3">
+        {nextCards.map(c => (
+          <a
+            href={c.href}
+            class={`${CARD} block p-5 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}
+          >
+            <h3 class="text-lg text-soil-900">{c.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{c.body}</p>
+          </a>
+        ))}
+      </div>
+    </div>
+
+    <aside class="hidden xl:block xl:sticky xl:top-24 xl:self-start">
+      <h2 class="mb-2.5 text-[12.5px] font-semibold text-soil-500">On this page</h2>
+      <ul class="flex flex-col gap-0.5">
+        {toc.map((item) => (
+          <li>
+            <a
+              href={`#${item.id}`}
+              class="block border-l-2 border-soil-200 px-2.5 py-1 text-[13px] text-soil-700 no-underline transition hover:border-soil-300 hover:text-soil-900"
+            >{item.label}</a>
+          </li>
+        ))}
+      </ul>
+    </aside>
+  </div>
+</PageLayout>

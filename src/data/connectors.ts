@@ -100,7 +100,7 @@ SELECT key, value:customer_id AS customer_id, value:total AS total, ts
 FROM read_topic('orders', from => 'latest')
 WHERE ts > now() - INTERVAL 10 MINUTE
 ORDER BY ts DESC;`,
-    theme: { iconBg: 'bg-amber-100', iconText: 'text-amber-800', accent: 'amber' },
+    theme: { iconBg: 'bg-cat-gold', iconText: 'text-cat-gold-ink', accent: 'gold' },
   },
   {
     id: 'imap',
@@ -155,7 +155,7 @@ WHERE mailbox = 'Support'
   AND received > now() - INTERVAL 7 DAY
 GROUP BY from_address
 ORDER BY messages DESC;`,
-    theme: { iconBg: 'bg-sky-100', iconText: 'text-sky-800', accent: 'sky' },
+    theme: { iconBg: 'bg-cat-slate', iconText: 'text-cat-slate-ink', accent: 'slate' },
   },
   {
     id: 'row-column-security',
@@ -207,7 +207,7 @@ ATTACH 'sales' AS sales (
 SELECT region, customer_name, email, revenue
 FROM sales.customers
 ORDER BY revenue DESC;`,
-    theme: { iconBg: 'bg-rose-100', iconText: 'text-rose-800', accent: 'rose' },
+    theme: { iconBg: 'bg-cat-clay', iconText: 'text-cat-clay-ink', accent: 'clay' },
   },
   {
     id: 'hostquery',
@@ -259,7 +259,7 @@ SELECT o.id, o.total, c.segment
 FROM hq.pg_prod.orders     AS o
 JOIN hq.mysql_analytics.customers AS c USING (customer_id)
 WHERE o.created_at > now() - INTERVAL 1 DAY;`,
-    theme: { iconBg: 'bg-violet-100', iconText: 'text-violet-800', accent: 'violet' },
+    theme: { iconBg: 'bg-cat-plum', iconText: 'text-cat-plum-ink', accent: 'plum' },
   },
   {
     id: 'citibike',
@@ -310,7 +310,7 @@ JOIN citibike.stations AS s USING (station_id)
 WHERE st.num_bikes_available <= 2
 ORDER BY s.capacity DESC
 LIMIT 10;`,
-    theme: { iconBg: 'bg-emerald-100', iconText: 'text-emerald-800', accent: 'emerald' },
+    theme: { iconBg: 'bg-cat-moss', iconText: 'text-cat-moss-ink', accent: 'moss' },
   },
   {
     id: 'volcanos',
@@ -360,7 +360,7 @@ FROM volcanos.smithsonian.volcanoes
 WHERE last_eruption_year IS NOT NULL
 ORDER BY last_eruption_year DESC
 LIMIT 10;`,
-    theme: { iconBg: 'bg-orange-100', iconText: 'text-orange-800', accent: 'orange' },
+    theme: { iconBg: 'bg-cat-field', iconText: 'text-cat-field-ink', accent: 'field' },
   },
   {
     id: 'earthquakes',
@@ -409,7 +409,7 @@ FROM quakes.usgs.events
 WHERE mag >= 4.5
   AND time > now() - INTERVAL 1 DAY
 ORDER BY mag DESC;`,
-    theme: { iconBg: 'bg-amber-100', iconText: 'text-amber-800', accent: 'amber' },
+    theme: { iconBg: 'bg-cat-gold', iconText: 'text-cat-gold-ink', accent: 'gold' },
   },
 ];
 

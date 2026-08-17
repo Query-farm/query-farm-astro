@@ -1,0 +1,456 @@
+---
+import PageLayout from '../../layouts/PageLayout.astro';
+import VGISubNav from '../../components/sections/VGISubNav.astro';
+import PageHead from '../../components/ui/PageHead.astro';
+import Button from '../../components/ui/Button.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import AccessProxyDiagram from '../../components/vgi/AccessProxyDiagram.astro';
+import VGISectionNav from '../../components/sections/VGISectionNav.astro';
+
+// ── Shared shape vocabulary (brief §10) — same tokens the other Family-C
+// VGI pages use, not a second set of names for the same things.
+const WRAP_WIDE = 'mx-auto w-full max-w-[1360px] px-6 sm:px-7';
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+const EYEBROW = 'qf-eyebrow text-sun-700';
+const P = 'mt-4 leading-relaxed text-soil-700';
+const CODE = 'rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900';
+const CURRENT = '/vgi/row-column-security';
+
+const toc = [
+  { id: 'what', label: 'What it is' },
+  { id: 'policies', label: 'The policy language' },
+  { id: 'rows', label: 'Row-level filtering' },
+  { id: 'dynamic-filters', label: 'Composing dynamic filters' },
+  { id: 'columns', label: 'Column-level enforcement' },
+  { id: 'functions', label: 'Function-level access' },
+  { id: 'adversarial', label: 'It doesn’t trust the worker' },
+  { id: 'identity', label: 'Identity' },
+  { id: 'deployment', label: 'Hosted or on-prem' },
+  { id: 'limits', label: 'What it’s honest about' },
+  { id: 'compare', label: 'How this compares' },
+  { id: 'faq', label: 'FAQ' },
+  { id: 'next-steps', label: 'Where to next' },
+];
+
+// Illustrative Cedar policies — real syntax and real entity type names
+// (Vgi::Group, Vgi::Table, Vgi::Column, Vgi::Action, context.schema,
+// resource.pii), written to show the shape of the policy language rather
+// than reproduced verbatim from any customer's actual policy set.
+const policyExample = `permit(
+  principal in Vgi::Group::"analysts",
+  action == Vgi::Action::"Read",
+  resource in Vgi::Table::"main.customers"
+);
+
+forbid(
+  principal,
+  action == Vgi::Action::"Read",
+  resource
+)
+when { resource.pii == true }
+unless { principal in Vgi::Group::"compliance" };
+
+forbid(principal, action, resource)
+when { context.schema == "finance" }
+unless { principal in Vgi::Group::"finance-managers" };`;
+
+// VERIFIED real mechanism — row-filters config resolves ${principal} /
+// ${claim.*} to escaped SQL literals and ${entitlement.*} to a semi-join
+// against an externally fetched key set; no matching branch means zero rows.
+const rowFilterExample = `# row-filters.yaml
+branches:
+  - scope: "earthquakes"
+    when: 'context.claim.region == "us-west"'
+    expr: "region = \${claim.region}"
+
+  - scope: "earthquakes"
+    when: "principal in Vgi::Group::\\"internal\\""
+    grant: all
+
+  - scope: "*"
+    grant: none   # fail closed — no matching branch, zero rows`;
+
+// Illustrative — extends the VERIFIED entitlement mechanism (a semi-join
+// against a key set fetched from outside the query) to a spatial predicate.
+// Real Overture Maps schema conventions (divisions.division_area, subtype
+// 'region', names.primary) are used for plausibility, but this exact table
+// hasn't been confirmed against the live vgi-overture worker — it's shown as
+// a worked example of the pattern, not a captured result.
+const dynamicFilterExample = `# row-filters.yaml — filtered against a real polygon, not a bounding box
+branches:
+  - scope: "properties"
+    when: 'context.claim.region == "california"'
+    expr: "ST_Within(location, \${entitlement.ca_boundary})"
+
+  - scope: "*"
+    grant: none`;
+
+const entitlementResolutionExample = `-- How the proxy resolves \${entitlement.ca_boundary} — a normal VGI query,
+-- run by the proxy itself, against the same worker any caller could attach to
+ATTACH 'overture' (TYPE vgi, LOCATION 'https://vgi-overture.rusty-bb6.workers.dev');
+
+SELECT geometry FROM overture.divisions.division_area
+WHERE names.primary = 'California' AND subtype = 'region';`;
+
+// Illustrative — real entity type (Vgi::Function) and action (Execute) from
+// the same Cedar entity model documented above, applied to a function call
+// rather than a table scan.
+const functionPolicyExample = `forbid(
+  principal,
+  action == Vgi::Action::"Execute",
+  resource in Vgi::Function::"geocode"
+)
+unless { principal in Vgi::Group::"premium-tier" };`;
+
+// Structural comparison against the warehouse-native governance category
+// (Immuta, Satori, Privacera, and similar). Not a claim that these tools
+// lack row/column security — most of them have it — the difference is scope
+// (a fixed connector list vs. any VGI worker) and deployment (SaaS-first vs.
+// hosted-or-on-prem here). Row/column parity is called out honestly rather
+// than pretending it's a differentiator.
+const comparisons = [
+  {
+    old: { label: 'Warehouse-native governance platforms', body: 'Immuta, Satori, and similar tools connect to a fixed list of warehouses and databases — Snowflake, Databricks, BigQuery, and the like — through native integrations, and are primarily sold as SaaS.' },
+    vgi: { label: 'This proxy', body: 'Sits in front of any VGI worker — a live API, a custom service, a warehouse, anything the protocol reaches — because enforcement happens at the protocol layer, not against a connector list. Hosted or fully on-prem, your choice.' },
+  },
+  {
+    old: { label: 'A proprietary policy builder', body: 'Most platforms in this category express rules through their own UI-driven builder or a vendor-specific rule format, portable only within that product.' },
+    vgi: { label: 'Cedar', body: 'The same open policy language AWS built for Verified Permissions — not invented for this page. permit/forbid over principals, actions, and resources, not a bespoke syntax.' },
+  },
+];
+
+const nextCards = [
+  { title: 'Rowfence, the product', body: 'Pricing framing, deployment options, and how it compares — the product page, not the mechanism docs.', href: '/products/rowfence' },
+  { title: 'Authentication', body: 'Bearer tokens and OAuth — how a caller’s identity reaches Rowfence in the first place.', href: '/vgi/authentication' },
+  { title: 'Data-as-a-Service', body: 'The broader case for full SQL access instead of a copy of your data.', href: '/vgi/data-as-a-service' },
+];
+
+const pageDescription =
+  'Rowfence: row- and column-level security for any VGI worker — enforced by a policy engine that never trusts the worker to police itself. A Query Farm product, hosted or on-prem, not open source.';
+---
+
+<PageLayout
+  title="VGI — Rowfence (Row & Column Security)"
+  description={pageDescription}
+>
+  <VGISubNav />
+
+  <!-- ── Page header ─────────────────────────────────────────── -->
+  <PageHead
+    variant="section"
+    wide
+    eyebrow="Rowfence"
+    title="Row- and column-level security, enforced adversarially."
+    lede="Rowfence is a policy-driven proxy that sits in front of any VGI worker and decides, on every single query, which rows and columns a caller is allowed to see — without asking the worker to police itself. Part of the VGI suite; a Query Farm product, hosted or on your own infrastructure."
+  >
+    <div class="mt-6 flex flex-wrap items-center gap-3">
+      <Button href="/products/rowfence" variant="primary" size="md">See the Rowfence product page →</Button>
+      <Button href="/company/contact" variant="secondary" size="md">Talk to us</Button>
+    </div>
+  </PageHead>
+
+  <!-- ── Docs grid: section nav / content / page TOC ──────────── -->
+  <div class={`${WRAP_WIDE} grid gap-10 py-10 lg:grid-cols-[220px_minmax(0,1fr)_200px] lg:gap-11`}>
+    <aside class="hidden lg:block lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto">
+      <VGISectionNav current={CURRENT} />
+    </aside>
+
+    <!-- Not a landmark element: BaseLayout already renders the page's single main. -->
+
+    <div class="min-w-0">
+      <!-- ── What it is ────────────────────────────────────────── -->
+      <p class={`${EYEBROW} block`}>Not a config flag</p>
+      <h2 id="what" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">A dedicated hop between DuckDB and the worker</h2>
+      <p class={P}>
+        A VGI worker doesn't have to implement access control itself to get it. Point
+        <code class={CODE}>ATTACH</code> at Rowfence instead of the worker directly, and
+        every query — every row, every column, every function call — passes through Cedar policy
+        evaluation before the worker ever sees it. There's no passthrough mode: enforcement is
+        always on.
+      </p>
+      <div class="mt-6 flex flex-col gap-8">
+        <div>
+          <AccessProxyDiagram variant="hosted" />
+          <h3 class="mt-4 text-lg text-soil-900">Hosted</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">
+            Query Farm runs the proxy for you, in front of a worker you already run yourself or
+            one hosted on Orchard.
+          </p>
+        </div>
+        <div>
+          <AccessProxyDiagram variant="on-prem" />
+          <h3 class="mt-4 text-lg text-soil-900">On-prem</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">
+            Run it inside your own network, in front of a worker that never has to leave your
+            infrastructure either.
+          </p>
+        </div>
+      </div>
+      <p class={`${P} mt-6`}>
+        Rowfence is a Query Farm product, sold as part of the VGI suite — it is not open source,
+        and there's no repository to point at. What follows describes how it behaves once it's
+        running, not how to build one yourself; for pricing framing and the pitch, see the
+        <a href="/products/rowfence" class="text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">Rowfence product page</a>.
+      </p>
+
+      <!-- ── Policy language ───────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>The policy language</p>
+      <h2 id="policies" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Cedar policies, not a bespoke DSL</h2>
+      <p class={P}>
+        Access control is expressed in <a href="https://www.cedarpolicy.com" class="text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">Cedar</a>
+        — the same policy language AWS built for Verified Permissions — against an entity model
+        that mirrors a catalog exactly: a server contains catalogs, a catalog contains schemas, a
+        schema contains tables, and a table contains columns, views, functions, and macros. Users
+        belong to groups, and every policy is a plain <code class={CODE}>permit</code> or
+        <code class={CODE}>forbid</code> statement over that hierarchy.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={policyExample} lang="cedar" title="policies.cedar (illustrative)" tryable={false} />
+      </div>
+      <p class={P}>
+        Nothing is allowed by default. A caller with no matching <code class={CODE}>permit</code>
+        sees nothing — the policy set has to grant access explicitly, not merely fail to deny it.
+      </p>
+
+      <!-- ── Row-level ─────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Same table, different rows</p>
+      <h2 id="rows" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Row-level filtering</h2>
+      <p class={P}>
+        Row rules are ordered branches, each with an optional Cedar condition and a scope pattern
+        that matches table names — exact, a prefix, a suffix, or everything. A matching branch can
+        grant every row, none of them, or inject a <code class={CODE}>WHERE</code> expression built
+        from the caller's own identity: <code class={CODE}>{'${principal}'}</code> and
+        <code class={CODE}>{'${claim.*}'}</code> render as escaped SQL literals — never raw string
+        interpolation — and <code class={CODE}>{'${entitlement.*}'}</code> resolves to a semi-join
+        against a key set fetched from outside the query itself.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={rowFilterExample} lang="yaml" title="row-filters.yaml (illustrative)" tryable={false} />
+      </div>
+      <p class={P}>
+        The earthquakes-by-region example from
+        <a href="/vgi/data-as-a-service#in-practice" class="text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">Data as a Service</a>
+        is exactly this pattern: one <code class={CODE}>earthquakes</code> table, one policy set,
+        a different <code class={CODE}>WHERE region = ...</code> injected per subscriber. Fail
+        closed is the default, not an opt-in — a query against a table with no matching branch
+        returns zero rows rather than everything.
+      </p>
+
+      <!-- ── Dynamic filters ───────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Beyond static values</p>
+      <h2 id="dynamic-filters" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Composing dynamic filters</h2>
+      <p class={P}>
+        <code class={CODE}>{'${entitlement.*}'}</code> isn't limited to a static lookup table —
+        an entitlement is anything resolved from outside the query, and "outside the query" can
+        mean another VGI worker just as easily as a database. Say you sell property data by state
+        and want a caller scoped to California limited to rows that actually fall inside its
+        border — not a bounding box, its real irregular outline. Overture Maps publishes exactly
+        that boundary as a worker-queryable polygon:
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={entitlementResolutionExample} lang="sql" title="resolving the entitlement (illustrative)" tryable={false} />
+      </div>
+      <p class={P}>
+        That's an ordinary <code class={CODE}>ATTACH</code> and an ordinary query — the proxy is
+        itself a VGI client here, reaching Overture the same way any caller's session would. A
+        real administrative polygon is expensive enough to fetch that doing it on every request
+        would be wasteful, so the proxy caches the resolved geometry and reuses it until the
+        entitlement is next refreshed — the same caching discipline VGI already applies to worker
+        results generally. The row rule itself just references the cached value:
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={dynamicFilterExample} lang="yaml" title="row-filters.yaml (illustrative)" tryable={false} />
+      </div>
+      <p class={P}>
+        Nothing about this is a special case in the proxy — it's the same
+        <code class={CODE}>{'${entitlement.*}'}</code> mechanism as a subscriber allow-list, just
+        pointed at a geometry instead of a set of IDs. Any VGI worker can sit on either side of
+        that composition: the one being filtered, and the one supplying what to filter by.
+      </p>
+
+      <!-- ── Column-level ──────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Same table, different columns</p>
+      <h2 id="columns" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Column-level enforcement</h2>
+      <p class={P}>
+        A forbidden column doesn't just get filtered out of the results — it's removed from the
+        schema DuckDB is told about in the first place, at bind time, so there's no column to
+        select in the first place, not just an empty one. Columns are marked sensitive either
+        through <code class={CODE}>Vgi::Column</code> policy entities or through Arrow field
+        metadata tags the worker itself sets (<code class={CODE}>pii</code>,
+        <code class={CODE}>sensitive</code>, <code class={CODE}>classification</code>,
+        <code class={CODE}>confidential</code>, <code class={CODE}>restricted</code>,
+        <code class={CODE}>secret</code>). If every column in a table ends up forbidden for a
+        given caller, the whole table is denied rather than returned empty — and column-level
+        statistics, which can leak distributional information even without returning rows, are
+        denied outright for any table under a column policy.
+      </p>
+
+      <!-- ── Function-level ────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Not just tables</p>
+      <h2 id="functions" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Function-level access</h2>
+      <p class={P}>
+        A VGI worker isn't only a catalog of tables — it can expose scalar, table, and aggregate
+        functions too, and some of those are worth gating on their own: an LLM-backed function, a
+        geocoder, a scoring model, anything with a real cost or a licensing meter behind each call.
+        The same entity model that secures a table secures a function — <code class={CODE}>Vgi::Function</code>
+        is a resource, <code class={CODE}>Execute</code> is the action, and
+        <code class={CODE}>permit</code> / <code class={CODE}>forbid</code> work exactly as they do
+        everywhere else on this page.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={functionPolicyExample} lang="cedar" title="policies.cedar (illustrative)" tryable={false} />
+      </div>
+      <p class={P}>
+        This is the enforcement side of
+        <a href="/vgi/data-as-a-service#charge" class="text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">compute as a product</a>:
+        a function call is a discrete, priceable unit precisely because it's also a thing you can
+        say no to.
+      </p>
+
+      <!-- ── Adversarial ───────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Not a thin passthrough</p>
+      <h2 id="adversarial" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">It doesn't trust the worker</h2>
+      <p class={P}>
+        The proxy never takes a worker's word for its own schema — it discovers the real schema
+        itself, using an embedded DuckDB engine, and enforces policy against that discovery rather
+        than whatever the worker advertises. For scans that go through a function rather than a
+        native table, results are strictly whitelist-filtered after the fact: if a worker leaks an
+        extra column it wasn't supposed to, the proxy drops it anyway rather than trusting the
+        worker to have behaved. Every error path in the enforcement logic denies by default; none
+        of them fall through to “allow.”
+      </p>
+      <p class={P}>
+        That work isn't free, and it isn't pretended to be — but it's tuned, not brute-forced: peak
+        memory during result post-filtering runs at roughly a quarter of the raw payload size, and
+        sixteen concurrent clients hold around 140MB of resident memory in the proxy itself.
+      </p>
+
+      <!-- ── Identity ──────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Who's asking</p>
+      <h2 id="identity" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Identity</h2>
+      <p class={P}>
+        The proxy accepts a caller's identity as a static bearer token, a verified JWT, or by
+        forwarding whatever the upstream connection already carries — and when it verifies OAuth
+        tokens, it does so using the same underlying library the core VGI extension's own
+        <a href="/vgi/authentication" class="text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">OAuth support</a>
+        is built on, not a second, independent implementation. Verified claims are exposed to
+        policies as <code class={CODE}>context.claim.&lt;name&gt;</code> — the same claims a
+        <code class={CODE}>${'${claim.*}'}</code> row rule reads from.
+      </p>
+
+      <!-- ── Deployment ────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Running it</p>
+      <h2 id="deployment" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Hosted or on-prem</h2>
+      <p class={P}>
+        Query Farm sells this two ways: hosted, running alongside a worker on Orchard or in front
+        of one you run yourself, or on-prem, deployed entirely inside your own network so the
+        proxy — and the identity claims and query plans that pass through it — never leave your
+        infrastructure. Both shapes support a single worker behind stateless, load-balanced
+        replicas, and a multi-tenant gateway mode that routes by tenant and worker to many
+        different backends behind one proxy — the shape for a vendor brokering access to more
+        than one downstream source.
+      </p>
+      <p class={P}>
+        Every decision is logged — JSONL, one line per event, covering authentication, every row
+        filter injected, every column projection denied, every entitlement resolved (as counts and
+        hashes, never the underlying values) — and an optional decision journal makes those
+        decisions replayable offline, so “why did this query see these rows” has an answer that
+        doesn't depend on remembering.
+      </p>
+      <p class={P}>
+        That log is also the foundation for something not built yet: a compliance bundle — canned
+        access-review reports, entitlement-change history, decision-replay summaries — aimed at
+        the audits that currently mean someone hand-assembling spreadsheets. It's on the roadmap,
+        not shipped; if it'd help your audit cycle,
+        <a href="/company/contact" class="text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">tell us what it needs to cover</a>.
+      </p>
+
+      <!-- ── Honest limits ─────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Where it draws the line</p>
+      <h2 id="limits" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">What it's honest about</h2>
+      <p class={P}>
+        Not everything a worker can do has an obvious securable anchor. A transform function —
+        one that takes a table in and returns a table out — has no single resource the proxy can
+        check a row or column policy against, so those calls are forwarded uninspected rather than
+        silently broken; they're still fully audited, tagged distinctly from an enforced scan, so
+        it's visible in the log that enforcement didn't apply rather than pretending it did.
+        Native-source interception (the fast path that rewrites a scan before it reaches the
+        worker) only covers reads, and only for the native scan types it knows about.
+      </p>
+
+      <!-- ── Compare ───────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>In context</p>
+      <h2 id="compare" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">How this compares</h2>
+      <p class={P}>
+        Row- and column-level security itself isn't the differentiator — Immuta, Satori, and
+        others in that category already do it well. What's different is what it's enforced in
+        front of, and how it's deployed.
+      </p>
+      <div class="mt-6 flex flex-col gap-3.5">
+        {comparisons.map((row) => (
+          <div class={`${CARD} grid gap-0 sm:grid-cols-2`}>
+            <div class="p-5 sm:border-r sm:border-soil-300">
+              <p class="text-[11px] font-semibold uppercase tracking-wide text-soil-500">{row.old.label}</p>
+              <p class="mt-1.5 text-sm leading-relaxed text-soil-700">{row.old.body}</p>
+            </div>
+            <div class="bg-link/5 p-5">
+              <p class="text-[11px] font-semibold uppercase tracking-wide text-link">{row.vgi.label}</p>
+              <p class="mt-1.5 text-sm leading-relaxed text-soil-700">{row.vgi.body}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <!-- ── FAQ ───────────────────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Questions</p>
+      <h2 id="faq" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">FAQ</h2>
+      <div class="mt-6 flex flex-col gap-5">
+        <div>
+          <h3 class="text-base font-medium text-soil-900">Is this open source?</h3>
+          <p class="mt-1.5 text-sm leading-relaxed text-soil-700">No — unlike the VGI extension and its worker SDKs, Rowfence is a Query Farm product we sell hosted or on-prem. There's no repository to self-host from.</p>
+        </div>
+        <div>
+          <h3 class="text-base font-medium text-soil-900">Does the worker behind it need to change?</h3>
+          <p class="mt-1.5 text-sm leading-relaxed text-soil-700">No — it's a standard VGI worker, unaware it's being proxied. Column-sensitivity tags are the one optional exception: a worker can flag its own columns via Arrow field metadata, but policy entities alone are enough without any worker changes at all.</p>
+        </div>
+        <div>
+          <h3 class="text-base font-medium text-soil-900">Can it sit in front of a worker on Orchard?</h3>
+          <p class="mt-1.5 text-sm leading-relaxed text-soil-700">Yes — the proxy doesn't care whether the worker behind it is self-hosted or running on Orchard; either way, it's the same <code class={CODE}>ATTACH</code> pointed at the proxy instead of the worker directly.</p>
+        </div>
+        <div>
+          <h3 class="text-base font-medium text-soil-900">How does this relate to VGI's own OAuth support?</h3>
+          <p class="mt-1.5 text-sm leading-relaxed text-soil-700">It builds on it rather than replacing it — the proxy's JWT verification shares the same underlying library the core extension uses for OAuth, so a caller authenticated any of the ways described on the <a href="/vgi/authentication" class="text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">Authentication</a> page carries an identity the proxy can already read.</p>
+        </div>
+      </div>
+
+      <!-- Next -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Keep going</p>
+      <h2 id="next-steps" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Where to next</h2>
+      <div class="mt-6 grid gap-3.5 sm:grid-cols-3">
+        {nextCards.map(c => (
+          <a
+            href={c.href}
+            class={`${CARD} block p-5 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}
+          >
+            <h3 class="text-lg text-soil-900">{c.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{c.body}</p>
+          </a>
+        ))}
+      </div>
+    </div>
+
+    <aside class="hidden xl:block xl:sticky xl:top-24 xl:self-start">
+      <h2 class="mb-2.5 text-[12.5px] font-semibold text-soil-500">On this page</h2>
+      <ul class="flex flex-col gap-0.5">
+        {toc.map((item) => (
+          <li>
+            <a
+              href={`#${item.id}`}
+              class="block border-l-2 border-soil-200 px-2.5 py-1 text-[13px] text-soil-700 no-underline transition hover:border-soil-300 hover:text-soil-900"
+            >{item.label}</a>
+          </li>
+        ))}
+      </ul>
+    </aside>
+  </div>
+</PageLayout>

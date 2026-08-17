@@ -1,10 +1,237 @@
 ---
-// Starlight Header override: render the site-wide Query.Farm header on docs
-// pages so the docs sit inside the same shell as the rest of query.farm, plus a
-// section subnav (breadcrumbs) beneath it — matching Haybarn / Orchard / Cupola.
-import SiteHeader from '../layout/Header.astro';
+/**
+ * Starlight `Header` override — the Query.Farm bar that sits above the docs.
+ *
+ * Starlight renders this inside its own fixed `header.header`, which is exactly
+ * `--sl-nav-height` tall. That number is set in starlight-shell.css as
+ * (--qf-nav-h + --qf-subnav-h), so the two bars below MUST keep those heights or
+ * the sidebar, TOC and mobile bars overlap the content (VGI_DOCS_GUIDE §4.5).
+ *
+ * This is deliberately a small, self-contained bar rather than the site-wide
+ * `layout/Header.astro`: the docs are the only part of the site with a dark
+ * theme, and the marketing header's mega-menu is authored in light-only Tailwind
+ * utilities. Keeping it local means the docs shell is theme-correct and the
+ * nav-height contract can't be broken from outside.
+ *
+ * Everything else about it is a faithful copy of the marketing bar, because a
+ * visitor crossing from /vgi into /vgi/docs/python should not see the site
+ * chrome change shape. That means: the same `.section-container` column (so the
+ * lockup sits on the same left edge as every other page's first column rather
+ * than at the viewport edge), the same `StrataSun` mark at 30px, the same
+ * Petrona 700 / 21px wordmark, the same 14px links on a 17px rhythm in the link
+ * green, and the same "Talk with Us" CTA. The CTA and link colours are
+ * hand-rolled on the --qf-* bridge vars instead of `Button`/Tailwind utilities,
+ * which are light-only.
+ */
+import SearchWidget from '../layout/SearchWidget.astro';
+import StrataSun from '../ui/StrataSun.astro';
+import ThemeSelect from './ThemeSelect.astro';
 import DocsSubNav from './DocsSubNav.astro';
+
+const path = Astro.url.pathname;
+
+const links = [
+  { name: 'Extensions', href: '/products/extensions' },
+  { name: 'Orchard', href: '/products/orchard' },
+  { name: 'VGI', href: '/vgi' },
+  { name: 'Cupola', href: '/products/cupola' },
+  { name: 'Haybarn', href: '/haybarn' },
+  { name: 'Consulting', href: '/consulting' },
+  { name: 'Blog', href: '/blog' },
+];
+
+// Longest-prefix match, so /vgi/docs/python/* marks VGI (not Extensions).
+const active = links
+  .filter((l) => path === l.href || path.startsWith(l.href + '/'))
+  .sort((a, b) => b.href.length - a.href.length)[0];
 ---
 
-<SiteHeader />
+<div class="qf-docs-nav" data-pagefind-ignore>
+  <div class="section-container qf-docs-nav__inner">
+    <a class="qf-lock" href="/" aria-label="Query.Farm home">
+      <StrataSun size={30} />
+      <span class="qf-wordmark-text">Query<span class="dot">.</span>Farm</span>
+    </a>
+
+    <nav class="qf-links" aria-label="Site">
+      {
+        links.map((l) => (
+          <a href={l.href} aria-current={active && active.href === l.href ? 'page' : undefined}>
+            {l.name}
+          </a>
+        ))
+      }
+    </nav>
+
+    <div class="qf-nav-right">
+      <SearchWidget />
+      <ThemeSelect />
+      <a class="qf-cta" href="/company/schedule">Talk with Us</a>
+    </div>
+  </div>
+</div>
+
 <DocsSubNav />
+
+<style>
+  .qf-docs-nav {
+    height: var(--qf-nav-h, 58px);
+    /* Opaque, NOT blurred: `backdrop-filter` would make this bar a containing
+       block for fixed-position descendants, which traps SearchWidget's modal
+       inside the 58px header. */
+    background: var(--sl-color-bg-nav);
+    border-bottom: 1px solid var(--qf-rule);
+  }
+
+  /* The shared marketing column. `.section-container` supplies max-width,
+     mx-auto and the responsive gutters; everything here is the flex row on top
+     of it. Starlight's header reset kills the `mx-auto` — starlight-shell.css
+     puts it back. */
+  .qf-docs-nav__inner {
+    display: flex;
+    height: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    /* Reserve room for Starlight's fixed hamburger on narrow viewports, on top
+       of the container's own gutter. */
+    padding-inline-end: calc(1rem + var(--sl-menu-button-size, 2rem) + 0.75rem);
+  }
+  /* 50rem is Starlight's `md` breakpoint — the hamburger disappears there, so
+     the reserved gutter can go too and the column is symmetric again. */
+  @media (min-width: 50rem) {
+    .qf-docs-nav__inner {
+      padding-inline-end: 1.5rem;
+    }
+  }
+  @media (min-width: 64rem) {
+    .qf-docs-nav__inner {
+      padding-inline-end: 2rem;
+    }
+  }
+
+  /* ── lock: mark + wordmark ── */
+  .qf-lock {
+    display: flex;
+    align-items: center;
+    gap: 0.32em;
+    text-decoration: none;
+    color: var(--sl-color-white);
+    flex: none;
+  }
+
+  /* `.qf-wordmark` in global.css, restated locally: the utility is authored for
+     the light marketing pages and this bar is the one place it has to sit on a
+     dark ground too. Petrona 700 at 21px — same as layout/Header.astro. */
+  .qf-wordmark-text {
+    font-family: var(--qf-font-display);
+    font-weight: 700;
+    letter-spacing: -0.018em;
+    line-height: 1;
+    white-space: nowrap;
+    font-size: 21px;
+  }
+  .qf-wordmark-text .dot {
+    color: var(--qf-accent);
+  }
+
+  /* ── links ── */
+  .qf-links {
+    display: none;
+    align-items: center;
+    gap: 17px;
+    font-size: 14px;
+    color: var(--qf-ink-2);
+  }
+  @media (min-width: 62rem) {
+    .qf-links {
+      display: flex;
+    }
+  }
+  @media (min-width: 96rem) {
+    .qf-links {
+      gap: 22px;
+      font-size: 14.5px;
+    }
+  }
+  .qf-links a {
+    text-decoration: none;
+    color: inherit;
+    padding-bottom: 2px;
+    border-bottom: 1.5px solid transparent;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  /* The marketing bar marks hover/current in the link green, not the gold
+     accent — the gold is the docs *body's* accent (sidebar, breadcrumbs). Both
+     values come from global.css so the two bars can't drift. */
+  .qf-links a:hover,
+  .qf-links a[aria-current='page'] {
+    color: var(--color-link);
+    border-bottom-color: var(--color-link);
+  }
+  :global([data-theme='dark']) .qf-links a:hover,
+  :global([data-theme='dark']) .qf-links a[aria-current='page'] {
+    color: var(--color-link-dark);
+    border-bottom-color: var(--color-link-dark);
+  }
+
+  /* ── right cluster ── */
+  .qf-nav-right {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  @media (min-width: 62rem) {
+    .qf-nav-right {
+      gap: 0.75rem;
+    }
+  }
+  /* The theme picker is a Starlight <Select>; it inherits --sl-color-gray-2. */
+  .qf-nav-right :global(starlight-theme-select) {
+    display: none;
+  }
+  @media (min-width: 50rem) {
+    .qf-nav-right :global(starlight-theme-select) {
+      display: block;
+    }
+  }
+
+  /* `Button variant="primary" size="sm"`, restated for a bar that can be dark.
+     Light: field-700 fill, darkening on hover. Dark: field-600, lightening on
+     hover with the label flipping to ink (white on field-400 is 3.19:1). */
+  .qf-cta {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-field-700);
+    background: var(--color-field-700);
+    color: #fff;
+    padding: 7px 15px;
+    font-size: 12.5px;
+    font-weight: 500;
+    line-height: 1.25;
+    text-decoration: none;
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+  }
+  @media (min-width: 62rem) {
+    .qf-cta {
+      display: inline-flex;
+    }
+  }
+  .qf-cta:hover {
+    background: var(--color-field-800);
+    border-color: var(--color-field-800);
+  }
+  :global([data-theme='dark']) .qf-cta {
+    background: var(--color-field-600);
+    border-color: var(--color-field-600);
+  }
+  :global([data-theme='dark']) .qf-cta:hover {
+    background: var(--color-field-400);
+    border-color: var(--color-field-400);
+    color: var(--color-rock-900);
+  }
+</style>

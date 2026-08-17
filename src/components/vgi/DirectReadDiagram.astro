@@ -1,0 +1,132 @@
+---
+/**
+ * Direct read — the control plane / data plane split.
+ *
+ * The claim this figure exists to make believable: the worker answers *which
+ * files, for whom, for how long*, and the bytes never pass through it. Prose
+ * alone gets re-read rather than believed, because readers assume they've
+ * misunderstood.
+ *
+ * Deliberately only TWO paths. The stream-through-worker case (where the
+ * worker really does send the rows as Arrow IPC) is a caption, not a third
+ * arrow set — two competing paths is the point; three is a diagram nobody
+ * parses.
+ *
+ * Mechanically this is scan delegation (`table_scan_function_get` returns a
+ * DuckDB scan function plus its arguments) and the Orchard remote secret
+ * provider (the catalog advertises a secret service; the extension registers a
+ * DuckDB SecretStorage and fetches short-lived credentials lazily). Neither
+ * name appears in the figure — they belong in prose, not on a box.
+ *
+ * Visual language is BigPictureDiagram's: same box treatment, same DuckDB
+ * mark in real brand colours, same animated packet on the wire.
+ */
+interface Props {
+  ariaLabel?: string;
+}
+const {
+  ariaLabel = 'A customer’s DuckDB asks the worker which files it may read and receives a short-lived credential, then reads the Parquet data straight from object storage. The bytes never pass through the worker.',
+} = Astro.props;
+
+// ── The DuckDB mark — identical to BigPictureDiagram's, real brand colours ──
+const DUCKDB_MARK = {
+  vb: { x: 217.6, y: 10, w: 334.4, h: 334.4 },
+  body: `
+    <path fill="#000" d="M384.8,344.4L384.8,344.4c-92.5,0-167.2-74.7-167.2-167.2l0,0C217.6,84.7,292.3,10,384.8,10l0,0 C477.3,10,552,84.7,552,177.2l0,0C552,269.6,477.3,344.4,384.8,344.4z"/>
+    <path fill="#fff100" d="M474.2,152.2h-32.8v49.5h32.8c13.7,0,24.9-11.3,24.9-24.9S487.9,152.2,474.2,152.2"/>
+    <path fill="#fff100" d="M280.7,177.1c0,38.2,31.1,69.3,69.3,69.3c38.2,0,69.3-31.1,69.3-69.3s-31.1-69.3-69.3-69.3 C311.8,107.8,280.7,138.9,280.7,177.1L280.7,177.1"/>
+  `,
+};
+
+const iconTransform = (vb: { x: number; y: number; w: number; h: number }, size: number, cx: number, cy: number) => {
+  const s = size / vb.w;
+  const tx = cx - (vb.w / 2) * s - vb.x * s;
+  const ty = cy - (vb.h / 2) * s - vb.y * s;
+  return `translate(${tx.toFixed(2)},${ty.toFixed(2)}) scale(${s.toFixed(5)})`;
+};
+
+const VB_W = 1000;
+const VB_H = 460;
+
+// Left: the customer. Right column: what you run.
+const DDB = { x: 24, y: 150, w: 236, h: 150 };
+const WORKER = { x: 610, y: 40, w: 340, h: 128 };
+const STORE = { x: 500, y: 282, w: 450, h: 132 };
+
+// The dashed "your infrastructure" boundary wraps the worker and the storage.
+const BOUND = { x: 476, y: 16, w: 500, h: 424 };
+---
+
+<div class="rounded-xl border border-soil-300 bg-[#fffdf7] p-4 md:p-6">
+  <svg
+    class="vgi-directread w-full h-auto"
+    viewBox={`0 0 ${VB_W} ${VB_H}`}
+    xmlns="http://www.w3.org/2000/svg"
+    xmlns:xlink="http://www.w3.org/1999/xlink"
+    role="img"
+    aria-label={ariaLabel}
+  >
+    <!-- Your infrastructure -->
+    <rect
+      x={BOUND.x} y={BOUND.y} width={BOUND.w} height={BOUND.h} rx="20"
+      fill="none" class="stroke-soil-300" stroke-width="2" stroke-dasharray="8 7"
+    />
+    <text x={BOUND.x + BOUND.w - 16} y={BOUND.y + 26} text-anchor="end" class="fill-soil-500" font-size="13" font-family="inherit" letter-spacing="0.8">YOUR INFRASTRUCTURE</text>
+
+    <!-- ── Control plane: thin wire, DuckDB ↔ worker ── -->
+    <path
+      id="vgi-dr-control"
+      d={`M${DDB.x + DDB.w} ${DDB.y + 40} C 380 ${DDB.y + 40} 420 104 ${WORKER.x} 104`}
+      fill="none" class="stroke-soil-300" stroke-width="2.5"
+    />
+    <circle r="5" class="fill-sun-500">
+      <animateMotion dur="2.4s" repeatCount="indefinite">
+        <mpath xlink:href="#vgi-dr-control" />
+      </animateMotion>
+    </circle>
+    <text x="430" y={DDB.y - 6} text-anchor="middle" class="fill-soil-700" font-size="14.5" font-family="inherit">which files, for whom</text>
+    <text x="430" y={DDB.y + 16} text-anchor="middle" class="fill-soil-700" font-size="14.5" font-family="inherit">↓ a file list + a scoped credential</text>
+
+    <!-- ── Data plane: thick wire, DuckDB ↔ storage, bypassing the worker ── -->
+    <path
+      id="vgi-dr-data"
+      d={`M${DDB.x + DDB.w} ${DDB.y + 108} C 380 ${DDB.y + 108} 420 ${STORE.y + 66} ${STORE.x} ${STORE.y + 66}`}
+      fill="none" class="stroke-field-600" stroke-width="7" stroke-linecap="round"
+    />
+    <circle r="8" class="fill-field-600">
+      <animateMotion dur="1.5s" repeatCount="indefinite" keyPoints="1;0" keyTimes="0;1" calcMode="linear">
+        <mpath xlink:href="#vgi-dr-data" />
+      </animateMotion>
+    </circle>
+    <text x="420" y={STORE.y + 108} text-anchor="middle" class="fill-field-700 font-semibold" font-size="15.5" font-family="inherit">bytes — never through your worker</text>
+
+    <!-- Customer's DuckDB -->
+    <rect x={DDB.x} y={DDB.y} width={DDB.w} height={DDB.h} rx="18" class="fill-soil-100 stroke-soil-900" stroke-width="3" />
+    <g transform={iconTransform(DUCKDB_MARK.vb, 44, DDB.x + DDB.w / 2, DDB.y + 44)} set:html={DUCKDB_MARK.body} />
+    <text x={DDB.x + DDB.w / 2} y={DDB.y + 100} text-anchor="middle" class="fill-soil-900 font-extrabold" font-size="25" font-family="inherit">Your customer</text>
+    <text x={DDB.x + DDB.w / 2} y={DDB.y + 126} text-anchor="middle" class="fill-soil-700" font-size="15" font-family="inherit">running DuckDB</text>
+
+    <!-- The worker: control plane -->
+    <rect x={WORKER.x} y={WORKER.y} width={WORKER.w} height={WORKER.h} rx="18" class="fill-[#fffdf7] stroke-soil-900" stroke-width="3" />
+    <text x={WORKER.x + 24} y={WORKER.y + 36} class="fill-sun-700 font-bold" font-size="13" font-family="inherit" letter-spacing="1.2">CONTROL PLANE</text>
+    <text x={WORKER.x + 24} y={WORKER.y + 72} class="fill-soil-900 font-extrabold" font-size="26" font-family="inherit">Your worker</text>
+    <text x={WORKER.x + 24} y={WORKER.y + 100} class="fill-soil-700" font-size="15" font-family="inherit">catalog · entitlements · credentials</text>
+    <text x={WORKER.x + 24} y={WORKER.y + WORKER.h + 36} class="fill-soil-500" font-size="13.5" font-family="inherit">Sized by number of queries, not by terabytes.</text>
+
+    <!-- The storage: data plane -->
+    <rect x={STORE.x} y={STORE.y} width={STORE.w} height={STORE.h} rx="18" class="fill-soil-100 stroke-soil-900" stroke-width="3" />
+    <text x={STORE.x + 26} y={STORE.y + 36} class="fill-field-700 font-bold" font-size="13" font-family="inherit" letter-spacing="1.2">DATA PLANE</text>
+    <text x={STORE.x + 26} y={STORE.y + 74} class="fill-soil-900 font-extrabold" font-size="26" font-family="inherit">Your storage</text>
+    <text x={STORE.x + 26} y={STORE.y + 104} class="fill-soil-700" font-size="15" font-family="inherit">S3 · R2 · Iceberg · Parquet — unmoved</text>
+  </svg>
+</div>
+
+<script>
+  // Respect reduced motion: freeze the two packets rather than looping them.
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    document.querySelectorAll('svg.vgi-directread').forEach((node) => {
+      const svg = node as SVGSVGElement & { pauseAnimations?: () => void };
+      svg.pauseAnimations?.();
+    });
+  }
+</script>

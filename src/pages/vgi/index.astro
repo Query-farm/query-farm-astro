@@ -1,98 +1,335 @@
 ---
+import { Icon } from 'astro-icon/components';
 import PageLayout from '../../layouts/PageLayout.astro';
 import VGISubNav from '../../components/sections/VGISubNav.astro';
-import SectionHeader from '../../components/ui/SectionHeader.astro';
-import Card from '../../components/ui/Card.astro';
+import PageHead from '../../components/ui/PageHead.astro';
 import Button from '../../components/ui/Button.astro';
 import CodeBlock from '../../components/ui/CodeBlock.astro';
+import BigPictureDiagram from '../../components/vgi/BigPictureDiagram.astro';
+import ExampleShellMounter from '../../components/repl/ExampleShellMounter.tsx';
+import OvertureMapExample from '../../components/vgi/OvertureMapExample.tsx';
+import LiveTrainBoard from '../../components/vgi/LiveTrainBoard.tsx';
+import ConnectorCard from '../../components/products/ConnectorCard.astro';
+import { featuredConnectors } from '../../data/connectors';
+
+// Orchard preview for the "discover" fork below — real prototype catalog
+// entries (src/data/connectors.ts), not placeholders. Orchard itself is
+// still incomplete, but these are the same live cards its own pages render.
+const orchardPreview = featuredConnectors.slice(0, 3);
+
+// Real data-source credits for the tabs below — logo + link, reused across
+// whichever tabs actually query that source. Logos are each org's own
+// official mark (Open-Meteo's favicon, Overture Maps Foundation's and
+// USGS's GitHub org avatars — fetched from their own domains, not
+// fabricated), saved to public/vgi/icons/.
+const OPEN_METEO = { name: 'Open-Meteo', logo: '/vgi/icons/open-meteo.png', href: 'https://open-meteo.com' };
+const USGS = { name: 'USGS', logo: '/vgi/icons/usgs.png', href: 'https://earthquake.usgs.gov' };
+const OVERTURE = { name: 'Overture Maps', logo: '/vgi/icons/overture-maps.png', href: 'https://overturemaps.org' };
+// NS's real brand mark and hex (#003082), from simple-icons' own source data
+// (data/simple-icons.json — the package's stripped @iconify-json build omits
+// hex, so this came from upstream, not guessed), rendered as a solid badge
+// matching every other source logo here.
+const NS = { name: 'NS (Dutch Railways)', logo: '/vgi/icons/ns.png', href: 'https://www.ns.nl' };
+
+// The 10-second tour's live examples — three tabs, three real queries,
+// three different workers, so "query it like any other catalog" doesn't
+// rest on a single cherry-picked example. Every sql/result pair here is
+// VERIFIED for real: ran each ATTACH + SELECT against the live worker via a
+// local haybarn build (~/Development/vgi/build/release/haybarn, loading the
+// matching build/release/extension/vgi/vgi.duckdb_extension — this
+// machine's stock Homebrew DuckDB is ABI-pinned to a different core commit
+// and won't load it). That confirms each worker is reachable and each
+// query is correct; it does NOT confirm the in-browser WASM path
+// specifically (CORS + a WASM/EH build of the community `vgi` extension
+// both still need to work for the page's own "Try it in your browser"
+// button — untested here). Every `result` below is the actual rows that run
+// returned (2026-08-13), not fabricated — times trimmed to "HH:MM UTC";
+// weather, the earthquake catalog, and the departure board will all drift
+// from these exact values over time, which is expected and fine: they're a
+// sample of the shape, not a promise of live data.
+//
+// Every tab's full SQL — ATTACH included — is what's shown on the page AND
+// what the live shell auto-runs; there's one canonical string per tab, not
+// a visible version and a separate hidden one. What changes is what the
+// *shell* echoes while running it: ExampleShell's runRepl() still executes
+// ATTACH (required — the rest of the query needs that catalog), it just
+// doesn't print it as a typed line, so the terminal jumps straight to the
+// query the reader is actually here to see. INSTALL/LOAD for the `vgi`
+// extension itself are the other case runRepl() special-cases — dropped
+// entirely rather than run-but-silent, since ensureExtension() already
+// loaded it engine-wide and running it again would be redundant, not just
+// noisy.
+const tourExamples = [
+  {
+    id: 'weather',
+    label: 'Weather forecast',
+    filename: 'weather.sql',
+    sql: `ATTACH 'open_meteo' AS m (TYPE vgi, LOCATION 'https://vgi-open-meteo.rusty-bb6.workers.dev');
+
+-- Geocode the place first, then LATERAL-join its coordinates straight into
+-- the forecast call — one round trip per row, no separate lookup step.
+SELECT w.time,
+       round(w.temperature_2m, 1)                AS temp_f,
+       m.main.weather_code_emoji(w.weather_code) AS icon,
+       m.main.weather_code_text(w.weather_code)  AS conditions
+FROM m.main.geocoding('Glen Allen, VA', count := 1, country_code := 'US') AS g,
+     LATERAL m.main.forecast_hourly(g.latitude, g.longitude,
+                                    forecast_days := 2,
+                                    temperature_unit := 'fahrenheit') AS w
+WHERE w.time >= now()
+ORDER BY w.time limit 6;`,
+    sources: [OPEN_METEO],
+    description:
+      "Open-Meteo is a free, open-source weather API — no key required for non-commercial use. This worker exposes its geocoding and hourly-forecast endpoints as ordinary SQL table functions.",
+    result: {
+      columns: ['time', 'temp_f', 'icon', 'conditions'],
+      numericCol: 1,
+      rows: [
+        ['2026-08-13 19:00 UTC', 89.3, '☁️', 'Overcast'],
+        ['2026-08-13 20:00 UTC', 90.1, '☁️', 'Overcast'],
+        ['2026-08-13 21:00 UTC', 89.9, '☁️', 'Overcast'],
+        ['2026-08-13 22:00 UTC', 88.9, '☁️', 'Overcast'],
+        ['2026-08-13 23:00 UTC', 87.4, '☁️', 'Overcast'],
+        ['2026-08-14 00:00 UTC', 83.6, '☁️', 'Overcast'],
+      ],
+    },
+  },
+  {
+    id: 'earthquakes',
+    label: 'Earthquakes',
+    filename: 'earthquakes.sql',
+    sql: `ATTACH 'earthquakes' AS eq (TYPE vgi, LOCATION 'https://vgi-earthquakes.rusty-bb6.workers.dev');
+
+SELECT time, round(mag, 1) AS mag, place
+FROM eq.main.recent
+WHERE mag >= 5
+ORDER BY mag DESC
+LIMIT 8;`,
+    sources: [USGS],
+    description:
+      "Live feed from the USGS Earthquake Hazards Program — the same 30-day feed seismologists and emergency responders watch, as an ordinary table.",
+    result: {
+      columns: ['time', 'mag', 'place'],
+      numericCol: 1,
+      rows: [
+        ['2026-08-10 12:34 UTC', 7.4, '5 km S of San José del Palmar, Colombia'],
+        ['2026-07-17 14:48 UTC', 7.3, '52 km W of Puerto Madero, Mexico'],
+        ['2026-07-28 07:27 UTC', 6.8, 'The 2026 Kumamoto Region, Japan Earthquake'],
+        ['2026-07-17 15:20 UTC', 6.4, '96 km SW of Puerto Madero, Mexico'],
+        ['2026-08-05 04:14 UTC', 6.3, '32 km SW of Sarangani, Philippines'],
+        ['2026-08-05 07:43 UTC', 6.3, 'south of the Kermadec Islands'],
+        ['2026-07-24 21:37 UTC', 6.0, '55 km W of Sola, Vanuatu'],
+        ['2026-08-12 11:47 UTC', 6.0, 'South Sandwich Islands region'],
+      ],
+    },
+  },
+  {
+    id: 'trains',
+    label: 'Amsterdam Centraal departures',
+    filename: 'amsterdam-departures.sql',
+    // vgi-trains-ts — a brand-new worker (deployed straight to Cloudflare,
+    // no earlier vgi-* naming baggage), wrapping the NS (Nederlandse
+    // Spoorwegen) live departures API. 'asd' is NS's own station code for
+    // Amsterdam Centraal — confirmed against the worker's own README, which
+    // uses that exact station in its own quickstart example, not guessed.
+    // train_departures() is a "blended" row-transform function: its
+    // station_code argument is a per-row input column, so `('asd')` here is
+    // shorthand for the single-station case — the same function also
+    // supports a LATERAL join across many stations at once (see the
+    // worker's own README for that shape).
+    sql: `ATTACH 'trains' AS trains (TYPE vgi, LOCATION 'https://vgi-trains-ts.rusty-bb6.workers.dev');
+
+SELECT strftime(planned_time, '%H:%M') AS time,
+       destination,
+       category,
+       coalesce(actual_track, planned_track) AS track,
+       delay_minutes
+FROM trains.main.train_departures('asd')
+ORDER BY planned_time
+LIMIT 10;`,
+    sources: [NS],
+    description:
+      'Live departure board from NS (Dutch Railways) — the same real-time data the platform boards at Amsterdam Centraal show, as an ordinary table.',
+    result: {
+      columns: ['time', 'destination', 'category', 'track', 'delay_minutes'],
+      numericCol: 4,
+      rows: [
+        ['22:55', 'Haarlem', 'Sprinter', '1', 0],
+        ['23:00', 'Schiphol Airport', 'Intercity', '8a', 0],
+        ['23:09', 'Alkmaar', 'Intercity', '2a', 1],
+        ['23:19', 'Utrecht Centraal', 'Intercity', '4a', 0],
+        ['23:46', 'Rotterdam Centraal', 'Intercity', '15a', 0],
+        ['00:19', 'Utrecht Centraal', 'Intercity', '5a', 0],
+      ],
+    },
+  },
+];
+
+// A third tab, handled separately from tourExamples above: its result is a
+// few hundred points, not a handful of rows, so it renders as a Leaflet map
+// (OvertureMapExample.tsx) instead of the terminal's table output. Its `sql`
+// (displayed AND run, one source of truth, same as the other tabs) is just
+// ATTACH + the query — `setupSql` (S3 region + httpfs) runs first, silently,
+// same idea as the terminal's unechoed-but-real ATTACH, applied here via an
+// actual separate step since this component has no terminal transcript to
+// selectively echo into. ATTACH itself stays in the visible `sql`, same as
+// every other tab — it's setupSql that's pure plumbing a reader doesn't
+// need to see: the region/httpfs config exists only so the CALLER's own
+// DuckDB can read Overture's public S3 parquet (see the worker README note
+// below), not something that helps explain what this example demonstrates.
+//
+// VERIFIED for real against the live overture worker via haybarn. Went
+// through a few earlier scopes: all of New Jersey, a McDonald's-vs-Burger-
+// King comparison over NYC, every church in Manhattan, then Washington DC.
+// Settled on Charlottesville, VA — small enough to scan fast, and with
+// `category` in the SELECT now (see OvertureMapExample.tsx: markers are
+// color-coded by category.primary, not one flat color). Real category
+// values, found by querying what the area actually has tagged near
+// "church"/"religio"/"worship" rather than guessed: church_cathedral,
+// catholic_church, baptist_church, pentecostal_church, evangelical_church,
+// episcopal_church, anglican_church. Deliberately excludes the broader
+// `religious_organization` bucket, which mixes in non-church religious
+// orgs. 115 rows for this bbox (91 church_cathedral, 20 baptist_church, 3
+// catholic_church, 1 anglican_church — the other three categories just
+// don't have a match here, which is real, not a bug), spot-checked by name
+// (Jefferson Park Baptist Church, First Baptist Church, Saint David's
+// Anglican Church — genuine places). lon/lat come from the bbox midpoint —
+// Overture's places are simple points, so xmin≈xmax and ymin≈ymax; no
+// ST_Centroid/spatial extension needed.
+const mapExample = {
+  label: 'Churches in Charlottesville, VA',
+  filename: 'charlottesville-churches.sql',
+  setupSql: `SET s3_region = 'us-west-2';
+INSTALL httpfs;
+LOAD httpfs;`,
+  sql: `ATTACH 'overture' (TYPE vgi, LOCATION 'https://vgi-overture.rusty-bb6.workers.dev');
+
+SELECT names.primary AS name,
+       categories.primary AS category,
+       (bbox.xmin + bbox.xmax) / 2 AS lon,
+       (bbox.ymin + bbox.ymax) / 2 AS lat
+FROM overture.places.place
+WHERE bbox.xmin BETWEEN -78.53 AND -78.43 AND bbox.xmax BETWEEN -78.53 AND -78.43
+  AND bbox.ymin BETWEEN 37.98 AND 38.08 AND bbox.ymax BETWEEN 37.98 AND 38.08
+  AND categories.primary IN ('church_cathedral', 'catholic_church', 'baptist_church',
+                              'pentecostal_church', 'evangelical_church',
+                              'episcopal_church', 'anglican_church');`,
+  sources: [OVERTURE],
+  description:
+    'Overture’s places dataset, filtered to Charlottesville, VA and church categories, color-coded by denomination and rendered as real points on a map — 115 locations.',
+};
 
 // Architecture diagram is rendered offline via the d2 CLI from
 // src/diagrams/vgi-architecture.d2 → public/vgi/architecture.svg.
 // Re-render after edits with:  d2 src/diagrams/vgi-architecture.d2 public/vgi/architecture.svg
 
-const useCases = [
+// ── Shared shape vocabulary (brief §10: port qf.css shapes as utilities) ──
+const WRAP = 'mx-auto w-full max-w-[1200px] px-6 sm:px-7';
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+const EYEBROW = 'qf-eyebrow text-sun-700';
+const LEDE = 'text-[17.5px] leading-relaxed text-soil-700';
+
+// Six recurring patterns, each hitting a different reason someone lands on
+// this page. Deliberately not 15 — every pattern here is either linkable to
+// real content today or general enough to stand on its own without one.
+// Candidates that didn't make the cut (SaaS connectors, RAG, feature stores,
+// streaming beyond the one slot below) are flavors of #1 or #2, not new
+// territory — better as a future "more patterns" page than a seventh card.
+// Icon values are Phosphor tokens (astro-icon `ph:` set, already the site's
+// icon library via ExtensionIcon.astro) — bare regular-weight names, matching
+// that component's convention rather than a `-bold`/`-duotone` suffix.
+const useCases: {
+  icon: string;
+  title: string;
+  description: string;
+  href?: string;
+  external?: boolean;
+  linkLabel?: string;
+}[] = [
   {
-    icon: 'api',
-    title: 'Expose external APIs',
-    description: 'Wrap REST, gRPC, or any HTTP service as SQL-accessible tables and functions. Query remote data alongside local tables without building connector plumbing.'
+    icon: 'share-network',
+    title: 'Data-as-a-Service',
+    description: 'Wrap an API, feed, or proprietary dataset as a SQL catalog that other teams or customers attach to and query directly.',
+    href: '/vgi/data-as-a-service'
   },
   {
-    icon: 'model',
-    title: 'Call models from SQL',
-    description: 'Score rows through PyTorch, ONNX, or any model that lives in your own runtime. Keep the model where it belongs and call it from DuckDB.'
+    icon: 'robot',
+    title: 'Reach AI agents, not just SQL',
+    // MCP compatibility is real and already in the SDK (VGI_OAUTH_CLIENT_ID
+    // etc. in the CLI reference), not aspirational. The pitch stays at the
+    // idea level: one worker, two audiences, same access control either way.
+    description: 'The same worker that plugs into DuckDB also speaks MCP — so the data, models, and services you expose for SQL are just as reachable by an AI agent, under the same access control.'
   },
   {
-    icon: 'code',
-    title: 'Reuse your code',
-    description: 'Make pandas transforms, Go services, TypeScript validators, and internal business logic available to SQL users without compiling native DuckDB extensions.'
+    icon: 'shield-check',
+    title: 'Secure down to the row and column',
+    // Verified against vgi-cedar-proxy (~/Development/vgi-cedar-proxy): Cedar
+    // policies enforce object/row/column rules adversarially on the data
+    // path — never trusting the worker — fail-closed by default, with JWT/
+    // OAuth-derived identity driving the checks. Real and tested (pytest +
+    // E2E against a built VGI), but LICENSE is proprietary/private, never
+    // published to PyPI — no public repo to link this card to, unlike
+    // fixedformat, so it stays a capability claim rather than a proof link.
+    description: 'OAuth carries a user’s identity all the way to the worker, so access can be restricted by row and column, not just by table, with nothing allowed unless a policy says so — the control a company-wide SQL layer actually needs.'
+  },
+  {
+    icon: 'hard-drives',
+    title: 'Bridge a legacy system',
+    // The COBOL/EBCDIC specifics moved behind the link rather than the card
+    // face — real and checkable one click away, but the pitch itself should
+    // read as "your old system," not "our mainframe-parsing worker."
+    description: 'Put SQL in front of a system you can’t rewrite — an old file format, an internal service, anything that still works but was never built to speak SQL.',
+    href: 'https://github.com/Query-farm/vgi-fixedformat',
+    external: true,
+    linkLabel: 'See a real example'
+  },
+  {
+    icon: 'waveform',
+    title: 'Query streaming and event data',
+    description: 'Turn a live stream of events — a queue, a topic, a webhook — into a table SQL can query directly.'
+  },
+  {
+    icon: 'gauge',
+    title: 'Prototype fast, optimize later',
+    description: 'Start fast in whatever language you already use. Reach for a native DuckDB extension later, only if you outgrow what a worker can deliver.',
+    href: '/vgi/architecture#compare'
   }
 ];
 
-const outcomes = [
-  'Expose a hosted service as a SQL catalog.',
-  'Discover schemas and tables from DuckDB.',
-  'Join remote workers with local files and tables.',
-  'Ship workers in the language and runtime your team already uses.',
-];
-
-const architectureNodes = [
-  {
-    label: 'DuckDB session',
-    eyebrow: 'SQL caller',
-    icon: 'duckdb',
-    detail: 'A query calls tables or functions exposed by an attached VGI catalog.',
-    popover: 'Example: SELECT * FROM my_api.main.customers;',
-    tone: 'bg-duck-50 border-duck-200',
-  },
-  {
-    label: 'VGI extension',
-    eyebrow: 'DuckDB side',
-    icon: 'vgi',
-    detail: 'The extension plans the call, validates types, and speaks the VGI protocol from inside DuckDB.',
-    popover: 'This is the small DuckDB extension users install and load.',
-    tone: 'bg-grain-50 border-grain-300',
-  },
-  {
-    label: 'Arrow transport',
-    eyebrow: 'Wire layer',
-    icon: 'arrow',
-    detail: 'Requests and responses move as Arrow batches over pipes, sockets, shared memory, or HTTP.',
-    popover: 'The same interface works locally or over HTTP for hosted workers.',
-    tone: 'bg-white border-soil-300',
-  },
-  {
-    label: 'Worker runtime',
-    eyebrow: 'Your code',
-    icon: 'worker',
-    detail: 'Python, TypeScript, Go, Rust, Java, or C++ code runs in its own process or service.',
-    popover: 'The worker owns schemas, tables, functions, auth, and service logic.',
-    tone: 'bg-harvest-50 border-harvest-200',
-  },
-];
-
+// Icon slugs match src/pages/vgi/languages.astro's own `languages` data
+// exactly (simple-icons:openjdk for Java, not simple-icons:java) — same
+// brand marks, not a second icon choice for the same five languages.
+//
+// hrefs go to each language's REAL docs where one exists — mirroring
+// VGISubNav's languageDocs list — rather than only Python having somewhere
+// to land and everyone else getting an anchor on the overview page. C++ is
+// left out entirely — it's not a shipped SDK yet, so there's nothing real to
+// link to.
+// All five now land in /vgi/docs/<language>/. They used to point at the
+// vgi-rpc-*.query.farm sites, which document the RPC layer underneath rather
+// than the SDK — the only real destination back when Python was the one SDK
+// with docs here.
 const workerLanguages = [
-  { name: 'Python', href: '/vgi/languages#python' },
-  { name: 'TypeScript', href: '/vgi/languages#typescript' },
-  { name: 'Go', href: '/vgi/languages#go' },
-  { name: 'Rust', href: '/vgi/languages#rust' },
-  { name: 'Java', href: '/vgi/languages#java' },
-  { name: 'C++', href: '/vgi/languages#cpp' },
+  { name: 'Python', href: '/vgi/docs/python/', icon: 'simple-icons:python' },
+  { name: 'TypeScript', href: '/vgi/docs/typescript/', icon: 'simple-icons:typescript' },
+  { name: 'Go', href: '/vgi/docs/go/', icon: 'simple-icons:go' },
+  { name: 'Rust', href: '/vgi/docs/rust/', icon: 'simple-icons:rust' },
+  { name: 'Java', href: '/vgi/docs/java/', icon: 'simple-icons:openjdk' },
 ];
 
-const quickStart = `-- 1. Install + load VGI
-INSTALL vgi FROM community;
-LOAD vgi;
 
--- 2. Attach a hosted worker as a SQL catalog
-ATTACH 'volcanos' AS volcanos (
-  TYPE vgi,
-  LOCATION 'https://vgi-volcanos.fly.dev/'
-);
-
--- 3. Query the remote service like normal tables
-SELECT name, country, primary_type
-FROM volcanos.smithsonian.pleistocene_volcanoes
-LIMIT 10;`;
+// DuckDB, VGI, and Worker all dropped from here — each is already shown in
+// the big picture diagram and the VGI Protocol / VGI worker terminology
+// cards above, so restating them a third time was pure repetition. The CGI
+// panel is the one thing this section adds that isn't said elsewhere — a
+// single card now, not a list of one. Links to the connect-to-a-worker page's
+// SSH section, not just the transports section.
+const cgiPanel = {
+  title: 'CGI, but for databases',
+  rfcHref: 'https://datatracker.ietf.org/doc/html/rfc3875',
+  href: '/vgi/connect-to-a-worker#ssh',
+  linkLabel: 'See how workers run remotely →',
+};
 
 const SITE_ORIGIN = 'https://query.farm';
 const vgiDescription = 'VGI (Vector Gateway Interface) lets teams expose APIs, services, models, and custom code as SQL-accessible DuckDB catalogs, tables, and functions without compiling native extensions.';
@@ -106,7 +343,7 @@ const jsonLd = [
     applicationCategory: 'DeveloperApplication',
     applicationSubCategory: 'DuckDB Extension Protocol',
     operatingSystem: 'Linux, macOS, Windows',
-    programmingLanguage: ['Python', 'TypeScript', 'Go', 'Rust', 'Java', 'C++'],
+    programmingLanguage: ['Python', 'TypeScript', 'Go', 'Rust', 'Java'],
     license: 'https://opensource.org/licenses/MIT',
     codeRepository: 'https://github.com/Query-farm/vgi',
     offers: {
@@ -139,436 +376,599 @@ const jsonLd = [
 >
   <VGISubNav />
 
-  <!-- Hero -->
-  <section class="relative bg-gradient-to-br from-harvest-100 via-harvest-50 to-white overflow-hidden py-14 lg:py-20 font-display">
-    <div class="absolute inset-0 opacity-40">
-      <svg class="w-full h-full" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <pattern id="vgi-hero-pattern" x="0" y="0" width="100" height="100" patternUnits="userSpaceOnUse">
-            <circle cx="50" cy="50" r="1.5" fill="currentColor" class="text-earth-300" />
-            <circle cx="25" cy="75" r="1" fill="currentColor" class="text-soil-300" />
-            <circle cx="75" cy="25" r="1" fill="currentColor" class="text-soil-300" />
-          </pattern>
-        </defs>
-        <rect width="100%" height="100%" fill="url(#vgi-hero-pattern)" />
-      </svg>
+  {/* Not gated behind a wasmSupported check the way the extension detail page
+      gates it (metadata.platforms) — this is a bespoke page, not driven by
+      that metadata, and vgi/augment/metadata.json doesn't declare a platforms
+      list at all. Mounted unconditionally so the button is visible to test;
+      whether it actually works depends on the unverified pieces noted above
+      tourSql. */}
+  <ExampleShellMounter client:load extensionName="VGI" installSource="community" fixtures={null} />
+
+  <!-- ── Page header ─────────────────────────────────────────── -->
+  <PageHead
+    variant="section"
+    title="The universal SQL interface."
+    hairband
+  >
+    {/* Lede moved from the prop to the slot so Haybarn can be linked. It
+        deliberately avoids the word "worker" — that term is introduced and
+        defined further down, in The gist, rather than in the first sentence a
+        visitor reads. */}
+    <Fragment slot="lede">
+      The Vector Gateway Interface (VGI) lets <a href="https://duckdb.org">DuckDB</a> and
+      <a href="/haybarn">Haybarn</a> attach a remote process as if it were a native catalog or
+      extension. Your data, services, models, and code stay in their own runtime; SQL users get
+      catalogs, schemas, tables, and functions they can explore, query, and join.
+    </Fragment>
+
+    {/* The badge carries the "Vector Gateway Interface" wordmark itself, so it
+        replaces the eyebrow rather than sitting beside it — the name would
+        otherwise appear twice within an inch. The alt text is what the eyebrow
+        used to say, keeping the product name in the accessibility tree and out
+        of the visual design. Source art is 1197x880; served at 900w since the
+        largest render is 320 CSS px. */}
+    <Fragment slot="icon">
+      <picture class="block flex-none">
+        <source srcset="/vgi/vgi-hero.webp" type="image/webp" />
+        <img
+          src="/vgi/vgi-hero.png"
+          alt="Vector Gateway Interface"
+          width="1197"
+          height="880"
+          class="h-auto w-[220px] sm:w-[268px] lg:w-[320px]"
+        />
+      </picture>
+    </Fragment>
+
+    <div class="mt-6 flex flex-wrap items-center gap-3">
+      <Button href="/vgi/getting-started" variant="primary" size="md">Get started</Button>
+      <Button href="/vgi/architecture" variant="secondary" size="md">How it works</Button>
+      <Button href="https://github.com/Query-farm/vgi" variant="secondary" size="md" external>GitHub ↗</Button>
     </div>
 
-    <div class="section-container relative z-10">
-      <div class="grid grid-cols-1 lg:grid-cols-[0.92fr_1.08fr] gap-10 lg:gap-14 items-center">
-        <div>
-          <div class="mb-5 inline-flex items-center gap-2 rounded-full border-2 border-soil-900 bg-white px-4 py-2 text-sm font-bold text-soil-900 shadow-sm">
-            <img src="/vgi/vgi-logo.png" alt="" class="h-6 w-6 object-contain" width="24" height="24" />
-            Vector Gateway Interface
-          </div>
-          <h1 class="text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-normal text-soil-900 leading-tight">
-            Turn APIs, models, and code into
-            <span class="inline-block rounded-2xl border-2 border-soil-900 bg-grain-300 px-3 pb-1 text-soil-900 shadow-sm">SQL.</span>
-          </h1>
+    <Fragment slot="aside">
+      <div class="qf-figure text-4xl leading-none text-sun-700">115</div>
+      <div class="mt-1.5 text-[12.5px] font-medium text-soil-700">Workers built</div>
+    </Fragment>
+  </PageHead>
 
-          <p class="mt-6 text-lg md:text-xl text-soil-700 leading-relaxed">
-            VGI lets Haybarn and DuckDB attach a remote worker as if it were a normal SQL catalog. Your data, service, model, or Python/TypeScript/Go/Rust code stays in its own runtime; SQL users get tables and functions they can discover, query, and join.
+  <!-- ── The gist ────────────────────────────────────────────── -->
+  <section class="py-16 lg:py-[70px]">
+    <div class={WRAP}>
+      <span class={EYEBROW}>The gist</span>
+      <h2 class="mt-3 max-w-[26ch] text-3xl md:text-4xl text-soil-900">
+        For the systems, data, and code DuckDB cannot reach by itself
+      </h2>
+      <p class={`mt-3.5 max-w-[68ch] ${LEDE}`}>
+        VGI removes the glue. Instead of writing code to bridge two systems, you write a
+        VGI-enabled process — a <em>worker</em> — that exposes an API, service, library, model,
+        or dataset. DuckDB attaches to that worker, discovers what it offers, and makes all of
+        it queryable in SQL.
+      </p>
+      <p class={`mt-3.5 max-w-[68ch] ${LEDE}`}>
+        A worker can run entirely on your own machine, or be reached over HTTP. Locally, DuckDB
+        spawns it for you and talks over pipes, a Unix socket, or shared memory — no service to
+        deploy, and nothing on the network. Over HTTP, the worker runs wherever you deploy it,
+        and any number of DuckDB sessions can attach to the same one. Because a worker is just an
+        HTTP service, you can also put a pool of them behind a load balancer and scale it like
+        any other tier — the usual shape for a shared model or inference service. Same worker,
+        same protocol; only the
+        <a href="/vgi/architecture#transports">transport</a> changes.
+      </p>
+      <p class={`mt-3.5 max-w-[68ch] ${LEDE}`}>
+        And because DuckDB has
+        <a href="https://duckdb.org/docs/stable/clients/overview">client libraries</a> for
+        Node.js, Python, Go, and Rust, plus
+        <a href="https://duckdb.org/docs/stable/clients/adbc">ADBC</a> and
+        <a href="https://duckdb.org/docs/stable/clients/odbc/overview">ODBC</a>, every VGI worker
+        is reachable from whatever language you already work in.
+      </p>
+      <p class={`mt-3.5 max-w-[68ch] ${LEDE}`}>
+        In practice, that shows up as a handful of recurring patterns:
+      </p>
+
+      <div class="mt-8 grid gap-3.5 md:grid-cols-3">
+        {useCases.map(u => {
+          const Tag = u.href ? 'a' : 'div';
+          const linkProps = u.href
+            ? { href: u.href, ...(u.external ? { target: '_blank', rel: 'noopener noreferrer' } : {}) }
+            : {};
+          return (
+            <Tag
+              {...linkProps}
+              class:list={[
+                CARD,
+                'p-6 text-center',
+                u.href && 'block no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400'
+              ]}
+            >
+              <Icon name={`ph:${u.icon}`} class="mx-auto block h-8 w-8 text-sun-700" aria-hidden="true" />
+              <h3 class="mt-4 text-xl text-soil-900">{u.title}</h3>
+              <p class="mt-2.5 text-sm leading-relaxed text-soil-700">{u.description}</p>
+              {u.href && (
+                <span class="mt-4 inline-block text-[12.5px] font-medium text-link">
+                  {u.linkLabel ?? 'Learn more'} {u.external ? '↗' : '→'}
+                </span>
+              )}
+            </Tag>
+          );
+        })}
+      </div>
+
+      <p class={`${EYEBROW} mt-12 block`}>Big picture</p>
+      <h2 class="mt-3 text-2xl md:text-3xl text-soil-900">One extension, however you use it</h2>
+      <p class={`mt-3.5 max-w-[68ch] ${LEDE}`}>
+        Every pattern above goes through the same path: DuckDB issues a request, the VGI
+        extension carries it as Arrow IPC over whichever transport you chose, and your worker
+        answers.
+      </p>
+      <div class="mt-6">
+        <BigPictureDiagram flip />
+      </div>
+
+      <p class={`${EYEBROW} mt-12 block`}>Terminology</p>
+      <h2 class="mt-3 text-2xl md:text-3xl text-soil-900">VGI Protocol and VGI worker</h2>
+      <div class="mt-6 grid gap-3.5 md:grid-cols-2">
+        <div class={`${CARD} p-6`}>
+          <span class={EYEBROW}>VGI Protocol</span>
+          <h3 class="mt-2.5 text-xl text-soil-900">What DuckDB speaks to reach a worker</h3>
+          <p class="mt-2.5 text-sm leading-relaxed text-soil-700">
+            VGI is two things at once: a DuckDB extension, and the Apache Arrow-based protocol it
+            speaks to reach a worker running outside DuckDB. That protocol carries authentication,
+            catalog discovery, query planning, and the data itself.
           </p>
+        </div>
+        <div class={`${CARD} p-6`}>
+          <span class={EYEBROW}>VGI worker</span>
+          <h3 class="mt-2.5 text-xl text-soil-900">The service that exposes data</h3>
+          <p class="mt-2.5 text-sm leading-relaxed text-soil-700">
+            A VGI worker is a process or hosted service that exposes data or compute to DuckDB. It
+            receives each request as a remote procedure call (RPC) and returns the rows or results
+            DuckDB asked for.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
 
-          <div class="mt-8 flex flex-col sm:flex-row items-start sm:items-center gap-4">
-            <Button href="/vgi/getting-started" variant="accent" size="lg">Get Started</Button>
-            <Button href="https://github.com/Query-farm/vgi" variant="secondary" size="lg" external>GitHub</Button>
-          </div>
+  <!-- ── The one dark slab: the 10-second tour ────────────────── -->
+  <section id="tour" class="scroll-mt-32 bg-pipe-6 py-16 text-cream">
+    <div class={WRAP}>
+      <span class="qf-eyebrow text-sun-400">The 10-second tour</span>
+      <h2 class="mt-3 text-3xl md:text-4xl text-cream">We could have faked this demo. We didn't.</h2>
+      <p class="mt-3 max-w-[58ch] text-[17.5px] leading-relaxed text-cream-2">
+        Every worker below is real and hosted — the same VGI protocol you'd run locally over a
+        pipe, just reached over plain HTTP so it works here, live, in your browser.
+        <code class="font-mono text-[0.92em] text-sun-400">ATTACH</code> doesn't care which: no
+        ETL, no connector plumbing, no native rebuild, either way.
+      </p>
+
+      <!-- Tabs — file-tab strip (underline style, sun-400 active, matching
+           VGISubNav's own tab idiom) over one panel per example. Each panel
+           is a self-contained code-wrapper + sample-output pair;
+           ExampleShellMounter finds and wires every pre[data-language="sql"]
+           on the page independently, hidden ones included, so switching tabs
+           just reveals a block that already has its own button/shell state —
+           nothing here has to coordinate with it beyond hide/show a panel. -->
+      <div class="mt-6" id="tour-tabs">
+        <div class="flex gap-1 overflow-x-auto border-b border-white/10" role="tablist" aria-label="Example queries">
+          {tourExamples.map((ex, i) => (
+            <button
+              type="button"
+              class:list={[
+                'tour-tab whitespace-nowrap border-b-2 px-3.5 py-2 text-[13.5px] font-medium transition-colors hover:text-cream',
+                i === 0 ? 'border-sun-400 text-sun-400' : 'border-transparent text-cream-2',
+              ]}
+              data-tab={ex.id}
+              role="tab"
+              aria-selected={i === 0 ? 'true' : 'false'}
+            >{ex.label}</button>
+          ))}
+          <button
+            type="button"
+            class="tour-tab whitespace-nowrap border-b-2 border-transparent px-3.5 py-2 text-[13.5px] font-medium text-cream-2 transition-colors hover:text-cream"
+            data-tab="map"
+            role="tab"
+            aria-selected="false"
+          >{mapExample.label}</button>
         </div>
 
-        <div class="rounded-2xl border-2 border-soil-900 bg-white p-3 md:p-4 shadow-2xl">
-          <div class="rounded-xl border-2 border-soil-900 bg-soil-900 p-4 md:p-5 text-soil-100">
-            <div class="mb-4 flex items-center justify-between gap-4">
-              <div>
-                <p class="text-xs font-semibold uppercase tracking-wider text-harvest-300">What VGI does</p>
-                <h2 class="mt-1 text-lg font-bold text-white">A gateway from real systems to SQL</h2>
-              </div>
-              <span class="hidden sm:inline-flex rounded-full border border-harvest-400/40 bg-harvest-400/10 px-3 py-1 text-xs font-bold text-harvest-200">Arrow IPC</span>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_4.25rem_minmax(0,1fr)] gap-3 md:gap-6 items-stretch">
-              <div class="grid gap-2">
-                {['Public APIs', 'Internal services', 'ML models', 'Data libraries'].map((item) => (
-                  <div class="rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm font-semibold text-soil-100">
-                    {item}
-                  </div>
+        {tourExamples.map((ex, i) => (
+          <div class="tour-tab-panel" data-tab-panel={ex.id} role="tabpanel" hidden={i !== 0}>
+            <!-- Source credit + description — sets up what this example is
+                 and where its data/functions come from before the reader
+                 hits the SQL, rather than explaining it after. Persists
+                 regardless of run state (unlike the sample table below) —
+                 it's context about the example, not a stand-in for output. -->
+            <div class="mt-5 flex items-center gap-3.5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4">
+              <div class="flex flex-none items-center gap-2">
+                {ex.sources.map((src, si) => (
+                  <>
+                    {si > 0 && <span class="text-base text-white/25">+</span>}
+                    <a href={src.href} target="_blank" rel="noopener" title={src.name}>
+                      <img src={src.logo} alt={src.name} class="h-12 w-12 rounded-lg object-contain" />
+                    </a>
+                  </>
                 ))}
               </div>
+              <p class="text-[13px] leading-relaxed text-cream-2">{ex.description}</p>
+            </div>
 
-              <div class="flex md:flex-col items-center justify-center gap-2">
-                <div class="h-px w-full md:h-full md:w-px bg-harvest-300/50"></div>
-                <div class="shrink-0 text-center">
-                  <div class="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-harvest-300/40 bg-harvest-300/10 text-sm font-black uppercase tracking-wider text-harvest-200">
-                    VGI
-                  </div>
-                </div>
-                <div class="h-px w-full md:h-full md:w-px bg-harvest-300/50"></div>
+            <div class="tour-code-wrapper mt-5">
+              <CodeBlock code={ex.sql} lang="sql" title={ex.filename} />
+            </div>
+
+            <!-- Sample output — for visitors who haven't clicked "Run using
+                 WASM" yet (ExampleShellMounter's own button, in its run bar
+                 below the code block). Styled to match that live terminal
+                 output (rock-900, the same ground CodeBlock itself sits on)
+                 rather than the light-mode QueryResult component docs pages
+                 use elsewhere, so it doesn't read as a mismatched light box
+                 dropped into a dark section. Real rows — see the doc comment
+                 on tourExamples above.
+
+                 Hides itself once this panel's live shell opens (see the
+                 script below) — its container lands as a sibling inside
+                 .tour-code-wrapper, right after ExampleShellMounter's own
+                 .example-run-bar div, so a MutationObserver on that wrapper
+                 is what ExampleShellMounter's own doc comment already
+                 promises ("a container placed right below that block").
+                 Reappears if the shell is closed again. -->
+            <div class="tour-sample-output mt-5 overflow-hidden rounded-xl border border-white/15 bg-rock-900">
+              <div class="border-b border-white/10 px-4 py-2.5 text-[12.5px] font-medium text-cream-2">
+                Sample output — click <span class="text-sun-400">Try it in your browser</span> above to get this live
               </div>
-
-              <div class="rounded-lg border border-harvest-300/30 bg-harvest-300/10 p-3">
-                <p class="mb-2 text-xs font-bold uppercase tracking-wider text-harvest-200">DuckDB sees</p>
-                <div class="space-y-2 text-sm font-semibold text-white">
-                  <div class="rounded bg-white/10 px-3 py-2">schemas</div>
-                  <div class="rounded bg-white/10 px-3 py-2">tables</div>
-                  <div class="rounded bg-white/10 px-3 py-2">functions</div>
-                </div>
+              <div class="overflow-x-auto">
+                <table class="w-full font-mono text-[12.5px]">
+                  <thead>
+                    <tr class="border-b border-white/10">
+                      {ex.result.columns.map((col) => (
+                        <th class="px-4 py-2 text-left font-medium text-cream-2">{col}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ex.result.rows.map((row) => (
+                      <tr class="border-t border-white/5 first:border-t-0">
+                        {row.map((cell, ci) => (
+                          <td class:list={['px-4 py-1.5', ci === ex.result.numericCol ? 'qf-figure text-sun-400' : 'text-[#e9e1d3]']}>{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
 
-            <pre class="mt-4 overflow-x-auto rounded-lg border border-white/10 bg-black/25 p-4 font-mono text-sm leading-relaxed text-soil-100"><code><span class="sql-keyword">ATTACH</span> <span class="sql-string">'my_api'</span> <span class="sql-keyword">AS</span> <span class="sql-object">my_api</span> (
-  <span class="sql-keyword">TYPE</span> vgi,
-  <span class="sql-keyword">LOCATION</span> <span class="sql-string">'https://worker.example.com'</span>
-);
-
-<span class="sql-keyword">SELECT</span> *
-<span class="sql-keyword">FROM</span> <span class="sql-object">my_api.main.customers</span>;</code></pre>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div class="absolute bottom-0 left-0 right-0">
-      <svg viewBox="0 0 1440 120" fill="none" xmlns="http://www.w3.org/2000/svg" class="w-full h-auto">
-        <path d="M0 0L60 10C120 20 240 40 360 46.7C480 53 600 47 720 43.3C840 40 960 40 1080 46.7C1200 53 1320 67 1380 73.3L1440 80V120H1380C1320 120 1200 120 1080 120C960 120 840 120 720 120C600 120 480 120 360 120C240 120 120 120 60 120H0V0Z" fill="white" fill-opacity="0.5"/>
-      </svg>
-    </div>
-  </section>
-
-  <!-- What is VGI -->
-  <section class="py-16 lg:py-24 bg-white font-display">
-    <div class="section-container">
-      <div class="max-w-4xl mx-auto text-center">
-        <SectionHeader
-          align="center"
-          eyebrow="The gist"
-          title="A SQL interface for the systems DuckDB cannot reach by itself"
-        />
-        <p class="text-lg text-soil-700 leading-relaxed mt-6">
-          VGI is for the moment when your data or logic is not already a file, table, or native DuckDB extension. You write or use a worker that exposes an API, model, service, dataset, or library. Haybarn attaches to that worker, discovers what it exposes, and makes it queryable from SQL.
-        </p>
-      </div>
-
-      <div class="mt-10 grid grid-cols-1 md:grid-cols-2 gap-4 max-w-5xl mx-auto">
-        {outcomes.map((item) => (
-          <div class="flex min-h-24 items-center gap-3 rounded-xl border-2 border-soil-900 bg-grain-50 p-5 shadow-sm">
-            <div class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-grain-300 text-soil-900">
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" />
-              </svg>
-            </div>
-            <p class="font-bold leading-snug text-soil-900">{item}</p>
+            {/* A second, bespoke "WASM" run path for this one tab — see
+                LiveTrainBoard.tsx's own doc comment for why it isn't folded
+                into ExampleShellMounter's generic mechanism. Reuses ex.sql
+                verbatim (one source of truth: the terminal button above
+                runs it once, this one keeps re-running just its final
+                SELECT on an interval). */}
+            {ex.id === 'trains' && <LiveTrainBoard client:load sql={ex.sql} />}
           </div>
         ))}
-      </div>
 
-      <div class="mt-10 max-w-5xl mx-auto rounded-2xl border-2 border-soil-900 bg-white p-5 md:p-6 shadow-lg">
-        <div class="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] gap-5 md:gap-6 items-stretch">
-          <div class="rounded-xl border border-soil-200 bg-soil-50 p-5">
-            <p class="text-xs font-bold uppercase tracking-wider text-harvest-700">VGI</p>
-            <h3 class="mt-2 text-xl font-bold text-soil-900">The DuckDB interface</h3>
-            <p class="mt-3 text-sm leading-relaxed text-soil-700">
-              VGI is the extension and Arrow-based protocol DuckDB uses to attach something outside DuckDB as a catalog. It handles discovery, planning, types, and moving batches back and forth.
-            </p>
-          </div>
-
-          <div class="hidden md:flex items-center justify-center">
-            <div class="rounded-full border-2 border-soil-900 bg-grain-300 px-3 py-1 text-xs font-bold text-soil-900">
-              talks to
-            </div>
-          </div>
-
-          <div class="rounded-xl border border-harvest-200 bg-harvest-50 p-5">
-            <p class="text-xs font-bold uppercase tracking-wider text-harvest-700">VGI worker</p>
-            <h3 class="mt-2 text-xl font-bold text-soil-900">The service that exposes data</h3>
-            <p class="mt-3 text-sm leading-relaxed text-soil-700">
-              A worker is the process or hosted service you build or reuse. It owns the API calls, model code, auth, schemas, tables, and functions that DuckDB users query through VGI.
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Protocol explanation -->
-  <section class="py-16 lg:py-24 bg-soil-50 font-display">
-    <div class="section-container">
-      <div class="grid grid-cols-1 lg:grid-cols-[0.9fr_1.1fr] gap-8 lg:gap-10 items-center">
-        <div>
-          <p class="text-sm font-semibold uppercase tracking-wider text-harvest-700 mb-3">Under the hood</p>
-          <h2 class="text-3xl md:text-4xl font-bold text-soil-900 mb-4">A protocol, not a framework</h2>
-          <p class="text-soil-700 leading-relaxed">
-            A small DuckDB extension speaks the VGI protocol from inside DuckDB. Lightweight worker libraries speak it from Python, TypeScript, Go, Rust, Java, or C++. The two sides exchange Apache Arrow batches over pipes, sockets, shared memory, or HTTP.
-          </p>
-          <p class="mt-4 text-soil-700 leading-relaxed">
-            The important part: your code runs outside DuckDB. That means no DuckDB headers, no FFI tangle, and no native rebuild every time your runtime or DuckDB version changes.
-          </p>
-        </div>
-
-        <div class="rounded-2xl border-2 border-soil-900 bg-white p-5 shadow-lg">
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
-            {[
-              ['DuckDB', 'SQL calls tables and functions'],
-              ['VGI', 'Arrow request and response'],
-              ['Worker', 'Your service or code runs here'],
-            ].map(([title, description]) => (
-              <div class="rounded-xl border border-soil-200 bg-soil-50 p-4">
-                <h3 class="font-bold text-soil-900">{title}</h3>
-                <p class="mt-2 text-sm leading-relaxed text-soil-700">{description}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Architecture diagram -->
-  <section id="technical-view" class="py-16 lg:py-24 bg-white font-display">
-    <div class="section-container">
-      <SectionHeader
-        align="center"
-        eyebrow="Technical view"
-        title="How the pieces fit together"
-        description="DuckDB on one side, your worker on the other, Apache Arrow IPC between them. Pick the language SDK and transport that match your stack."
-        class="mb-4"
-      />
-
-      <p class="mb-8 text-center text-sm font-semibold text-soil-500">
-        Hover over each step to learn more.
-      </p>
-
-      <div class="max-w-6xl mx-auto overflow-visible rounded-2xl border-2 border-soil-900 bg-white p-4 md:p-6 shadow-lg">
-        <div class="grid grid-cols-1 lg:grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr] gap-4 items-stretch">
-          {architectureNodes.map((node, index) => (
-            <>
-              <div tabindex="0" class={`group relative flex min-h-48 flex-col items-center justify-center rounded-xl border-2 ${node.tone} p-5 text-center shadow-sm transition-all hover:-translate-y-1 hover:shadow-xl focus:-translate-y-1 focus:shadow-xl focus:outline-none`}>
-                <div class="flex h-20 w-20 items-center justify-center rounded-2xl border-2 border-soil-900 bg-white shadow-sm">
-                  {node.icon === 'duckdb' && (
-                    <img src="/vgi/icons/duckdb-mark.svg" alt="" class="h-12 w-12 object-contain opacity-90" width="48" height="48" />
-                  )}
-                  {node.icon === 'vgi' && (
-                    <span class="relative block h-16 w-16 overflow-hidden">
-                      <img src="/Query_Farm_Logo_Transparent.png" alt="" class="absolute left-1/2 top-1/2 h-24 w-32 max-w-none -translate-x-[54%] -translate-y-[48%] object-contain opacity-95" width="128" height="96" />
-                    </span>
-                  )}
-                  {node.icon === 'arrow' && (
-                    <span class="flex h-12 w-12 items-center justify-center">
-                      <img src="/vgi/icons/apache-arrow-chevrons.svg" alt="" class="h-10 w-12 translate-x-1 object-contain opacity-90" width="48" height="40" />
-                    </span>
-                  )}
-                  {node.icon === 'worker' && (
-                    <svg class="h-14 w-14 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <rect x="4.5" y="5" width="15" height="5.5" rx="1.5" stroke-width="2" />
-                      <rect x="4.5" y="13.5" width="15" height="5.5" rx="1.5" stroke-width="2" />
-                      <path stroke-linecap="round" stroke-width="2" d="M8 7.75h.01M8 16.25h.01M11 7.75h5M11 16.25h5" />
-                    </svg>
-                  )}
-                </div>
-                <p class="mt-4 text-xs font-bold uppercase tracking-wider text-harvest-700">{node.eyebrow}</p>
-                <h3 class="mt-1 text-xl font-bold leading-tight text-soil-900">{node.label}</h3>
-                <p class="mt-3 text-sm leading-relaxed text-soil-700 lg:hidden">{node.detail}</p>
-
-                <div class="pointer-events-none absolute left-1/2 top-[calc(100%+0.75rem)] z-50 hidden w-72 -translate-x-1/2 rounded-xl border-2 border-soil-900 bg-white p-4 text-left shadow-xl group-hover:block group-focus:block">
-                  <p class="text-xs font-bold uppercase tracking-wider text-harvest-700">{node.eyebrow}</p>
-                  <p class="mt-1 text-sm font-semibold leading-relaxed text-soil-900">{node.detail}</p>
-                  <p class="mt-3 rounded-lg bg-grain-50 px-3 py-2 text-xs font-semibold leading-relaxed text-soil-700">{node.popover}</p>
-                </div>
-              </div>
-
-              {index < architectureNodes.length - 1 && (
-                <div class="hidden lg:flex items-center justify-center">
-                  <div class="flex h-full min-h-28 flex-col items-center justify-center gap-2">
-                    <div class="h-px w-14 bg-soil-900"></div>
-                    <div class="rounded-full border-2 border-soil-900 bg-grain-300 px-3 py-1 text-xs font-bold text-soil-900">
-                      {index === 1 ? 'Arrow IPC' : 'request'}
-                    </div>
-                    <div class="h-px w-14 bg-soil-900"></div>
-                  </div>
-                </div>
-              )}
-            </>
-          ))}
-        </div>
-
-        <div class="mt-5 grid grid-cols-1 lg:grid-cols-[1fr_1fr] gap-4">
-          <div class="rounded-xl border-2 border-soil-900 bg-soil-900 p-4 text-soil-100">
-            <p class="text-xs font-bold uppercase tracking-wider text-harvest-300">Supported worker runtimes</p>
-            <p class="mt-1 text-xs font-semibold text-soil-300">Click a language to see examples.</p>
-            <div class="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {workerLanguages.map((language) => (
-                <a
-                  href={language.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-center text-sm font-semibold text-white transition-colors hover:border-harvest-300/50 hover:bg-harvest-300/15"
-                >
-                  {language.name}
-                </a>
+        <!-- The map tab — handled outside tourExamples.map above since its
+             result renders as Leaflet markers, not a terminal/table. tryable
+             is off on its CodeBlock so ExampleShellMounter's generic scan
+             skips it — OvertureMapExample is this tab's own run button, not
+             a second one stacked underneath. -->
+        <div class="tour-tab-panel" data-tab-panel="map" role="tabpanel" hidden>
+          <div class="mt-5 flex items-center gap-3.5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4">
+            <div class="flex flex-none items-center gap-2">
+              {mapExample.sources.map((src, si) => (
+                <>
+                  {si > 0 && <span class="text-base text-white/25">+</span>}
+                  <a href={src.href} target="_blank" rel="noopener" title={src.name}>
+                    <img src={src.logo} alt={src.name} class="h-12 w-12 rounded-lg object-contain" />
+                  </a>
+                </>
               ))}
             </div>
+            <p class="text-[13px] leading-relaxed text-cream-2">{mapExample.description}</p>
           </div>
-          <div class="rounded-xl border-2 border-soil-900 bg-grain-50 p-4">
-            <p class="text-xs font-bold uppercase tracking-wider text-harvest-700">Transports</p>
-            <p class="mt-2 text-sm leading-relaxed text-soil-700">
-              Use pipes for spawned local workers, Unix sockets for local services, shared memory for high-throughput co-located workloads, or HTTP for hosted workers.
-            </p>
+
+          <div class="mt-5">
+            <CodeBlock code={mapExample.sql} lang="sql" title={mapExample.filename} tryable={false} />
           </div>
+
+          <OvertureMapExample client:load sql={mapExample.sql} setupSql={mapExample.setupSql} />
         </div>
       </div>
-
-      <p class="mt-8 text-center text-sm text-soil-600 max-w-3xl mx-auto leading-relaxed">
-        The DuckDB-side is a small C++ extension. Your code lives in a separate process, written in any of the supported languages. The two ends speak Apache Arrow IPC over a transport you choose — pipes for the spawned-subprocess case, Unix sockets for an existing local worker, shared memory for high-throughput co-located workloads, HTTP for remote ones.
-      </p>
     </div>
   </section>
 
-  <!-- Use cases -->
-  <section class="py-16 lg:py-24 bg-soil-50 font-display">
-    <div class="section-container">
-      <SectionHeader
-        align="center"
-        eyebrow="What you can build"
-        title="Use cases"
-        class="mb-12"
-      />
+  <!-- ── Under the hood ──────────────────────────────────────── -->
+  <section class="border-y border-soil-300 bg-soil-100 py-16 lg:py-[70px]">
+    <div class={WRAP}>
+      <div class="grid gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
+        <div>
+          <span class={EYEBROW}>Under the hood</span>
+          <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">A protocol, not a framework</h2>
+          <p class={`mt-3.5 ${LEDE}`}>
+            VGI is a DuckDB extension that uses
+            <a href="https://vgi-rpc.query.farm">VGI-RPC</a>
+            — an Apache Arrow IPC-based RPC protocol — to expose an interface for building
+            database extensions. Lightweight implementation libraries make that same protocol
+            easy to speak in Python,
+            TypeScript, Go, Rust, or Java, so a worker never has to hand-roll the wire format.
+            What moves between DuckDB and a worker is
+            <a href="https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc">Apache Arrow IPC</a>,
+            carried over pipes, sockets, shared memory, or HTTP.
+          </p>
+          <p class="mt-4 text-[15px] leading-relaxed text-soil-700">
+            The important part: your code runs outside DuckDB, so it's never tied to DuckDB's own
+            extension interface — the ABI that changes across versions and forces a recompile. Any
+            language with an <a href="https://arrow.apache.org/docs/status.html">Arrow library</a>
+            can speak VGI — in practice, that's most of them. Writing a new worker ends up feeling
+            like writing an ordinary service, not building a
+            database extension.
+          </p>
+        </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-6xl mx-auto">
-        {useCases.map(u => (
-          <Card padding="lg" class="text-center border-2 border-soil-900 shadow-sm">
-            <div class="mx-auto mb-5 flex h-16 w-16 items-center justify-center text-harvest-700">
-              {u.icon === 'api' && (
-                <svg class="h-11 w-11" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.1" d="M4 18V8.5L12 5l8 3.5V18" />
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.1" d="M7 18v-5h10v5M9 10h.01M12 9h.01M15 10h.01M3 18h18" />
-                </svg>
-              )}
-              {u.icon === 'model' && (
-                <svg class="h-11 w-11" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.1" d="M5 17c4.2 0 7-2.8 7-7 0 4.2 2.8 7 7 7" />
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.1" d="M12 5v14M7 8c1.6.2 3.3.8 5 2 1.7-1.2 3.4-1.8 5-2" />
-                  <circle cx="12" cy="10" r="1.5" fill="currentColor" stroke="none" />
-                </svg>
-              )}
-              {u.icon === 'code' && (
-                <svg class="h-11 w-11" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.1" d="M5 18h14M7 18v-7l5-3 5 3v7" />
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.1" d="M10 13l-2 2 2 2M14 13l2 2-2 2" />
-                </svg>
-              )}
-            </div>
-            <h3 class="text-lg font-bold text-soil-900 mb-3">{u.title}</h3>
-            <p class="text-sm text-soil-700 leading-relaxed">{u.description}</p>
-          </Card>
+        <div class={`${CARD} p-5`}>
+          <h3 class="text-lg text-soil-900">{cgiPanel.title}</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">
+            <a href={cgiPanel.rfcHref}>CGI</a> is old — a 1990s standard, from back when most web
+            pages were still static HTML files and the dynamic ones ran out of a folder every site
+            had, literally named <code class="rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900">/cgi-bin/</code> —
+            for handing a request off to an external program instead of building every feature
+            into the server itself. VGI does
+            the same for DuckDB — it launches or connects to a process outside the database rather
+            than compiling that logic in. And because the launch is just a command, it doesn’t
+            have to stay local: swap in a command that reaches over SSH, or attach an HTTP address
+            instead, and the worker runs somewhere else entirely.
+          </p>
+          <a href={cgiPanel.href} class="mt-3 inline-block text-[13px] font-medium text-link no-underline transition-colors hover:text-link-hover">
+            {cgiPanel.linkLabel}
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Fork 1: discover & consume (the ~90% path) ─────────────
+       Replaces the old "Technical view" section, which by this point in the
+       page was re-explaining the same DuckDB/VGI/Arrow/worker pieces the big
+       picture diagram and the terminology cards above already covered. Most
+       visitors don't want another diagram — they want to know which of the
+       two things to do next: attach something that already exists, or build
+       something that doesn't. This section and the one after it are that
+       fork, in the order most people actually need it. -->
+  <!-- Three beats, one story: what's live (touchable proof), how big the
+       pipeline behind it is (scale proof), then the actual differentiator
+       (deployment choice) — in that order deliberately, since the close only
+       lands once the reader already believes the catalog is real and
+       growing. Orchard IS the 115 from vgi-workers-created.txt, at various
+       stages of landing in the catalog — not a separate universe next to
+       it, which is how this section used to read. -->
+  <section id="discover" class="scroll-mt-32 py-16 lg:py-[70px]">
+    <div class={WRAP}>
+      <span class={EYEBROW}>Most visitors start here</span>
+      <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">Find a worker someone already built</h2>
+      <p class={`mt-3.5 max-w-[68ch] ${LEDE}`}>
+        <a href="/products/orchard">Orchard</a> is Query.Farm's marketplace and hosting platform
+        for VGI workers — attach one and start querying. No worker to write, no code to run
+        yourself.
+      </p>
+
+      <div class="mt-8 grid gap-3.5 sm:grid-cols-3">
+        {orchardPreview.map((connector) => (
+          <ConnectorCard connector={connector} showPricing={false} />
         ))}
       </div>
-    </div>
-  </section>
 
-  <!-- Quick start preview -->
-  <section class="py-16 lg:py-24 bg-white font-display">
-    <div class="section-container">
-      <div class="max-w-4xl mx-auto">
-        <SectionHeader
-          align="center"
-          eyebrow="The 10-second tour"
-          title="From hosted worker to SQL catalog"
-          class="mb-8"
-        />
-        <div class="rounded-xl border-2 border-soil-900 bg-white p-4 shadow-sm">
-          <CodeBlock code={quickStart} lang="sql" title="quickstart.sql" />
+      <div class="mt-7 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div class="flex flex-wrap gap-3">
+          <Button href="/products/orchard" variant="primary" size="md">Browse Orchard →</Button>
+          <Button href="/vgi/getting-started#hosted-worker" variant="secondary" size="md">See a hosted worker attached</Button>
         </div>
-        <div class="mt-8 text-center">
-          <Button href="/vgi/getting-started" variant="primary" size="lg">
-            Full Getting Started Guide →
-          </Button>
-        </div>
+        <p class="text-[13px] text-soil-500">What's live today is the leading edge — more of the catalog below is landing regularly.</p>
       </div>
-    </div>
-  </section>
 
-  <!-- Sub-page navigation -->
-  <section class="py-16 lg:py-24 bg-soil-50 font-display">
-    <div class="section-container">
-      <SectionHeader
-        align="center"
-        eyebrow="Dive deeper"
-        title="Where to next"
-        class="mb-12"
-      />
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
-        <a href="/vgi/getting-started" class="block">
-          <Card padding="lg" class="h-full border-2 border-soil-900 shadow-sm hover:shadow-xl transition-shadow">
-            <div class="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-grain-100 text-harvest-700">
-              <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M7 17v-5l5-8 5 8v5M9 17h6M10 20h4" />
-              </svg>
-            </div>
-            <h3 class="text-lg font-bold text-soil-900 mb-2">Getting Started</h3>
-            <p class="text-sm text-soil-700">Install the extension, write your first worker, and run it end-to-end.</p>
-          </Card>
-        </a>
-        <a href="/vgi/architecture" class="block">
-          <Card padding="lg" class="h-full border-2 border-soil-900 shadow-sm hover:shadow-xl transition-shadow">
-            <div class="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-grain-100 text-harvest-700">
-              <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M4 18h16M6 18V8l6-3 6 3v10M9 18v-5h6v5" />
-              </svg>
-            </div>
-            <h3 class="text-lg font-bold text-soil-900 mb-2">Architecture</h3>
-            <p class="text-sm text-soil-700">Transports, lifecycle, wire format, and how it integrates with the DuckDB execution engine.</p>
-          </Card>
-        </a>
-        <a href="/vgi/languages" class="block">
-          <Card padding="lg" class="h-full border-2 border-soil-900 shadow-sm hover:shadow-xl transition-shadow">
-            <div class="mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-grain-100 text-harvest-700">
-              <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M7 8l-3 4 3 4M17 8l3 4-3 4M13.5 5l-3 14" />
-              </svg>
-            </div>
-            <h3 class="text-lg font-bold text-soil-900 mb-2">Languages</h3>
-            <p class="text-sm text-soil-700">SDKs for Python, TypeScript, Go, Rust, Java, and C++ — pick yours and start building.</p>
-          </Card>
-        </a>
-      </div>
-    </div>
-  </section>
-
-  <!-- CTA -->
-  <section class="py-16 lg:py-24 bg-white font-display">
-    <div class="section-container">
-      <div class="rounded-2xl border-2 border-soil-900 bg-harvest-50 p-8 md:p-12 text-center shadow-lg">
-        <p class="text-sm font-bold uppercase tracking-wider text-harvest-700 mb-3">Build with VGI</p>
-        <h2 class="text-3xl md:text-4xl lg:text-5xl font-bold text-soil-900 mb-6">
-          Building something with VGI?
-        </h2>
-        <p class="text-lg md:text-xl text-soil-700 mb-8 max-w-3xl mx-auto leading-relaxed">
-          We help teams design, build, and ship VGI-based extensions. From a one-day spike to a long-term engagement.
+      <!-- Beat 2 (the close). Scale already lives in the hero stat and the
+           tour's stat row (115 · Workers built) — a second, static breakdown
+           here was re-litigating that plus duplicating a job Orchard's own
+           page (/products/orchard) already does properly: a live connector
+           count, real category chips with counts, and a filterable catalog.
+           Cut rather than kept as a weaker echo of that page. Not said
+           anywhere else on the site as of this writing — subscribe.astro
+           only ever describes the hosted half. -->
+      <div class="mt-14 border-t border-soil-300 pt-10">
+        <span class={EYEBROW}>However you want to run it</span>
+        <h3 class="mt-2.5 text-xl text-soil-900">Self-hosted, or let Orchard run it</h3>
+        <p class="mt-2.5 max-w-[68ch] text-sm leading-relaxed text-soil-700">
+          Every worker in Orchard works either way. Orchard is both the marketplace where you find
+          it and a platform that can run it for you — which one you choose depends on how much you
+          want to manage yourself.
         </p>
-        <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
-          <Button href="/consulting" variant="accent" size="lg">
-            Consulting & Custom Development
-          </Button>
-          <Button href="/company/schedule" variant="secondary" size="lg">
-            Schedule a Call
-          </Button>
+
+        <div class="mt-6 grid gap-3.5 sm:grid-cols-2">
+          <div class={`${CARD} p-5`}>
+            <h4 class="text-lg text-soil-900">Run it your way</h4>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">
+              <a href="#build">Build your own worker</a>, or download one someone else already
+              wrote — either way, it runs on your own infrastructure: a laptop, your servers,
+              wherever your data already lives.
+              <code class="rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900">LOCATION</code>
+              is just a shell command, so launch and distribution are up to you —
+              <code class="rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900">uv run</code>
+              for Python,
+              <code class="rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900">npx</code>
+              for TypeScript, a Docker/OCI image VGI pulls and runs itself, or your own private
+              artifact. Nothing leaves your network unless you choose to let it.
+            </p>
+            <a href="/vgi/getting-started" class="mt-3 inline-block text-[13px] font-medium text-link no-underline transition-colors hover:text-link-hover">
+              See how a worker runs →
+            </a>
+          </div>
+          <div class={`${CARD} p-5`}>
+            <h4 class="text-lg text-soil-900">Let Orchard run it</h4>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">
+              Subscribe to a hosted version instead. Orchard runs it, keeps it current, and hands
+              you a token — no connector infrastructure for you to manage.
+            </p>
+            <a href="/products/orchard/subscribe" class="mt-3 inline-block text-[13px] font-medium text-link no-underline transition-colors hover:text-link-hover">
+              See hosted pricing →
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Fork 2: build your own (the ~10% path) ─────────────────── -->
+  <section id="build" class="scroll-mt-32 border-y border-soil-300 bg-soil-100 py-16 lg:py-[70px]">
+    <div class={WRAP}>
+      <span class={EYEBROW}>Building something new?</span>
+      <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">Write your own VGI worker</h2>
+      <p class={`mt-3.5 max-w-[68ch] ${LEDE}`}>
+        If what you need isn't in Orchard yet, build it. It's the same protocol regardless of
+        language — pick the SDK that matches your stack.
+      </p>
+      <p class="mt-3.5 max-w-[68ch] text-[15px] leading-relaxed text-soil-700">
+        Not every worker needs to be public, either. Writing one just for your own systems — your
+        database, your internal APIs, data that shouldn't leave your network — is completely
+        supported, and it's the common case, not the exception. Most problems aren't generic
+        enough for someone else's off-the-shelf connector to solve them.
+      </p>
+
+      <div class="mt-8 grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+        {workerLanguages.map((language) => (
+          <a
+            href={language.href}
+            class="flex items-center gap-3 rounded-xl border border-soil-300 bg-[#fffdf7] px-5 py-4 text-base font-medium text-soil-900 no-underline transition-colors hover:border-sun-400 hover:text-link"
+            {...(language.external ? { target: '_blank', rel: 'noopener' } : {})}
+          >
+            <Icon name={language.icon} class="h-7 w-7 flex-none text-soil-700" />
+            {language.name}
+            {language.external && <span class="ml-auto text-soil-500" aria-hidden="true">↗</span>}
+          </a>
+        ))}
+      </div>
+
+      <div class="mt-7 flex flex-wrap gap-3">
+        <Button href="/vgi/getting-started" variant="primary" size="md">Get started →</Button>
+        <Button href="/vgi/building-a-worker" variant="secondary" size="md">Building a worker guide</Button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── CTA ─────────────────────────────────────────────────── -->
+  <section class="pt-16 pb-16 lg:pt-[70px]">
+    <div class={WRAP}>
+      <div class={`${CARD} flex flex-wrap items-center justify-between gap-6 px-8 py-9`}>
+        <div class="max-w-[52ch]">
+          <h2 class="text-2xl md:text-3xl text-soil-900">Building something with VGI?</h2>
+          <p class="mt-3 text-[17.5px] leading-relaxed text-soil-700">
+            We help teams design, build, and ship VGI-based extensions. From a one-day spike to a
+            long-term engagement.
+          </p>
+        </div>
+        <div class="flex flex-wrap gap-3">
+          <Button href="/consulting" variant="primary" size="md">Consulting &amp; custom development</Button>
+          <Button href="/company/schedule" variant="secondary" size="md">Schedule a call</Button>
         </div>
       </div>
     </div>
   </section>
 </PageLayout>
 
-<style>
-  .sql-keyword {
-    color: #bef264;
-    font-weight: 800;
+<script>
+  // Copy button for hand-rolled rock-900/950 code blocks (brief §3: code never
+  // sits on a coloured band, so slab code blocks are built here rather than
+  // reusing the shared CodeBlock component).
+  function wireCopyButtons() {
+    document.querySelectorAll<HTMLButtonElement>('button.qf-copy').forEach((btn) => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', async () => {
+        const pre = btn.closest('div')?.parentElement?.querySelector('pre');
+        if (!pre) return;
+        try {
+          await navigator.clipboard.writeText(pre.textContent ?? '');
+          btn.textContent = 'Copied';
+          setTimeout(() => { btn.textContent = 'Copy'; }, 1600);
+        } catch { /* clipboard unavailable */ }
+      });
+    });
   }
+  wireCopyButtons();
+  document.addEventListener('astro:after-swap', wireCopyButtons);
+</script>
 
-  .sql-string {
-    color: #fef3c7;
-  }
+<script>
+  // Hide each tab's static "Sample output" table once that tab's live WASM
+  // shell opens — the shell's container lands as a sibling inside that
+  // panel's .tour-code-wrapper, right after ExampleShellMounter's own
+  // "Try it in your browser" bar (.example-run-bar). Reappears if the shell
+  // is closed again. One wrapper/sample pair per panel now that the tour is
+  // tabbed, so this wires all of them rather than a single fixed id pair.
+  // Observes DOM structure ExampleShellMounter already documents as its
+  // behavior, rather than reaching into its internals — nothing here
+  // depends on that component's own code changing.
+  function wireTourSampleToggle() {
+    document.querySelectorAll<HTMLElement>('.tour-tab-panel').forEach((panel) => {
+      const wrapper = panel.querySelector<HTMLElement>('.tour-code-wrapper');
+      const sample = panel.querySelector<HTMLElement>('.tour-sample-output');
+      if (!wrapper || !sample || wrapper.dataset.wired) return;
+      wrapper.dataset.wired = '1';
 
-  .sql-object {
-    color: #e0f2fe;
-    font-weight: 700;
+      const sync = () => {
+        const shellOpen = wrapper.querySelector('.example-run-bar')?.nextElementSibling != null;
+        sample.style.display = shellOpen ? 'none' : '';
+      };
+      new MutationObserver(sync).observe(wrapper, { childList: true });
+      sync();
+    });
   }
-</style>
+  wireTourSampleToggle();
+  document.addEventListener('astro:after-swap', wireTourSampleToggle);
+</script>
+
+<script>
+  // Tab strip for the tour's example queries — plain show/hide. A shell left
+  // running in a tab the visitor switches away from just goes along with the
+  // rest of that panel's `hidden` state — no special handling needed, and
+  // switching back shows it exactly as it was left.
+  //
+  // A previous version tried to proactively close a running shell on
+  // switch-away by simulating a click on its Run/Hide button. That button's
+  // own handler decides open-vs-close by checking `container.parentElement`
+  // — a piece of state private to ExampleShellMounter's React closure, not
+  // visible from here. This code was instead inferring the same thing from
+  // a DOM proxy (whether the run bar had a next sibling), and the two checks
+  // could disagree — when they did, the simulated click landed on the wrong
+  // branch and *opened* a shell (booting the WASM engine) instead of closing
+  // one. Simplest fix: don't guess at a state this script doesn't own —
+  // hidden takes care of it either way.
+  function wireTourTabs() {
+    const root = document.getElementById('tour-tabs');
+    if (!root || root.dataset.wired) return;
+    root.dataset.wired = '1';
+
+    const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('.tour-tab'));
+    const panels = Array.from(root.querySelectorAll<HTMLElement>('.tour-tab-panel'));
+
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const id = tab.dataset.tab;
+        tabs.forEach((t) => {
+          const active = t === tab;
+          t.classList.toggle('border-sun-400', active);
+          t.classList.toggle('text-sun-400', active);
+          t.classList.toggle('border-transparent', !active);
+          t.classList.toggle('text-cream-2', !active);
+          t.setAttribute('aria-selected', String(active));
+        });
+        panels.forEach((p) => {
+          p.hidden = p.dataset.tabPanel !== id;
+        });
+      });
+    });
+  }
+  wireTourTabs();
+  document.addEventListener('astro:after-swap', wireTourTabs);
+</script>

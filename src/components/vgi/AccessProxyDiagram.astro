@@ -1,0 +1,119 @@
+---
+/**
+ * Where Rowfence sits: DuckDB → Rowfence → Worker, always in that order —
+ * it's a mandatory hop, not an optional sidecar, so unlike TransportDiagram
+ * there's no "no proxy" variant to show. The only thing that changes between
+ * variants is who operates the middle box: Query Farm (hosted) or you
+ * (on-prem). Same fixed-geometry-per-variant pattern as
+ * TransportDiagram/DaaSDiagram — box positions never move, only the
+ * boundary drawn around the Rowfence box and its label do.
+ *
+ * The middle box carries the real Rowfence mark (public/rowfence/rowfence-icon.svg,
+ * inlined as path data here so it can share a single fill color per shape
+ * the way DuckDB's mark does) rather than a generic Phosphor icon, and gets
+ * a gold accent border instead of the neutral soil-900 DuckDB/Worker use —
+ * it's the product being illustrated, not just context around it.
+ */
+interface Props {
+  variant: 'hosted' | 'on-prem';
+}
+const { variant } = Astro.props;
+
+const DUCKDB_MARK = {
+  vb: { x: 217.6, y: 10, w: 334.4, h: 334.4 },
+  body: `
+    <path fill="#000" d="M384.8,344.4L384.8,344.4c-92.5,0-167.2-74.7-167.2-167.2l0,0C217.6,84.7,292.3,10,384.8,10l0,0 C477.3,10,552,84.7,552,177.2l0,0C552,269.6,477.3,344.4,384.8,344.4z"/>
+    <path fill="#fff100" d="M474.2,152.2h-32.8v49.5h32.8c13.7,0,24.9-11.3,24.9-24.9S487.9,152.2,474.2,152.2"/>
+    <path fill="#fff100" d="M280.7,177.1c0,38.2,31.1,69.3,69.3,69.3c38.2,0,69.3-31.1,69.3-69.3s-31.1-69.3-69.3-69.3 C311.8,107.8,280.7,138.9,280.7,177.1L280.7,177.1"/>
+  `,
+};
+// The real Rowfence mark — same three-post picket shape and colors as
+// public/rowfence/rowfence-icon.svg, ported to path data so it drops into
+// the same iconTransform pipeline as DuckDB's mark.
+const ROWFENCE_MARK = {
+  vb: { x: 0, y: 0, w: 24, h: 24 },
+  body: `
+    <rect x="2" y="11" width="20" height="2" rx="1" fill="#211a12"/>
+    <rect x="2" y="16" width="20" height="2" rx="1" fill="#211a12"/>
+    <polygon points="4.8,21 4.8,8 6,4 7.2,8 7.2,21" fill="#f0c877" stroke="#211a12" stroke-width="1.1" stroke-linejoin="round"/>
+    <polygon points="16.8,21 16.8,8 18,4 19.2,8 19.2,21" fill="#f0c877" stroke="#211a12" stroke-width="1.1" stroke-linejoin="round"/>
+    <polygon points="10.8,21 10.8,5 12,1.5 13.2,5 13.2,21" fill="#d9a441" stroke="#211a12" stroke-width="1.1" stroke-linejoin="round"/>
+  `,
+};
+// Phosphor "cube" (reused from TransportDiagram) — a generic worker process.
+const ICON_VB = { x: 0, y: 0, w: 256, h: 256 };
+const CUBE_BODY =
+  '<path fill="currentColor" d="m223.68 66.15l-88-48.15a15.88 15.88 0 0 0-15.36 0l-88 48.17a16 16 0 0 0-8.32 14v95.64a16 16 0 0 0 8.32 14l88 48.17a15.88 15.88 0 0 0 15.36 0l88-48.17a16 16 0 0 0 8.32-14V80.18a16 16 0 0 0-8.32-14.03M128 32l80.34 44L128 120L47.66 76ZM40 90l80 43.78v85.79l-80-43.75Zm96 129.57v-85.75L216 90v85.78Z"/>';
+
+const iconTransform = (vb: { x: number; y: number; w: number; h: number }, size: number, cx: number, cy: number) => {
+  const s = size / vb.w;
+  const tx = cx - (vb.w / 2) * s - vb.x * s;
+  const ty = cy - (vb.h / 2) * s - vb.y * s;
+  return `translate(${tx.toFixed(2)},${ty.toFixed(2)}) scale(${s.toFixed(5)})`;
+};
+
+// ── Fixed geometry — identical across both variants ──
+const VB_W = 780;
+const VB_H = 220;
+const DDB_X = 40, DDB_Y = 70, DDB_W = 160, DDB_H = 90;
+const PXY_X = 310, PXY_Y = 70, PXY_W = 160, PXY_H = 90;
+const WRK_X = 580, WRK_Y = 70, WRK_W = 160, WRK_H = 90;
+const ddbCx = DDB_X + DDB_W / 2, ddbCy = DDB_Y + DDB_H / 2;
+const pxyCx = PXY_X + PXY_W / 2, pxyCy = PXY_Y + PXY_H / 2;
+const wrkCx = WRK_X + WRK_W / 2, wrkCy = WRK_Y + WRK_H / 2;
+const wireLeftD = `M${DDB_X + DDB_W} ${ddbCy} L${PXY_X - 12} ${pxyCy}`;
+const wireRightD = `M${PXY_X + PXY_W + 12} ${pxyCy} L${WRK_X} ${wrkCy}`;
+
+const config = {
+  hosted: { boundaryLabel: 'Hosted by Query Farm' },
+  'on-prem': { boundaryLabel: 'Your infrastructure' },
+}[variant];
+
+const ariaLabel = `Diagram: DuckDB queries pass through Rowfence, ${
+  variant === 'hosted' ? 'hosted by Query Farm' : 'run on your own infrastructure'
+}, before reaching the worker.`;
+
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+---
+
+<div class={`${CARD} p-4`}>
+  <svg
+    class="w-full h-auto"
+    viewBox={`0 0 ${VB_W} ${VB_H}`}
+    xmlns="http://www.w3.org/2000/svg"
+    role="img"
+    aria-label={ariaLabel}
+  >
+    <defs>
+      <marker id={`rf-arrow-${variant}`} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0L10 5L0 10z" class="fill-soil-400" />
+      </marker>
+    </defs>
+
+    <!-- Boundary around Rowfence only — the worker's own operator is a
+         separate decision, covered on the Data-as-a-Service page. -->
+    <rect x={PXY_X - 30} y="30" width={PXY_W + 60} height="160" rx="14" fill="none" class="stroke-soil-300" stroke-width="2" stroke-dasharray="5 5" />
+    <text x={PXY_X - 16} y="50" text-anchor="start" class="fill-soil-500 font-bold" font-size="13" font-family="inherit" letter-spacing="0.5">{config.boundaryLabel.toUpperCase()}</text>
+
+    <!-- Wires, with direction: DuckDB → Rowfence → Worker -->
+    <path d={wireLeftD} fill="none" class="stroke-soil-300" stroke-width="2.5" marker-end={`url(#rf-arrow-${variant})`} />
+    <text x={(DDB_X + DDB_W + PXY_X) / 2} y={ddbCy - 12} text-anchor="middle" class="fill-soil-500 font-bold" font-size="13" font-family="inherit">queries</text>
+    <path d={wireRightD} fill="none" class="stroke-soil-300" stroke-width="2.5" marker-end={`url(#rf-arrow-${variant})`} />
+    <text x={(PXY_X + PXY_W + WRK_X) / 2} y={pxyCy - 12} text-anchor="middle" class="fill-soil-500 font-bold" font-size="13" font-family="inherit">scoped scan</text>
+
+    <!-- DuckDB -->
+    <rect x={DDB_X} y={DDB_Y} width={DDB_W} height={DDB_H} rx="14" class="fill-soil-100 stroke-soil-900" stroke-width="2.5" />
+    <g transform={iconTransform(DUCKDB_MARK.vb, 28, ddbCx, ddbCy - 14)} set:html={DUCKDB_MARK.body} />
+    <text x={ddbCx} y={ddbCy + 26} text-anchor="middle" class="fill-soil-900 font-extrabold" font-size="17" font-family="inherit">DuckDB</text>
+
+    <!-- Rowfence — the accent border marks it as the product, not context -->
+    <rect x={PXY_X} y={PXY_Y} width={PXY_W} height={PXY_H} rx="14" class="fill-[#fffdf7] stroke-sun-500" stroke-width="3" />
+    <g transform={iconTransform(ROWFENCE_MARK.vb, 30, pxyCx, pxyCy - 14)} set:html={ROWFENCE_MARK.body} />
+    <text x={pxyCx} y={pxyCy + 26} text-anchor="middle" class="fill-soil-900 font-extrabold" font-size="17" font-family="inherit">Rowfence</text>
+
+    <!-- Worker -->
+    <rect x={WRK_X} y={WRK_Y} width={WRK_W} height={WRK_H} rx="14" class="fill-[#fffdf7] stroke-soil-900" stroke-width="2.5" />
+    <g class="text-soil-700" transform={iconTransform(ICON_VB, 26, wrkCx, wrkCy - 14)} set:html={CUBE_BODY} />
+    <text x={wrkCx} y={wrkCy + 26} text-anchor="middle" class="fill-soil-900 font-extrabold" font-size="17" font-family="inherit">Worker</text>
+  </svg>
+</div>

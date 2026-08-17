@@ -1,18 +1,60 @@
 ---
-// Section subnav for the VGI Python docs, styled to match HaybarnSubNav /
-// OrchardSubNav: a white sticky bar (below the global header) with the VGI mark +
-// "VGI Python" wordmark on the left, followed by breadcrumb pills derived from the
-// Starlight sidebar (section group → current page), and a GitHub link on the right.
+/**
+ * Section subnav for the VGI SDK docs — the docs-section equivalent of the
+ * Haybarn / Orchard / Cupola subnavs described in DESIGN_BRIEF §7: the section
+ * mark + name on the left, then breadcrumbs, and a GitHub link on the right.
+ *
+ * The hierarchy is `VGI Docs › <language> › <group> › <page>`, and every crumb
+ * except the current page is a link. That matters: this bar used to render the
+ * whole trail as plain <span>s, so the one piece of chrome that told you where
+ * you were was the one piece you couldn't navigate with. Group crumbs resolve to
+ * the first page in the group, which is how the sidebar's own group headings
+ * behave when you open them.
+ *
+ * The trail comes from `starlightRoute.sidebar`, which src/starlightRouteData.ts
+ * has already scoped to this section and unwrapped — so the enclosing groups it
+ * yields are real subsections ("API Reference"), never the language name again.
+ *
+ * It renders inside Starlight's fixed header, immediately below the site bar, so
+ * its height is pinned to `--qf-subnav-h`; `--sl-nav-height` in
+ * starlight-shell.css is (--qf-nav-h + --qf-subnav-h) and everything Starlight
+ * positions — sidebar, TOC, mobile bars — depends on that sum being right
+ * (VGI_DOCS_GUIDE §4.5).
+ *
+ * Styling is plain CSS on the --qf-* bridge variables rather than Tailwind
+ * utilities, because the docs are the one part of the site with a dark theme and
+ * the utilities are light-only.
+ */
 import type { SidebarEntry } from '@astrojs/starlight/utils/navigation';
+import { Icon } from 'astro-icon/components';
+import { CONCEPTS, DOCS_ROOT, SHARED_REPO, rootOf, sectionFor } from '../../lib/vgi-docs';
 
 const route = (Astro.locals as { starlightRoute?: { sidebar: SidebarEntry[]; entry: { data: { title: string } } } }).starlightRoute;
 const sidebar = route?.sidebar ?? [];
 
-// Walk the sidebar tree to the current entry, collecting the enclosing group labels.
-function findTrail(entries: SidebarEntry[], groups: string[] = []): { groups: string[]; label: string } | null {
+interface Crumb {
+  label: string;
+  href?: string;
+}
+
+/** The first link anywhere under a group — where its heading should point. */
+function firstLink(entries: SidebarEntry[]): string | undefined {
   for (const e of entries) {
     if (e.type === 'group') {
-      const hit = findTrail(e.entries, [...groups, e.label]);
+      const hit = firstLink(e.entries);
+      if (hit) return hit;
+    } else {
+      return e.href;
+    }
+  }
+  return undefined;
+}
+
+// Walk the sidebar tree to the current entry, collecting the enclosing groups.
+function findTrail(entries: SidebarEntry[], groups: Crumb[] = []): { groups: Crumb[]; label: string } | null {
+  for (const e of entries) {
+    if (e.type === 'group') {
+      const hit = findTrail(e.entries, [...groups, { label: e.label, href: firstLink(e.entries) }]);
       if (hit) return hit;
     } else if (e.isCurrent) {
       return { groups, label: e.label };
@@ -21,65 +63,186 @@ function findTrail(entries: SidebarEntry[], groups: string[] = []): { groups: st
   return null;
 }
 
-const ROOT = '/vgi/docs/python/';
 const path = Astro.url.pathname;
-const isRoot = path === ROOT || path === ROOT.slice(0, -1);
-const trail = findTrail(sidebar);
-// Breadcrumb crumbs after the "VGI Python" root: enclosing groups, then the page.
-const crumbs = isRoot ? [] : [...(trail?.groups ?? []), trail?.label ?? route?.entry?.data?.title ?? ''];
-const REPO = 'https://github.com/Query-farm/vgi-python';
+const section = sectionFor(path);
+const isDocsHome = path === DOCS_ROOT || path === DOCS_ROOT.slice(0, -1);
+const isSectionRoot = section ? path === rootOf(section) || path === rootOf(section).slice(0, -1) : false;
+
+const trail = isSectionRoot || isDocsHome ? null : findTrail(sidebar);
+
+const crumbs: Crumb[] = [];
+if (section) {
+  crumbs.push({ label: section.name, href: isSectionRoot ? undefined : rootOf(section) });
+}
+if (trail) {
+  // Concepts pages nest under a group named after the section itself; don't say
+  // it twice.
+  for (const g of trail.groups) {
+    if (section && g.label === section.name) continue;
+    crumbs.push(g);
+  }
+  crumbs.push({ label: trail.label });
+}
+if (!section && !isDocsHome) {
+  crumbs.push({ label: route?.entry?.data?.title ?? '' });
+}
+
+const repo = section?.repo ?? SHARED_REPO;
+const repoLabel = section && section.slug !== CONCEPTS.slug ? `VGI ${section.name}` : 'VGI';
 ---
 
-<div class="vgi-docs-subnav sticky top-16 lg:top-20 z-40 bg-white border-b border-soil-200">
-  <!-- Centered content container, matching the Orchard/Haybarn subnavs. -->
-  <div class="section-container">
-    <div class="flex items-center justify-between gap-4 py-3">
-      <!-- Left: VGI mark + wordmark + breadcrumbs -->
-      <nav class="flex items-center gap-2 min-w-0 overflow-x-auto vgi-docs-subnav__bar" aria-label="Breadcrumb">
-        <a href={ROOT} class="flex items-center gap-2.5 flex-shrink-0 group">
-          <img src="/vgi/vgi-logo.png" alt="" class="w-8 h-8 rounded-md object-contain" width="32" height="32" />
-          <span class="font-display font-bold text-soil-900 group-hover:text-harvest-700 transition-colors whitespace-nowrap">VGI&nbsp;Python</span>
-        </a>
-        {crumbs.map((crumb, i) => (
+<div class="vgi-docs-subnav" data-pagefind-ignore>
+  <div class="section-container vgi-docs-subnav__inner">
+  <nav class="vgi-docs-subnav__bar" aria-label="Breadcrumb">
+    <a href={DOCS_ROOT} class="brand" aria-current={isDocsHome ? 'page' : undefined}>
+      <img src="/vgi/vgi-logo.png" alt="" width="30" height="30" />
+      <span>VGI&nbsp;Docs</span>
+    </a>
+    {
+      crumbs.map((crumb, i) => {
+        const isLast = i === crumbs.length - 1;
+        return (
           <>
-            <svg class="w-4 h-4 text-soil-300 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <svg class="sep" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
             </svg>
-            <span
-              class:list={[
-                'whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium',
-                i === crumbs.length - 1 ? 'bg-harvest-50 text-harvest-700' : 'text-soil-500',
-              ]}
-              aria-current={i === crumbs.length - 1 ? 'page' : undefined}
-            >
-              {crumb}
-            </span>
+            {crumb.href && !isLast ? (
+              <a class="crumb crumb--link" href={crumb.href}>
+                {i === 0 && section && <Icon name={section.icon} class="crumb__icon" />}
+                {crumb.label}
+              </a>
+            ) : (
+              <span class:list={['crumb', isLast && 'crumb--current']} aria-current={isLast ? 'page' : undefined}>
+                {i === 0 && section && <Icon name={section.icon} class="crumb__icon" />}
+                {crumb.label}
+              </span>
+            )}
           </>
-        ))}
-      </nav>
+        );
+      })
+    }
+  </nav>
 
-      <!-- Right: GitHub -->
-      <a
-        href={REPO}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="vgi-python on GitHub"
-        title="View source on GitHub"
-        class="flex items-center justify-center rounded-md p-1.5 text-soil-600 transition-colors hover:bg-soil-50 hover:text-soil-900 flex-shrink-0"
-      >
-        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M12 .5C5.73.5.66 5.57.66 11.85c0 5.02 3.26 9.28 7.78 10.78.57.1.78-.25.78-.55v-2.1c-3.17.69-3.84-1.36-3.84-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.67 1.25 3.32.95.1-.74.4-1.25.72-1.54-2.53-.29-5.19-1.27-5.19-5.64 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.45.11-3.02 0 0 .96-.31 3.15 1.17a10.9 10.9 0 0 1 2.87-.39c.97 0 1.95.13 2.87.39 2.18-1.48 3.14-1.17 3.14-1.17.63 1.57.24 2.73.12 3.02.74.8 1.18 1.82 1.18 3.07 0 4.38-2.67 5.35-5.21 5.63.41.36.78 1.07.78 2.15v3.19c0 .31.21.66.79.55 4.51-1.5 7.77-5.76 7.77-10.78C23.34 5.57 18.27.5 12 .5z"/>
-        </svg>
-      </a>
-    </div>
+  <a href={repo} target="_blank" rel="noopener noreferrer" aria-label={`${repoLabel} on GitHub`} title="View source on GitHub" class="gh">
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 .5C5.73.5.66 5.57.66 11.85c0 5.02 3.26 9.28 7.78 10.78.57.1.78-.25.78-.55v-2.1c-3.17.69-3.84-1.36-3.84-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.67 1.25 3.32.95.1-.74.4-1.25.72-1.54-2.53-.29-5.19-1.27-5.19-5.64 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.45.11-3.02 0 0 .96-.31 3.15 1.17a10.9 10.9 0 0 1 2.87-.39c.97 0 1.95.13 2.87.39 2.18-1.48 3.14-1.17 3.14-1.17.63 1.57.24 2.73.12 3.02.74.8 1.18 1.82 1.18 3.07 0 4.38-2.67 5.35-5.21 5.63.41.36.78 1.07.78 2.15v3.19c0 .31.21.66.79.55 4.51-1.5 7.77-5.76 7.77-10.78C23.34 5.57 18.27.5 12 .5z"/>
+    </svg>
+  </a>
   </div>
 </div>
 
 <style>
+  .vgi-docs-subnav {
+    height: var(--qf-subnav-h, 44px);
+    background: var(--qf-surface-2);
+    border-bottom: 1px solid var(--qf-rule);
+  }
+
+  /* Same `.section-container` column as the bar above and as every other page
+     on the site, so the VGI mark sits directly under the Query.Farm lockup —
+     exactly the relationship VGISubNav.astro has with layout/Header.astro. */
+  .vgi-docs-subnav__inner {
+    display: flex;
+    height: 100%;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
   .vgi-docs-subnav__bar {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+    overflow-x: auto;
     scrollbar-width: none;
   }
   .vgi-docs-subnav__bar::-webkit-scrollbar {
     display: none;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: none;
+    text-decoration: none;
+    padding-inline-end: 0.85rem;
+    margin-inline-end: 0.15rem;
+    border-inline-end: 1px solid var(--qf-rule);
+    font-family: var(--qf-font-display);
+    font-weight: 600;
+    font-size: 0.98rem;
+    letter-spacing: -0.018em;
+    white-space: nowrap;
+    color: var(--qf-ink);
+    transition: color 0.18s;
+  }
+  .brand:hover {
+    color: var(--qf-accent);
+  }
+  /* 30px inside a 44px bar: the mark reads as a mark rather than a favicon,
+     and still clears the rule above and below. */
+  .brand img {
+    width: 30px;
+    height: 30px;
+    object-fit: contain;
+    border-radius: 5px;
+  }
+
+  .sep {
+    width: 0.85rem;
+    height: 0.85rem;
+    flex: none;
+    color: var(--qf-ink-3);
+    opacity: 0.65;
+  }
+
+  .crumb {
+    display: flex;
+    align-items: center;
+    gap: 0.34rem;
+    white-space: nowrap;
+    font-size: 0.8125rem;
+    color: var(--qf-ink-2);
+    padding: 0.15rem 0.25rem;
+    border-radius: 5px;
+    text-decoration: none;
+  }
+  .crumb__icon {
+    width: 0.95rem;
+    height: 0.95rem;
+    flex: none;
+    opacity: 0.8;
+  }
+  .crumb--link {
+    transition: color 0.18s, background-color 0.18s;
+  }
+  .crumb--link:hover {
+    color: var(--qf-ink);
+    background: var(--qf-accent-tint-soft);
+  }
+  .crumb--current {
+    color: var(--qf-accent);
+    font-weight: 500;
+  }
+
+  .gh {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    margin-inline-start: auto;
+    padding: 0.3rem;
+    border-radius: 6px;
+    color: var(--qf-ink-2);
+    transition: color 0.18s, background-color 0.18s;
+  }
+  .gh:hover {
+    color: var(--qf-ink);
+    background: var(--qf-accent-tint-soft);
+  }
+  .gh svg {
+    width: 1.1rem;
+    height: 1.1rem;
   }
 </style>
