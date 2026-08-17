@@ -1,0 +1,754 @@
+---
+title: "Aggregate functions"
+description: "Per-group accumulation: update, combine, finalize."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Per-group accumulation: update, combine, finalize.
+
+</div>
+
+<div class="api-class">
+
+<a id="AggregateBindParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `AggregateBindParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate.go#L19" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type AggregateBindParams struct {
+	Args		*Arguments
+	InputSchema	*arrow.Schema
+	Settings	map[string]interface{}
+	Secrets		map[string]map[string]interface{}
+	Auth		*vgirpc.AuthContext
+}`} />
+
+<p class="api-section">Description</p>
+
+AggregateBindParams holds the parameters passed to AggregateFunction.OnBind.
+
+</div>
+
+<div class="api-class">
+
+<a id="AggregateFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `AggregateFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate.go#L44" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type AggregateFunction interface {
+	// Name is the SQL-visible function name.
+	Name() string
+	// Metadata describes function attributes (stability, null-handling, etc.).
+	Metadata() FunctionMetadata
+	// ArgumentSpecs declares the input columns and any const params.
+	ArgumentSpecs() []ArgSpec
+	// OnBind resolves the output schema. Must return a single-column schema.
+	OnBind(params *AggregateBindParams) (*BindResponse, error)
+	// NewState returns a fresh state pointer for a new group. The pointer
+	// type is what the dispatcher uses for gob register/serialize.
+	NewState(params *AggregateProcessParams) interface{}
+	// Update accumulates rows into per-group state. The states map is
+	// pre-populated with existing states, but groups that aren't yet in
+	// the map MUST be created on demand by the function — call NewState
+	// only when the row genuinely contributes (e.g. non-null value with
+	// NullHandlingDefault). Groups never inserted into states stay absent
+	// from storage so finalize() returns NULL.
+	Update(states map[int64]interface{}, groupIDs *Int64Slice, columns []arrow.Array, params *AggregateProcessParams) error
+	// Combine merges source into target, returning the new target state.
+	Combine(source, target interface{}, params *AggregateProcessParams) (interface{}, error)
+	// Finalize produces one result row per group_id. groupIDs entries map
+	// to states[gid] which may be nil if the group was never updated
+	// (NULL-only inputs with NullHandlingDefault).
+	Finalize(groupIDs []int64, states map[int64]interface{}, params *AggregateProcessParams) (arrow.RecordBatch, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+AggregateFunction is the interface every aggregate implements.
+
+State is held on the worker side keyed by group_id; the Go SDK
+gob-serializes it across RPCs for cross-call continuity. Implementations
+register a concrete state type via `NewState` (returning a fresh zero
+value) so the dispatcher can reflect on it.
+
+</div>
+
+<div class="api-class">
+
+<a id="AggregateProcessParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `AggregateProcessParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate.go#L28" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type AggregateProcessParams struct {
+	Args		*Arguments
+	OutputSchema	*arrow.Schema
+	Settings	map[string]interface{}
+	Secrets		map[string]map[string]interface{}
+	Auth		*vgirpc.AuthContext
+	// AttachOpaqueData is the catalog the function was invoked under (nil for ad-hoc calls).
+	AttachOpaqueData	[]byte
+}`} />
+
+<p class="api-section">Description</p>
+
+AggregateProcessParams is shared by Update/Combine/Finalize/Window callbacks.
+
+</div>
+
+<div class="api-class">
+
+<a id="AggregateWindowFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `AggregateWindowFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate.go#L73" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type AggregateWindowFunction interface {
+	AggregateFunction
+	// WindowInit can derive optional per-partition state. Returns nil if
+	// no derived state is needed; otherwise the value is gob-serialized
+	// and passed back to Window.
+	WindowInit(partition *WindowPartition, params *AggregateProcessParams) (interface{}, error)
+	// Window computes the aggregate value for one output row.
+	// Subframes are usually a single (begin,end) pair; up to 3 for
+	// EXCLUDE TIES/GROUP. Returns a Go scalar matching the output schema.
+	Window(rid int64, subframes [][2]int64, partition *WindowPartition, windowState interface{}, params *AggregateProcessParams) (interface{}, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+AggregateWindowFunction is implemented by aggregates that also support
+SQL OVER windowing. Functions opt in by also setting Metadata.SupportsWindow.
+
+</div>
+
+<div class="api-class">
+
+<a id="Int64Slice"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `Int64Slice`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate.go#L104" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type Int64Slice struct {
+	Data []int64
+}`} />
+
+<p class="api-section">Description</p>
+
+Int64Slice wraps an int64 slice to ease passing to Update without
+importing arrow types in user code. The underlying array is borrowed.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="Int64Slice.At"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `At`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate.go#L112" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *Int64Slice) At(i int) int64</code></pre>
+
+At returns the i-th entry.
+
+</div>
+<div class="api-member">
+
+<a id="Int64Slice.Len"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Len`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate.go#L109" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *Int64Slice) Len() int</code></pre>
+
+Len returns the number of entries.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="StreamingAggregateFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `StreamingAggregateFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_streaming.go#L29" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type StreamingAggregateFunction interface {
+	AggregateFunction
+	// StreamingOpen prepares cross-partition state for the session. The
+	// returned value is opaque to the framework — it's threaded back into
+	// StreamingChunk and StreamingClose.
+	StreamingOpen(params *AggregateProcessParams) (interface{}, error)
+	// StreamingChunk processes one input chunk. Implementations must return
+	// an arrow.Array of the same length as \`chunk.NumRows()\`. The first
+	// \`partitionKeyCount\` columns of \`chunk\` are the partition keys; the
+	// next \`orderKeyCount\` are order keys; remaining columns are the
+	// function's value arguments.
+	StreamingChunk(state interface{}, chunk arrow.RecordBatch, partitionKeyCount, orderKeyCount int, params *AggregateProcessParams) (arrow.Array, error)
+	// StreamingClose drops the session. Always called once per execution_id.
+	StreamingClose(state interface{}, params *AggregateProcessParams) error
+}`} />
+
+<p class="api-section">Description</p>
+
+StreamingAggregateFunction is the optional interface an aggregate may
+implement to participate in DuckDB's streaming-window optimizer rule.
+When eligible (cumulative frame, no EXCLUDE/DISTINCT/FILTER), DuckDB
+pipes input chunks to the worker and expects an output array of the same
+length as the input.
+
+Functions that don't implement this still work as windowed aggregates via
+the standard aggregate_window callbacks; the streaming path is purely an
+optimization.
+
+</div>
+
+<div class="api-class">
+
+<a id="WindowPartition"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `WindowPartition`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate.go#L86" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type WindowPartition struct {
+	// Inputs is the partition's input columns (excludes reserved group_id).
+	Inputs	arrow.RecordBatch
+	// RowCount is the number of rows in the partition.
+	RowCount	int64
+	// FilterMask is a per-row boolean from FILTER (WHERE ...); nil when absent.
+	FilterMask	[]bool
+	// FrameStats is the optimizer's per-partition frame statistics:
+	// ((begin_delta, end_delta), (begin_delta, end_delta)).
+	FrameStats	[2][2]int64
+	// AllValid[i] is true if input column i has no nulls.
+	AllValid	[]bool
+	// OutputSchema is the function's resolved output schema.
+	OutputSchema	*arrow.Schema
+}`} />
+
+<p class="api-section">Description</p>
+
+WindowPartition is the partition data available during windowed evaluation.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="unpackWindowPartition"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `unpackWindowPartition`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_helpers.go#L58" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func unpackWindowPartition(req AggregateWindowInitRequestWire) (*WindowPartition, error)</code></pre>
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="aggregateStorage"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `aggregateStorage`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L27" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type aggregateStorage struct {
+	mu	sync.Mutex
+	back	FunctionStorage
+	resolve	func() (FunctionStorage, error)	// set by the Worker
+}`} />
+
+<p class="api-section">Description</p>
+
+aggregateStorage is a thin shim that lazily resolves a FunctionStorage
+backend from a setter and exposes the bucket(funcName, execID) pattern
+the protocol layer uses.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="aggregateStorage.bucket"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `bucket`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L86" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *aggregateStorage) bucket(funcName string, execID []byte, shardKey string) *stateBucket</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="aggregateStorage.ensureOpen"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ensureOpen`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L47" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *aggregateStorage) ensureOpen() (FunctionStorage, error)</code></pre>
+
+ensureOpen resolves and caches the backend on first use.
+
+</div>
+<div class="api-member">
+
+<a id="newAggregateStorage"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `newAggregateStorage`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L33" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func newAggregateStorage() *aggregateStorage</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="aggregateStorage.setResolver"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `setResolver`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L40" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *aggregateStorage) setResolver(r func() (FunctionStorage, error))</code></pre>
+
+setResolver wires a lazy backend resolver. Called once by the Worker so
+the FunctionStorage is shared with ExecutionStorage and any future
+backends (Cloudflare DO, etc.).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="stateBucket"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `stateBucket`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L76" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type stateBucket struct {
+	storage		*aggregateStorage
+	functionName	string
+	executionID	[]byte
+	// shardKey routes per logical ATTACH (att-<hex uuid>) for the CfDo backend;
+	// "" for non-sharding backends. Derived by the handler from the request's
+	// unwrapped attach UUID.
+	shardKey	string
+}`} />
+
+<p class="api-section">Description</p>
+
+stateBucket binds aggregate operations to one (function_name, execution_id).
+Mirrors the original surface so aggregate_protocol.go and aggregate_helpers.go
+don't have to change.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="stateBucket.backend"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `backend`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L93" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (b *stateBucket) backend() (FunctionStorage, error)</code></pre>
+
+backend resolves the shared backend and, for a remote-sharding backend
+(CfDo), pins it to this bucket's shard key — so aggregate state routes to
+the same Durable Object as the execution's other storage.
+
+</div>
+<div class="api-member">
+
+<a id="stateBucket.clear"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `clear`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L151" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (b *stateBucket) clear() error</code></pre>
+
+clear drops aggregate state and window partition rows for this
+execution_id. Const args are intentionally left behind: they're small,
+keyed by (execution_id, function_name), and reaped by the FunctionStorage's
+TTL sweep. Matches vgi-python which also has no per-call const-args clear.
+
+</div>
+<div class="api-member">
+
+<a id="stateBucket.deleteWindowPartition"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `deleteWindowPartition`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L194" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (b *stateBucket) deleteWindowPartition(partitionID int64) error</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="stateBucket.getConstArgs"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `getConstArgs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L170" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (b *stateBucket) getConstArgs() ([]byte, error)</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="stateBucket.getWindowPartition"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `getWindowPartition`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L186" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (b *stateBucket) getWindowPartition(partitionID int64) ([]byte, error)</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="stateBucket.loadStates"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `loadStates`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L109" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (b *stateBucket) loadStates(gids []int64) (map[int64][]byte, error)</code></pre>
+
+loadStates fetches all states for the given group_ids. Returns a map keyed
+by group_id; gids absent from the result are not yet stored. Matches the
+pre-shared-backend surface so callers don't change.
+
+</div>
+<div class="api-member">
+
+<a id="stateBucket.putConstArgs"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `putConstArgs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L162" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (b *stateBucket) putConstArgs(args []byte) error</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="stateBucket.putWindowPartition"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `putWindowPartition`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L178" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (b *stateBucket) putWindowPartition(partitionID int64, payload []byte) error</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="stateBucket.saveStates"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `saveStates`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_storage.go#L132" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (b *stateBucket) saveStates(states map[int64][]byte) error</code></pre>
+
+saveStates writes (gid, bytes) pairs.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="streamingSession"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `streamingSession`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_streaming.go#L104" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type streamingSession struct {
+	fn			StreamingAggregateFunction
+	state			interface{}
+	outputSchema		*arrow.Schema
+	partitionKeyCount	int
+	orderKeyCount		int
+	args			*Arguments
+	settings		map[string]interface{}
+	secrets			map[string]map[string]interface{}
+	attachOpaqueData	[]byte
+}`} />
+
+<p class="api-section">Description</p>
+
+streamingSession holds per-execution_id state for a streaming-aggregate
+invocation. The session is removed in handleAggregateStreamingClose.
+
+</div>
+
+<div class="api-class">
+
+<a id="streamingSessionStore"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `streamingSessionStore`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_streaming.go#L116" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type streamingSessionStore struct {
+	mu		sync.Mutex
+	sessions	map[string]*streamingSession
+}`} />
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="streamingSessionStore.drop"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `drop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_streaming.go#L136" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *streamingSessionStore) drop(execID []byte) *streamingSession</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="streamingSessionStore.get"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `get`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_streaming.go#L130" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *streamingSessionStore) get(execID []byte) *streamingSession</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="streamingSessionStore.put"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `put`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_streaming.go#L121" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *streamingSessionStore) put(execID []byte, sess *streamingSession)</code></pre>
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="windowPartitionPayload"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `windowPartitionPayload`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_helpers.go#L20" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type windowPartitionPayload struct {
+	PartitionBatch	[]byte
+	OutputSchema	[]byte
+	FilterMask	[]byte
+	FrameStats	[]byte
+	AllValid	[]byte
+	RowCount	int64
+	WindowState	[]byte	// optional gob-encoded WindowInit return value
+}`} />
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="decodeWindowPartitionPayload"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `decodeWindowPartitionPayload`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_helpers.go#L49" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func decodeWindowPartitionPayload(data []byte) (windowPartitionPayload, error)</code></pre>
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="EnsureState"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `EnsureState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate.go#L119" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func EnsureState[T any](states map[int64]interface&#123;&#125;, gid int64, newFn func() *T) *T</code></pre>
+
+EnsureState is a helper for Update implementations: returns the existing
+state for gid, or creates one via newFn() and registers it. Functions
+should call this only when the row genuinely contributes (e.g. non-null
+with NullHandlingDefault) — groups never inserted stay absent from
+storage so finalize() returns NULL.
+
+</div>
+<div class="api-member">
+
+<a id="PartitionKey"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `PartitionKey`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_streaming.go#L284" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func PartitionKey(chunk arrow.RecordBatch, partitionKeyCount, i int) uint64</code></pre>
+
+PartitionKey is a helper to derive a stable hash key from the partition-key
+columns at row i. Use it from StreamingChunk implementations to look up
+per-partition state.
+
+</div>
+<div class="api-member">
+
+<a id="buildBatchResult"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `buildBatchResult`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_helpers.go#L184" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func buildBatchResult(values []interface&#123;&#125;, outputSchema *arrow.Schema) (arrow.RecordBatch, error)</code></pre>
+
+buildBatchResult builds a count-row RecordBatch from a slice of scalar values.
+
+</div>
+<div class="api-member">
+
+<a id="buildScalarColumn"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `buildScalarColumn`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_helpers.go#L203" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func buildScalarColumn(mem memory.Allocator, dt arrow.DataType, values []interface&#123;&#125;) (arrow.Array, error)</code></pre>
+
+buildScalarColumn appends each value (or null) into a column of the given type.
+
+</div>
+<div class="api-member">
+
+<a id="buildScalarResultBatch"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `buildScalarResultBatch`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_helpers.go#L169" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func buildScalarResultBatch(value interface&#123;&#125;, outputSchema *arrow.Schema) (arrow.RecordBatch, error)</code></pre>
+
+buildScalarResultBatch wraps a single scalar value in a one-row RecordBatch
+matching outputSchema (which must have exactly one field).
+
+</div>
+<div class="api-member">
+
+<a id="buildSingleScalarArray"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `buildSingleScalarArray`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_helpers.go#L198" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func buildSingleScalarArray(mem memory.Allocator, dt arrow.DataType, v interface&#123;&#125;) (arrow.Array, error)</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="encodeWindowPartitionPayload"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `encodeWindowPartitionPayload`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_helpers.go#L30" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func encodeWindowPartitionPayload(req AggregateWindowInitRequestWire, windowState []byte) []byte</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="gobDecodeState"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `gobDecodeState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate.go#L142" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func gobDecodeState(data []byte) (interface&#123;&#125;, error)</code></pre>
+
+gobDecodeState deserializes bytes into a state value via gob's interface
+machinery. The concrete type must have been previously registered with
+gob.Register.
+
+</div>
+<div class="api-member">
+
+<a id="gobEncodeState"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `gobEncodeState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate.go#L130" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func gobEncodeState(state interface&#123;&#125;) ([]byte, error)</code></pre>
+
+gobEncodeState serializes a state value (passed by interface, typically a
+pointer to a registered struct) to bytes.
+
+</div>
+<div class="api-member">
+
+<a id="splitGroupIDColumn"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `splitGroupIDColumn`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_protocol.go#L736" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func splitGroupIDColumn(batch arrow.RecordBatch) (int, []int64, []arrow.Array, error)</code></pre>
+
+splitGroupIDColumn returns the group_id column index, the int64 group_ids,
+and the remaining input columns (excluding group_id).
+
+</div>
+<div class="api-member">
+
+<a id="uniqueInt64"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `uniqueInt64`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_protocol.go#L768" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func uniqueInt64(in []int64) []int64</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="unpackAllValid"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `unpackAllValid`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_helpers.go#L155" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func unpackAllValid(data []byte, numCols int) []bool</code></pre>
+
+unpackAllValid reads numCols bytes — one per input column — into a []bool.
+
+</div>
+<div class="api-member">
+
+<a id="unpackBoolMask"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `unpackBoolMask`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_helpers.go#L125" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func unpackBoolMask(packed []byte, rowCount int64) []bool</code></pre>
+
+unpackBoolMask converts the C++ extension's packed-bit boolean encoding into
+a flat []bool of length rowCount.
+
+</div>
+<div class="api-member">
+
+<a id="unpackFrameStats"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `unpackFrameStats`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/aggregate_helpers.go#L142" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func unpackFrameStats(data []byte) [2][2]int64</code></pre>
+
+unpackFrameStats reads ((begin_delta, end_delta), (begin_delta, end_delta))
+from 4×int64 little-endian bytes.
+
+</div>

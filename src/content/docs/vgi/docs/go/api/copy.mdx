@@ -1,0 +1,536 @@
+---
+title: "COPY formats"
+description: "Custom COPY ... FROM readers and COPY ... TO writers."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Custom COPY ... FROM readers and COPY ... TO writers.
+
+</div>
+
+<div class="api-class">
+
+<a id="CopyFromCommenter"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `CopyFromCommenter`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L66" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CopyFromCommenter interface {
+	CopyFromComment() string
+}`} />
+
+<p class="api-section">Description</p>
+
+CopyFromCommenter is an optional interface; when implemented, the returned
+comment is surfaced by vgi_copy_formats(). Mirrors COPY_FROM_COMMENT.
+
+</div>
+
+<div class="api-class">
+
+<a id="CopyFromContext"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CopyFromContext`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L19" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CopyFromContext struct {
+	// Format is the FORMAT name resolved at COPY bind time.
+	Format	string
+	// FilePath is the source path from the COPY ... FROM 'path' statement.
+	FilePath	string
+	// ExpectedSchema is the COPY target's schema (column names + types, in target
+	// order). The reader must emit batches whose schema matches this exactly —
+	// DuckDB inserts no cast between the scan and the INSERT.
+	ExpectedSchema	*arrow.Schema
+}`} />
+
+<p class="api-section">Description</p>
+
+CopyFromContext is the COPY ... FROM context threaded onto a bind/init when a
+COPY-FROM scan is opened. Mirrors Python's vgi.protocol.CopyFromContext.
+
+Present (non-nil on BindParams/ProcessParams) only when the scan was opened by
+a COPY ... FROM statement against a custom format. The COPY options arrive
+through the function's normal arguments (params.Args), not here.
+
+</div>
+
+<div class="api-class">
+
+<a id="CopyFromFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `CopyFromFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L49" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CopyFromFunction interface {
+	// Name returns the handler's registered function name.
+	Name() string
+	// Metadata returns descriptive metadata (description/categories/tags).
+	Metadata() FunctionMetadata
+	// ArgumentSpecs returns the COPY option specifications.
+	ArgumentSpecs() []ArgSpec
+	// CopyFromFormat returns the SQL FORMAT identifier users type.
+	CopyFromFormat() string
+	// Read parses the source at path and emits Arrow batches via out whose
+	// schema matches expectedSchema exactly. out.Finish() is called by the
+	// framework after Read returns.
+	Read(ctx context.Context, params *ProcessParams, path string, expectedSchema *arrow.Schema, out *vgirpc.OutputCollector) error
+}`} />
+
+<p class="api-section">Description</p>
+
+CopyFromFunction is the interface a worker implements to serve a custom
+COPY ... FROM format. Mirrors vgi-python's CopyFromFunction base class.
+
+A CopyFromFunction is, mechanically, an ordinary producer-mode table function
+(RegisterCopyFrom wraps it as one so it reuses the whole table bind/init/scan
+path). What makes it a COPY format is that CopyFromFormat() returns the SQL
+FORMAT identifier and the worker advertises it via catalog_copy_from_formats.
+
+  - Name() is the handler's registered function name (also visible in
+<Code lang="go" code={`duckdb_functions like any table function).`} />
+
+  - CopyFromFormat() is the bare SQL FORMAT identifier (the VGI extension
+<Code lang="go" code={`scopes it by the attach alias, e.g. "acme.<format>").`} />
+
+  - The COPY options are declared via ArgumentSpecs() (the file_path is
+<Code lang="go" code={`supplied by COPY, never as an option) and read in Read via params.Args.`} />
+
+  - Read parses the source and emits Arrow batches matching expectedSchema.
+
+</div>
+
+<div class="api-class">
+
+<a id="CopyFromSecretProvider"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `CopyFromSecretProvider`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L79" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CopyFromSecretProvider interface {
+	// SecretLookups returns the secrets to resolve at bind, typically scoped by the
+	// source path (params.CopyFrom.FilePath). Returning nil/empty requests none.
+	SecretLookups(params *BindParams) []SecretLookup
+}`} />
+
+<p class="api-section">Description</p>
+
+CopyFromSecretProvider is an optional interface a CopyFromFunction may
+implement to forward CREATE SECRET credentials for secret-backed cloud sources
+(S3/GCS/HTTP/…). Mirrors Python's CopyFromFunction.on_secrets.
+
+SecretLookups is the COPY-FROM secret-bind hook: it is called during bind (only
+on the first pass) and returns the secrets to resolve — typically scoped by the
+source path (params.CopyFrom.FilePath). The framework's two-phase secret bind
+resolves each lookup from the caller's SecretManager and surfaces the resolved
+values on params.Secrets at Read time. Returning nil/empty requests nothing.
+
+</div>
+
+<div class="api-class">
+
+<a id="CopyToCommenter"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `CopyToCommenter`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_to.go#L81" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CopyToCommenter interface {
+	CopyToComment() string
+}`} />
+
+<p class="api-section">Description</p>
+
+CopyToCommenter is an optional interface; when implemented, the returned
+comment is surfaced by vgi_copy_formats(). Mirrors COPY_TO_COMMENT.
+
+</div>
+
+<div class="api-class">
+
+<a id="CopyToContext"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CopyToContext`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_to.go#L19" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CopyToContext struct {
+	// Format is the FORMAT name resolved at COPY bind time.
+	Format	string
+	// FilePath is the destination path from the COPY ... TO 'path' statement.
+	FilePath	string
+}`} />
+
+<p class="api-section">Description</p>
+
+CopyToContext is the COPY ... TO context threaded onto a bind/init when a
+COPY-TO sink is opened. Mirrors Python's vgi.protocol.CopyToContext.
+
+Present (non-nil on BindParams/ProcessParams) only when the bind/init was
+opened by a COPY ... TO statement against a custom format. The COPY options
+arrive through the function's normal arguments (params.Args), not here; the
+source columns ride params.OutputSchema / the bind input schema.
+
+</div>
+
+<div class="api-class">
+
+<a id="CopyToFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `CopyToFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_to.go#L61" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CopyToFunction interface {
+	// Name returns the handler's registered function name.
+	Name() string
+	// Metadata returns descriptive metadata (description/categories/tags). Set
+	// SinkOrderDependent=true to request a single-thread, source-ordered sink.
+	Metadata() FunctionMetadata
+	// ArgumentSpecs returns the COPY option specifications.
+	ArgumentSpecs() []ArgSpec
+	// CopyToFormat returns the SQL FORMAT identifier users type.
+	CopyToFormat() string
+	// Write persists one input batch to an execution-scoped shard (called once
+	// per sink batch). params.CopyTo carries the destination format + path.
+	Write(ctx context.Context, params *ProcessParams, batch arrow.RecordBatch) error
+	// Close reads every shard back and performs the terminal write + close of
+	// the destination, exactly once. Called even for an empty COPY (zero rows).
+	Close(ctx context.Context, params *ProcessParams) error
+}`} />
+
+<p class="api-section">Description</p>
+
+CopyToFunction is the interface a worker implements to serve a custom
+COPY ... TO format. Mirrors vgi-python's CopyToFunction base class.
+
+Mechanically a CopyToFunction is a buffered (Sink+Combine) function with NO
+Source phase: RegisterCopyTo wraps it as a TableBufferingFunction so it reuses
+the table_buffering_process / table_buffering_combine machinery on both sides.
+
+  - Write is called once per input batch (the buffered process() step, fanned
+<Code lang="go" code={`out across DuckDB's sink threads / per-thread workers). Persist the batch
+to an execution_id-scoped shard via params.Storage (cross-process safe).`} />
+
+  - Close is called exactly once on the coordinator worker (the buffered
+<Code lang="go" code={`combine() step, driven by DuckDB's once-only copy_to_finalize). Read the
+shards back and perform the terminal write+flush+close of the destination.
+`} />
+
+There is no finalize/drain phase, so the destination MUST be fully written and
+closed inside Close — a writer that forgets leaves a silent partial file.
+
+Cross-process invariant: Write and Close may run on different worker processes
+(pool rotation / HTTP). Any shard state Close needs MUST live in
+execution_id-scoped storage (params.Storage), not in per-instance fields.
+
+  - Name() is the handler's registered function name (the TableBufferingFunction
+<Code lang="go" code={`name; visible in duckdb_functions like any table-buffering function).`} />
+
+  - CopyToFormat() is the bare SQL FORMAT identifier (the VGI extension scopes
+<Code lang="go" code={`it by the attach alias, e.g. "acme.<format>").`} />
+
+  - The COPY options are declared via ArgumentSpecs() (the file_path is supplied
+<Code lang="go" code={`by COPY, never as an option) and read in Write/Close via params.Args.`} />
+
+  - To require source order, return Metadata with SinkOrderDependent=true;
+<Code lang="go" code={`RegisterCopyTo surfaces ordered=true, which the extension maps to a
+single-thread sink.`} />
+
+</div>
+
+<div class="api-class">
+
+<a id="CopyToSecretProvider"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `CopyToSecretProvider`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_to.go#L96" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CopyToSecretProvider interface {
+	// SecretLookups returns the secrets to resolve at bind, typically scoped by the
+	// destination path (params.CopyTo.FilePath). Returning nil/empty requests none.
+	SecretLookups(params *BindParams) []SecretLookup
+}`} />
+
+<p class="api-section">Description</p>
+
+CopyToSecretProvider is an optional interface a CopyToFunction may implement to
+forward CREATE SECRET credentials for secret-backed cloud writes
+(S3/GCS/HTTP/…). Mirrors Python's CopyToFunction.on_secrets.
+
+SecretLookups is the COPY-TO secret-bind hook: it is called during bind (only
+on the first pass, before any secrets are resolved) and returns the secrets to
+resolve — typically scoped by the destination path (params.CopyTo.FilePath).
+The framework's two-phase secret bind resolves each lookup from the caller's
+SecretManager and surfaces the resolved values on params.Secrets at Write/Close
+time. Returning nil/empty requests nothing, so a writer that never touched
+credentials is unaffected.
+
+</div>
+
+<div class="api-class">
+
+<a id="copyFromAdapter"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `copyFromAdapter`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L109" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type copyFromAdapter struct {
+	inner CopyFromFunction
+}`} />
+
+<p class="api-section">Description</p>
+
+copyFromAdapter wraps a CopyFromFunction as a TypedTableFunc so it reuses the
+table bind/init/scan machinery. Mirrors Python's CopyFromFunction.on_bind /
+process.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="copyFromAdapter.ArgumentSpecs"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ArgumentSpecs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L117" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyFromAdapter) ArgumentSpecs() []ArgSpec</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="copyFromAdapter.Metadata"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L116" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyFromAdapter) Metadata() FunctionMetadata</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="copyFromAdapter.Name"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Name`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L115" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyFromAdapter) Name() string</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="copyFromAdapter.NewState"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `NewState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L143" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyFromAdapter) NewState(params *ProcessParams) (*copyFromState, error)</code></pre>
+
+NewState allocates the single-shot read guard.
+
+</div>
+<div class="api-member">
+
+<a id="copyFromAdapter.OnBind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnBind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L122" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyFromAdapter) OnBind(params *BindParams) (*BindResponse, error)</code></pre>
+
+OnBind binds the output schema to the COPY target's schema. DuckDB forces the
+scan's output types to the target table's columns, so a COPY-FROM reader must
+produce exactly the expected schema.
+
+</div>
+<div class="api-member">
+
+<a id="copyFromAdapter.Process"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Process`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L148" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyFromAdapter) Process(ctx context.Context, params *ProcessParams, state *copyFromState, out *vgirpc.OutputCollector) error</code></pre>
+
+Process drives Read once, then finishes the stream.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="copyFromFormatRecord"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `copyFromFormatRecord`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L87" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type copyFromFormatRecord struct {
+	formatName	string
+	handler		string
+	comment		string	// "" = no comment (encoded as null)
+	direction	string
+	description	string
+	tags		map[string]string
+	argSpecs	[]ArgSpec
+	// ordered marks a COPY ... TO writer that needs source order. The C++
+	// extension maps it to a single-thread sink. Always false for FROM formats.
+	ordered	bool
+}`} />
+
+<p class="api-section">Description</p>
+
+copyFromFormatRecord is the worker-side record advertised via
+catalog_copy_from_formats. Mirrors CopyFromFormatInfo on the wire.
+
+</div>
+
+<div class="api-class">
+
+<a id="copyFromState"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `copyFromState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from.go#L102" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type copyFromState struct {
+	Done bool
+}`} />
+
+<p class="api-section">Description</p>
+
+copyFromState is the single-shot read guard for the producer-mode adapter.
+Exported field so it gob-encodes for HTTP rehydration.
+
+</div>
+
+<div class="api-class">
+
+<a id="copyToAdapter"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `copyToAdapter`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_to.go#L105" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type copyToAdapter struct {
+	inner CopyToFunction
+}`} />
+
+<p class="api-section">Description</p>
+
+copyToAdapter wraps a CopyToFunction as a TableBufferingFunction so it reuses
+the buffered process/combine machinery. Mirrors Python's CopyToFunction
+process()/combine() (final methods over write()/close()).
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="copyToAdapter.ArgumentSpecs"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ArgumentSpecs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_to.go#L113" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyToAdapter) ArgumentSpecs() []ArgSpec</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="copyToAdapter.Combine"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Combine`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_to.go#L145" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyToAdapter) Combine(ctx context.Context, params *ProcessParams, stateIDs [][]byte) ([][]byte, error)</code></pre>
+
+Combine performs the terminal write (→ Close) once on the coordinator and
+returns an empty finalize list — the COPY-TO path never drains output.
+
+</div>
+<div class="api-member">
+
+<a id="copyToAdapter.Finalize"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Finalize`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_to.go#L159" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyToAdapter) Finalize(ctx context.Context, params *ProcessParams, finalizeStateID []byte) ([]arrow.RecordBatch, error)</code></pre>
+
+Finalize is never invoked on the COPY-TO path (Combine returns no finalize
+ids). Present to satisfy the TableBufferingFunction interface.
+
+</div>
+<div class="api-member">
+
+<a id="copyToAdapter.Metadata"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_to.go#L112" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyToAdapter) Metadata() FunctionMetadata</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="copyToAdapter.Name"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Name`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_to.go#L111" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyToAdapter) Name() string</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="copyToAdapter.OnBind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnBind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_to.go#L120" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyToAdapter) OnBind(params *BindParams) (*BindResponse, error)</code></pre>
+
+OnBind: a sink produces no rows — bind to an empty output schema. Mirrors
+Python's CopyToFunction.on_bind. If the writer implements CopyToSecretProvider,
+its requested secret lookups are forwarded on the first bind pass so the
+two-phase secret bind resolves them (the resolved values reach Write/Close via
+params.Secrets).
+
+</div>
+<div class="api-member">
+
+<a id="copyToAdapter.Process"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Process`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_to.go#L131" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *copyToAdapter) Process(ctx context.Context, params *ProcessParams, batch arrow.RecordBatch) ([]byte, error)</code></pre>
+
+Process sinks one input batch (→ Write) and returns the execution_id bucket so
+all of a query's batches land in one bucket, mirroring Python.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="SerializeCopyFromFormatInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `SerializeCopyFromFormatInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/copy_from_info.go#L24" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func SerializeCopyFromFormatInfo(rec copyFromFormatRecord) ([]byte, error)</code></pre>
+
+SerializeCopyFromFormatInfo serializes one copy-from/copy-to format record to
+IPC bytes matching CopyFromFormatInfoSchema (comment, tags, format_name,
+handler, options, direction, description, ordered). The options field carries the IPC-serialized
+Arrow argument schema built from the handler's ArgSpecs — the same encoding as
+FunctionInfo.arguments — so option type/default/doc surface identically to
+vgi_function_arguments().
+
+</div>

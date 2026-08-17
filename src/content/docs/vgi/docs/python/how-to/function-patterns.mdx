@@ -15,6 +15,7 @@ import streamingSrc from '../../../../../../examples/vgi-python/series_streaming
 import filterSrc from '../../../../../../examples/vgi-python/filter_worker.py?raw';
 import sumSrc from '../../../../../../examples/vgi-python/sum_worker.py?raw';
 import rowCountSrc from '../../../../../../examples/vgi-python/row_count_worker.py?raw';
+import batchIndexSrc from '../../../../../../examples/vgi-python/batch_index_worker.py?raw';
 
 Each of the five VGI function shapes, with a complete, runnable worker for each — so you can find
 the shape that fits your problem. (Do the [tutorial](/vgi/docs/python/tutorial/scalar/) first.)
@@ -57,6 +58,11 @@ built-in DuckDB function.
 <tr><td><strong>Buffering</strong></td><td>stream → [state] → stream</td><td>you must see <em>every</em> row first (sort, top-k, full reduction)</td><td><code>SELECT * FROM f((SELECT …))</code></td></tr>
 </tbody>
 </table>
+
+Table-in-out has one variant worth knowing about up front:
+**[blended](#blended-positional-args-are-the-input-columns)**, where the positional arguments *are*
+the input columns, so `f(x, y)` reads like an ordinary function call and works inside `LATERAL`. It's
+a per-row map — no finalize — rather than a sixth shape.
 
 ## Scalar
 
@@ -107,8 +113,10 @@ SELECT * FROM calc.series(3);`} lang="sql" tryable={false} />
 
 The tutorial's `series` emits every row in a single `process` call. That's fine for small results,
 but `process` is actually called *repeatedly* until you call `out.finish()` — so for large output
-you emit a bounded chunk per call and remember your place in a small **state** object. The state
-extends `ArrowSerializableDataclass` so it survives HTTP state round-trips:
+you emit a bounded chunk per call and remember your place in a small **state** object. Here the state
+extends `ArrowSerializableDataclass`, which writes the encoding for you so it survives HTTP state
+round-trips (you can [supply your own
+encoding](/vgi/docs/python/how-to/state-storage/#state-doesnt-have-to-be-arrow) instead):
 
 <Collapsible summary="series_streaming_worker.py">
 <CodeBlock code={streamingSrc} lang="python" tryable={false} />
@@ -133,6 +141,58 @@ SELECT * FROM filters.filter_positive((SELECT * FROM (VALUES (-2), (5), (0), (9)
 
 <QueryIO inColumns={["value"]} inRows={[[-2], [5], [0], [9], [-1]]} outColumns={["value"]} outRows={[[5], [9]]} />
 
+### Blended: positional args *are* the input columns
+
+The `filter_positive` function above takes an explicit `TABLE` subquery, so it can only be called
+one way. A **`RowTransformFunction`** removes that constraint: its positional `Arg`s declare the
+per-row input columns directly — no synthetic `TABLE` placeholder — so a single registration serves
+a literal call, a column call, and a correlated `LATERAL` call:
+
+<CodeBlock code={`SELECT geo.geo_encode(52.0, 13.0);                    -- literals -> one input row
+SELECT * FROM t, geo.geo_encode(t.lat, t.lon);        -- columns  -> streaming input
+SELECT * FROM t, LATERAL geo.geo_encode(t.lat, t.lon);`} lang="sql" tryable={false} />
+
+Subclassing `RowTransformFunction` *is* the signal — there's no `Meta` flag, deliberately, because a
+flag can be forgotten on one of several same-named overloads and inheritance cannot. Positional args
+are read off `batch` by their declared name; named (`str`-position) args stay bind-time scalars on
+`params.args`:
+
+<CodeBlock code={`class GeoEncodeFunction(RowTransformFunction[GeoArgs]):
+    class Meta:
+        name = "geo_encode"
+
+    @classmethod
+    def on_bind(cls, params: BindParams[GeoArgs]) -> BindResponse:
+        return BindResponse(output_schema=schema({"geohash": pa.string()}))
+
+    @classmethod
+    def process(cls, params, state, batch, out) -> None:
+        precision = params.args.precision          # named arg -> params.args
+        lats = batch.column("latitude").to_pylist()  # positional args -> batch columns
+        lons = batch.column("longitude").to_pylist()
+        codes = [f"{round(la, precision)}:{round(lo, precision)}" for la, lo in zip(lats, lons)]
+        out.emit(pa.record_batch({"geohash": pa.array(codes, type=pa.string())}))`} lang="python" tryable={false} />
+
+Three rules follow from the call shapes it has to serve:
+
+- **Map-shaped only — there is no `finalize`.** A `finalize()`/`finish()` override is rejected at
+  `resolve_metadata`, because DuckDB forbids `FinalExecute` under correlated `LATERAL`. 1→1, 1→N and
+  1→0 all work; anything that must accumulate belongs in a classic `TableInput` table-in-out or a
+  buffering function.
+- **No positional `const` args.** In the column form DuckDB sweeps a constant into the input
+  subquery, and in the literal form it's indistinguishable from an input column. Use a named arg for
+  optional config.
+- **Overloads resolve by arity**, so same-named blended functions with different positional counts
+  coexist. For a varargs function the runtime column names aren't known at declaration time — read
+  them positionally with `RowTransformFunction.input_columns(batch)`.
+
+<Callout type="info" title="Which table-in-out do I want?">
+Reach for **blended** when your function is a per-row map that users should be able to call like an
+ordinary function (`f(x, y)`), including inside `LATERAL`. Keep the classic **`TableInput`** form
+when the function genuinely consumes a *relation* — when it needs a required constant, or when it
+accumulates across the stream and needs a `finalize`.
+</Callout>
+
 ## Aggregate
 
 <div class="kind-banner kind-banner--aggregate"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/aggregate.svg" alt="aggregate shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → 1 value</code><p class="kind-banner__desc">Folds many rows down into a single value per group.</p></div></div>
@@ -152,10 +212,17 @@ GROUP BY category ORDER BY category;`} lang="sql" tryable={false} />
 
 <QueryIO inColumns={["category", "value"]} inRows={[[0, 10], [0, 5], [1, 1], [1, 2], [1, 3]]} outColumns={["category", "total"]} outRows={[[0, 15], [1, 6]]} />
 
-<Callout type="info" title="State must be an ArrowSerializableDataclass">
-Table generators and aggregates keep state between calls. Because that state is serialized across
-parallel workers (aggregates) and HTTP round-trips, the framework requires it to extend
-`ArrowSerializableDataclass`. Annotate fields with `ArrowType(...)` so the wire type is explicit.
+<Callout type="info" title="State has to be turnable into bytes">
+Aggregate state is merged across parallel workers and round-trips through storage between calls, so
+`TState` must supply `serialize_to_bytes()` and `deserialize_from_bytes()`. Extending
+`ArrowSerializableDataclass` writes both for you — annotate fields with `ArrowType(...)` so the wire
+type is explicit — and that's what `sum_worker.py` above does.
+
+It is not the only option, and for a small state it's an expensive one: an aggregate serializes once
+**per group, per batch**, and a one-row Arrow stream pays for a schema message, a batch message and
+an end-of-stream marker whatever the payload. A two-integer state packs into 16 bytes with `struct`.
+The same rule and the same trade-off apply to table generators and table-in-out functions — see
+[State doesn't have to be Arrow](/vgi/docs/python/how-to/state-storage/#state-doesnt-have-to-be-arrow).
 </Callout>
 
 ## Buffering
@@ -183,6 +250,26 @@ Both consume a relation, but a **table-in-out** function emits *per input batch*
 whole input — use it for streaming transforms (filter, enrich, reshape). Reach for **buffering**
 only when output genuinely depends on every row.
 </Callout>
+
+### Recovering input order
+
+A buffering sink runs in parallel across DuckDB threads, so batches arrive in no particular order.
+Set `Meta.requires_input_batch_index = True` and each `process()` call also receives
+`params.batch_index` — a globally-unique monotonic index — which is what lets you put the input back
+in order. That's the prerequisite for anything order-sensitive: row pattern matching, a running
+total, `LAG`-style windows over the buffered stream.
+
+<Collapsible summary="batch_index_worker.py">
+<CodeBlock code={batchIndexSrc} lang="python" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'bi' (TYPE vgi, LOCATION 'uv run batch_index_worker.py');
+SELECT * FROM bi.batch_indexes((SELECT * FROM range(5000))) ORDER BY batch_index;`} lang="sql" tryable={false} />
+
+Not every source can supply an index — a base table scan can, while `range()` and `VALUES` cannot.
+When it can't, the extension serializes the sink and numbers the batches itself, so a worker always
+sees a valid monotonic index and never has to care which route produced it. `params.batch_index` is
+`None` on every other call path.
 
 ## Next steps
 

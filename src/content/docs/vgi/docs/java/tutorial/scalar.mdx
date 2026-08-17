@@ -1,0 +1,156 @@
+---
+title: 1. Your first scalar function
+description: Build and run a scalar VGI function in Java, callable from DuckDB.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import workerSrc from '../../../../../../examples/vgi-java/ScalarExample.java?raw';
+
+The first tutorial step: build a worker with one **scalar** function and call it from SQL — about
+**10 minutes**, for first-time VGI users with JDK 21+.
+
+<InfoTip label="What's a “worker”?" title="What's a “worker”?">
+A **worker** is a small program DuckDB talks to over Apache Arrow. It exposes one or more typed
+functions, and DuckDB calls them like built-ins. It is an ordinary JVM program — nothing is compiled
+into DuckDB, and nothing links against it.
+</InfoTip>
+
+<div class="kind-banner kind-banner--scalar"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><div class="kind-banner__text"><code class="kind-banner__formula">1 row → 1 value</code><p class="kind-banner__desc">Runs on each row independently and returns a single value — a pure per-row transform.</p></div></div>
+
+<Callout type="tip" title="Why this is powerful">
+`upper_case` is intentionally trivial — DuckDB can already uppercase a string. The point is that
+`compute` is **ordinary Java**: reach for a Maven dependency, a model, an HTTP client, a parser
+DuckDB has never heard of, and DuckDB calls it like a **native SQL function**.
+</Callout>
+
+## Step 1 — The build file
+
+A worker needs one dependency, and three build settings that are not optional.
+
+<CodeBlock code={`plugins { application }
+
+repositories { mavenCentral() }
+
+dependencies {
+    implementation("farm.query:vgi:0.26.1")
+    runtimeOnly("org.slf4j:slf4j-simple:2.0.16")   // any SLF4J binding
+}
+
+tasks.withType<JavaCompile> {
+    // Required. See the warning below.
+    options.compilerArgs.add("-parameters")
+}
+
+application {
+    mainClass.set("farm.query.vgi.examples.ScalarExample")
+    applicationDefaultJvmArgs = listOf(
+        "--add-opens=java.base/java.nio=ALL-UNNAMED",   // Arrow needs nio access
+        "--enable-native-access=ALL-UNNAMED",           // shared-memory transport
+    )
+}`} lang="kotlin" title="build.gradle.kts" tryable={false} />
+
+<Callout type="warning" title="`-parameters` fails silently, not loudly">
+The annotation-driven API reads your **parameter names** to build the SQL signature. Java erases
+those by default, and without `-parameters` the worker still starts, still registers, and still
+answers positional calls — so nothing looks wrong:
+
+<CodeBlock code={`SELECT arg_name FROM vgi_function_arguments() WHERE function_name = 'upper_case';`} lang="sql" tryable={false} />
+
+<table>
+<thead><tr><th>Built with <code>-parameters</code></th><th>Built without</th></tr></thead>
+<tbody><tr><td><code>value</code></td><td><code>arg0</code></td></tr></tbody>
+</table>
+
+`upper_case('hello')` keeps working either way. What breaks is everything that depends on the name:
+`upper_case(value := 'hello')` stops resolving, and any agent or tool reading the catalog sees
+`arg0`. Nothing warns you, so put the flag in the build file before you write the function.
+</Callout>
+
+## Step 2 — Write the worker
+
+<CodeBlock code={workerSrc} lang="java" title="ScalarExample.java" tryable={false} />
+
+Four things to notice:
+
+- **The method signature is the SQL signature.** `@Vector` marks a per-row input column, and the
+  Java vector type is the SQL type. There is no separate spec to keep in sync.
+- **The last unannotated vector is the output.** The framework allocates it, sized to the batch, and
+  sends back whatever you write into it.
+- **A whole column at a time.** `compute` runs once per batch, not once per row.
+- **`runFromArgs` picks the transport.** One entry point handles stdio, `--unix` and `--http`, which
+  is why the same binary works for every deployment below.
+
+<InfoTip label="New to Apache Arrow?" title="New to Apache Arrow?" width="34rem">
+[Apache Arrow](https://arrow.apache.org/) is a language-independent **columnar** memory format.
+Rather than rows of objects, data lives in **vectors**: a contiguous, typed sequence of values for a
+single column. VGI hands your function a whole column, and operating on it at once is what keeps it
+fast across the process boundary. In Java these are the `org.apache.arrow.vector.*` types —
+`VarCharVector` is one UTF-8 column.
+
+<a href="https://arrow.apache.org/" target="_blank" rel="noopener" class="arrow-logo-link"><img src="/vgi/apache-arrow.svg" alt="Apache Arrow" class="arrow-logo" /></a>
+</InfoTip>
+
+## Step 3 — Build it
+
+<CodeBlock code={`./gradlew installDist`} lang="bash" tryable={false} />
+
+That produces a self-contained launch script under
+`build/install/<project>/bin/<project>` — the JVM flags from the build file are baked into it, which
+is why `ATTACH` can point straight at it.
+
+## Step 4 — Attach and call it
+
+Start **[Haybarn](/haybarn)** from anywhere and attach the launch script:
+
+<CodeBlock code={`INSTALL vgi FROM community;
+LOAD vgi;
+
+ATTACH 'demo' (TYPE vgi, LOCATION 'launch:/abs/path/build/install/demo/bin/demo');`} lang="sql" tryable={false} />
+
+<Callout type="warning" title="Use `launch:`, not a bare path — and know what it caches">
+A cold JVM takes seconds to start. A bare `LOCATION` spawns a fresh one for **every query**, which
+makes an interactive session unusable. The `launch:` prefix starts the worker once and reuses it
+across queries over a flock-coordinated Unix socket.
+
+The consequence to remember: **after you rebuild, the pooled worker is still the old one.** It will
+keep answering with the previous build until it idles out or you kill it, which produces the
+memorable experience of a fix that appears not to work. `DETACH`, then kill the JVM, then re-attach.
+</Callout>
+
+Now call it:
+
+<CodeBlock code={`SELECT demo.upper_case('hello');`} lang="sql" tryable={false} />
+
+<QueryResult columns={["upper_case('hello')"]} rows={[["HELLO"]]} />
+
+…and by name, which is what `-parameters` bought you:
+
+<CodeBlock code={`SELECT demo.upper_case(value := 'hello');`} lang="sql" tryable={false} />
+
+<QueryResult columns={["upper_case(value := 'hello')"]} rows={[["HELLO"]]} />
+
+**What just happened:** `ATTACH` launched the worker and registered `demo.upper_case` in your SQL
+session. DuckDB handed your Java a whole `VarCharVector`, `compute` ran over it, and the result came
+back across the wire — no row-by-row round trips. Swap the body for any Java you like and the SQL
+above doesn't change.
+
+You've built and run your first VGI function in Java. 🎉
+
+<InfoTip label="It didn't work?" title="Troubleshooting" width="34rem" up>
+- **The argument is called `arg0`** — the `-parameters` flag is missing from the build.
+- **Your change had no effect** — the pooled `launch:` worker is still the old build. Kill the JVM.
+- **`IllegalAccessError` mentioning `java.nio`** — the `--add-opens` flag is missing.
+- **`ATTACH` takes seconds every time** — you used a bare `LOCATION` instead of `launch:`.
+- **`No worker handles catalog 'x'`** — the name in `ATTACH` must equal `catalogName(...)`.
+</InfoTip>
+
+## Next steps
+
+- **[2. Your first table function](/vgi/docs/java/tutorial/table/)** — generate rows instead of
+  transforming them.
+- **The other function shapes** → [Function patterns](/vgi/docs/java/how-to/function-patterns/).
+- **The exact contracts** → [Package overview](/vgi/docs/java/api/) and
+  [Scalar functions](/vgi/docs/java/api/scalar/).

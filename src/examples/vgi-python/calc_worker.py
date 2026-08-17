@@ -41,9 +41,11 @@ class Double(ScalarFunction):
         return pc.multiply(value, 2)
 
 
+
+
 @dataclass(slots=True, frozen=True, kw_only=True)
 class SeriesArgs:
-    """Arguments for the Series table function (one positional ``count``)."""
+    """Arguments for :class:`Series` (one positional ``count``)."""
 
     count: Annotated[int, Arg(0, doc="How many numbers to generate", ge=0)]
 
@@ -65,6 +67,8 @@ class Series(TableFunctionGenerator[SeriesArgs]):
         """Emit all rows at once, then signal completion."""
         out.emit(pa.RecordBatch.from_pydict({"n": list(range(params.args.count))}, schema=params.output_schema))
         out.finish()
+
+
 
 
 class CalcWorker(Worker):

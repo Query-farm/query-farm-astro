@@ -1,0 +1,197 @@
+---
+title: What's new
+description: "Everything that changed in vgi-python between 0.8 and 0.28 — new capabilities, protocol bumps, and the two breaking changes."
+---
+
+import Callout from '../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../components/ui/CodeBlock.astro';
+
+vgi-python has moved from **0.8.0 to 0.28.1**, and the wire protocol from **1.0.0 to 1.3.0**. This
+page groups what landed by theme rather than by release, and links to the guide for each. Two changes
+are breaking — both are called out below.
+
+## Breaking changes
+
+<Callout type="warning" title="0.18.0 — functions resolve by (schema, name)">
+A function name was never a unique key. The worker's registry was a flat `name → classes` map, so two
+functions registered under the same name in different catalog schemas collided as overloads and any
+call raised *"Ambiguous function call"*. Registration was already schema-aware; dispatch was not.
+
+`BindRequest` gained `schema_name`, and **all five `Client` entry points now require it**
+(`vgi-client` gained `--schema`). Callers that pass no schema search every schema and get a
+cross-schema ambiguity error naming the schemas involved. Functions from the legacy flat `functions`
+list register into the catalog's `default_schema`. Protocol 1.0.0 → 1.1.0.
+</Callout>
+
+<Callout type="warning" title="0.20.0 — the unary RPCs name their schema too">
+The follow-on. 1.1.0 fixed *bind*, but the unary RPCs that **re-resolve** a function by name carried
+no schema — so a name declared in two schemas bound correctly and then ran the *other* schema's
+implementation at `update`/`finalize`/`process`, returning a wrong-but-plausible answer.
+
+A nullable `schema_name` was added to the 15 request dataclasses that resolve by name (five aggregate
+core, four window, three streaming, three table-buffering) and threaded to every by-name resolution
+site. Protocol 1.1.0 → 1.2.0.
+</Callout>
+
+Nothing else in this range requires a source change.
+
+## Result caching
+
+New in **0.14.0**, and the largest addition in this range. A worker can advertise that its result is
+reusable by attaching `vgi.cache.*` metadata to its first data batch — a freshness lifetime, a reuse
+scope, validators for conditional revalidation, and stale-serving grace windows, with the vocabulary
+borrowed from HTTP caching.
+
+<table>
+<thead>
+<tr><th>Version</th><th>What landed</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>0.14.0</strong></td><td><code>CacheControl</code> and the <code>vgi.cache.*</code> keys for table functions.</td></tr>
+<tr><td><strong>0.16.0</strong></td><td>Cache control from a buffering function's <code>finalize</code> emit; conditional-revalidation validators surfaced to the worker (<code>params.if_none_match</code> / <code>if_modified_since</code>).</td></tr>
+<tr><td><strong>0.16.1</strong></td><td>Opt-in for <strong>scalar</strong> functions; <code>partition_scope</code> for per-partition caching.</td></tr>
+<tr><td><strong>0.18.0</strong></td><td><code>per_value</code> — per-VALUE memoization for exchange-mode maps.</td></tr>
+</tbody>
+</table>
+
+→ **[Cache results on the client](/vgi/docs/python/how-to/result-caching/)**
+
+## Custom COPY formats
+
+A catalog can register its own `COPY` formats, in both directions (**0.8.8**). A `CopyFromFunction`
+is an ordinary producer-mode table function; a `CopyToFunction` is a buffered function with no Source
+phase. **0.9.0** added the `on_secrets` hook, which forwards `CREATE SECRET` credentials to a writer
+through a two-phase bind retry — the seam that makes writing to `s3://` possible when `on_bind` is
+`@final`.
+
+→ **[Add a custom COPY format](/vgi/docs/python/how-to/copy-formats/)**
+
+## Function shapes
+
+- **Blended table-in-out (`RowTransformFunction`, 0.16.0)** — positional args *are* the per-row input
+  columns, so one registration serves `f(52, 13)`, `FROM t, f(t.x, t.y)` and correlated `LATERAL`.
+  Map-shaped only: there is no `finalize`, because DuckDB forbids `FinalExecute` under correlated
+  `LATERAL`. Overloads resolve by arity, and **0.16.0** also added per-output-row provenance so
+  batched correlated `LATERAL` stays correct.
+- **Parallel finalize / `substream_id` (0.16.0)** for table-in-out functions.
+- **Ordered buffering input** — not new (`Meta.requires_input_batch_index` shipped in 0.8.0) but
+  newly *documented*, with a runnable example worker as of 0.28.0. It delivers DuckDB's per-chunk
+  index alongside each buffered batch, so a parallel sink can reconstruct source order; when a source
+  can't supply one (`range()`, `VALUES`), the extension serializes the sink and numbers the batches
+  itself.
+
+→ **[Function patterns](/vgi/docs/python/how-to/function-patterns/)**
+
+## Catalogs
+
+<table>
+<thead>
+<tr><th>Version</th><th>What landed</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>0.8.4</strong></td><td>Declarative <code>Catalog</code> can advertise <code>source_url</code>.</td></tr>
+<tr><td><strong>0.10.0</strong></td><td><strong>Companion catalogs</strong> (<code>attach_catalogs</code>) — the client ATTACHes a companion lakehouse (DuckLake / Iceberg / Postgres) at VGI-attach time, so catalog-table branches resolve without hand-attaching. Scheme allowlist + never-clobber conflict policy.</td></tr>
+<tr><td><strong>0.15.0</strong></td><td><code>required_field_filter_paths</code> → <strong><code>required_filters</code></strong>, now AND-of-ORs (conjunctive normal form) with prefix-based satisfaction.</td></tr>
+<tr><td><strong>0.15.0</strong></td><td><code>Table.arguments</code> forwarded to the scan-time worker bind.</td></tr>
+<tr><td><strong>0.24.0</strong></td><td><strong>Global functions</strong> — publish selected functions into DuckDB's <code>system.main</code> so they're callable unqualified. Best-effort and advisory; first attach wins. Protocol 1.2.0 → 1.3.0.</td></tr>
+<tr><td><strong>0.28.0</strong></td><td><code>deserialize_column_statistics()</code> and <code>Client.table_column_statistics()</code> — the missing inverse of <code>serialize_column_statistics</code>.</td></tr>
+</tbody>
+</table>
+
+→ **[Expose a catalog](/vgi/docs/python/how-to/catalogs/)** ·
+**[Publish global functions](/vgi/docs/python/how-to/global-functions/)**
+
+## Arguments
+
+- **`TaggedUnion` (0.8.3)** — union-typed arguments decode into a wrapper preserving both the
+  discriminator and the value, instead of `as_py()` silently dropping the tag. Extended to table
+  varargs in 0.9.0.
+- **Per-argument documentation (0.8.5)** — serialized as the `vgi_doc` Arrow field-metadata key.
+  Extended to **macro** parameters in 0.8.6.
+- **Typed const scalars (0.8.10)** — a `ConstParam` annotated as an Arrow scalar type is delivered as
+  a typed `pyarrow.Scalar`.
+- **Declared constraints (0.10.0)** — `choices` / `ge` / `le` / `gt` / `lt` / `pattern` on
+  `Param` / `ConstParam`, encoded into field metadata for discovery **and enforced at bind** for
+  const args (`ArgumentValidationError`). Columnar `Param` constraints stay advisory.
+
+→ **[Argument serialization](/vgi/docs/concepts/argument-serialization/)** ·
+**[Function API](/vgi/docs/python/how-to/generator-api/)**
+
+## Serving and deployment
+
+<table>
+<thead>
+<tr><th>Version</th><th>What landed</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>0.8.7</strong></td><td><strong>TCP transport</strong> — <code>vgi-serve --tcp</code>, <code>Client.from_tcp()</code>. No auth or encryption: loopback and trusted networks only.</td></tr>
+<tr><td><strong>0.22.1</strong></td><td><code>VGI-Proxy-Proof-Required</code> advertised from <code>create_app</code>, so a proxy can confirm the worker enforces the proofs it mints.</td></tr>
+<tr><td><strong>0.24.0</strong></td><td><strong>Shared signing key</strong> — <code>resolve_shared_signing_key()</code> replaces a per-process <code>os.urandom(32)</code>, and an ephemeral key is now announced at <code>WARNING</code>. See the warning below.</td></tr>
+<tr><td><strong>0.24.0</strong></td><td>Optional <strong>granian</strong> server (<code>--server granian</code>) — Rust socket I/O off the GIL, measured 1.9x over the best waitress config from a single process. Plus the waitress tuning <code>vgi-serve</code> was missing.</td></tr>
+<tr><td><strong>0.25.0</strong></td><td><code>--max-externalized-response-bytes</code> (a <em>hard</em> cap, unlike the soft stream cap), <code>Worker.resolve_token()</code> for proxy token introspection, and access-log sampling.</td></tr>
+<tr><td><strong>0.27.0</strong></td><td>The worker landing page reads the catalog <strong>over the protocol</strong> instead of producing a static <code>describe.json</code>.</td></tr>
+</tbody>
+</table>
+
+<Callout type="warning" title="Set VGI_SIGNING_KEY before running more than one process">
+Before 0.24.0, an unset `VGI_SIGNING_KEY` minted a key per process — correct for one process and
+silently wrong for more. The failure is load-dependent: a pinned connection never notices, while one
+that reconnects mid-stream hits a token sealed under a key the receiving process doesn't have and
+gets an intermittent `400` that reads as flakiness.
+</Callout>
+
+→ **[Serve over HTTP](/vgi/docs/python/how-to/serve-http/)**
+
+## Client
+
+All from **0.28.0** / **0.28.1**, and all about controlling a worker process properly:
+
+- **`stop(force=True)`** — SIGKILL a direct subprocess worker wedged inside a handler. A graceful
+  stop blocks on exactly the case you want to escape. Inert for pooled workers (they belong to the
+  pool, not the client); HTTP and TCP are already prompt.
+- **Workers spawn without a shell**, so the client owns the real process — which is what makes
+  `force` actually kill it.
+- **`server_path` accepts an argv sequence**, so an argument carrying spaces or quotes survives. No
+  single quoting convention works on both POSIX and Windows, which is what the shell had been
+  papering over.
+
+→ **[Use VGI from a Python app](/vgi/docs/python/how-to/python-app/)**
+
+## State and storage
+
+- **`StreamStateCodec` (0.24.0)** — a stream function's state no longer has to extend
+  `ArrowSerializableDataclass`. The framework only ever needed two methods, so the requirement is now
+  a structurally-checked protocol. A two-integer state measured **416 bytes / 36µs** through Arrow
+  IPC against **16 bytes / 0.21µs** packed directly — the framing was the entire cost.
+- **Aggregates too (unreleased, after 0.28.1)** — the same relaxation reached `AggregateFunction`,
+  whose `TState` had still been bound to `ArrowSerializableDataclass`. It matters more here than for
+  stream functions: an aggregate serializes once **per group, per batch**, so the Arrow framing cost
+  scales with cardinality. A `TState` with neither codec method is now rejected at class-definition
+  time instead of failing as an `AttributeError` on the first group of the first batch.
+- **`function_storage` (0.24.0)** — writers are serialized on the shared-cache in-memory SQLite DB.
+
+→ **[Persist state across workers](/vgi/docs/python/how-to/state-storage/)**
+
+## Performance and correctness
+
+- **0.16.1** — `statistics_from_duckdb` collects every column in a **single scan** instead of one
+  pass per column, so cost no longer scales with table width.
+- **0.16.1** — filter pushdown drops a fully-degraded `AND` instead of emitting `WHERE ()`.
+- **0.21.0** — the embedded `bind_call` serializes as binary, a cross-language wire format.
+- **0.23.0** — per-class argument specs are cached; worker logging and profiling became reachable
+  (`vgi.profiling`, opt-in by environment variable, shared by every worker entry point).
+- **0.24.0** — HTTP call state moved out of the per-turn state token; waitress buffers sized for
+  Arrow bodies; the per-class `FunctionArguments` parse plan is cached.
+- **0.24.0** — the attach is no longer carried decrypted in the call state.
+
+## Also worth knowing
+
+- **Secrets (0.8.8)** — `ResolvedSecrets` became scope- and type-aware, and name-keyed.
+- **Python 3.14** is tested in CI as of 0.25.0; `httpx2` as of 0.26.0.
+- The `vgi-rpc` floor moved from **0.20.0 to 0.40.0** over this range; several capabilities above
+  (TCP, externalized-response caps, proxy proofs) are VGI exposing what vgi-rpc had gained.
+## Next steps
+
+- **Start building** → [Function patterns](/vgi/docs/python/how-to/function-patterns/).
+- **The full API** → [API Reference](/vgi/docs/python/api/vgi-scalar_function/).
+- **Upstream changelog** → [Query-farm/vgi-python releases](https://github.com/Query-farm/vgi-python/releases).

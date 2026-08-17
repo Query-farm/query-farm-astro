@@ -1,41 +1,99 @@
 ---
-title: Aggregate functions — reference
+title: Aggregate functions
 description: "Deep reference for the VGI aggregate shape: initial_state / update / combine / finalize contracts, dynamic output types, multi-arg and weighted aggregates, and the streaming-partitioned opt-in."
 ---
 
 import Callout from '../../../../../../components/docs/Callout.astro';
 import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
 
-The deep reference for the aggregate shape — the exact contracts of `initial_state`, `update`, `combine`, and `finalize`, plus dynamic output types, multi-argument aggregates, and the streaming-partitioned opt-in for unbounded windowed queries.
+The deep reference for the aggregate shape — the exact contracts of `initial_state`, `update`,
+`combine`, and `finalize`, plus dynamic output types, multi-argument aggregates, and the
+streaming-partitioned opt-in for unbounded windowed queries.
 
 <Callout type="tip" title="New to aggregates?">
-Start with the runnable example in [Function patterns → Aggregate](/vgi/docs/python/how-to/function-patterns/#aggregate); this page is the deep reference. For how the phases fit into a query's overall execution, see [Function lifecycle](/vgi/docs/python/concepts/lifecycle/). The full method signatures live in the [`aggregate_function` API reference](/vgi/docs/python/api/vgi-aggregate_function/).
+Start with the runnable example in [Function patterns →
+Aggregate](/vgi/docs/python/how-to/function-patterns/#aggregate); this page is the deep reference.
+For how the phases fit into a query's overall execution, see [Function
+lifecycle](/vgi/docs/concepts/lifecycle/). The full method signatures live in the
+[`aggregate_function` API reference](/vgi/docs/python/api/vgi-aggregate_function/).
 </Callout>
 
-Aggregate functions accumulate input rows into per-group state and produce one result per group, powering SQL like `SELECT my_agg(col) FROM t GROUP BY category`. Each DuckDB callback (bind, update, combine, finalize, destructor) maps to one unary RPC. Per-group state lives in `FunctionStorage` (SQLite-backed), keyed by a globally unique `group_id` assigned by C++ from a shared atomic counter, so IDs never collide across parallel threads. Because state is serialized via `ArrowSerializableDataclass` rather than held in memory, the design is HTTP-transport compatible.
+Aggregate functions accumulate input rows into per-group state and produce one result per group,
+powering SQL like `SELECT my_agg(col) FROM t GROUP BY category`. Each DuckDB callback (bind, update,
+combine, finalize, destructor) maps to one unary RPC. Per-group state lives in `FunctionStorage`
+(SQLite-backed), keyed by a globally unique `group_id` assigned by C++ from a shared atomic counter,
+so IDs never collide across parallel threads. Because state is serialized to bytes rather than held
+in memory, the design is HTTP-transport compatible.
 
 ## State class
 
-The state class must be a `dataclass` extending `ArrowSerializableDataclass`, and every field needs an `ArrowType` annotation so the wire type is explicit. It is the function's first type parameter — `AggregateFunction[SumState]` — and is serialized to bytes between every RPC call:
+The state is the function's first type parameter — `AggregateFunction[SumState]` — and is serialized
+to bytes between every RPC call. The framework asks it for exactly two things,
+`serialize_to_bytes()` and `deserialize_from_bytes()` (the `StreamStateCodec` protocol), and treats
+the result as opaque.
+
+The usual answer is a `dataclass` extending `ArrowSerializableDataclass`, which writes both methods
+for you. Every field needs an `ArrowType` annotation so the wire type is explicit:
 
 <CodeBlock code={`@dataclass(kw_only=True)
 class AvgState(ArrowSerializableDataclass):
     total: Annotated[float, ArrowType(pa.float64())] = 0.0
     count: Annotated[int, ArrowType(pa.int64())] = 0`} lang="python" tryable={false} />
 
-Use simple scalar fields (int, float, str, bytes) for efficient serialization. Provide defaults that represent the **identity element** of the aggregation (0 for sum, empty for concatenation) so `initial_state()` can return a bare instance.
+Use simple scalar fields (int, float, str, bytes) for efficient serialization. Provide defaults that
+represent the **identity element** of the aggregation (0 for sum, empty for concatenation) so
+`initial_state()` can return a bare instance.
+
+### Packing the state yourself
+
+Arrow is not required, and for a small state it is the expensive choice. An aggregate serializes
+once **per group, per batch**, and a one-row Arrow stream pays for a schema message, a batch message
+and an end-of-stream marker whatever the payload — so the framing cost scales with cardinality. Two
+counters pack into 16 bytes:
+
+<CodeBlock code={`@dataclass(kw_only=True)
+class SumState:
+    # Same two counters, packed as little-endian int64s.
+    total: int = 0
+    count: int = 0
+
+    _STRUCT: ClassVar[struct.Struct] = struct.Struct("<qq")
+
+    def serialize_to_bytes(self) -> bytes:
+        return self._STRUCT.pack(self.total, self.count)
+
+    @classmethod
+    def deserialize_from_bytes(cls, data: bytes) -> "SumState":
+        total, count = cls._STRUCT.unpack(data)
+        return cls(total=total, count=count)`} lang="python" tryable={false} />
+
+This also lets a Python worker match the state encoding a sibling VGI implementation in another
+language already uses.
+
+<Callout type="warning" title="The codec must round-trip exactly">
+`T.deserialize_from_bytes(s.serialize_to_bytes())` has to equal `s` for every state the aggregate
+can produce, **including `initial_state()`**. The framework cannot check that, and a lossy codec
+surfaces as wrong aggregate results rather than as an error. A `TState` with neither method is
+rejected at class-definition time, so the mistake that *is* catchable fails where you declared it
+rather than deep in the persistence path.
+</Callout>
 
 ## Method contracts
 
-The four required classmethods form the accumulation pipeline. (`finalize` and `update` are declared with `*args`/`**kwargs` on the base class — you give them concrete, `Param`-annotated signatures in your subclass.)
+The four required classmethods form the accumulation pipeline. (`finalize` and `update` are declared
+with `*args`/`**kwargs` on the base class — you give them concrete, `Param`-annotated signatures in
+your subclass.)
 
 ### `initial_state(params) -> TState`
 
-Returns the identity element for a new group. Called lazily — the first time a `group_id` is encountered during `update()`, not during DuckDB's C++ `initialize()`. The framework pre-populates the `states` dict for you, so you rarely call this directly.
+Returns the identity element for a new group. Called lazily — the first time a `group_id` is
+encountered during `update()`, not during DuckDB's C++ `initialize()`. The framework pre-populates
+the `states` dict for you, so you rarely call this directly.
 
 ### `update(states, group_ids, ...columns) -> None`
 
-Accumulates a batch of input rows into per-group state. Mutate `states` in place; the framework persists every modified state to `FunctionStorage` after the call returns.
+Accumulates a batch of input rows into per-group state. Mutate `states` in place; the framework
+persists every modified state to `FunctionStorage` after the call returns.
 
 <table>
 <thead>
@@ -48,7 +106,8 @@ Accumulates a batch of input rows into per-group state. Mutate `states` in place
 </tbody>
 </table>
 
-A vectorized `update` groups within the batch first, then folds each group's partial into the stored state:
+A vectorized `update` groups within the batch first, then folds each group's partial into the stored
+state:
 
 <CodeBlock code={`@classmethod
 def update(cls, states, group_ids, value: Annotated[pa.Int64Array, Param(doc="Column to sum")]) -> None:
@@ -62,17 +121,22 @@ def update(cls, states, group_ids, value: Annotated[pa.Int64Array, Param(doc="Co
 
 ### `combine(source, target, params) -> TState`
 
-Merges two partial states produced by parallel workers, called during DuckDB's hash-aggregate combine phase. `source` is removed after the call; the returned state replaces `target`. **`combine` must be associative and commutative** — DuckDB calls it in an unspecified order across threads.
+Merges two partial states produced by parallel workers, called during DuckDB's hash-aggregate
+combine phase. `source` is removed after the call; the returned state replaces `target`. **`combine`
+must be associative and commutative** — DuckDB calls it in an unspecified order across threads.
 
 <CodeBlock code={`@classmethod
 def combine(cls, source: SumState, target: SumState, params) -> SumState:
     return SumState(total=source.total + target.total)`} lang="python" tryable={false} />
 
-For multi-field state, combine each field with its own algebra — sum the sums, sum the counts, concatenate the lists.
+For multi-field state, combine each field with its own algebra — sum the sums, sum the counts,
+concatenate the lists.
 
 ### `finalize(group_ids, states, params) -> RecordBatch`
 
-Produces the final result. Must return a `RecordBatch` with **one row per `group_id`, in the same order** as the `group_ids` argument. Annotate the return with `Returns(arrow_type)` to declare the static output type:
+Produces the final result. Must return a `RecordBatch` with **one row per `group_id`, in the same
+order** as the `group_ids` argument. Annotate the return with `Returns(arrow_type)` to declare the
+static output type:
 
 <CodeBlock code={`@classmethod
 def finalize(
@@ -83,7 +147,12 @@ def finalize(
 
 ### `on_bind(params) -> BindResponse` (optional)
 
-Override for dynamic output types or bind-time validation. `params` is an `AggregateBindParams` carrying `args`, `input_schema`, `settings`, `secrets`, and `auth_context`. The default implementation derives the output schema from the `Returns(...)` annotation on `finalize()`; you only need `on_bind()` when the type isn't statically known (see [Dynamic output type](#dynamic-output-type-any)) or when you want to validate arguments or resolve secrets at plan time.
+Override for dynamic output types or bind-time validation. `params` is an `AggregateBindParams`
+carrying `args`, `input_schema`, `settings`, `secrets`, and `auth_context`. The default
+implementation derives the output schema from the `Returns(...)` annotation on `finalize()`; you
+only need `on_bind()` when the type isn't statically known (see [Dynamic output
+type](#dynamic-output-type-any)) or when you want to validate arguments or resolve secrets at plan
+time.
 
 ## Meta options
 
@@ -108,7 +177,9 @@ Override for dynamic output types or bind-time validation. `params` is an `Aggre
 
 ## Input parameters
 
-Input columns are declared on `update()` with `Param` annotations — the same pattern as `ScalarFunction.compute()`. Multiple `Param`s give you a multi-argument (e.g. weighted) aggregate; each is delivered as a column array parallel to `group_ids`:
+Input columns are declared on `update()` with `Param` annotations — the same pattern as
+`ScalarFunction.compute()`. Multiple `Param`s give you a multi-argument (e.g. weighted) aggregate;
+each is delivered as a column array parallel to `group_ids`:
 
 <CodeBlock code={`@classmethod
 def update(
@@ -122,7 +193,8 @@ def update(
 
 ### Constant parameters (ConstParam)
 
-For parameters that are constant across all rows (e.g. a percentile threshold), use `ConstParam`. These are constant-folded at bind time and stored in `FunctionStorage`:
+For parameters that are constant across all rows (e.g. a percentile threshold), use `ConstParam`.
+These are constant-folded at bind time and stored in `FunctionStorage`:
 
 <CodeBlock code={`percentile: Annotated[float, ConstParam("Percentile (0-1)", phase="finalize")] = 0.5`} lang="python" tryable={false} />
 
@@ -139,13 +211,16 @@ The `phase` controls when the constant is injected:
 </tbody>
 </table>
 
-Use `phase="finalize"` to avoid serializing a large constant on every update batch — it's only loaded when `finalize()` needs it. In `finalize()`, read constant values from `params.args.positional`:
+Use `phase="finalize"` to avoid serializing a large constant on every update batch — it's only
+loaded when `finalize()` needs it. In `finalize()`, read constant values from
+`params.args.positional`:
 
 <CodeBlock code={`pct = params.args.positional[0].as_py() if params.args and params.args.positional else 0.5`} lang="python" tryable={false} />
 
 ### Varargs
 
-For aggregates accepting a variable number of columns, use `Param(varargs=True)`; the parameter receives a list of arrays. SQL: `SELECT vgi_sum_all(a, b, c) FROM t GROUP BY category`.
+For aggregates accepting a variable number of columns, use `Param(varargs=True)`; the parameter
+receives a list of arrays. SQL: `SELECT vgi_sum_all(a, b, c) FROM t GROUP BY category`.
 
 <CodeBlock code={`@classmethod
 def update(
@@ -163,7 +238,9 @@ def update(
 
 ## Dynamic output type (ANY)
 
-When the output type depends on the input, annotate `finalize()` with `Returns()` (no arrow type) and override `on_bind()` to derive the schema from `params.input_schema`. The catalog reports this column as a dynamic `any` type until bind resolves it:
+When the output type depends on the input, annotate `finalize()` with `Returns()` (no arrow type)
+and override `on_bind()` to derive the schema from `params.input_schema`. The catalog reports this
+column as a dynamic `any` type until bind resolves it:
 
 <CodeBlock code={`class GenericSum(AggregateFunction[GenericSumState]):
     @classmethod
@@ -182,10 +259,20 @@ When the output type depends on the input, annotate `finalize()` with `Returns()
 ## Streaming-partitioned aggregates (opt-in)
 
 <Callout type="info" title="When to reach for this">
-For most analytics, pre-aggregating the input in plain SQL is the cleaner answer than a custom streaming path — collapse fills per period in a CTE, then run a normal windowed aggregate over the pre-aggregate. The `streaming_partitioned` opt-in is for the cases where pre-aggregation isn't viable: per-fill running views, very high per-partition cardinality, or aggregates whose state isn't algebraically reducible.
+For most analytics, pre-aggregating the input in plain SQL is the cleaner answer than a custom
+streaming path — collapse fills per period in a CTE, then run a normal windowed aggregate over the
+pre-aggregate. The `streaming_partitioned` opt-in is for the cases where pre-aggregation isn't
+viable: per-fill running views, very high per-partition cardinality, or aggregates whose state isn't
+algebraically reducible.
 </Callout>
 
-For `OVER (PARTITION BY ... ORDER BY ...)` queries against unbounded inputs (e.g. running aggregates across years of trade history), the standard windowed path materializes each partition in DuckDB memory before the aggregate sees it — fine for bounded data, but it OOMs at scale. Setting `streaming_partitioned = True` on the function's `Meta` routes eligible queries through a custom physical operator: input chunks pipe directly to the worker, which maintains concurrent per-partition state in a hash map and emits one cumulative-snapshot output per input row. Memory is bounded by `partitions × state_per_partition`, not by row count.
+For `OVER (PARTITION BY ... ORDER BY ...)` queries against unbounded inputs (e.g. running aggregates
+across years of trade history), the standard windowed path materializes each partition in DuckDB
+memory before the aggregate sees it — fine for bounded data, but it OOMs at scale. Setting
+`streaming_partitioned = True` on the function's `Meta` routes eligible queries through a custom
+physical operator: input chunks pipe directly to the worker, which maintains concurrent
+per-partition state in a hash map and emits one cumulative-snapshot output per input row. Memory is
+bounded by `partitions × state_per_partition`, not by row count.
 
 <CodeBlock code={`class MyRunningAgg(AggregateFunction[MyState]):
     class Meta:
@@ -216,11 +303,17 @@ For `OVER (PARTITION BY ... ORDER BY ...)` queries against unbounded inputs (e.g
         # Cleanup hook, called once per session. Default: no-op.
         ...`} lang="python" tryable={false} />
 
-The extension's optimizer rule decides eligibility and requires: `streaming_partitioned = True`; a cumulative frame (`UNBOUNDED PRECEDING AND CURRENT ROW`, or the implicit cumulative frame from `ORDER BY` alone); no `EXCLUDE`, `DISTINCT`, `FILTER (WHERE ...)`, or aggregate-arg `ORDER BY`; and no const-arg parameters (v1 limitation). Queries that don't satisfy all of these fall back to the standard windowed path automatically. The streaming path is additive — it does not replace `update`/`combine`/`finalize`, which still service `GROUP BY` queries normally.
+The extension's optimizer rule decides eligibility and requires: `streaming_partitioned = True`; a
+cumulative frame (`UNBOUNDED PRECEDING AND CURRENT ROW`, or the implicit cumulative frame from
+`ORDER BY` alone); no `EXCLUDE`, `DISTINCT`, `FILTER (WHERE ...)`, or aggregate-arg `ORDER BY`; and
+no const-arg parameters (v1 limitation). Queries that don't satisfy all of these fall back to the
+standard windowed path automatically. The streaming path is additive — it does not replace
+`update`/`combine`/`finalize`, which still service `GROUP BY` queries normally.
 
 ## Registration
 
-Register aggregates alongside scalar and table functions; the framework detects `AggregateFunction` subclasses and registers them with the correct catalog function type:
+Register aggregates alongside scalar and table functions; the framework detects `AggregateFunction`
+subclasses and registers them with the correct catalog function type:
 
 <CodeBlock code={`worker = Worker(functions=[SumFunction, AvgFunction])`} lang="python" tryable={false} />
 
@@ -243,3 +336,9 @@ See `vgi/examples/aggregate.py` for complete implementations:
 <tr><td><code>SumAllFunction</code></td><td>Varargs aggregate</td></tr>
 </tbody>
 </table>
+## Next steps
+
+- **A runnable aggregate** → [Function patterns → Aggregate](/vgi/docs/python/how-to/function-patterns/#aggregate).
+- **How the phases are driven** → [Function lifecycle](/vgi/docs/concepts/lifecycle/).
+- **Where combine state lives** → [Persist state across workers](/vgi/docs/python/how-to/state-storage/).
+- **Exact signatures** → [API Reference: aggregate_function](/vgi/docs/python/api/vgi-aggregate_function/).

@@ -1,0 +1,122 @@
+---
+title: Expose a catalog
+description: "Present a Rust worker as a database — schemas, function-backed tables, and views DuckDB can query with ordinary qualified names."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import catalogSrc from '../../../../../../examples/vgi-rust/catalog.rs?raw';
+
+A worker does not have to be a bag of functions. It can present itself as a **database**: a named
+catalog you `ATTACH`, holding schemas that hold tables and views, queried with ordinary qualified
+names. The user never sees a function call.
+
+## The whole worker
+
+<Collapsible summary="catalog.rs">
+<CodeBlock code={catalogSrc} lang="rust" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'cat' (TYPE vgi, LOCATION './target/release/catalog');
+SELECT * FROM cat.data.cities;`} lang="sql" tryable={false} />
+
+<QueryResult
+  columns={["name", "population"]}
+  rows={[["Charlottesville", 51000], ["Richmond", 230000], ["Virginia Beach", 457000]]}
+/>
+
+## Function-backed tables
+
+The table is not stored — it is a **table function plus the arguments to call it with**:
+
+<CodeBlock code={`let cities = CatTable {
+    name: "cities".to_string(),
+    columns: cities_schema(),
+    scan_function: "cities_scan".to_string(),
+    scan_arguments: Arguments::serialize_scan_args(&[Arc::new(Int64Array::from(vec![0i64]))])
+        .unwrap_or_default(),
+    ..Default::default()
+};`} lang="rust" tryable={false} />
+
+`SELECT * FROM cat.data.cities` runs `cities_scan(0)`. The user passes nothing and never learns the
+function exists. Declaring `columns` explicitly is what lets DuckDB describe the table without
+calling the worker at all.
+
+`scan_arguments` is an IPC-serialized argument batch rather than a Rust list, because it travels on
+the wire in the catalog description; `Arguments::serialize_scan_args` is the encoder.
+
+<InfoTip label="Same as DuckDB?" title="How this differs from a native table">
+VGI tables live in DuckDB's catalog model, so you query them with ordinary qualified names, and
+`duckdb_tables()` and `duckdb_columns()` see them. The difference is where the rows come from: a
+native table is stored and managed by DuckDB, while a VGI table delegates its scan to your worker.
+</InfoTip>
+
+## Views
+
+A view is pure SQL. Once its definition has been advertised at attach time, DuckDB evaluates it
+itself — there is no worker round trip for the view, only for whatever tables it reads.
+
+<CodeBlock code={`let big_cities = CatView {
+    name: "big_cities".to_string(),
+    definition: "SELECT * FROM cat.data.cities WHERE population >= 100000".to_string(),
+    ..Default::default()
+};`} lang="rust" tryable={false} />
+
+<QueryResult
+  columns={["name", "population"]}
+  rows={[["Richmond", 230000], ["Virginia Beach", 457000]]}
+/>
+
+<Callout type="note" title="Qualifying the definition with the catalog name is safe">
+`cat` is hardcoded there, which normally would be fragile — but the name in `ATTACH` is not a free
+alias. It must match `CatalogModel.name`, and attaching under any other name fails at once with
+*"No worker handles catalog 'mydb'"*. So the catalog name your worker declares is the name the view
+will always be read under.
+</Callout>
+
+## Metadata surfaces
+
+Constraints and comments are not decoration — they reach DuckDB's own catalog views:
+
+<CodeBlock code={`SELECT column_name, is_nullable FROM duckdb_columns() WHERE table_name = 'cities';`} lang="sql" tryable={false} />
+
+<QueryResult
+  columns={["column_name", "is_nullable"]}
+  rows={[["name", false], ["population", true]]}
+/>
+
+`not_null: vec![0]` became `is_nullable = false` on column 0. Note that the constraint fields take
+**column indices**, not names — a rename that does not update them moves the constraint silently.
+
+## What else a table can declare
+
+`CatTable` carries considerably more than the example uses. The ones worth knowing early:
+
+<table>
+<thead>
+<tr><th>Field</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>not_null</code>, <code>unique</code>, <code>primary_key</code>, <code>check</code>, <code>foreign_keys</code></td><td>Constraints, surfaced to the planner and to <code>duckdb_constraints()</code>.</td></tr>
+<tr><td><code>cardinality</code></td><td>A row-count estimate DuckDB can plan against without calling the worker.</td></tr>
+<tr><td><code>statistics</code></td><td>Per-column min/max, so the optimizer can eliminate impossible filters at plan time.</td></tr>
+<tr><td><code>required_filters</code></td><td>Refuse an unbounded scan. An AND of OR-groups of column paths; the extension throws a <code>BinderException</code> naming any unsatisfied group.</td></tr>
+<tr><td><code>supports_time_travel</code>, <code>time_travel</code>, <code>branches</code></td><td>Answer <code>AT (VERSION …)</code> / <code>AT (TIMESTAMP …)</code> queries.</td></tr>
+<tr><td><code>scan_function_impl</code></td><td>Attach the function value directly rather than resolving it by name.</td></tr>
+</tbody>
+</table>
+
+<Callout type="warning" title="Keep a cursor in the producer, not the result set">
+The example's producer holds an **index**, not the rows. That matters: a producer is carried between
+`next_batch` calls and may be serialized for an HTTP continuation, so materializing the whole result
+in it is paid for repeatedly. Three rows would not notice; three million would.
+</Callout>
+
+## Next steps
+
+- **Making the scan smarter** → [Function patterns](/vgi/docs/rust/how-to/function-patterns/).
+- **Serving it remotely** → [Transports & runtimes](/vgi/docs/rust/how-to/transports/).
+- **Exact types** → [Catalogs](/vgi/docs/rust/api/catalog/).

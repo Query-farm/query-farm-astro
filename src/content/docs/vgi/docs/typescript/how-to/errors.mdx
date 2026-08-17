@@ -1,0 +1,117 @@
+---
+title: Report errors well
+description: "The typed errors a TypeScript VGI worker can throw, how they reach the person running the query, and the stack trace that travels with them."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+Anything you throw becomes what the person running the query sees. Throwing the right thing is the
+difference between *"argument 'count' must be >= 0"* and a wall of stack frames.
+
+## The typed errors
+
+All extend `VgiError`, and the class name travels to the client as the error type:
+
+<table>
+<thead>
+<tr><th>Class</th><th>Throw it when</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ArgumentValidationError</code></td><td>An argument is out of range, the wrong shape, or fails a rule you enforce yourself.</td></tr>
+<tr><td><code>RowCountMismatchError</code></td><td>Raised for you: a scalar <code>compute</code> returned a different number of values than rows it was given.</td></tr>
+<tr><td><code>FunctionNotFoundError</code></td><td>A name the worker doesn't serve. Mostly raised by the framework.</td></tr>
+<tr><td><code>CatalogReadOnlyError</code></td><td>A DML attempt against a read-only catalog.</td></tr>
+<tr><td><code>CatalogNotFoundError</code> / <code>CatalogAlreadyExistsError</code></td><td>Catalog, schema, table or view lookup and creation conflicts.</td></tr>
+<tr><td><code>NoCatalogError</code></td><td>The worker was built with no catalog configured at all.</td></tr>
+</tbody>
+</table>
+
+Anything else — a plain `Error`, a `TypeError` from your own code — still reaches the user, just
+carrying its own class name instead.
+
+<CodeBlock code={`import { ArgumentValidationError } from "@query-farm/vgi";
+
+onBind: (params) => {
+  if (!params.bindCall.input_schema) {
+    throw new ArgumentValidationError("filter_positive requires a table argument");
+  }
+  return { outputSchema: params.bindCall.input_schema };
+},`} lang="typescript" tryable={false} />
+
+## Constraints you get for free
+
+Before writing a validation by hand, check whether `argConstraints` already covers it. Declared
+constraints are enforced **at bind**, before any data moves, and produce a well-formed error without
+you writing one:
+
+<CodeBlock code={`args: { count: int },
+argConstraints: { count: { ge: 0 } },`} lang="typescript" tryable={false} />
+
+<CodeBlock code={`Invalid Input Error: VGI Worker Exception: ArgumentValidationError: argument 'count' must be >= 0`} lang="text" tryable={false} />
+
+`ge`, `le`, `gt`, `lt`, `choices` and `pattern` are all available, and they double as discovery
+metadata — `vgi_function_arguments()` reports them, so an agent inspecting the catalog learns the
+valid range without calling anything.
+
+## Your stack trace reaches the SQL client
+
+<Callout type="warning" title="Errors ship their stack, not just their message">
+The wire format carries `traceback: error.stack`, and the extension prints it. A thrown error
+surfaces in the SQL client as the message *plus* the JS stack, with absolute paths from the worker
+machine:
+
+<CodeBlock code={`Invalid Input Error: VGI Worker Exception: TypeError: Invalid mix of BigInt and other type in addition.
+TypeError: Invalid mix of BigInt and other type in addition.
+    at <anonymous> (/srv/workers/rates.ts:10:72)
+    at dispatchStream (/srv/node_modules/@query-farm/vgi-rpc/src/dispatch/stream.ts:157:22)
+    …`} lang="text" tryable={false} />
+
+That is deliberate and it is excellent while developing. Two consequences worth planning for:
+
+- **It leaks your filesystem layout and dependency versions** to whoever can run a query. On a
+  worker serving untrusted callers, catch at the boundary and rethrow a clean
+  `ArgumentValidationError` with a message you chose.
+- **The first line is the one users read.** Put the actionable part in the message, not in a comment
+  three frames down.
+</Callout>
+
+## Write for the reader
+
+The message reaches someone at a SQL prompt who may not know a worker exists. Name the argument, say
+what was expected, and skip the internals:
+
+<CodeBlock code={`// Unhelpful — true, and unactionable.
+throw new Error("bad input");
+
+// Better — names the argument, the rule, and the value that broke it.
+throw new ArgumentValidationError(
+  \`argument 'precision' must be between 0 and 10, got \${precision}\`,
+);`} lang="typescript" tryable={false} />
+
+<InfoTip label="Two log channels" title="Where to put what isn't an error">
+`console.log` goes to **stdout**, which on the stdio transport is the protocol — never print there.
+Use `console.error` (stderr) for operator diagnostics, and `out.clientLog(level, msg)` to send a
+message in-band to the DuckDB client, where it surfaces in `duckdb_logs()` with `type='VGI'`. Use the
+in-band channel for something the user can act on — a row skipped, a credential about to expire.
+</InfoTip>
+
+## Async errors count too
+
+`onBind`, `outputType`, `process` and the storage calls may all be async, and a rejected promise is
+reported exactly like a throw. What is *not* reported is a floating promise:
+
+<CodeBlock code={`// The failure is invisible — the query succeeds with missing rows.
+someAsyncWork();
+
+// Awaited, so a rejection becomes the query's error.
+await someAsyncWork();`} lang="typescript" tryable={false} />
+
+A missing `await` inside `process` is the most common way a TypeScript worker returns quietly wrong
+results instead of failing.
+
+## Next steps
+
+- **The error classes** → [Errors](/vgi/docs/typescript/api/errors/).
+- **Declaring constraints** → [Function patterns](/vgi/docs/typescript/how-to/function-patterns/).

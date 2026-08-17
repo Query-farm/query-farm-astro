@@ -1,0 +1,1126 @@
+---
+title: "Worker & serving"
+description: "Building a worker and putting it on a transport."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Building a worker and putting it on a transport.
+
+</div>
+
+<div class="api-member">
+
+<a id="ExchangeStream"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">trait</span> `ExchangeStream`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/transport.rs#L41" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub trait ExchangeStream {
+    fn header(&self) -> Option<&RecordBatch>;
+
+    fn exchange(&mut self, input: &RecordBatch) -> Result<Option<(RecordBatch, Metadata)>>;
+
+    fn close(&mut self) -> Result<()>;
+
+    fn cancel(&mut self) -> Result<()>;
+}`} />
+
+<p class="api-section">Description</p>
+
+An open exchange stream: the client sends batches, the worker answers.
+
+</div>
+
+<div class="api-member">
+
+<a id="ProducerStream"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">trait</span> `ProducerStream`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/transport.rs#L23" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub trait ProducerStream {
+    fn header(&self) -> Option<&RecordBatch>;
+
+    fn tick(&mut self) -> Result<Option<(RecordBatch, Metadata)>>;
+
+    fn cancel(&mut self) -> Result<()>;
+}`} />
+
+<p class="api-section">Description</p>
+
+An open producer stream: the worker emits, the client ticks.
+
+</div>
+
+<div class="api-member">
+
+<a id="VgiTransport"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">trait</span> `VgiTransport`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/transport.rs#L59" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub trait VgiTransport: Send {
+    fn call_unary(&mut self, method: &str, params: &RecordBatch) -> Result<RecordBatch>;
+
+    fn open_producer<'a>(
+        &'a mut self,
+        method: &str,
+        params: &RecordBatch,
+        has_header: bool,
+    ) -> Result<Box<dyn ProducerStream + 'a>>;
+
+    fn open_exchange<'a>(
+        &'a mut self,
+        method: &str,
+        params: &RecordBatch,
+        has_header: bool,
+    ) -> Result<Box<dyn ExchangeStream + 'a>>;
+
+    fn label(&self) -> &str;
+}`} />
+
+<p class="api-section">Description</p>
+
+Something that can carry the VGI protocol.
+
+</div>
+
+<div class="api-member">
+
+<a id="Dispatcher"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `Dispatcher`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L206" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct Dispatcher {
+    pub catalog_name: String,
+    pub scalars: HashMap<String, Vec<Arc<dyn ScalarFunction>>>,
+    pub tables: HashMap<String, Vec<Arc<dyn TableFunction>>>,
+    pub tableinouts: HashMap<String, Vec<Arc<dyn TableInOutFunction>>>,
+    pub buffering: HashMap<String, Vec<Arc<dyn TableBufferingFunction>>>,
+    pub aggregates: HashMap<String, Vec<Arc<dyn AggregateFunction>>>,
+    pub store: Arc<dyn FunctionStorage>,
+    pub catalog: catalog::CatalogModel,
+    pub secondary: Vec<catalog::CatalogModel>,
+    pub(crate) secondary_functions: Vec<Vec<String>>,
+    pub(crate) hidden_functions: std::collections::HashSet<String>,
+    pub(crate) scopes: HashMap<(FnKind, String), Vec<FunctionScope>>,
+    pub secret_types: Vec<catalog::SecretTypeSpec>,
+    pub settings: Vec<catalog::SettingSpec>,
+    pub attach_catalogs: Vec<crate::protocol::dtos::AttachCatalogInfo>,
+    pub copy_from_formats: Vec<Arc<dyn crate::copy_from::CopyFromFunction>>,
+    pub copy_to_formats: Vec<Arc<dyn crate::copy_to::CopyToFunction>>,
+    exec_counter: AtomicU64,
+}`} />
+
+<p class="api-section">Description</p>
+
+Shared dispatch state. Cloned (as `Arc`) into every RPC handler closure.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="Dispatcher.decode_init_state"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `decode_init_state`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L1472" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn decode_init_state(&amp;self, bytes: &amp;[u8]) -&gt; Result&lt;vgi_rpc::stream::StreamStateKind&gt;</code></pre>
+
+Rebuild a stateless exchange stream from its HTTP-continuation blob.
+Registered as the `init` method's state decoder so a pooled HTTP
+worker can resume a scalar / table-in-out exchange from an AEAD token.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.handle_catalog_catalogs"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `handle_catalog_catalogs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L1644" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn handle_catalog_catalogs(&amp;self, _req: &amp;Request) -&gt; Result&lt;Option&lt;RecordBatch&gt;&gt;</code></pre>
+
+`catalog_catalogs` — discovery: advertise this worker's catalog plus
+its version metadata so clients can inspect before attaching.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.handle_catalog_copy_from_formats"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `handle_catalog_copy_from_formats`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L2434" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn handle_catalog_copy_from_formats(&amp;self, req: &amp;Request) -&gt; Result&lt;Option&lt;RecordBatch&gt;&gt;</code></pre>
+
+`catalog_copy_from_formats` — advertise the worker's custom
+`COPY ... FROM` / `COPY ... TO` formats. Catalog-level (not
+schema-scoped). Only the primary catalog owns these formats; secondaries
+advertise none.
+
+A reader advertises `direction="from"` and a writer `direction="to"`. When
+the *same* `format_name` is registered on both sides, the two are paired
+into a single `direction="both"` entry — the extension registers one
+DuckDB `CopyFunction` per format name and keeps the first registration, so
+emitting two entries would silently drop the second direction. Pairing
+requires the reader and writer to share a `handler_name` (the wire carries
+one handler per format, and the extension hands it to both sides); the
+advertised options are the union of the two directions' argument specs.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.handle_empty_items"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `handle_empty_items`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L3203" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn handle_empty_items(&amp;self, _req: &amp;Request) -&gt; Result&lt;Option&lt;RecordBatch&gt;&gt;</code></pre>
+
+Empty `ItemsResult` for the contents/get methods not yet implemented.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.handle_read_only"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `handle_read_only`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L3217" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn handle_read_only(&amp;self, _req: &amp;Request) -&gt; Result&lt;Option&lt;RecordBatch&gt;&gt;</code></pre>
+
+Every catalog-mutating DDL RPC ends here: the example catalog is
+read-only, so the request is accepted (proving the wire contract is
+intact) and rejected with a clear `catalog is read-only` error.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.handle_table_column_statistics_get"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `handle_table_column_statistics_get`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L2202" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn handle_table_column_statistics_get(&amp;self, req: &amp;Request) -&gt; Result&lt;Option&lt;RecordBatch&gt;&gt;</code></pre>
+
+Per-column optimizer statistics for a table. Returns the sparse-union
+IPC batch (result-wrapped), empty when the table declares no stats.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.handle_table_function_cardinality"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `handle_table_function_cardinality`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L2137" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn handle_table_function_cardinality(
+    &self,
+    req: &Request,
+    ctx: &CallContext,
+) -> Result<Option<RecordBatch>>`} />
+
+Per-call cardinality for a function-backed table scan.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.handle_table_function_dynamic_to_string"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `handle_table_function_dynamic_to_string`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L2159" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn handle_table_function_dynamic_to_string(
+    &self,
+    req: &Request,
+) -> Result<Option<RecordBatch>>`} />
+
+Post-execution profiling info (EXPLAIN ANALYZE Extra Info).
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.handle_table_function_statistics"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `handle_table_function_statistics`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L2181" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn handle_table_function_statistics(
+    &self,
+    req: &Request,
+    ctx: &CallContext,
+) -> Result<Option<RecordBatch>>`} />
+
+Per-call statistics for a function-backed table scan (e.g. `sequence`).
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.handle_table_scan_branches_get"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `handle_table_scan_branches_get`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L2217" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn handle_table_scan_branches_get(&amp;self, req: &amp;Request) -&gt; Result&lt;Option&lt;RecordBatch&gt;&gt;</code></pre>
+
+Multi-branch scan resolution. A single-source table returns one branch
+wrapping its scan function; the list must be non-empty.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.handle_table_scan_function_get"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `handle_table_scan_function_get`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L2091" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn handle_table_scan_function_get(&amp;self, req: &amp;Request) -&gt; Result&lt;Option&lt;RecordBatch&gt;&gt;</code></pre>
+
+Lazy scan-function resolution for non-inlined function-backed tables.
+Returns a FLAT `ScanFunctionResult` batch (no `{result}` envelope).
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.handle_void"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `handle_void`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L3210" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn handle_void(&amp;self, _req: &amp;Request) -&gt; Result&lt;Option&lt;RecordBatch&gt;&gt;</code></pre>
+
+Void result (commit / rollback / detach / drop).
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.hide_function"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `hide_function`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L491" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn hide_function(&amp;mut self, name: impl Into&lt;String&gt;)</code></pre>
+
+Hide `name` from `catalog_schema_contents_functions` without
+unregistering it. The function stays bindable — a function-backed catalog
+table still resolves its scan — but DuckDB never creates a SQL callable
+for it, so the table is the only entry point.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.register_aggregate_scoped"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_aggregate_scoped`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L429" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn register_aggregate_scoped(
+    &mut self,
+    f: Arc<dyn AggregateFunction>,
+    scope: FunctionScope,
+)`} />
+
+Register an aggregate declared in a specific catalog schema.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.register_attach_catalog"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_attach_catalog`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L358" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_attach_catalog(&amp;mut self, info: crate::protocol::dtos::AttachCatalogInfo)</code></pre>
+
+Advertise a companion catalog for the client to ATTACH at VGI-attach time
+(surfaced in `catalog_attach.attach_catalogs`; lakehouse federation).
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.register_buffering_scoped"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_buffering_scoped`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L587" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn register_buffering_scoped(
+    &mut self,
+    f: Arc<dyn TableBufferingFunction>,
+    scope: FunctionScope,
+)`} />
+
+Register a table-buffering function declared in a specific catalog
+schema.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.register_copy_from"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_copy_from`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L366" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_copy_from(&amp;mut self, f: Arc&lt;dyn crate::copy_from::CopyFromFunction&gt;)</code></pre>
+
+Record a custom `COPY ... FROM` format reader for advertisement via
+`catalog_copy_from_formats`. The reader must also be registered as a
+table function under its handler name (done by
+`Worker::register_copy_from`).
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.register_copy_to"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_copy_to`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L374" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_copy_to(&amp;mut self, f: Arc&lt;dyn crate::copy_to::CopyToFunction&gt;)</code></pre>
+
+Record a custom `COPY ... TO` format writer for advertisement via
+`catalog_copy_from_formats` (`direction="to"`). The writer must also be
+registered as a table-buffering function under its handler name (done by
+`Worker::register_copy_to`).
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.register_scalar_scoped"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_scalar_scoped`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L468" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_scalar_scoped(&amp;mut self, f: Arc&lt;dyn ScalarFunction&gt;, scope: FunctionScope)</code></pre>
+
+Register a scalar declared in a specific catalog schema.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.register_secondary_catalog"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_secondary_catalog`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L314" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn register_secondary_catalog(
+    &mut self,
+    model: catalog::CatalogModel,
+    functions: Vec<String>,
+)`} />
+
+Add a secondary catalog (served alongside the primary, MetaWorker-style),
+declaring the worker-global function names it owns (so its function
+listing is scoped and the primary hides them).
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.register_table_if_absent"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_table_if_absent`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L498" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_table_if_absent(&amp;mut self, f: Arc&lt;dyn TableFunction&gt;)</code></pre>
+
+Register `f` only if no table function with its name is registered yet.
+Used by `Worker::set_catalog` to auto-register catalog tables' embedded
+`scan_function_impl` without clobbering an explicit `register_table`.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.register_table_in_out_scoped"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_table_in_out_scoped`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L544" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn register_table_in_out_scoped(
+    &mut self,
+    f: Arc<dyn TableInOutFunction>,
+    scope: FunctionScope,
+)`} />
+
+Register a table-in-out function declared in a specific catalog schema.
+
+</div>
+<div class="api-member">
+
+<a id="Dispatcher.register_table_scoped"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_table_scoped`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L481" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_table_scoped(&amp;mut self, f: Arc&lt;dyn TableFunction&gt;, scope: FunctionScope)</code></pre>
+
+Register a table (producer) function declared in a specific catalog
+schema.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="ExchangeBlob"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ExchangeBlob`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L3225" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct ExchangeBlob {
+    pub kind: String, // "scalar" | "table_in_out"
+    pub function_name: String,
+    pub output_schema: Vec<u8>,
+    pub input_schema: Vec<u8>, // empty = none
+    pub arguments: Vec<u8>,
+    pub settings: Vec<u8>,
+    pub secrets: Vec<u8>,
+    pub execution_id: Vec<u8>,
+    pub substream_id: Vec<u8>,
+    pub init_opaque: Vec<u8>,
+    pub pushdown_filters: Vec<u8>, // empty = none
+    pub auto_apply: bool,
+    pub inner_resume: Vec<u8>,
+    pub at_unit: String,
+    pub at_value: String,
+    pub catalog_name: String,
+    pub schema_name: String,
+}`} />
+
+<p class="api-section">Description</p>
+
+Serializable rebuild info for an exchange stream, so HTTP continuations can
+reconstruct the state from an AEAD token on any pooled worker.
+
+</div>
+
+<div class="api-member">
+
+<a id="FunctionScope"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `FunctionScope`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L64" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct FunctionScope {
+    pub catalog: String,
+    pub schema: String,
+}`} />
+
+<p class="api-section">Description</p>
+
+Where a function instance is *declared*: the VGI catalog that owns it and
+the schema within that catalog. Every registered function has exactly one.
+
+A function name is not a unique key — a worker may declare the same name in
+two schemas of one catalog, or (serving several catalogs from one process)
+in the same schema name of two different catalogs. The home is what breaks
+the tie, and the bind request carries the caller's half of it: the schema on
+`BindRequest::schema_name` and the catalog inside `attach_opaque_data`.
+
+There is deliberately no "unscoped" state. A function with no home would be
+advertised everywhere and would match any call, which makes
+`example.data.f()` and `example.main.f()` indistinguishable — the exact
+ambiguity this type exists to remove. Registering without naming a home
+([`Worker::register_scalar`](crate::Worker::register_scalar) and friends)
+still yields one: the worker's own catalog and its default schema
+(`main`), which is where DuckDB registers such functions anyway.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="FunctionScope.new"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `new`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/dispatch.rs#L73" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn new(catalog: impl Into&lt;String&gt;, schema: impl Into&lt;String&gt;) -&gt; Self</code></pre>
+
+Declare a function into `schema` of `catalog`.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="HttpTransport"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `HttpTransport`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/transport.rs#L176" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct HttpTransport {
+    client: HttpClient,
+    label: String,
+}`} />
+
+<p class="api-section">Description</p>
+
+An HTTP transport.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="HttpTransport.new"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `new`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/transport.rs#L183" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn new(client: HttpClient, label: impl Into&lt;String&gt;) -&gt; Self</code></pre>
+
+Wrap an already-connected `HttpClient`.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="StreamTransport"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `StreamTransport`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/transport.rs#L84" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct StreamTransport {
+    client: RpcClient,
+    label: String,
+}`} />
+
+<p class="api-section">Description</p>
+
+A byte-stream transport: subprocess, AF_UNIX, or TCP.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="StreamTransport.new"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `new`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/transport.rs#L91" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn new(client: RpcClient, label: impl Into&lt;String&gt;) -&gt; Self</code></pre>
+
+Wrap an already-connected [`RpcClient`].
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="Worker"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `Worker`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L49" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct Worker {
+    disp: Dispatcher,
+    server_id: Option<String>,
+}`} />
+
+<p class="api-section">Description</p>
+
+VGI wire protocol version advertised to the C++ extension.
+
+Enforced as an exact major+minor match at the dispatch boundary (carried in
+`vgi_rpc.protocol_version` custom metadata), so this must track
+A VGI worker: the process DuckDB launches and talks to.
+
+Build one with [`Worker::new`], register one or more functions
+([`register_scalar`](Self::register_scalar),
+[`register_table`](Self::register_table),
+[`register_aggregate`](Self::register_aggregate), …) and/or a catalog
+([`set_catalog`](Self::set_catalog)), then call [`run`](Self::run) to serve.
+`run` does not return — it serves until DuckDB disconnects.
+
+# Examples
+
+<Code lang="rust" code={`use vgi::Worker;
+fn main() {
+    let mut worker = Worker::new();
+    worker.register_scalar(UpperCase);
+    worker.run(); // never returns
+}`} />
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="Worker.build_server"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `build_server`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L280" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn build_server(self) -&gt; RpcServer</code></pre>
+
+Build the configured [`RpcServer`], registering every VGI method.
+
+</div>
+<div class="api-member">
+
+<a id="Worker.hide_function"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `hide_function`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L135" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn hide_function(&amp;mut self, name: impl Into&lt;String&gt;)</code></pre>
+
+Hide an already-registered function from the catalog's advertised
+function list. It stays bindable, so a function-backed catalog table can
+still resolve it as a scan function, but the client creates no SQL
+callable for it — use this when the table is the only intended entry
+point.
+
+</div>
+<div class="api-member">
+
+<a id="Worker.new"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `new`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L67" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn new() -&gt; Self</code></pre>
+
+Create a worker.
+
+The catalog name DuckDB sees in `ATTACH 'name' (TYPE vgi, …)` defaults to
+`example` and can be overridden with the `VGI_WORKER_CATALOG_NAME`
+environment variable. (In SQL you qualify functions by the *alias* you
+give `ATTACH`, not by this internal name.)
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_aggregate"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_aggregate`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L184" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_aggregate(&amp;mut self, f: impl crate::aggregate::AggregateFunction + 'static)</code></pre>
+
+Register an aggregate function.
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_aggregate_in"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_aggregate_in`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L190" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn register_aggregate_in(
+    &mut self,
+    catalog: &str,
+    schema: &str,
+    f: impl crate::aggregate::AggregateFunction + 'static,
+)`} />
+
+Register an aggregate function declared in `schema` of `catalog`.
+See [`register_scalar_in`](Self::register_scalar_in).
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_attach_catalog"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_attach_catalog`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L275" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_attach_catalog(&amp;mut self, info: crate::protocol::dtos::AttachCatalogInfo)</code></pre>
+
+Advertise a companion catalog for the client to ATTACH at VGI-attach time
+(surfaced via `catalog_attach.attach_catalogs`; lakehouse federation).
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_buffering"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_buffering`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L162" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn register_buffering(
+    &mut self,
+    f: impl crate::buffering::TableBufferingFunction + 'static,
+)`} />
+
+Register a table-buffering function.
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_buffering_in"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_buffering_in`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L171" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn register_buffering_in(
+    &mut self,
+    catalog: &str,
+    schema: &str,
+    f: impl crate::buffering::TableBufferingFunction + 'static,
+)`} />
+
+Register a table-buffering function declared in `schema` of `catalog`.
+See [`register_scalar_in`](Self::register_scalar_in).
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_copy_from"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_copy_from`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L209" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_copy_from(&amp;mut self, f: impl crate::copy_from::CopyFromFunction + 'static)</code></pre>
+
+Register a custom `COPY ... FROM` format reader.
+
+The reader is exposed two ways: as a producer-mode table function (so the
+whole table bind/init/scan path is reused) and as an advertised
+`COPY ... FROM` format via `catalog_copy_from_formats`. Users then run
+`COPY target FROM 'path' (FORMAT <alias>.<format>, opt val, ...)`.
+See [`crate::copy_from::CopyFromFunction`].
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_copy_to"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_copy_to`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L225" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_copy_to(&amp;mut self, f: impl crate::copy_to::CopyToFunction + 'static)</code></pre>
+
+Register a custom `COPY ... TO` format writer.
+
+The writer is exposed two ways: as a table-buffering (Sink+Combine)
+function (so the whole buffering RPC path is reused — `write()` per shard,
+`close()` for the terminal destination write; no Source phase) and as an
+advertised `COPY ... TO` format via `catalog_copy_from_formats`
+(`direction="to"`). Users then run
+`COPY (source) TO 'path' (FORMAT <alias>.<format>, opt val, ...)`.
+See [`crate::copy_to::CopyToFunction`].
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_scalar"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_scalar`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L88" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_scalar(&amp;mut self, f: impl ScalarFunction + 'static)</code></pre>
+
+Register a scalar function.
+
+It is declared in this worker's own catalog, in the `main` schema —
+every function has exactly one home. Use
+[`register_scalar_in`](Self::register_scalar_in) to place it in a
+different catalog schema.
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_scalar_in"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_scalar_in`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L99" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn register_scalar_in(
+    &mut self,
+    catalog: &str,
+    schema: &str,
+    f: impl ScalarFunction + 'static,
+)`} />
+
+Register a scalar function declared in `schema` of `catalog`.
+
+A function name is not a unique key: the same name may be declared in
+two schemas of one catalog, or in two catalogs served by one worker
+process. The home is what tells them apart — the function is advertised
+only in that schema, and only a bind naming that schema resolves to it.
+See [`FunctionScope`](crate::FunctionScope).
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_secondary_catalog"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_secondary_catalog`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L255" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn register_secondary_catalog(
+    &mut self,
+    model: crate::catalog::CatalogModel,
+    functions: Vec<String>,
+)`} />
+
+Add a secondary catalog served alongside the primary (MetaWorker model):
+advertised by `catalog_catalogs` and attachable by its name. `functions`
+names the worker-global functions it owns (scopes its function listing).
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_secret_type"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_secret_type`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L264" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_secret_type(&amp;mut self, spec: crate::catalog::SecretTypeSpec)</code></pre>
+
+Register a secret type (surfaced via `catalog_attach`).
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_setting"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_setting`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L269" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_setting(&amp;mut self, spec: crate::catalog::SettingSpec)</code></pre>
+
+Register a custom setting (surfaced via `catalog_attach`).
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_table"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_table`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L112" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn register_table(&amp;mut self, f: impl crate::table_function::TableFunction + 'static)</code></pre>
+
+Register a table (producer) function.
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_table_in"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_table_in`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L118" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn register_table_in(
+    &mut self,
+    catalog: &str,
+    schema: &str,
+    f: impl crate::table_function::TableFunction + 'static,
+)`} />
+
+Register a table (producer) function declared in `schema` of `catalog`.
+See [`register_scalar_in`](Self::register_scalar_in).
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_table_in_out"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_table_in_out`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L140" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn register_table_in_out(
+    &mut self,
+    f: impl crate::table_in_out::TableInOutFunction + 'static,
+)`} />
+
+Register a table-in-out function.
+
+</div>
+<div class="api-member">
+
+<a id="Worker.register_table_in_out_in"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `register_table_in_out_in`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L149" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn register_table_in_out_in(
+    &mut self,
+    catalog: &str,
+    schema: &str,
+    f: impl crate::table_in_out::TableInOutFunction + 'static,
+)`} />
+
+Register a table-in-out function declared in `schema` of `catalog`.
+See [`register_scalar_in`](Self::register_scalar_in).
+
+</div>
+<div class="api-member">
+
+<a id="Worker.run"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `run`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L321" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn run(self)</code></pre>
+
+Parse `argv` and serve over the selected transport, blocking until the
+connection closes.
+
+DuckDB launches the worker with the right flags; you normally just call
+`run()` from `main`. The transport is chosen from `argv`:
+
+- *(none)* — **stdio** (the default).
+- `--unix <path>` — **Unix-socket** launcher transport
+  (`--idle-timeout <secs>` optional; Unix only).
+- `--tcp [<host>:]<port>` — **TCP** launcher transport (raw Arrow-IPC
+  framing, no auth/TLS; host defaults to `127.0.0.1`, port `0`
+  auto-selects; `--idle-timeout <secs>` optional).
+- `--http` — **HTTP** transport (Arrow-IPC over HTTP). Bearer auth is
+  enabled by setting `VGI_BEARER_TOKENS` (`token=principal,…`).
+
+</div>
+<div class="api-member">
+
+<a id="Worker.serve_reader_writer"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `serve_reader_writer`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L390" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn serve_reader_writer&lt;R: std::io::Read, W: std::io::Write&gt;(self, mut r: R, mut w: W)</code></pre>
+
+Serve the worker's RPC protocol over an arbitrary byte stream (used by the
+SAB transport and native tests). Blocking; consumes the worker.
+
+</div>
+<div class="api-member">
+
+<a id="Worker.server_id"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `server_id`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L77" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn server_id(mut self, id: impl Into&lt;String&gt;) -&gt; Self</code></pre>
+
+Override the server id.
+
+</div>
+<div class="api-member">
+
+<a id="Worker.set_catalog"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `set_catalog`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/worker.rs#L239" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn set_catalog(&amp;mut self, model: crate::catalog::CatalogModel)</code></pre>
+
+Install the declarative catalog (views / macros / tables).
+
+Any catalog table built with [`crate::catalog::CatTable::with_function`]
+carries an embedded scan function; these are auto-registered into the
+dispatch table here (deduped by name), so a function-backed table needs no
+separate [`Worker::register_table`] call — parity with the Go
+`CatalogTable.Function` ergonomics.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="serve_http"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `serve_http`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/transport.rs#L192" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn serve_http(
+    server: Arc<RpcServer>,
+    authenticate: Option<vgi_rpc::Authenticate>,
+    landing_info: Option<vgi_rpc::http::LandingInfo>,
+)`} />
+
+<p class="api-section">Description</p>
+
+Serve over HTTP: bind a TCP port, announce it with `PORT:<n>`, and serve
+the axum router. An optional `authenticate` callback enables bearer auth.
+
+Gated on `transport-http` (tokio/axum) so the crate stays wasm-buildable.
+
+</div>
+
+<div class="api-member">
+
+<a id="serve_stdio"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `serve_stdio`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/transport.rs#L19" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn serve_stdio(server: Arc&lt;RpcServer&gt;)</code></pre>
+
+<p class="api-section">Description</p>
+
+Serve a single sequential Arrow-IPC stream over stdin/stdout until EOF.
+
+</div>
+
+<div class="api-member">
+
+<a id="serve_tcp"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `serve_tcp`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/transport.rs#L120" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn serve_tcp(server: Arc&lt;RpcServer&gt;, host: &amp;str, port: u16, idle_timeout: f64)</code></pre>
+
+<p class="api-section">Description</p>
+
+Bind a TCP socket, announce it with `TCP:<host>:<port>` (the actual bound
+port, so `port == 0` ephemeral binds are discoverable), and serve each
+inbound connection on a worker thread. `idle_timeout` (seconds, 0 = never)
+self-shuts the worker after that long without a new connection, matching the
+launcher protocol.
+
+Raw TCP framing carries no authentication or TLS — bind loopback / a trusted
+network only; use [`serve_http`] for untrusted networks.
+
+Native only: this thread-per-connection variant needs `std::thread`, which
+wasm lacks. A single-thread wasm `serve_tcp` (wasip2 `std::net`, no threads)
+is added separately for the in-browser/wasmtime shared-worker path.
+
+</div>
+
+<div class="api-member">
+
+<a id="serve_unix"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `serve_unix`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/transport.rs#L37" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn serve_unix(server: Arc&lt;RpcServer&gt;, path: &amp;str, idle_timeout: f64)</code></pre>
+
+<p class="api-section">Description</p>
+
+Bind an AF_UNIX socket, announce it with `UNIX:<path>`, and serve each
+inbound connection on a worker thread. `idle_timeout` (seconds, 0 =
+never) self-shuts the worker after that long without a new connection,
+matching the launcher protocol.
+
+Unix-only: the launcher transport relies on AF_UNIX sockets. On other
+platforms the worker falls back to stdio/HTTP (see [`crate::Worker::run`]).
+
+</div>

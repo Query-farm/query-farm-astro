@@ -1,0 +1,848 @@
+---
+title: "Client"
+description: "Calling a VGI worker from Java, without DuckDB in the middle."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Calling a VGI worker from Java, without DuckDB in the middle.
+
+</div>
+
+<div class="api-member">
+
+<a id="ArgumentsEncoder"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `ArgumentsEncoder`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/ArgumentsEncoder.java#L48" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class ArgumentsEncoder</code></pre>
+
+<p class="api-section">Description</p>
+
+Encode a table/scalar function's bind-time arguments into the
+`BindRequest.arguments` IPC bytes a VGI worker expects.
+
+The inverse of the worker-side `ArgumentsParser`. DuckDB sends a
+one-row batch holding a single `args` *struct* column whose
+children are `positional_0`, `positional_1`, … in call order and
+`named_&lt;name&gt;` for each named argument. (The parser also accepts a
+flat batch whose columns are named directly by parameter name; this encoder
+emits the struct form, because that is what an engine actually sends and
+therefore what workers are tested against.)
+
+Typical use from a JVM consumer building a `BindRequest`:
+
+```java
+`byte[] args = ArgumentsEncoder.builder()
+  .positional(5000L)                 // seq(5000, batch_size := 1000)
+  .named("batch_size", 1000L)
+  .encode();`
+```
+
+Values carry their Arrow type via `ScalarValue`; the `Object`
+overloads infer it. A `null` argument has no inferable type, so pass
+`ScalarValue#ofNull(ArrowType)` for it.
+
+Instances are mutable builders and are not thread-safe; build one per
+bind call.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>ArgumentsEncoder builder()</code></pre>
+
+Start a new argument list.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>byte[] positionalArgs(Object... values)</code></pre>
+
+Encode positional arguments only — the common shape.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ArgumentsEncoder positional(Object value)</code></pre>
+
+Append the next positional argument.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ArgumentsEncoder positional(ScalarValue value)</code></pre>
+
+Append the next positional argument with an explicit type.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ArgumentsEncoder named(String name, Object value)</code></pre>
+
+Set a named argument. The wire child is `named_<name>`; pass the
+bare parameter name here.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ArgumentsEncoder named(String name, ScalarValue value)</code></pre>
+
+Set a named argument with an explicit type.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>byte[] encode()</code></pre>
+
+Serialise the accumulated arguments.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="ColumnStatisticsDecoder"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `ColumnStatisticsDecoder`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/ColumnStatisticsDecoder.java#L33" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class ColumnStatisticsDecoder</code></pre>
+
+<p class="api-section">Description</p>
+
+Decode the per-column statistics a worker returns from
+`table_function_statistics` (and
+`catalog_table_column_statistics_get`).
+
+The inverse of the worker-side `ColumnStatisticsSerializer`: one row
+per column, with `min` / `max` carried in a *sparse union*
+so a batch can mix an int64 column's bounds with a utf8 column's. Each row's
+active union member names the statistic's Arrow type, which is what
+`ColumnStatistics#arrowType()` reports back.
+
+An empty reply is the worker saying "no statistics" — DuckDB treats that
+as unknown rather than as an error — so this decoder answers an empty or
+`null` blob with an empty list rather than throwing.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;ColumnStatistics&gt; decode(byte[] data)</code></pre>
+
+Decode a statistics reply.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="Decoded"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `Decoded`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/ScanFunctionArguments.java#L66" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record Decoded(List&lt;ScalarValue&gt; positional, Map&lt;String, ScalarValue&gt; named)</code></pre>
+
+<p class="api-section">Description</p>
+
+The decoded arguments: positional in call order, named by name.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>Decoded decode(byte[] arguments)</code></pre>
+
+Decode a scan function's bound arguments.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>byte[] toBindArguments(byte[] arguments)</code></pre>
+
+Decode a scan function's bound arguments and re-encode them as bind
+arguments.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="EncodedPushdownFilters"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `EncodedPushdownFilters`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/EncodedPushdownFilters.java#L23" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record EncodedPushdownFilters(byte[] pushdownFilters, List&lt;byte[]&gt; joinKeys)</code></pre>
+
+<p class="api-section">Description</p>
+
+The two wire artefacts a pushdown-filter encode produces, which travel in
+two different fields of the same `InitRequest`.
+
+`pushdownFilters` is the filter batch itself (the JSON spec plus its
+sibling constant columns) and belongs in `InitRequest.pushdown_filters`.
+`joinKeys` holds one single-column batch per `join_keys`
+predicate and belongs in `InitRequest.join_keys`; the worker matches
+each batch back to its filter node *by column name*, so the two lists
+must be sent together — a filter batch whose join-key batches were dropped
+decodes to a filter the worker cannot resolve.
+
+</div>
+
+<div class="api-member">
+
+<a id="FilterPredicate"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `FilterPredicate`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/FilterPredicate.java#L33" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed interface FilterPredicate</code></pre>
+
+<p class="api-section">Description</p>
+
+A pushdown predicate, *without* the column it applies to.
+
+The wire form repeats `column_name` / `column_index` on every
+node, including the children of an `and`/`or` and the
+`child_filter` of a `struct` — DuckDB's serializer copies the
+parent's column identity down the tree, because a pushed filter is always
+rooted at exactly one column. Modelling the predicate separately from the
+column keeps that invariant structural instead of clerical: you attach a
+column once, in
+`PushdownFiltersEncoder#filter(ProjectedColumn, FilterPredicate)`, and
+the encoder stamps it onto every node it emits.
+
+Build predicates through the static factories:
+
+```java
+`FilterPredicate.and(FilterPredicate.ge(5L), FilterPredicate.lt(100L));
+FilterPredicate.or(FilterPredicate.isNull(), FilterPredicate.eq("x"));
+FilterPredicate.structField(1, "city", FilterPredicate.eq("Berlin"));
+FilterPredicate.joinKeys(List.of(1L, 2L, 3L));`
+```
+
+</div>
+
+<div class="api-member">
+
+<a id="ProjectedColumn"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `ProjectedColumn`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/ProjectedColumn.java#L35" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record ProjectedColumn(String name, int projectedIndex)</code></pre>
+
+<p class="api-section">Description</p>
+
+The column a pushdown filter targets, identified the way the VGI wire
+identifies it: by name *and* by position in the **projected**
+column list.
+
+**`projectedIndex` is not the base-schema position.** It
+is the column's index in the projection the client asked for — the same list
+it sends as `InitRequest.projection_ids` and the same order the worker
+emits its batches in. A worker applies a constant or `IN` filter by
+index (`batch.column(column_index)`), so an index taken from the full
+table schema silently filters the *wrong column* whenever a projection
+drops or reorders columns: no error, just wrong rows.
+
+Because that mistake is invisible at runtime, prefer building columns
+through `ProjectedColumns`, which derives the index from the projected
+column list itself and cannot drift:
+
+```java
+`ProjectedColumns cols = ProjectedColumns.of(List.of("n", "name"));  // the projection
+ProjectedColumn n = cols.column("n");                               // index 0`
+```
+
+Use `#of(String, int)` directly only when the index is already known
+to be a projected position.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>ProjectedColumn</code></pre>
+
+Validates that the name is present and the index is a plausible position.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ProjectedColumn of(String name, int projectedIndex)</code></pre>
+
+A column at a known *projected* position.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="ProjectedColumns"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `ProjectedColumns`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/ProjectedColumns.java#L36" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class ProjectedColumns</code></pre>
+
+<p class="api-section">Description</p>
+
+The projected column list of one scan, and the safe way to name a column in
+a pushdown filter.
+
+A pushdown filter's `column_index` must be the column's position in
+the *projection* the client requested, not in the base schema (see
+`ProjectedColumn` for why getting that wrong corrupts results
+silently). Building the projection once and asking it for columns by name
+makes the index impossible to get wrong: it comes from the same list the
+client sends as `InitRequest.projection_ids`.
+
+```java
+`// The scan projects two of the table's columns, in this order.
+ProjectedColumns cols = ProjectedColumns.of(List.of("n", "name"));
+
+EncodedPushdownFilters f = PushdownFiltersEncoder.builder()
+  .filter(cols.column("n"), FilterPredicate.ge(5L))
+  .filter(cols.column("name"), FilterPredicate.isNotNull())
+  .encode();`
+```
+
+Instances are immutable.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>ProjectedColumns of(List&lt;String&gt; projectedColumnNames)</code></pre>
+
+Build from the projected column names, in projection order.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ProjectedColumns of(Schema projectedSchema)</code></pre>
+
+Build from a projected schema — e.g. the bind response's output schema
+narrowed to the projection.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ProjectedColumn column(String name)</code></pre>
+
+Look up a projected column by name.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ProjectedColumn column(int projectedIndex)</code></pre>
+
+Look up a projected column by its projected index.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;ProjectedColumn&gt; all()</code></pre>
+
+All projected columns, in projection order.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="PushdownFiltersEncoder"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `PushdownFiltersEncoder`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/PushdownFiltersEncoder.java#L66" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class PushdownFiltersEncoder</code></pre>
+
+<p class="api-section">Description</p>
+
+Encode filter predicates into the `InitRequest.pushdown_filters` (and
+`InitRequest.join_keys`) wire form.
+
+The inverse of the worker-side `PushdownFiltersDecoder`, and a
+port of the C++ extension's `VgiSerializeFilters` — the authoritative
+producer. The wire form is one single-row record batch:
+
+  
+- column 0, `filter_spec`: a UTF-8 JSON *array* of filter
+  nodes. Its field carries the metadata `vgi_filter_version = "1"`;
+  a worker rejects the payload outright without it.
+  
+- columns `_val_0` … `_val_N-1`: the typed constants. A node's
+  `value_ref: N` resolves to batch column `N + 1` — the JSON
+  stays type-agnostic and the constants keep their Arrow types.
+
+`join_keys` predicates are the exception: their values do
+*not* occupy a `_val_N` column but ride as separate
+single-column batches, matched to their node by column name. Both artefacts
+come back together in `EncodedPushdownFilters`.
+
+**Column indices are projected positions.** Every node
+carries `column_name` and `column_index`, and the index is the
+column's position in the *projected* column list — not in the base
+schema. A worker applies a filter by index, so a base-schema index filters
+the wrong column with no error. Build columns through
+`ProjectedColumns` rather than counting by hand; see
+`ProjectedColumn` for the full argument.
+
+```java
+`ProjectedColumns cols = ProjectedColumns.of(List.of("n", "name"));
+EncodedPushdownFilters f = PushdownFiltersEncoder.builder()
+  .filter(cols.column("n"), FilterPredicate.and(
+  FilterPredicate.ge(5L), FilterPredicate.lt(100L)))
+  .filter(cols.column("name"), FilterPredicate.joinKeys(List.of("a", "b")))
+  .encode();
+
+new InitRequest(..., f.pushdownFilters(), f.joinKeys(), ...);`
+```
+
+Instances are mutable builders and are not thread-safe; build one per scan.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>String FILTER_VERSION = "1"</code></pre>
+
+The only filter-spec version any VGI worker accepts today.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>PushdownFiltersEncoder builder()</code></pre>
+
+Start a new filter set.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>PushdownFiltersEncoder filter(ProjectedColumn column, FilterPredicate predicate)</code></pre>
+
+Add one column-rooted filter. Multiple filters are implicitly ANDed by
+the worker, exactly as DuckDB's own filter set is.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>EncodedPushdownFilters encode()</code></pre>
+
+Serialise the accumulated filters.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="ScalarValue"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `ScalarValue`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/ScalarValue.java#L38" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record ScalarValue(ArrowType type, Object value)</code></pre>
+
+<p class="api-section">Description</p>
+
+A single wire constant: a Java value paired with the Arrow type it is
+encoded as.
+
+Every client-side encoder in this package — bind arguments, settings,
+pushdown-filter constants, join keys — needs the same two things for each
+value it writes: an Arrow `Field` to declare and a cell to populate.
+The type cannot always be inferred from the value, because `null` is a
+legitimate constant with no runtime class to inspect and because Java's
+`Long` covers every DuckDB integer width. So the type travels with the
+value rather than being re-derived at each write site.
+
+`#of(Object)` infers the type for the common cases and is what the
+convenience overloads throughout this package call. Reach for
+`#of(ArrowType, Object)` when the width matters — notably for a
+pushdown-filter constant, where the worker compares the literal against a
+column of a specific type — and for `#ofNull(ArrowType)` whenever the
+value is `null`.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>ArrowType INT64 = new ArrowType.Int(64, true)</code></pre>
+
+Signed 64-bit integer — the default inferred for every boxed Java integer.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ArrowType INT32 = new ArrowType.Int(32, true)</code></pre>
+
+Signed 32-bit integer.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ArrowType FLOAT64 = new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)</code></pre>
+
+Double-precision float — the default inferred for `Float` and `Double`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ArrowType UTF8 = new ArrowType.Utf8()</code></pre>
+
+Variable-length UTF-8 string.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ArrowType BOOL = new ArrowType.Bool()</code></pre>
+
+Boolean.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ArrowType BINARY = new ArrowType.Binary()</code></pre>
+
+Variable-length byte string.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ScalarValue</code></pre>
+
+Validates that a type is present — a `ScalarValue` without one
+could not declare its field.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ScalarValue of(Object value)</code></pre>
+
+A value whose Arrow type is inferred from its Java class.
+
+Boxed integers become `int64`, `Float`/`Double`
+become `float64`, `String` becomes `utf8`,
+`Boolean` becomes `bool`, `byte[]` becomes
+`binary`. A `Map` becomes a struct and a `List` a list,
+with child types inferred the same way (both must be non-empty, and a
+list's elements must share one type).
+
+An argument that is already a `ScalarValue` passes through
+unchanged, so every `Object`-taking convenience in this package
+also accepts an explicitly typed value.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ScalarValue of(ArrowType type, Object value)</code></pre>
+
+A value written as an explicitly chosen Arrow type — e.g. an
+`int32` filter constant against an `INTEGER` column.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ScalarValue ofNull(ArrowType type)</code></pre>
+
+A typed null. The type is still required: the field has to be declared
+before the null bit can be set.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Field field(String name)</code></pre>
+
+Declare this value as a nullable field.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void write(FieldVector vector, int row)</code></pre>
+
+Write this value into row `row` of `vector`.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="ScanFunctionArguments"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `ScanFunctionArguments`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/ScanFunctionArguments.java#L47" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class ScanFunctionArguments</code></pre>
+
+<p class="api-section">Description</p>
+
+Read the bound arguments a worker returns for a catalog table's scan
+function, and re-encode them as `BindRequest.arguments`.
+
+The two are *not* the same encoding, which is the whole reason this
+class exists. `TableScanFunctionGetResponse.arguments` is a flat
+one-row batch whose columns are `arg_0`, `arg_1`, … for the
+positional arguments plus one column per named argument. Bind arguments are a
+one-row batch holding a single `args` *struct* whose children are
+`positional_N` / `named_&lt;name&gt;` (see
+`ArgumentsEncoder`). Feeding the former straight into a
+`BindRequest` looks plausible and fails at the worker — the C++
+extension decodes to typed values and re-encodes at bind time, and a JVM
+consumer has to do the same.
+
+```java
+`TableScanFunctionGetResponse scan =
+  vgi.catalog_table_scan_function_get(handle, "data", "numbers", null, null, null, null);
+BindRequest bind = new BindRequest(
+  scan.function_name(),
+  ScanFunctionArguments.toBindArguments(scan.arguments()),
+  "TABLE", ...);`
+```
+
+Types are preserved: each column is read as a `ScalarValue` carrying
+the Arrow type the worker declared, so an `int32` argument does not
+silently widen on its way back out.
+
+</div>
+
+<div class="api-member">
+
+<a id="SettingsEncoder"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `SettingsEncoder`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/SettingsEncoder.java#L41" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class SettingsEncoder</code></pre>
+
+<p class="api-section">Description</p>
+
+Encode the extension settings a worker declared into the
+`BindRequest.settings` IPC bytes.
+
+The inverse of the worker-side `SettingsParser`. The wire shape is
+flatter than the argument one: a single-row batch where *each column name
+is a setting name* and the row-0 cell holds that setting's current value.
+A setting the client leaves out simply doesn't appear, which is how a worker
+distinguishes "unset" from "set to null".
+
+```java
+`byte[] settings = SettingsEncoder.builder()
+  .setting("example_multiplier", 3L)
+  .setting("example_greeting", "hi")
+  .encode();`
+```
+
+Values carry their Arrow type via `ScalarValue`; the `Object`
+overloads infer it, including a `Map` for a struct-valued setting.
+
+Instances are mutable builders and are not thread-safe; build one per
+bind call.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>SettingsEncoder builder()</code></pre>
+
+Start a new settings batch.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>byte[] of(Map&lt;String, ?&gt; settings)</code></pre>
+
+Encode a whole settings map in one call.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>SettingsEncoder setting(String name, Object value)</code></pre>
+
+Set one setting's value.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>SettingsEncoder setting(String name, ScalarValue value)</code></pre>
+
+Set one setting's value with an explicit type — the route for a null.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>byte[] encode()</code></pre>
+
+Serialise the accumulated settings.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableFunctionRequests"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableFunctionRequests`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/TableFunctionRequests.java#L40" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class TableFunctionRequests</code></pre>
+
+<p class="api-section">Description</p>
+
+Build the request blobs for the two optimiser-facing table-function RPCs,
+`VgiService#table_function_cardinality(byte[])` and
+`VgiService#table_function_statistics(byte[])`.
+
+Both take a *packed* outer `byte[]` rather than a normal
+record: a one-row IPC batch of named binary fields, which the worker unpacks
+with `IpcUnpacker`. Both expect the same two fields —
+`bind_call` (the serialised `BindRequest` that produced the
+binding) and `bind_opaque_data` (the handle the matching
+`BindResponse` returned). A worker resolves the binding from the opaque
+handle when it still has it and falls back to re-reading `bind_call`,
+so sending both is what makes the call work against a pooled or restarted
+worker.
+
+```java
+`BindResponse bound = vgi.bind(bindRequest, null);
+byte[] req = TableFunctionRequests.forBind(bindRequest, bound.opaque_data());
+
+CardinalityResponse card = vgi.table_function_cardinality(req);
+List\<ColumnStatistics\> stats =
+  ColumnStatisticsDecoder.decode(vgi.table_function_statistics(req));`
+```
+
+Cardinality comes back typed as `CardinalityResponse`; statistics
+come back as raw IPC bytes for `ColumnStatisticsDecoder`.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>byte[] forBind(BindRequest bindCall, byte[] bindOpaqueData)</code></pre>
+
+Pack a cardinality/statistics request from the bind call and its handle.
+
+The same blob serves both RPCs — they read identical fields — so a
+client that asks for cardinality and statistics about one binding builds
+it once.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>byte[] forBind(byte[] serialisedBindCall, byte[] bindOpaqueData)</code></pre>
+
+Pack a cardinality/statistics request from an already-serialised bind
+call — e.g. the exact bytes the client also put in
+`InitRequest.bind_call`.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableInfoDecoder"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableInfoDecoder`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/client/TableInfoDecoder.java#L51" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class TableInfoDecoder</code></pre>
+
+<p class="api-section">Description</p>
+
+Decode the `TableInfo` records a worker returns from
+`catalog_schema_contents_tables` and `catalog_table_get`.
+
+The inverse of the worker-side `TableInfoSerializer`. It exists
+separately because `TableInfo` is the one catalog record that is
+*not* an `ArrowSerializableRecord` — its
+`list<list<int32>>` constraint shapes and its several optional binary
+"inline" fields are hand-rolled on the way out — so
+`RecordCodec.deserializeFromBytes` cannot read one back. Without this
+a JVM consumer can list a catalog's *functions* but not its
+*tables*, which is precisely the half a Spark `TableCatalog`
+needs.
+
+```java
+`ItemsResponse tables = vgi.catalog_schema_contents_tables(handle, "data", null, null);
+for (TableInfo t : TableInfoDecoder.decodeAll(tables.items())) \{
+  Schema columns = SchemaUtil.deserializeSchema(t.columns());`
+}
+```
+
+**Decoded against the wire's own schema**
+
+Fields are matched to record components **by name**, read
+through the schema the sender actually put on the batch rather than through
+a copy of the schema this repo happens to write. That is deliberate: the
+decoder is aimed at *other* implementations' bytes (vgi-python is the
+reference), and a positional read would silently transpose two same-typed
+columns if a sender ever ordered them differently. A field the sender omits
+decodes to its empty/absent value — additive wire growth is the normal case
+here (`required_filters` is a trailing addition) — while the four
+fields a table cannot be identified without are required outright.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>TableInfo decode(byte[] item)</code></pre>
+
+Decode one serialised `TableInfo` item.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;TableInfo&gt; decodeAll(List&lt;byte[]&gt; items)</code></pre>
+
+Decode every item of an `ItemsResponse`.
+
+</div>
+</div>
+
+</div>

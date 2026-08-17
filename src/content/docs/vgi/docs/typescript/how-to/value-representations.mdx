@@ -1,0 +1,188 @@
+---
+title: Value representations
+description: "What a column's values actually are in TypeScript — rich vs raw, why decimals are unscaled bigints, and the two access paths that do not agree."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+
+Every value DuckDB exchanges with a worker has an Arrow type, and each Arrow type maps to exactly one
+JS value shape. Getting that mapping wrong is the most common source of silently wrong output in a
+TypeScript worker, because nothing throws — a decimal read the wrong way is just a number that is
+100× off.
+
+## The two access paths do not agree
+
+This is the first thing to internalize, and it is not in the package README.
+
+<table>
+<thead>
+<tr><th>How you read it</th><th>What you get</th></tr>
+</thead>
+<tbody>
+<tr><td><code>iterRows(batch)</code>, and the typed <code>compute</code> paths</td><td>The <strong>rich</strong> value — converted by the SDK's codec</td></tr>
+<tr><td><code>batch.getChildAt(i).get(n)</code></td><td>The <strong>backend's native</strong> value, unconverted</td></tr>
+</tbody>
+</table>
+
+For `int64` the two happen to coincide — both give a `bigint` — which is exactly why the difference
+goes unnoticed until a date or a decimal is involved. Reading one `DECIMAL(18,2)` value of `123.45`
+both ways:
+
+<CodeBlock code={`// Raw: the backend's own storage.
+batch.getChildAt(0)!.get(0);           // DecimalBigNum [12345, 0, 0, 0]
+
+// Rich: the codec runs. iterRows yields one object per row, keyed by column
+// name — a scalar function's input columns are positional, so they come
+// through as col_0, col_1, …
+const [row] = Array.from(iterRows(batch));
+row.col_0;                             // 12345n  — unscaled bigint`} lang="typescript" tryable={false} />
+
+The first is the raw 128-bit limb array the Arrow backend stores. It is not wrong, it is *lower
+level* — and it is backend-specific, so the same code reading it would see something else under
+flechette on Cloudflare Workers.
+
+<Callout type="warning" title="Use getChildAt for numbers and strings; use iterRows for everything else">
+`getChildAt` is the right tool for `int*`, `float*`, `bool`, `utf8` and `binary`, where the native
+value is already the value you want, and it avoids materializing rows. For **dates, timestamps,
+durations, decimals, and nested types** go through `iterRows` (or a typed `compute`) so the codec
+runs. The examples in these docs use `getChildAt` only on integer columns for that reason.
+</Callout>
+
+## rich, the default
+
+Under the default `rich` representation, every type is its canonical wire unit **except** `date32`
+and `date64`, which surface as a JS `Date`:
+
+<table>
+<thead>
+<tr><th>Arrow type</th><th><code>rich</code> JS value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bool</code></td><td><code>boolean</code></td></tr>
+<tr><td><code>int8</code> … <code>int32</code>, <code>uint8</code> … <code>uint32</code></td><td><code>number</code></td></tr>
+<tr><td><code>int64</code> / <code>uint64</code></td><td><code>bigint</code></td></tr>
+<tr><td><code>float16</code> / <code>float32</code> / <code>float64</code></td><td><code>number</code></td></tr>
+<tr><td><code>utf8</code> / <code>largeUtf8</code></td><td><code>string</code></td></tr>
+<tr><td><code>binary</code> / <code>fixedSizeBinary</code></td><td><code>Uint8Array</code></td></tr>
+<tr><td><strong><code>date32</code> / <code>date64</code></strong></td><td><strong><code>Date</code></strong></td></tr>
+<tr><td><code>time32</code> / <code>time64</code></td><td><code>number</code> / <code>bigint</code> in the declared unit</td></tr>
+<tr><td><code>timestamp[s/ms/us/ns]</code></td><td><code>bigint</code> in the declared unit</td></tr>
+<tr><td><code>duration[s/ms/us/ns]</code></td><td><code>bigint</code> in the declared unit</td></tr>
+<tr><td><code>decimal128</code> / <code>decimal256</code></td><td><code>bigint</code>, <strong>unscaled</strong></td></tr>
+<tr><td><code>struct</code></td><td><code>&#123; field: richValue &#125;</code></td></tr>
+<tr><td><code>list</code> / <code>largeList</code> / <code>fixedSizeList</code></td><td><code>Array&lt;richValue | null&gt;</code></td></tr>
+<tr><td><code>map</code></td><td><code>Array&lt;[richKey, richValue]&gt;</code></td></tr>
+</tbody>
+</table>
+
+`null` and `undefined` pass through as `null` for every type.
+
+### Why timestamps are not `Date`
+
+A `Date` holds milliseconds. A `timestamp[us]` holds microseconds, and a `timestamp[ns]` nanoseconds
+— so narrowing either to a `Date` throws away real precision on every value. The SDK will not do
+that silently, so sub-second temporal types stay numeric:
+
+<CodeBlock code={`-- 2024-10-19 12:34:56.789 as timestamp[us]
+1729341296789000n   -- exact microseconds, round-trips unchanged`} lang="text" tryable={false} />
+
+`date32` is the exception because a day number has no sub-millisecond content to lose.
+
+### Why decimals are unscaled
+
+A `DECIMAL(18,2)` value of `123.45` reaches you as `12345n`. The scale travels with the *column
+type*, not with the value, so applying it is your job:
+
+<CodeBlock code={`const scale = 2;                     // from the declared type
+const value = 12345n;
+Number(value) / 10 ** scale;         // 123.45`} lang="typescript" tryable={false} />
+
+This is the one that produces plausible, wrong output rather than an error — a report that is off by
+exactly a power of ten is the symptom.
+
+## raw, and the branded types
+
+Opting a function into `repr: "raw"` swaps the ergonomic shape for the canonical wire unit carrying a
+**branded** TypeScript type — `TimestampMicros`, `Date32`, `UnscaledDecimal` and so on. At runtime a
+branded value *is* the underlying `number`/`bigint`; the brand exists only at compile time, so mixing
+units becomes a type error instead of a silent bug:
+
+<CodeBlock code={`import { defineScalarFunction, timestampMicros, asTimestampMicros, iterRows, type TimestampMicros } from "@query-farm/vgi";
+
+const addHour = defineScalarFunction({
+  name: "add_hour",
+  params: { ts: timestampMicros() },
+  returns: timestampMicros(),
+  repr: "raw",
+  compute: (batch) => {
+    // "raw" on BOTH ends: the read as well as the declaration.
+    const rows = Array.from(iterRows(batch, "raw") as Iterable<{ col_0: TimestampMicros | null }>);
+    return rows.map((r) =>
+      r.col_0 == null ? null : asTimestampMicros(r.col_0 + 3_600_000_000n));
+  },
+});`} lang="typescript" tryable={false} />
+
+<CodeBlock code={`SELECT r.add_hour(TIMESTAMP '2024-10-19 12:34:56.789');`} lang="sql" tryable={false} />
+
+<QueryResult columns={["add_hour(…)"]} rows={[["2024-10-19 13:34:56.789"]]} />
+
+Under `raw`, `date32` is a plain day-number rather than a `Date` — that is the only representational
+difference between the two modes.
+
+<Callout type="warning" title="repr: 'raw' does not change what getChildAt returns">
+This is the trap the previous section sets up, and it is worth seeing concretely. Write the same
+function reading the column directly:
+
+<CodeBlock code={`const ts = batch.getChildAt(0)! as Iterable<TimestampMicros | null>;
+return Array.from(ts, (v) => (v == null ? null : asTimestampMicros(v + 3_600_000_000n)));`} lang="typescript" tryable={false} />
+
+It **typechecks** — the cast asserts a branded bigint and the compiler believes it — and then fails
+at runtime with *"Invalid mix of BigInt and other type in addition"*, because arrow-js hands back a
+millisecond `number` for a `timestamp[us]` column. The `repr` setting governs the codec, and
+`getChildAt` is the path that skips the codec. Read through `iterRows(batch, "raw")` and the branded
+types are real rather than asserted.
+</Callout>
+
+<InfoTip label="When to pick raw" title="Reach for raw when units are the risk">
+`rich` is right for most functions. `raw` earns its extra ceremony when a function juggles several
+temporal units, or hands values to something else that has its own opinion about them — the compiler
+then refuses to let a `TimestampMillis` stand in for a `TimestampMicros`.
+</InfoTip>
+
+## The codec validates
+
+Building output goes through the same codec, and it throws rather than truncating: a non-integer
+where an integer is required, a `bigint` that overflows the declared width, an out-of-range `Date`, a
+`fixedSizeBinary` of the wrong length. You get a `codec[<type>]: …` `TypeError` at build time instead
+of corrupt data on the wire.
+
+Reads and writes are symmetric, so `build(read(x))` round-trips in either representation.
+
+## Discriminating types
+
+<Callout type="warning" title="Never test `constructor.name`">
+The type factories return Arrow *type instances*, not classes named after the factory. `dateDay()`
+returns a `Date_` whose `typeId` is `Type.Date` and whose `unit` is `DateUnit.DAY` — there is **no**
+class called `DateDay`, so `type.constructor.name === "DateDay"` is always false. It also breaks
+across the two Arrow backends and under minification.
+
+Use the exported predicates, or compare `typeId` and `unit`:
+
+<CodeBlock code={`import { dateDay, isDate, DateUnit, TypeId } from "@query-farm/vgi";
+
+const t = dateDay();
+isDate(t);                  // true — backend-agnostic
+t.typeId === TypeId.Date;   // true
+t.unit === DateUnit.DAY;    // true — day-resolution date32`} lang="typescript" tryable={false} />
+</Callout>
+
+## Next steps
+
+- **Converting by hand** → `codecFor(type)` on
+  [Value representations](/vgi/docs/typescript/api/codec/) returns the codec directly.
+- **The type factories** → [Arrow types](/vgi/docs/typescript/api/arrow-types/).
+- **The wire format underneath** →
+  [Argument serialization](/vgi/docs/concepts/argument-serialization/).

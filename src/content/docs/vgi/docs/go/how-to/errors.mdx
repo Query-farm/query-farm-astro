@@ -1,0 +1,145 @@
+---
+title: Report errors well
+description: "The typed errors a Go VGI worker can return, how they surface in DuckDB, and the wrapping mistake that silently loses them."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+Every callback returns an `error`, and what you return decides what the person running the query
+sees. Returning the right type is the difference between *"Invalid Input Error: argument "count"
+(position 0): must be >= 0"* and an opaque runtime failure.
+
+## Typed errors
+
+Return one of these and the extension surfaces it with a matching error class, so DuckDB reports it
+the way it reports its own errors of that kind.
+
+<table>
+<thead>
+<tr><th>Type</th><th>Use it for</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ArgumentError</code></td><td>A bad argument value — out of range, wrong shape, failing a constraint. Carries the argument name and position.</td></tr>
+<tr><td><code>SchemaValidationError</code></td><td>Input didn't match the schema you bound — wrong column count, wrong type.</td></tr>
+<tr><td><code>TypeBoundError</code></td><td>An <code>any</code> argument arrived as a type outside its declared <code>bound=</code>.</td></tr>
+<tr><td><code>UnknownFunctionError</code></td><td>A name the worker doesn't serve. Mostly raised by the framework.</td></tr>
+<tr><td><code>CatalogReadOnlyError</code></td><td>A DML attempt against a read-only catalog.</td></tr>
+<tr><td><code>WorkerPanicError</code></td><td>Raised for you when a callback panics — see below.</td></tr>
+</tbody>
+</table>
+
+Anything else becomes a generic `RuntimeError` carrying your message.
+
+<Callout type="warning" title="Do not wrap a typed error with %w — it loses the type">
+`AsRpcError` maps errors with a **type switch**, not `errors.As`. So the idiomatic Go move is exactly
+wrong here:
+
+<CodeBlock code={`// The type is lost — this reaches DuckDB as a generic RuntimeError.
+return fmt.Errorf("validating count: %w", argErr)
+
+// Return it unwrapped, and put the context inside the error instead.
+return &vgi.ArgumentError{ArgName: "count", Position: 0, Detail: "must be >= 0"}`} lang="go" tryable={false} />
+
+If you need to add context, build the typed error with the fuller message rather than wrapping one.
+</Callout>
+
+## Panics are already caught
+
+The framework wraps `bind`, `init`, `statistics` and `cardinality` in `RecoverPanic`, so a panic in
+your code becomes a `WorkerPanicError` — carrying the function name, the phase, the recovered value
+and a stack — rather than killing the worker process.
+
+Anywhere the framework doesn't cover, do it yourself with the same helper:
+
+<CodeBlock code={`func (f *MyFn) Process(ctx context.Context, params *vgi.ProcessParams,
+    state *myState, out *vgirpc.OutputCollector,
+) (err error) {                                    // named return, so the defer can set it
+    defer vgi.RecoverPanic("process", f.Name(), &err)
+    ...
+}`} lang="go" tryable={false} />
+
+The named return value is what makes this work — `RecoverPanic` writes through the pointer.
+
+<InfoTip label="Where it shows up" title="How an error reaches the user">
+A returned error crosses the wire as an `RpcError` and is re-raised by the extension, so what the
+user sees is `Invalid Input Error: VGI Worker Exception: <your message>` with the worker command
+appended. Write the message for that reader: name the argument, say what was expected, and don't
+assume they know what a "worker" is.
+</InfoTip>
+
+## Context and cancellation
+
+`Process` on a scalar or table function takes a `context.Context`, and so do the copy handlers'
+`Read`, `Write` and `Close`. `OnBind`, `OnInit`, `NewState` and the aggregate methods (`Update`,
+`Combine`, `Finalize`) do not — they receive only their params struct, and are expected to be quick.
+
+The examples in these docs discard the context because they finish instantly. A function that talks
+to a network, scans a large source, or loops should not:
+
+<CodeBlock code={`func (*EventsFn) Process(ctx context.Context, params *vgi.ProcessParams,
+    state *eventsState, out *vgirpc.OutputCollector,
+) error {
+    for state.more() {
+        if err := ctx.Err(); err != nil {
+            return err          // the query was cancelled or timed out
+        }
+        ...
+    }
+    return nil
+}`} lang="go" tryable={false} />
+
+Honouring it is what makes a cancelled query actually stop rather than run to completion with nobody
+listening. Pass `ctx` down to any HTTP or database call you make.
+
+## Logging alongside errors
+
+Two channels, and they go to different places:
+
+- **`log`/`slog` through the SDK's loggers** → the worker's **stderr**. For operators.
+- **`ClientLog(level, msg)`** → back to the DuckDB client in-band, surfacing in `duckdb_logs()` with
+  `type='VGI'`. For the person running the query.
+
+Which receiver you call `ClientLog` on depends on the shape. A streaming function has it on the
+`*vgirpc.OutputCollector` it is already writing to:
+
+<CodeBlock code={`out.ClientLog(vgirpc.LogWarn, "skipped 3 rows with a null key")`} lang="go" tryable={false} />
+
+A buffering table function has no collector, so the framework wires the sink onto the params instead
+— `params.ClientLog(...)`. Elsewhere the sink is nil and the call is a silent no-op, so don't rely on
+it from `OnBind` or `NewState`; return an error or log to stderr there.
+
+Use `ClientLog` for something the user can act on — a row skipped, a credential about to expire —
+and stderr for everything else. On the stdio transport stdout is the protocol, so never print there.
+
+## Diagnostics under `EXPLAIN ANALYZE`
+
+There is a third channel, and it is the one to reach for when the question is *"why was that scan
+slow?"* rather than *"what went wrong?"*. A table function that implements `DynamicToStringHook` gets
+its key/value pairs merged into the operator's Extra Info:
+
+<CodeBlock code={`func (*SeriesFn) DynamicToString(_ context.Context,
+    params *vgi.DynamicToStringParams,
+) (keys []string, values []string, err error) {
+    return []string{"shard_size", "source"},
+        []string{"3", "in-memory range"}, nil
+}`} lang="go" tryable={false} />
+
+<CodeBlock code={`EXPLAIN ANALYZE SELECT count(*) FROM calc.series(10);`} lang="sql" tryable={false} />
+
+<CodeBlock code={`│   Batch Bytes: 80 bytes   │
+│       shard_size: 3       │
+│                           │
+│          source:          │
+│      in-memory range      │`} lang="text" tryable={false} />
+
+The hook is called once per scan thread and **the last writer wins**, so return an aggregate rather
+than one thread's private view. `params.Storage` is the same execution-scoped store the scan wrote to
+— `Storage.Snapshot()` reads every worker's contribution without draining it, which is how you report
+a total (rows fetched, bytes read, upstream calls) instead of a sample.
+
+## Next steps
+
+- **The error types in full** → [Errors & logging](/vgi/docs/go/api/observability/).
+- **Constraint errors you get for free** → [Argument tags](/vgi/docs/go/how-to/argument-tags/#constraints).

@@ -1,0 +1,225 @@
+---
+title: "Table functions"
+description: "Set-returning producers, and the producer that streams their rows."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Set-returning producers, and the producer that streams their rows.
+
+</div>
+
+<div class="api-member">
+
+<a id="TableFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">trait</span> `TableFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_function.rs#L154" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub trait TableFunction: Send + Sync {
+    fn name(&self) -> &str;
+    fn metadata(&self) -> FunctionMetadata;
+    fn argument_specs(&self) -> Vec<ArgSpec>;
+    fn on_bind(&self, params: &BindParams) -> Result<BindResponse>;
+    fn max_workers(&self, _params: &BindParams) -> i64 {
+        1
+    }
+    fn on_init(&self, _params: &ProcessParams) -> Result<()> {
+        Ok(())
+    }
+    fn cardinality(&self, _params: &BindParams) -> Option<TableCardinality> {
+        None
+    }
+    fn statistics(&self, _params: &BindParams) -> Option<Vec<crate::statistics::CatColStat>> {
+        None
+    }
+    fn secret_lookups(&self, _params: &BindParams) -> Vec<crate::secrets::SecretLookup> {
+        Vec::new()
+    }
+    fn producer(&self, params: &ProcessParams) -> Result<Box<dyn TableProducer>>;
+
+    fn dynamic_to_string(
+        &self,
+        _global_execution_id: &[u8],
+        _storage: &dyn crate::storage::FunctionStorage,
+    ) -> Vec<(String, String)> {
+        Vec::new()
+    }
+}`} />
+
+<p class="api-section">Description</p>
+
+A table (producer) VGI function: generates rows with no row input.
+
+A table function is a *factory*: at bind time it resolves an output schema
+([`on_bind`](Self::on_bind)), and for each execution it builds a
+[`TableProducer`] ([`producer`](Self::producer)) that yields output batches
+until exhausted. Implement [`name`](Self::name), [`metadata`](Self::metadata),
+[`argument_specs`](Self::argument_specs), [`on_bind`](Self::on_bind), and
+[`producer`](Self::producer); everything else (cardinality, statistics,
+parallelism, secrets) has a default. Projection and pushed-down filters are
+applied to each emitted batch by the framework, so producers don't handle
+them. Register with [`Worker::register_table`](crate::Worker::register_table).
+
+# Examples
+
+<Code lang="rust" code={`use std::sync::Arc;
+
+use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use vgi::function::{ArgSpec, BindParams, BindResponse, FunctionMetadata, ProcessParams};
+use vgi::table_function::{TableFunction, TableProducer};
+use vgi_rpc::{OutputCollector, Result, RpcError};
+
+/// \`count_to(n)\` — emit a single \`value\` column 0..n.
+struct CountTo;
+
+struct CountProducer {
+    schema: SchemaRef,
+    n: i64,
+    done: bool,
+}
+
+impl TableProducer for CountProducer {
+    fn next_batch(&mut self, _out: &mut OutputCollector) -> Result<Option<RecordBatch>> {
+        if self.done {
+            return Ok(None);
+        }
+        self.done = true;
+        let col: ArrayRef = Arc::new((0..self.n).collect::<Int64Array>());
+        let batch = RecordBatch::try_new(self.schema.clone(), vec![col])
+            .map_err(|e| RpcError::runtime_error(e.to_string()))?;
+        Ok(Some(batch))
+    }
+}
+
+impl TableFunction for CountTo {
+    fn name(&self) -> &str {
+        "count_to"
+    }
+    fn metadata(&self) -> FunctionMetadata {
+        FunctionMetadata::default()
+    }
+    fn argument_specs(&self) -> Vec<ArgSpec> {
+        vec![ArgSpec::const_arg("n", 0, "int64", "Upper bound (exclusive)")]
+    }
+    fn on_bind(&self, _params: &BindParams) -> Result<BindResponse> {
+        let schema = Arc::new(Schema::new(vec![Field::new("value", DataType::Int64, true)]));
+        Ok(BindResponse { output_schema: schema, opaque_data: Vec::new() })
+    }
+    fn producer(&self, params: &ProcessParams) -> Result<Box<dyn TableProducer>> {
+        Ok(Box::new(CountProducer {
+            schema: params.output_schema.clone(),
+            n: params.arguments.const_i64(0).unwrap_or(0),
+            done: false,
+        }))
+    }
+}`} />
+
+</div>
+
+<div class="api-member">
+
+<a id="TableProducer"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">trait</span> `TableProducer`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_function.rs#L28" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub trait TableProducer: Send {
+    fn next_batch(
+        &mut self,
+        out: &mut vgi_rpc::OutputCollector,
+    ) -> Result<Option<arrow_array::RecordBatch>>;
+    fn encode_resume(&self) -> Vec<u8> {
+        Vec::new()
+    }
+    fn restore_resume(&mut self, _bytes: &[u8]) {}
+    fn resume_supported(&self) -> bool {
+        false
+    }
+    fn last_metadata(&self) -> Option<std::collections::HashMap<String, String>> {
+        None
+    }
+    fn on_dynamic_filters(&mut self, _filters: Option<&crate::pushdown::PushdownFilters>) {}
+    fn on_conditional_request(&mut self, _request: &crate::cache_control::ConditionalRequest) {}
+}`} />
+
+<p class="api-section">Description</p>
+
+A per-execution producer. Holds the function's mutable scan state.
+
+Returns the next batch, or `None` when the scan is exhausted. The dispatch
+adapter applies projection / auto-filter pushdown to each batch before
+emitting, so producers stay free of that concern. `out` is provided only
+for `client_log` — do NOT emit through it (the adapter emits the returned
+batch).
+
+</div>
+
+<div class="api-member">
+
+<a id="TableCardinality"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `TableCardinality`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_function.rs#L16" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct TableCardinality {
+    pub estimate: Option<i64>,
+    pub max: Option<i64>,
+}`} />
+
+<p class="api-section">Description</p>
+
+Cardinality estimate for a table function.
+
+</div>
+
+<div class="api-member">
+
+<a id="pack"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `pack`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_function.rs#L210" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn pack(vals: &amp;[i64]) -&gt; Vec&lt;u8&gt;</code></pre>
+
+<p class="api-section">Description</p>
+
+Pack a slice of `i64` cursor values little-endian.
+
+</div>
+
+<div class="api-member">
+
+<a id="project_schema"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `project_schema`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_function.rs#L237" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn project_schema(full: &amp;SchemaRef, ids: &amp;Option&lt;Vec&lt;i64&gt;&gt;) -&gt; SchemaRef</code></pre>
+
+<p class="api-section">Description</p>
+
+Narrow a full schema to the projected columns (`projection_ids`).
+
+</div>
+
+<div class="api-member">
+
+<a id="unpack"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `unpack`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_function.rs#L221" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn unpack(bytes: &amp;[u8], n: usize) -&gt; Option&lt;Vec&lt;i64&gt;&gt;</code></pre>
+
+<p class="api-section">Description</p>
+
+Unpack exactly `n` `i64` values; returns `None` if the byte length does
+not match (e.g. an empty/corrupt token), so callers degrade to a fresh
+start rather than panic.
+
+</div>

@@ -1,0 +1,265 @@
+---
+title: "Aggregate functions"
+description: "Per-group accumulation: update, combine, finalize."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Per-group accumulation: update, combine, finalize.
+
+</div>
+
+<div class="api-class">
+
+<a id="AggregateBindParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `AggregateBindParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/aggregate.ts#L61" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface AggregateBindParams&lt;TArgs = Record&lt;string, any&gt;&gt;</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">args</code><code class="api-ftype">TArgs</code></dt>
+
+<dt><code class="api-fname">arguments</code><code class="api-ftype">Arguments</code></dt>
+
+<dt><code class="api-fname">inputSchema</code><code class="api-ftype">VgiSchema | null</code></dt>
+
+<dt><code class="api-fname">settings</code><code class="api-ftype">Record&lt;string, any&gt;</code></dt>
+
+<dt><code class="api-fname">secrets</code><code class="api-ftype">Record&lt;string, Record&lt;string, any&gt;&gt;</code></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="AggregateFinalizeParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `AggregateFinalizeParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/aggregate.ts#L85" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface AggregateFinalizeParams&lt;TArgs = Record&lt;string, any&gt;, TState = any&gt;</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">groupIds</code><code class="api-ftype">bigint[]</code></dt>
+
+<dt><code class="api-fname">states</code><code class="api-ftype">Map&lt;bigint, TState | null&gt;</code></dt>
+
+<dt><code class="api-fname">outputSchema</code><code class="api-ftype">VgiSchema</code></dt>
+
+<dt><code class="api-fname">args</code><code class="api-ftype">TArgs</code></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="AggregateFunctionConfig"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `AggregateFunctionConfig`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/aggregate.ts#L92" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface AggregateFunctionConfig&lt;TArgs = Record&lt;string, any&gt;, TState = any&gt;</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">outputType</code><code class="api-ftype">VgiDataType</code></dt>
+<dd>
+
+Arrow type of the aggregate's output (one value per group). DuckDB uses
+this to build the result column type at bind time. May be overridden
+at bind time by `onBind` (returning a different Arrow type) for
+aggregates whose return type depends on the input column type
+(e.g. vgi_generic_sum: BIGINT input → BIGINT output, DOUBLE → DOUBLE).
+
+</dd>
+
+<dt><code class="api-fname">initialState</code><code class="api-ftype">(params: AggregateBindParams&lt;TArgs&gt;) =&gt; TState</code></dt>
+
+<dt><code class="api-fname">update</code><code class="api-ftype">(params: AggregateUpdateParams&lt;TArgs, TState&gt;) =&gt; void</code></dt>
+<dd>
+
+Fold a batch of input rows into the provided per-group state map.
+Implementations mutate `states` in place. `groupIds[i]` identifies which
+group row i belongs to; `columns[k][i]` is the value for the kth declared
+column argument at row i.
+
+</dd>
+
+<dt><code class="api-fname">combine</code><code class="api-ftype">(source: TState, target: TState, params: AggregateBindParams&lt;TArgs&gt;) =&gt; TState</code></dt>
+
+<dt><code class="api-fname">finalize</code><code class="api-ftype">(params: AggregateFinalizeParams&lt;TArgs, TState&gt;) =&gt; VgiBatch</code></dt>
+<dd>
+
+Must return a single-column RecordBatch with `groupIds.length` rows.
+
+</dd>
+
+<dt><code class="api-fname">description</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">args</code><code class="api-ftype">Record&lt;string, VgiDataType&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Map of positional argument name → Arrow type. Passed through to DuckDB
+function registration. Use `null` (untyped) for varargs placeholders.
+
+</dd>
+
+<dt><code class="api-fname">varargs</code><code class="api-ftype">string[]</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Names of args that accept a variable number of column arguments. DuckDB
+treats these as varargs of the declared Arrow type; at call time the
+function may receive 1..N columns of that type. update() sees all of
+them as consecutive entries in `columns`.
+
+</dd>
+
+<dt><code class="api-fname">constParams</code><code class="api-ftype">string[]</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Names of args whose value is constant (known at bind time) and must be
+folded away by DuckDB before reaching update(). The value arrives in
+`bindParams.args[name]`; it is NOT passed as an input column in the
+update batch. Use for aggregates parameterized by a literal (e.g.
+percentile=0.5 in vgi_percentile).
+
+</dd>
+
+<dt><code class="api-fname">onBind</code><code class="api-ftype">(params: AggregateBindParams&lt;TArgs&gt;) =&gt; VgiDataType | Promise&lt;VgiDataType&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Optional bind-time hook for dynamic output types. Receives the bind
+parameters (including input_schema) and returns the Arrow type to
+advertise for this invocation. Defaults to returning `config.outputType`.
+
+</dd>
+
+<dt><code class="api-fname">argDefaults</code><code class="api-ftype">Record&lt;string, any&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Optional per-arg default values (positional only here).
+
+</dd>
+
+<dt><code class="api-fname">argConstraints</code><code class="api-ftype">Record&lt;string, ArgumentConstraints&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Per-argument discovery constraints (choices / ge / le / gt / lt / pattern),
+keyed by argument name. Surfaced via `vgi_function_arguments()` and enforced
+at aggregate_bind for const params: a value violating a declared constraint
+fails the bind with an ArgumentValidationError.
+
+</dd>
+
+<dt><code class="api-fname">examples</code><code class="api-ftype">FunctionExample[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">categories</code><code class="api-ftype">string[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Arbitrary function-level tags surfaced into duckdb_functions().tags.
+
+</dd>
+
+<dt><code class="api-fname">nullHandling</code><code class="api-ftype">"DEFAULT" | "SPECIAL"</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">requiredSecrets</code><code class="api-ftype">string[]</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+DuckDB secret types this aggregate needs. Advertised on the catalog's
+`required_secrets` so the C++ extension pre-resolves matching secrets and
+delivers their VALUES on the aggregate_bind request (keyed by secret name).
+The secret is read at bind time only — update/combine/finalize receive an
+empty ResolvedSecrets. Mirrors vgi-python's `Secret()` annotation on an
+aggregate `on_bind`.
+
+</dd>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="AggregateUpdateParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `AggregateUpdateParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/aggregate.ts#L69" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface AggregateUpdateParams&lt;TArgs = Record&lt;string, any&gt;, TState = any&gt;</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">states</code><code class="api-ftype">Map&lt;bigint, TState&gt;</code></dt>
+
+<dt><code class="api-fname">groupIds</code><code class="api-ftype">bigint[]</code></dt>
+
+<dt><code class="api-fname">columns</code><code class="api-ftype">any[]</code></dt>
+
+<dt><code class="api-fname">args</code><code class="api-ftype">TArgs</code></dt>
+
+<dt><code class="api-fname">ensureState</code><code class="api-ftype">(gid: bigint) =&gt; TState</code></dt>
+<dd>
+
+Get-or-initialize accessor for per-group state. Call this inside the loop
+only when the row actually contributes to the aggregate — skipping it
+(e.g. on NULL input under NullHandling.DEFAULT) leaves `states` without
+an entry for the group, so finalize() can return SQL NULL for that
+group (matches vgi-python's "state absent = NULL" semantics for
+SUM/AVG/MIN/MAX over zero non-null rows).
+
+</dd>
+
+</dl>
+
+</div>
+
+<div class="api-member">
+
+<a id="defineAggregate"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `defineAggregate`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/aggregate.ts#L334" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`export function defineAggregate<TArgs = Record<string, any>, TState = any>(
+  config: AggregateFunctionConfig<TArgs, TState>,
+): VgiFunction & { aggregateConfig: AggregateFunctionConfig<TArgs, TState> }`} />
+
+<p class="api-section">Description</p>
+
+Declare an aggregate function. The returned VgiFunction has `kind:
+"aggregate"` plus a `config` handle the dispatch layer uses to drive the
+aggregate_* RPCs; the scalar/table-function code paths ignore it.
+
+</div>
+
+<div class="api-member">
+
+<a id="GROUP_COLUMN_NAME"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">const</span> `GROUP_COLUMN_NAME`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/aggregate.ts#L59" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const GROUP_COLUMN_NAME = "__vgi_group_id"</code></pre>
+
+</div>

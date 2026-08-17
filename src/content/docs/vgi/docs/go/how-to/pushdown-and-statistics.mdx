@@ -1,0 +1,149 @@
+---
+title: Integrate with the optimizer
+description: "Make a Go table function cooperate with DuckDB's optimizer: accept pushed-down filters and report column statistics."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+Make your table functions cooperate with DuckDB's query optimizer — receive the `WHERE` predicates it
+pushed toward the scan, and report column statistics so the planner can skip work. Most relevant when
+a table function fronts a real data source.
+
+## Prerequisites
+
+- A table function (see [Function patterns](/vgi/docs/go/how-to/function-patterns/)).
+- Ideally a [catalog table](/vgi/docs/go/how-to/catalogs/), since that is where statistics are
+  declared.
+
+<InfoTip label="Same optimizer?" title="DuckDB plans; VGI supplies scan facts">
+DuckDB still owns planning and decides which filters and statistics matter. VGI gives your external
+table function a way to *receive* the predicates DuckDB pushed toward the scan, and a way to *report*
+statistics so DuckDB can plan as if it knew more about the source.
+</InfoTip>
+
+## Filter pushdown
+
+Opt in with `FilterPushdown` in the function's metadata. The framework decodes the predicates and
+hands them to you on the process params:
+
+<CodeBlock code={`func (*EventsFn) Metadata() vgi.FunctionMetadata {
+    return vgi.FunctionMetadata{
+        Description:    "Events from a remote source",
+        FilterPushdown: true,   // opt in to receiving WHERE predicates
+    }
+}
+
+func (*EventsFn) Process(ctx context.Context, params *vgi.ProcessParams,
+    state *eventsState, out *vgirpc.OutputCollector,
+) error {
+    // *vgi.PushdownFilters, or nil when no filter reached the scan.
+    if f := params.CurrentPushdownFilters; f != nil {
+        where, args := f.ToSQL(pq.QuoteIdentifier, "$%d")
+        state.narrow(where, args)   // hand the predicate to the upstream
+    }
+    return vgi.GenerateBatch(&state.BatchState, out, state.nextRows)
+}`} lang="go" tryable={false} />
+
+`CurrentPushdownFilters` is refreshed before each `Process` call and is `nil` when no filter applies.
+It is already decoded — a `PushdownFilters` holding a `Filters` slice combined with AND at the top
+level.
+
+### Applying them
+
+You have three options, and the choice is about where the work happens:
+
+- **Push the predicate upstream yourself.** Translate `filters` into whatever your source
+  understands — a `WHERE` clause, a query parameter, an index seek. This is the whole point: fewer
+  rows cross the boundary.
+- **Translate them to SQL.** If your source speaks SQL, `ToSQL(quoteIdentifier, placeholder)` returns
+  a ready `WHERE` clause and its bind arguments — you never walk the filter tree yourself. Usually the
+  shortest path for a database-backed worker.
+- **Let the framework filter the output.** Set `AutoApplyFilters: true` in the metadata and emit
+  everything; the framework evaluates the predicates against your batches. Less code, and no saving
+  on data transfer — worth it when the source can't be narrowed.
+
+You can also evaluate them by hand with `PushdownFilters.Evaluate(ctx, batch)`, which returns a
+boolean mask.
+
+<Callout type="note" title="Partial application is fine">
+Apply the filters you can and ignore the rest — DuckDB always re-verifies the result, so a filter you
+skip costs performance, never correctness. That is what makes it safe to handle only the predicate
+shapes your source supports.
+</Callout>
+
+The node types and the wire format are in
+[Filter pushdown](/vgi/docs/go/api/filter-pushdown/).
+
+## Column statistics
+
+When a table reports per-column min/max, null and distinct-count statistics, DuckDB's optimizer can
+eliminate scans outright and order joins better. Declare them on the `CatalogTable`:
+
+`deptSchema` and `NewDeptScan()` below are your own — the schema and scan function for the table, as
+built in [Expose a catalog](/vgi/docs/go/how-to/catalogs/).
+
+<CodeBlock code={`w.RegisterCatalogTable("data", vgi.CatalogTable{
+    Name:    "departments",
+    Columns: deptSchema,
+    Function: NewDeptScan(),
+    Statistics: map[string]*vgi.ColumnStatistics{
+        "id": {
+            ColumnName: "id",
+            Type:       arrow.PrimitiveTypes.Int64,
+            Min:        int64(1),
+            Max:        int64(10),
+            HasNull:    false,
+            HasNotNull: true,
+        },
+    },
+    StatisticsCacheMaxAgeSeconds: vgi.Seconds(3600),
+})`} lang="go" tryable={false} />
+
+Declaring a non-empty `Statistics` map is what makes the catalog report
+`supports_column_statistics=true` for that table — there is no separate flag to remember.
+
+With statistics in place the optimizer can prune an impossible predicate without scanning at all:
+
+<CodeBlock code={`EXPLAIN SELECT * FROM cat.data.departments WHERE id > 100;
+-- Physical Plan: EMPTY_RESULT`} lang="sql" tryable={false} />
+
+<table>
+<thead>
+<tr><th>Field</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Type</code></td><td>Arrow type of <code>Min</code>/<code>Max</code>. <strong>Required</strong> if either is set.</td></tr>
+<tr><td><code>Min</code>, <code>Max</code></td><td>Bounds, as plain Go values (<code>int64(1)</code>, <code>float64(0.99)</code>, <code>"Accounting"</code>).</td></tr>
+<tr><td><code>HasNull</code>, <code>HasNotNull</code></td><td>Whether the column contains NULLs / non-NULLs.</td></tr>
+<tr><td><code>DistinctCount</code></td><td>Approximate distinct count. Zero is treated as unknown — use <code>SetDistinctCount</code> to record a genuine zero.</td></tr>
+<tr><td><code>ContainsUnicode</code>, <code>MaxStringLength</code></td><td>String and binary columns only.</td></tr>
+</tbody>
+</table>
+
+<Callout type="warning" title="Statistics are a promise, not a hint">
+The optimizer *believes* them. A `Max` that is too low means rows above it get pruned and silently
+never returned — a wrong answer, not a slow one. Report bounds you can guarantee, and use
+`StatisticsCacheMaxAgeSeconds` to bound how long a stale one can be trusted: `nil` caches
+indefinitely, `0` disables caching, `n` re-fetches after n seconds.
+</Callout>
+
+## Cheaper still: cardinality and required filters
+
+Two neighbours on the same `CatalogTable`:
+
+- **`CardinalityEstimate`** / **`CardinalityMax`** inline a row-count estimate, letting the extension
+  skip the per-bind cardinality RPC entirely. Use for read-only or slow-changing tables where the
+  count is statically known.
+- **`RequiredFilters`** inverts pushdown: instead of accepting whatever predicates arrive, refuse a
+  scan that carries none. See
+  [Requiring a filter](/vgi/docs/go/how-to/catalogs/#requiring-a-filter).
+
+## Next steps
+
+- **Skip the scan entirely** → [Cache results on the client](/vgi/docs/go/how-to/result-caching/) —
+  the cheapest scan is the one that never reaches you.
+- **Where statistics are declared** → [Expose a catalog](/vgi/docs/go/how-to/catalogs/).
+- **Exact types** → [Filter pushdown](/vgi/docs/go/api/filter-pushdown/) ·
+  [Catalogs](/vgi/docs/go/api/catalog/).

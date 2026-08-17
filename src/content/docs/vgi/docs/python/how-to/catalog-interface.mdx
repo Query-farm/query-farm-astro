@@ -1,21 +1,35 @@
 ---
-title: Catalog Interface reference
+title: Catalog interface
 description: "Hand-written guidance for VGI's catalog interface: declarative catalogs, scan delegation, and safely logging attach options and opaque data."
 ---
 
+import Callout from '../../../../../../components/docs/Callout.astro';
 import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
 
-The catalog interface lets a VGI worker expose database-like structure — catalogs, schemas, tables, and views — to clients via DuckDB's `ATTACH`. This page covers the parts that aren't obvious from the type signatures: the declarative catalog API, how table scanning is delegated, and — most importantly — how to handle opaque state and attach options without leaking secrets.
+The catalog interface lets a VGI worker expose database-like structure — catalogs, schemas, tables,
+and views — to clients via DuckDB's `ATTACH`. This page covers the parts that aren't obvious from
+the type signatures: the declarative catalog API, how table scanning is delegated, and — most
+importantly — how to handle opaque state and attach options without leaking secrets.
 
-For the high-level model (how a worker becomes a catalog, how functions get qualified names), start with [Expose a catalog](/vgi/docs/python/how-to/catalogs/). For the exhaustive class, method, and field catalog — every signature, every attribute — see the [Catalogs API reference](/vgi/docs/python/api/vgi-catalog/); this page links there rather than restating it.
+For the high-level model (how a worker becomes a catalog, how functions get qualified names), start
+with [Expose a catalog](/vgi/docs/python/how-to/catalogs/). For the exhaustive class, method, and
+field catalog — every signature, every attribute — see the [Catalogs API
+reference](/vgi/docs/python/api/vgi-catalog/); this page links there rather than restating it.
 
 ## How catalog methods dispatch
 
-Catalog operations are ordinary `vgi_rpc` typed methods: each has its own request/response with automatic Arrow serialization. There is no bind/init/stream handshake like VGI functions have — a call is a single typed request and a single typed response. You implement a catalog by subclassing `CatalogInterface` (full control) or `ReadOnlyCatalogInterface` (DDL pre-stubbed to raise), or by declaring one with the dataclass API below. The complete method surface — required abstract methods, optional overrides and their defaults, and the matching client methods — is in the [API reference](/vgi/docs/python/api/vgi-catalog/).
+Catalog operations are ordinary `vgi_rpc` typed methods: each has its own request/response with
+automatic Arrow serialization. There is no bind/init/stream handshake like VGI functions have — a
+call is a single typed request and a single typed response. You implement a catalog by subclassing
+`CatalogInterface` (full control) or `ReadOnlyCatalogInterface` (DDL pre-stubbed to raise), or by
+declaring one with the dataclass API below. The complete method surface — required abstract methods,
+optional overrides and their defaults, and the matching client methods — is in the [API
+reference](/vgi/docs/python/api/vgi-catalog/).
 
 ## Declarative catalogs
 
-For most cases you don't implement `CatalogInterface` directly — you declare the catalog with the `Catalog` / `Schema` / `Table` / `View` dataclasses and attach it to your worker:
+For most cases you don't implement `CatalogInterface` directly — you declare the catalog with the
+`Catalog` / `Schema` / `Table` / `View` dataclasses and attach it to your worker:
 
 <CodeBlock code={`from vgi import Worker
 from vgi.catalog import Catalog, Schema, Table, View
@@ -46,7 +60,9 @@ if __name__ == "__main__":
 
 ### Function-backed tables (recommended)
 
-Back a table with a `TableFunctionGenerator` and the table's column schema is derived from the function's output schema — no duplication, and no scan wiring (see below). Constraint column names are validated against the derived schema at definition time:
+Back a table with a `TableFunctionGenerator` and the table's column schema is derived from the
+function's output schema — no duplication, and no scan wiring (see below). Constraint column names
+are validated against the derived schema at definition time:
 
 <CodeBlock code={`from vgi.catalog import Table
 
@@ -60,7 +76,9 @@ users_table = Table(
 
 ### Tables with explicit columns
 
-When a table isn't backed by a function, supply the column schema yourself. These tables **require** the worker to implement `table_scan_function_get()` (next section) so DuckDB knows how to read the data:
+When a table isn't backed by a function, supply the column schema yourself. These tables **require**
+the worker to implement `table_scan_function_get()` (next section) so DuckDB knows how to read the
+data:
 
 <CodeBlock code={`import pyarrow as pa
 from vgi.catalog import Table
@@ -95,9 +113,14 @@ Catalog(
 
 ## Delegating table scans
 
-For tables with explicit columns, `table_scan_function_get()` tells the VGI DuckDB extension *which DuckDB function to call* to obtain the rows. This lets a catalog delegate scanning to any DuckDB function — `read_parquet`, `iceberg_scan`, a custom VGI table function — with the arguments and extensions it needs. (Function-backed tables don't need this; the framework supplies the scan.)
+For tables with explicit columns, `table_scan_function_get()` tells the VGI DuckDB extension *which
+DuckDB function to call* to obtain the rows. This lets a catalog delegate scanning to any DuckDB
+function — `read_parquet`, `iceberg_scan`, a custom VGI table function — with the arguments and
+extensions it needs. (Function-backed tables don't need this; the framework supplies the scan.)
 
-The method returns a `ScanFunctionResult` — see its fields in the [API reference](/vgi/docs/python/api/vgi-catalog/). A typical implementation points a table at Parquet on S3:
+The method returns a `ScanFunctionResult` — see its fields in the [API
+reference](/vgi/docs/python/api/vgi-catalog/). A typical implementation points a table at Parquet on
+S3:
 
 <CodeBlock code={`def table_scan_function_get(
     self,
@@ -118,7 +141,10 @@ The method returns a `ScanFunctionResult` — see its fields in the [API referen
 
 ## Opaque data is yours — and may carry secrets
 
-`catalog_attach()` returns an `attach_opaque_data` value, and `catalog_transaction_begin()` returns a `transaction_opaque_data` value. These are **not framework identifiers**. They are arbitrary `bytes` your implementation chooses, which the client round-trips back verbatim on every subsequent call. You may pack a UUID, a connection handle, credentials, or any session state into them.
+`catalog_attach()` returns an `attach_opaque_data` value, and `catalog_transaction_begin()` returns
+a `transaction_opaque_data` value. These are **not framework identifiers**. They are arbitrary
+`bytes` your implementation chooses, which the client round-trips back verbatim on every subsequent
+call. You may pack a UUID, a connection handle, credentials, or any session state into them.
 
 Because they may carry secrets, treat them like the `options` dict below:
 
@@ -126,9 +152,15 @@ Because they may carry secrets, treat them like the `options` dict below:
 
 ## Logging attach options safely
 
-The worker emits structured `_logger.info` records and Sentry breadcrumbs for catalog lifecycle events (`catalog.attach`, `catalog.detach`, `catalog.create`, `catalog.transaction.begin`, `catalog.transaction.commit`, `catalog.transaction.rollback`). The catalog name, attach id, transaction id, and version specs are always logged (the opaque ids short-hashed, as above).
+The worker emits structured `_logger.info` records and Sentry breadcrumbs for catalog lifecycle
+events (`catalog.attach`, `catalog.detach`, `catalog.create`, `catalog.transaction.begin`,
+`catalog.transaction.commit`, `catalog.transaction.rollback`). The catalog name, attach id,
+transaction id, and version specs are always logged (the opaque ids short-hashed, as above).
 
-The `options` dict passed to `catalog_attach()` and `catalog_create()` routinely carries credentials — passwords, tokens, OAuth secrets, connection strings. To avoid leaking these, the worker **does not log any option field by default**. You opt in by overriding `loggable_attach_options()` to allowlist the keys you know are safe:
+The `options` dict passed to `catalog_attach()` and `catalog_create()` routinely carries credentials
+— passwords, tokens, OAuth secrets, connection strings. To avoid leaking these, the worker **does
+not log any option field by default**. You opt in by overriding `loggable_attach_options()` to
+allowlist the keys you know are safe:
 
 <CodeBlock code={`class MyCatalog(CatalogInterface):
     def loggable_attach_options(self, options: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -136,11 +168,15 @@ The `options` dict passed to `catalog_attach()` and `catalog_create()` routinely
         safe_keys = {"host", "region", "bucket", "database"}
         return {k: v for k, v in options.items() if k in safe_keys}`} lang="python" tryable={false} />
 
-When the override returns an empty mapping — the default for catalogs that haven't opted in — the `options` field is omitted from the lifecycle event entirely. This is deliberately fail-closed: logging nothing is preferred over a partial leak.
+When the override returns an empty mapping — the default for catalogs that haven't opted in — the
+`options` field is omitted from the lifecycle event entirely. This is deliberately fail-closed:
+logging nothing is preferred over a partial leak.
 
 ## Read-only catalogs
 
-`ReadOnlyCatalogInterface` is a convenience base for catalogs without DDL — every modification method is pre-stubbed to raise `CatalogReadOnlyError`. The simplest use is exposing functions as a catalog with no custom code at all:
+`ReadOnlyCatalogInterface` is a convenience base for catalogs without DDL — every modification
+method is pre-stubbed to raise `CatalogReadOnlyError`. The simplest use is exposing functions as a
+catalog with no custom code at all:
 
 <CodeBlock code={`from vgi.catalog import ReadOnlyCatalogInterface
 
@@ -151,11 +187,16 @@ class MyFunctionCatalog(ReadOnlyCatalogInterface):
 # Functions appear in the "main" schema:
 #   SELECT * FROM my_funcs.main.my_scalar_function(args);`} lang="python" tryable={false} />
 
-A worker that declares `functions` but no explicit catalog gets a `ReadOnlyCatalogInterface` automatically (`catalog_name` defaults to `"functions"`). To take full control instead, set `catalog_interface` on the worker; to disable the catalog entirely, set both `catalog_interface = None` and `catalog_name = None`.
+A worker that declares `functions` but no explicit catalog gets a `ReadOnlyCatalogInterface`
+automatically (`catalog_name` defaults to `"functions"`). To take full control instead, set
+`catalog_interface` on the worker; to disable the catalog entirely, set both `catalog_interface =
+None` and `catalog_name = None`.
 
 ## Transactions
 
-Transactions are optional. Set `supports_transactions=True` on the `CatalogAttachResult` and implement `catalog_transaction_begin` / `_commit` / `_rollback`; if `supports_transactions` is `False` those methods are never called. The contract a worker must honour:
+Transactions are optional. Set `supports_transactions=True` on the `CatalogAttachResult` and
+implement `catalog_transaction_begin` / `_commit` / `_rollback`; if `supports_transactions` is
+`False` those methods are never called. The contract a worker must honour:
 
 - Transactions MAY span multiple worker processes.
 - Workers MUST treat `transaction_opaque_data` as opaque bytes (see the security note above).
@@ -165,7 +206,11 @@ Signatures are in the [API reference](/vgi/docs/python/api/vgi-catalog/).
 
 ## Persisting state across processes
 
-For stateful catalogs, `CatalogStorage` persists attachment and transaction state across worker processes; `CatalogStorageSqlite` is the bundled SQLite-backed implementation (WAL mode, for concurrent access), defaulting to `~/.local/state/vgi/vgi_catalog.db`. The `CatalogStorage` protocol and `CatalogStorageSqlite` methods are documented in the [API reference](/vgi/docs/python/api/vgi-catalog/).
+For stateful catalogs, `CatalogStorage` persists attachment and transaction state across worker
+processes; `CatalogStorageSqlite` is the bundled SQLite-backed implementation (WAL mode, for
+concurrent access), defaulting to `~/.local/state/vgi/vgi_catalog.db`. The `CatalogStorage` protocol
+and `CatalogStorageSqlite` methods are documented in the [API
+reference](/vgi/docs/python/api/vgi-catalog/).
 
 ## Errors
 
@@ -182,6 +227,59 @@ Catalog exceptions propagate through the VGI protocol to the client:
 </tbody>
 </table>
 
+## Requiring filters on a scan
+
+A table backed by a remote API often can't be scanned wholesale — the upstream needs a key. Set
+**`required_filters`** and the VGI extension's optimizer pass verifies it against every scan, throwing
+a `BinderException` that names the unsatisfied groups rather than letting an unbounded request
+through.
+
+The shape is conjunctive normal form: the outer list is an **AND** of groups, each inner group an
+**OR** of dotted-path column references.
+
+<CodeBlock code={`# "accession_number AND one of (ticker, cik)"
+required_filters=[["accession_number"], ["ticker", "cik"]]`} lang="python" tryable={false} />
+
+Paths may be top-level names (`"country"`) or struct subfields (`"bbox.xmin"`). Satisfaction is
+prefix-based, so a filter on a shorter path satisfies every required path it prefixes — a
+whole-struct filter on `bbox` satisfies all of `"bbox.*"`. The default is empty, which is the
+zero-cost fast path.
+
+<Callout type="note" title="Renamed in 0.15.0">
+This field was `required_field_filter_paths` and took a flat list. It is now `required_filters` and
+takes the AND-of-ORs form.
+</Callout>
+
+## Companion catalogs
+
+A catalog can ask the client to `ATTACH` **other** catalogs alongside it, so multi-branch catalog
+tables — and direct user queries — resolve against a companion lakehouse (DuckLake, Iceberg,
+Postgres) without the client hand-attaching anything. Advertise them on
+`CatalogAttachResult.attach_catalogs`:
+
+<CodeBlock code={`from vgi.catalog import AttachCatalogInfo
+
+AttachCatalogInfo(
+    alias="acme_lake",                              # namespace this by YOUR catalog identity
+    target="ducklake:sqlite:/data/meta.sqlite",
+    db_type="ducklake",                             # empty => inferred from the target scheme
+    options={"DATA_PATH": "/data/files"},
+    hidden=True,      # excluded from duckdb_databases(); still resolvable by qualified name
+    required=True,    # a failed attach fails the whole VGI ATTACH, loudly
+)`} lang="python" tryable={false} />
+
+Two things to get right:
+
+- **Namespace the alias.** Two workers both claiming `"lake"` on one client is a collision, and
+collisions are rejected — never silently merged.
+- **Choose `required` deliberately.** When false, a failure is logged and skipped, and branches
+referencing the companion then error at bind instead.
+
+Companion attach is remote-influenced, so the extension applies a scheme allowlist and a
+never-clobber conflict policy: it will never replace a catalog it did not itself create. Use
+`secret_ref` to pre-resolve a named credential into the companion's ATTACH options for metadata
+connections (a Postgres DSN, say) where the path-keyed catch-all lookup isn't enough.
+
 ## Current limitations
 
 The catalog interface is metadata-first; these capabilities are not yet available:
@@ -193,9 +291,11 @@ The catalog interface is metadata-first; these capabilities are not yet availabl
 - **Indexes** are not supported.
 - **`INSERT` / `UPDATE` / `DELETE`** are not implemented (metadata only).
 
-## See also
+## Next steps
 
-- [Expose a catalog](/vgi/docs/python/how-to/catalogs/) — the high-level model and `ATTACH` walkthrough.
-- [Catalogs API reference](/vgi/docs/python/api/vgi-catalog/) — every class, method, and field.
-- [Function Lifecycle](/vgi/docs/python/concepts/lifecycle/) — function execution phases.
-- [Function Metadata](/vgi/docs/python/how-to/metadata/) — function introspection.
+- **The high-level model** → [Expose a catalog](/vgi/docs/python/how-to/catalogs/) — how a worker
+becomes a catalog, and the `ATTACH` walkthrough.
+- **Publish functions globally** → [Publish global functions](/vgi/docs/python/how-to/global-functions/).
+- **Add your own COPY formats** → [Add a custom COPY format](/vgi/docs/python/how-to/copy-formats/).
+- **Every class, method, and field** → [Catalogs API reference](/vgi/docs/python/api/vgi-catalog/).
+- **Function execution phases** → [Function lifecycle](/vgi/docs/concepts/lifecycle/).

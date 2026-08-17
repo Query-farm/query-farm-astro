@@ -1,0 +1,109 @@
+---
+title: 2. Your first table function
+description: Add a row-generating table function to your TypeScript VGI worker, and call it in a FROM clause.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import workerSrc from '../../../../../../examples/vgi-typescript/calc.ts?raw';
+
+Step two: add a **table** function to the worker from
+[step 1](/vgi/docs/typescript/tutorial/scalar/). A scalar function transforms a column; a table
+function *produces* rows, so it is called in a `FROM` clause. About **10 minutes**.
+
+<div class="kind-banner kind-banner--table"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table.svg" alt="table shape" /><div class="kind-banner__text"><code class="kind-banner__formula">args → N rows</code><p class="kind-banner__desc">A table-valued source: scalar arguments in, a whole set of rows out.</p></div></div>
+
+## Step 1 — Add the function
+
+Replace `calcscalar.ts` with `calc.ts`, keeping `double` and adding `series`:
+
+<Collapsible summary="calc.ts">
+<CodeBlock code={workerSrc} lang="typescript" title="calc.ts" tryable={false} />
+</Collapsible>
+
+Five things to notice:
+
+- **State is separate from arguments.** `initialState` builds the per-scan cursor; arguments are
+  fixed for the whole scan, so they are read once, here, rather than per batch.
+- **`process` is a pull loop.** DuckDB calls it repeatedly and consumes lazily. Emit what you can,
+  then `out.finish()` to signal end-of-stream. Nothing has to be materialized up front — that is what
+  makes a table function a *generator*.
+- **`argConstraints` are enforced, not just advertised.** `{ count: { ge: 0 } }` travels into the
+  registered spec, so `series(-1)` fails at bind rather than looping or silently returning nothing.
+- **The output schema is built once.** `toSchema({ n: int })` at module scope, because it never
+  varies. A function whose columns depend on its arguments would build it inside `onBind`.
+- **`BigInt(args.count)` is load-bearing.** See the warning below.
+
+<Callout type="warning" title="A table function's arguments arrive as numbers, not bigints">
+An `int` argument reaches a **scalar** function's columns as a `bigint`. The same `int` argument
+reaches a **table** function's `args` as a JS `number`.
+
+That asymmetry is invisible until the first batch, where mixing the two throws
+*"Invalid mix of BigInt and other type in subtraction"* — at runtime, from inside `process`, with a
+stack that points at your arithmetic rather than at the cause. Normalize once in `initialState`:
+
+<CodeBlock code={`initialState: ({ args }) => ({ i: 0n, count: BigInt(args.count) }),`} lang="typescript" tryable={false} />
+
+Then the rest of the function is bigint throughout and the question never comes up again.
+</Callout>
+
+<InfoTip label="Why “generator” and not just “function”?" title="Why a generator?" width="32rem">
+A table function is pulled, not called: the engine asks the worker for output until it signals
+completion. `process` is the pull handler. `series` knows up front how many rows it owes, so its
+state is just a counter — but a generator reading a paginated API would keep its cursor in the same
+state object and decide for itself when it is done.
+</InfoTip>
+
+## Step 2 — Call it
+
+Re-attach the new file and query it in a `FROM` clause:
+
+<CodeBlock code={`LOAD vgi;
+ATTACH 'calc' (TYPE vgi, LOCATION 'bun run ./calc.ts');
+
+SELECT * FROM calc.series(3);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["n"]} rows={[[0], [1], [2]]} />
+
+Both functions live in one worker, so they compose in a single query:
+
+<CodeBlock code={`SELECT calc.double(n) AS doubled FROM calc.series(3);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["doubled"]} rows={[[0], [2], [4]]} />
+
+The batching is real, not decorative — `series(5000)` streams through in chunks of 1024:
+
+<CodeBlock code={`SELECT count(*), sum(n) FROM calc.series(5000);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["count_star()", "sum(n)"]} rows={[[5000, 12497500]]} />
+
+And the constraint does its job:
+
+<CodeBlock code={`SELECT * FROM calc.series(-1);`} lang="sql" tryable={false} />
+
+<CodeBlock code={`Invalid Input Error: VGI Worker Exception: ArgumentValidationError: argument 'count' must be >= 0`} lang="text" tryable={false} />
+
+**What just happened:** one `calc` worker now serves two functions. `series` ran in the `FROM` clause
+— DuckDB pulled batches from `process` until it called `finish()` — and `double` transformed them,
+all in the same process.
+
+<InfoTip label="It didn't work?" title="Troubleshooting" width="34rem" up>
+- **`Binder Error: Failed to attach database: database with name "calc" already exists`** — `calc` is
+  still attached from step 1. Run `DETACH calc;` or open a fresh shell.
+- **`Function "series" is a table function but it was used as a scalar function`** — table functions
+  go in `FROM`, not `SELECT`.
+- **`Invalid mix of BigInt and other type`** — the `BigInt(args.count)` normalization above.
+- **Empty result** — `series(0)` is legitimately zero rows. Try `series(5)`.
+- **The scan never ends** — a generator that never reaches its `finish()` is an infinite scan.
+  `process` must make progress toward the condition it checks.
+</InfoTip>
+
+## Next steps
+
+- **The other three shapes** → [Function patterns](/vgi/docs/typescript/how-to/function-patterns/) —
+  table-in-out, aggregate and buffering, each with a runnable worker.
+- **When each callback fires** → [Function lifecycle](/vgi/docs/concepts/lifecycle/).
+- **Exact contracts** → [Table functions](/vgi/docs/typescript/api/table/).

@@ -1,5 +1,5 @@
 ---
-title: Function API — reference
+title: Function API
 description: "Deep reference for the callback APIs behind the scalar, table, and table-in-out shapes: the bind / init / process / finalize method contracts, the @bind_fixed_schema and @init_single_worker decorators, ProcessParams, and output-schema rules."
 ---
 
@@ -7,7 +7,9 @@ import Callout from '../../../../../../components/docs/Callout.astro';
 import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
 import InfoTip from '../../../../../../components/docs/InfoTip.astro';
 
-The deep reference for the callback APIs behind the scalar, table, and table-in-out shapes — the exact `bind` / `init` / `process` / `finalize` contracts, the simplified-vs-generator base classes, the lifecycle decorators, and the rules each shape places on its output schema.
+The deep reference for the callback APIs behind the scalar, table, and table-in-out shapes — the
+exact `bind` / `init` / `process` / `finalize` contracts, the simplified-vs-generator base classes,
+the lifecycle decorators, and the rules each shape places on its output schema.
 
 <InfoTip label="DuckDB UDF API?" title="VGI wraps DuckDB, but this is not DuckDB's Python UDF API">
 DuckDB sees registered SQL functions and table functions. The classes on this page are the VGI
@@ -16,14 +18,27 @@ native DuckDB Python client UDF interface.
 </InfoTip>
 
 <Callout type="tip" title="Looking for a runnable worker?">
-[Function patterns](/vgi/docs/python/how-to/function-patterns/) is the recipe — a complete, runnable worker for each of the five shapes. This page is the API reference behind those recipes; it documents method contracts and edge cases rather than repeating the templates. For how the callbacks fire across a query, see [Function lifecycle](/vgi/docs/python/concepts/lifecycle/), and for the generated signatures the [`scalar_function`](/vgi/docs/python/api/vgi-scalar_function/), [`table_function`](/vgi/docs/python/api/vgi-table_function/), and [`table_in_out_function`](/vgi/docs/python/api/vgi-table_in_out_function/) API pages.
+[Function patterns](/vgi/docs/python/how-to/function-patterns/) is the recipe — a complete, runnable
+worker for each of the five shapes. This page is the API reference behind those recipes; it
+documents method contracts and edge cases rather than repeating the templates. For how the callbacks
+fire across a query, see [Function lifecycle](/vgi/docs/concepts/lifecycle/), and for the
+generated signatures the [`scalar_function`](/vgi/docs/python/api/vgi-scalar_function/),
+[`table_function`](/vgi/docs/python/api/vgi-table_function/), and
+[`table_in_out_function`](/vgi/docs/python/api/vgi-table_in_out_function/) API pages.
 </Callout>
 
-Most shapes ship two base classes: a **declarative** one (annotations on a single callback — the common case) and a **generator** one (a per-batch `process()` callback for full control). Reach for the generator variant only when you need custom per-batch init/response handling or to manage `OutputCollector` yourself.
+Most shapes ship two base classes: a **declarative** one (annotations on a single callback — the
+common case) and a **generator** one (a per-batch `process()` callback for full control). Reach for
+the generator variant only when you need custom per-batch init/response handling or to manage
+`OutputCollector` yourself.
 
 ## Scalar functions
 
-`ScalarFunction` (declarative) transforms each input row to exactly one output value. You write `compute()`, annotating inputs with `Param`/`ConstParam` and the return with `Returns`; the framework infers the output schema, validates types, and enforces the row-count contract. See [Function patterns → Scalar](/vgi/docs/python/how-to/function-patterns/#scalar) for a runnable template.
+`ScalarFunction` (declarative) transforms each input row to exactly one output value. You write
+`compute()`, annotating inputs with `Param`/`ConstParam` and the return with `Returns`; the
+framework infers the output schema, validates types, and enforces the row-count contract. See
+[Function patterns → Scalar](/vgi/docs/python/how-to/function-patterns/#scalar) for a runnable
+template.
 
 ### Constraints (enforced at runtime)
 
@@ -39,6 +54,26 @@ Most shapes ship two base classes: a **declarative** one (annotations on a singl
 </tbody>
 </table>
 
+### Declaring value constraints
+
+`Param` and `ConstParam` accept `choices`, `ge`, `le`, `gt`, `lt` and `pattern` (0.10.0+). They
+serve two purposes at once: they are encoded into the argument schema's field metadata, so
+`vgi_function_arguments()` and any agent introspecting the catalog can describe the argument without
+running Python — and on a `ConstParam` they are **enforced**.
+
+<CodeBlock code={`precision: Annotated[int, ConstParam(doc="Rounding precision", ge=0, le=10)]`} lang="python" tryable={false} />
+
+A violating const value raises `ArgumentValidationError` once at bind, rather than reaching
+`compute()` / `update()`. The same check runs for the aggregate bind dispatcher. Constraints on a
+**columnar** `Param` stay advisory — they describe the argument but are not checked per row. See
+[Argument serialization → Discovery
+metadata](/vgi/docs/concepts/argument-serialization/#discovery-metadata).
+
+<Callout type="note" title="Typed const scalars">
+Since 0.8.10, a `ConstParam` annotated as an Arrow scalar type is delivered as a typed
+`pyarrow.Scalar` rather than a coerced Python value, so the declared type is what you receive.
+</Callout>
+
 ### Method contracts
 
 <table>
@@ -53,11 +88,17 @@ Most shapes ship two base classes: a **declarative** one (annotations on a singl
 </tbody>
 </table>
 
-The `bind()` and `global_init()` protocol entry points are `@final` — do not override them; use `on_bind()` / `on_init()`. A dynamic output type means annotating `compute()` with `Returns()` (no arrow type) and overriding `output_type(params)` to compute it from `params.arguments_schema` or `params.constant_arguments`.
+The `bind()` and `global_init()` protocol entry points are `@final` — do not override them; use
+`on_bind()` / `on_init()`. A dynamic output type means annotating `compute()` with `Returns()` (no
+arrow type) and overriding `output_type(params)` to compute it from `params.arguments_schema` or
+`params.constant_arguments`.
 
 ### Generator variant
 
-`ScalarFunctionGenerator` gives you a per-batch `process()` (keyword-only: `batch`, `init_call`, `init_response`, `storage`, `auth_context`) and an abstract `output_type()`. Return a `RecordBatch` with the same row count as `batch`. Use it only when `compute()`'s columnar model is too restrictive.
+`ScalarFunctionGenerator` gives you a per-batch `process()` (keyword-only: `batch`, `init_call`,
+`init_response`, `storage`, `auth_context`) and an abstract `output_type()`. Return a `RecordBatch`
+with the same row count as `batch`. Use it only when `compute()`'s columnar model is too
+restrictive.
 
 <CodeBlock code={`class MyScalarGen(ScalarFunctionGenerator):
     @classmethod
@@ -73,7 +114,14 @@ The `bind()` and `global_init()` protocol entry points are `@final` — do not o
 
 ## Table functions
 
-`TableFunctionGenerator[TArgs, TState]` generates rows from arguments, with no input table. You declare a typed `FunctionArguments` dataclass (`Annotated[T, Arg(...)]` fields), an output schema, and a `process()` that emits batches until `out.finish()`. State (`TState`) persists between `process()` calls and must extend `ArrowSerializableDataclass` so it survives HTTP round-trips. See [Function patterns → Table](/vgi/docs/python/how-to/function-patterns/#table) and the [Streaming with state](/vgi/docs/python/how-to/function-patterns/#streaming-with-state) section for runnable templates.
+`TableFunctionGenerator[TArgs, TState]` generates rows from arguments, with no input table. You
+declare a typed `FunctionArguments` dataclass (`Annotated[T, Arg(...)]` fields), an output schema,
+and a `process()` that emits batches until `out.finish()`. State (`TState`) persists between
+`process()` calls and must be encodable — it needs `serialize_to_bytes()` /
+`deserialize_from_bytes()`, which `ArrowSerializableDataclass` writes for you — so it survives HTTP
+round-trips. See [Function patterns → Table](/vgi/docs/python/how-to/function-patterns/#table) and
+the [Streaming with state](/vgi/docs/python/how-to/function-patterns/#streaming-with-state) section
+for runnable templates.
 
 ### Method contracts
 
@@ -89,11 +137,14 @@ The `bind()` and `global_init()` protocol entry points are `@final` — do not o
 </tbody>
 </table>
 
-`process()` is called **repeatedly** until you call `out.finish()` — emit a bounded chunk per call and remember your place in `state`. `FunctionArguments` is auto-extracted from the first generic parameter when you write `TableFunctionGenerator[MyArgs, MyState]`, or you can set it explicitly.
+`process()` is called **repeatedly** until you call `out.finish()` — emit a bounded chunk per call
+and remember your place in `state`. `FunctionArguments` is auto-extracted from the first generic
+parameter when you write `TableFunctionGenerator[MyArgs, MyState]`, or you can set it explicitly.
 
 ### Lifecycle decorators
 
-Two class decorators wire up the common single-worker pattern so you don't hand-write the boilerplate:
+Two class decorators wire up the common single-worker pattern so you don't hand-write the
+boilerplate:
 
 <table>
 <thead>
@@ -124,11 +175,20 @@ def process(cls, params, state, out):
 
 ## Table-in-out functions
 
-For transforming a streamed input relation, use `TableInOutFunction` (declarative) or `TableInOutGenerator` (generator). Both stream input batch-by-batch; the difference is the callback surface. See [Function patterns → Table-in-out](/vgi/docs/python/how-to/function-patterns/#table-in-out) for a runnable template, and the [Buffering](/vgi/docs/python/how-to/function-patterns/#buffering) section when output depends on *every* row.
+For transforming a streamed input relation, use `TableInOutFunction` (declarative) or
+`TableInOutGenerator` (generator). Both stream input batch-by-batch; the difference is the callback
+surface. See [Function patterns →
+Table-in-out](/vgi/docs/python/how-to/function-patterns/#table-in-out) for a runnable template, and
+the [Buffering](/vgi/docs/python/how-to/function-patterns/#buffering) section when output depends on
+*every* row.
 
 ### `TableInOutFunction` (declarative)
 
-You override `transform()` and optionally `finish()`; state management is automatic. `TState` is the second type parameter — when it's an `ArrowSerializableDataclass`, the framework saves it to storage after each `transform()` for distributed processing. When omitted, `transform()` always receives `state=None`.
+You override `transform()` and optionally `finish()`; state management is automatic. `TState` is the
+second type parameter — when it supplies a serialization codec (an `ArrowSerializableDataclass`, or
+your own `serialize_to_bytes` / `deserialize_from_bytes`), the framework saves it to storage after
+each `transform()` for distributed processing. When omitted, `transform()` always receives
+`state=None`.
 
 <table>
 <thead>
@@ -143,12 +203,18 @@ You override `transform()` and optionally `finish()`; state management is automa
 </table>
 
 <Callout type="note" title="Defining finish() changes the DuckDB registration">
-The framework only advertises a finalize callback to DuckDB when a real <code>finish()</code>/<code>finalize()</code> override is present (auto-detected, or forced via <code>Meta.has_finalize</code>). DuckDB rejects <code>LATERAL</code> with correlated input on table functions that register a finalize callback — so a passthrough/streaming transform should *not* define <code>finish()</code> if it needs to support correlated <code>LATERAL</code>.
+The framework only advertises a finalize callback to DuckDB when a real
+<code>finish()</code>/<code>finalize()</code> override is present (auto-detected, or forced via
+<code>Meta.has_finalize</code>). DuckDB rejects <code>LATERAL</code> with correlated input on table
+functions that register a finalize callback — so a passthrough/streaming transform should *not*
+define <code>finish()</code> if it needs to support correlated <code>LATERAL</code>.
 </Callout>
 
 ### `TableInOutGenerator` (generator)
 
-For full control, override `process(params, state, batch, out)` and emit via `OutputCollector`. Override `finalize(params)` to return any buffered output. The default `process()` is a passthrough (echo), so an empty subclass is a valid identity function.
+For full control, override `process(params, state, batch, out)` and emit via `OutputCollector`.
+Override `finalize(params)` to return any buffered output. The default `process()` is a passthrough
+(echo), so an empty subclass is a valid identity function.
 
 <CodeBlock code={`class MyFunction(TableInOutGenerator[MyArgs, MyState]):
     @classmethod
@@ -164,16 +230,21 @@ For full control, override `process(params, state, batch, out)` and emit via `Ou
     def finalize(cls, params) -> list[pa.RecordBatch]:
         return []`} lang="python" tryable={false} />
 
-To emit more than one output batch for a single input, set the `vgi.status` metadata to `HAVE_MORE_OUTPUT`:
+To emit more than one output batch for a single input, set the `vgi.status` metadata to
+`HAVE_MORE_OUTPUT`:
 
 <CodeBlock code={`def process(cls, params, state, batch, out: OutputCollector) -> None:
     out.emit(batch, custom_metadata={b"vgi.status": b"HAVE_MORE_OUTPUT"})`} lang="python" tryable={false} />
 
-`OutputCollector` also carries `out.client_log(level, message)` for in-band logging, and (over HTTP) `out.remaining_response_bytes` / `out.externalization_enabled` for sizing emits within the response budget.
+`OutputCollector` also carries `out.client_log(level, message)` for in-band logging, and (over HTTP)
+`out.remaining_response_bytes` / `out.externalization_enabled` for sizing emits within the response
+budget.
 
 ### Cancellation hook
 
-`TableInOutGenerator` exposes `on_cancel(params, state)`, fired when DuckDB tears down a scan early (upstream `LIMIT`, Ctrl-C, exception unwind). Override it to release per-stream resources held in `state` — database cursors, streaming sessions, file handles, GPU buffers.
+`TableInOutGenerator` exposes `on_cancel(params, state)`, fired when DuckDB tears down a scan early
+(upstream `LIMIT`, Ctrl-C, exception unwind). Override it to release per-stream resources held in
+`state` — database cursors, streaming sessions, file handles, GPU buffers.
 
 ## Pitfalls
 
@@ -181,7 +252,8 @@ A reference checklist of the mistakes that bite most often:
 
 ### Forgetting `out.finish()` in a table function
 
-`process()` is called in a loop; without `out.finish()` the client hangs forever waiting for more output.
+`process()` is called in a loop; without `out.finish()` the client hangs forever waiting for more
+output.
 
 <CodeBlock code={`# WRONG — never signals completion
 @classmethod
@@ -200,7 +272,8 @@ def process(cls, params, state, out):
 
 ### Not advancing state in `process()`
 
-If `process()` emits without decrementing its counter (or otherwise advancing `state`), the loop never terminates.
+If `process()` emits without decrementing its counter (or otherwise advancing `state`), the loop
+never terminates.
 
 <CodeBlock code={`# WRONG — infinite loop
 @classmethod
@@ -219,8 +292,25 @@ def process(cls, params, state, out):
 
 ### Changing row count in a scalar `compute()`
 
-Scalar functions require 1:1 row mapping — filtering or expanding rows raises `RowCountMismatchError`. Use a table-in-out function (N→M) or a buffering function instead.
+Scalar functions require 1:1 row mapping — filtering or expanding rows raises
+`RowCountMismatchError`. Use a table-in-out function (N→M) or a buffering function instead.
 
-### Mutable state that isn't an `ArrowSerializableDataclass`
+### State that can't be turned into bytes
 
-Table-generator and table-in-out `TState` is serialized to storage between calls (and across workers / HTTP round-trips). State that doesn't extend `ArrowSerializableDataclass` (with `ArrowType`-annotated fields) cannot survive the round-trip.
+Table-generator and table-in-out `TState` is serialized between calls (and across workers / HTTP
+round-trips), so it has to be encodable. Since 0.24.0 the requirement is a structural protocol,
+`StreamStateCodec`: the state class needs `serialize_to_bytes()` and `deserialize_from_bytes()`.
+Extending `ArrowSerializableDataclass` writes both for you and stays the default; implementing them
+yourself lets you own the encoding (see [State doesn't have to be
+Arrow](/vgi/docs/python/how-to/state-storage/#state-doesnt-have-to-be-arrow)). A plain
+dataclass that has neither raises a `TypeError` at class-definition time — it would appear to work
+on the subprocess transport, where the worker is long-lived, and break on HTTP, where each tick is
+an independent request.
+## Next steps
+
+- **Runnable templates** → [Function patterns](/vgi/docs/python/how-to/function-patterns/).
+- **When each callback fires** → [Function lifecycle](/vgi/docs/concepts/lifecycle/).
+- **Aggregates, which have their own contracts** → [Aggregate functions](/vgi/docs/python/how-to/aggregate-functions/).
+- **Exact signatures** → [`scalar_function`](/vgi/docs/python/api/vgi-scalar_function/) ·
+[`table_function`](/vgi/docs/python/api/vgi-table_function/) ·
+[`table_in_out_function`](/vgi/docs/python/api/vgi-table_in_out_function/).

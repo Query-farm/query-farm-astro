@@ -1,0 +1,190 @@
+---
+title: "Table-in-out functions"
+description: "Streaming a relation through, batch by batch."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Streaming a relation through, batch by batch.
+
+</div>
+
+<div class="api-member">
+
+<a id="TableInOutFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">trait</span> `TableInOutFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_in_out.rs#L91" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub trait TableInOutFunction: Send + Sync {
+    fn name(&self) -> &str;
+    fn metadata(&self) -> FunctionMetadata;
+    fn argument_specs(&self) -> Vec<ArgSpec>;
+    fn secret_lookups(&self, _params: &BindParams) -> Vec<crate::secrets::SecretLookup> {
+        Vec::new()
+    }
+    fn on_bind(&self, params: &BindParams) -> Result<BindResponse> {
+        let input = params
+            .input_schema
+            .clone()
+            .ok_or_else(|| RpcError::value_error("table-in-out requires an input schema"))?;
+        Ok(BindResponse {
+            output_schema: input,
+            opaque_data: Vec::new(),
+        })
+    }
+    fn process(&self, params: &ProcessParams, batch: &RecordBatch) -> Result<Vec<RecordBatch>> {
+        Ok(vec![project_batch(batch, &params.output_schema)?])
+    }
+
+    fn process_out(
+        &self,
+        params: &ProcessParams,
+        batch: &RecordBatch,
+        out: &mut TableInOutOutput,
+    ) -> Result<()> {
+        for b in self.process(params, batch)? {
+            out.emit(b);
+        }
+        Ok(())
+    }
+
+    fn has_finish(&self) -> bool {
+        false
+    }
+
+    fn finish(&self, _params: &ProcessParams) -> Result<Vec<RecordBatch>> {
+        Ok(Vec::new())
+    }
+}`} />
+
+<p class="api-section">Description</p>
+
+A table-in-out VGI function.
+
+</div>
+
+<div class="api-member">
+
+<a id="EmitOptions"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `EmitOptions`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_in_out.rs#L27" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct EmitOptions {
+    pub metadata: Option<HashMap<String, String>>,
+    pub cache_control: Option<CacheControl>,
+    pub parent_rows: Option<Vec<i32>>,
+}`} />
+
+<p class="api-section">Description</p>
+
+Options for one emitted table-in-out output batch (all optional).
+
+</div>
+
+<div class="api-member">
+
+<a id="PARENT_ROW_METADATA_KEY"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">constant</span> `PARENT_ROW_METADATA_KEY`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_in_out.rs#L23" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub const PARENT_ROW_METADATA_KEY: &amp;str = "vgi_rpc.parent_row#b64";</code></pre>
+
+<p class="api-section">Description</p>
+
+Per-batch wire-metadata key carrying per-output-row provenance for the
+batched correlated-LATERAL operator: a base64-encoded raw little-endian
+`int32[]` where element `i` is the 0-based index (into this call's input
+batch) of the row that produced output row `i`. Absent metadata = identity
+1→1 map (the extension assumes it, and requires output rows == input rows).
+
+</div>
+
+<div class="api-member">
+
+<a id="TableInOutOutput"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `TableInOutOutput`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_in_out.rs#L45" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct TableInOutOutput {
+    pub(crate) items: Vec<(RecordBatch, Option<HashMap<String, String>>)>,
+}`} />
+
+<p class="api-section">Description</p>
+
+Collects one `process` call's output batches with optional per-batch
+metadata — the emit surface for
+[`TableInOutFunction::process_out`]. Plain 1→1 transforms keep returning
+`Vec<RecordBatch>` from [`TableInOutFunction::process`]; override
+`process_out` (and emit through this) only when a batch needs
+[`EmitOptions`] (cache control, LATERAL provenance, raw metadata).
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="TableInOutOutput.emit"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `emit`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_in_out.rs#L51" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn emit(&amp;mut self, batch: RecordBatch)</code></pre>
+
+Emit a batch with no per-batch metadata.
+
+</div>
+<div class="api-member">
+
+<a id="TableInOutOutput.emit_with"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `emit_with`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_in_out.rs#L58" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn emit_with(&amp;mut self, batch: RecordBatch, opts: EmitOptions) -&gt; Result&lt;()&gt;</code></pre>
+
+Emit a batch with [`EmitOptions`] (metadata / cache control / LATERAL
+provenance). Mirrors the Python `out.emit(batch, metadata=...,
+cache_control=..., parent_rows=...)` kwargs.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="arc"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `arc`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_in_out.rs#L178" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn arc(s: Schema) -&gt; Arc&lt;Schema&gt;</code></pre>
+
+<p class="api-section">Description</p>
+
+Build an `Arc<Schema>`.
+
+</div>
+
+<div class="api-member">
+
+<a id="project_batch"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `project_batch`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/table_in_out.rs#L156" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn project_batch(batch: &amp;RecordBatch, schema: &amp;SchemaRef) -&gt; Result&lt;RecordBatch&gt;</code></pre>
+
+<p class="api-section">Description</p>
+
+Project a batch to `schema`'s columns by name (projection pushdown).
+
+</div>

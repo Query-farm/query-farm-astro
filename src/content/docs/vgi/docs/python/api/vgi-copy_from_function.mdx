@@ -1,0 +1,220 @@
+---
+title: vgi.copy_from_function
+description: API reference for vgi.copy_from_function
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">Module overview</p>
+
+Base class for custom ``COPY ... FROM`` format readers.
+
+A :class:[`CopyFromFunction`](/vgi/docs/python/api/vgi-copy_from_function/#vgi.copy_from_function.CopyFromFunction) lets a VGI catalog act as a remote file-format
+reader: the user runs ``COPY target FROM 'path' (FORMAT <name>, opt val, ...)``
+and the worker parses the source and streams Arrow batches that DuckDB inserts
+into the local ``target`` table.
+
+Mechanically a [`CopyFromFunction`](/vgi/docs/python/api/vgi-copy_from_function/#vgi.copy_from_function.CopyFromFunction) is an ordinary producer-mode table function
+(so it reuses the entire table-function bind/init/scan path on both sides). What
+makes it a COPY format is twofold:
+
+* it sets :attr:`CopyFromFunction.COPY_FROM_FORMAT` to the SQL ``FORMAT``
+  identifier, and
+* the catalog advertises it via
+  :meth:`vgi.catalog.catalog_interface.ReadOnlyCatalogInterface.copy_from_formats`,
+  so the VGI DuckDB extension registers a DuckDB ``CopyFunction`` for it.
+
+The COPY statement's file path and the target table's schema arrive on the bind
+through :class:`vgi.protocol.CopyFromContext` (``params.bind_call.copy_from`` /
+``params.init_call.bind_call.copy_from``). The COPY options arrive as the
+function's normal [`Arg`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arg)-annotated arguments — declare them on
+``FunctionArguments`` exactly like any other function; their ``doc`` becomes the
+option description surfaced by ``vgi_copy_formats()`` / ``vgi_function_arguments()``.
+
+Subclasses implement :meth:`read`, emitting Arrow batches whose schema matches
+``expected_schema`` exactly — DuckDB inserts **no** cast between the scan and the
+INSERT, so a type/arity mismatch is rejected by the extension at COPY bind.
+
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.copy_from_function.CopyFromFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `CopyFromFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/copy_from_function.py#L62" target="_blank" rel="noopener">source</a>
+
+<p class="api-bases">Bases: <code><a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionGenerator">TableFunctionGenerator</a>[TArgs, _CopyFromState]</code></p>
+
+<p class="api-section">Description</p>
+
+Base class for custom ``COPY ... FROM`` format readers.
+
+Subclass and:
+
+* set :attr:`COPY_FROM_FORMAT` to the SQL ``FORMAT`` identifier,
+* declare any options as [`Arg`](/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arg)-annotated ``FunctionArguments`` (the source
+  ``file_path`` is supplied by the COPY statement, **not** as an option),
+* implement :meth:`read` to parse the source and emit Arrow batches matching
+  ``expected_schema``.
+
+Register the subclass in the catalog's function list like any table function.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.copy_from_function.CopyFromFunction.COPY_FROM_FORMAT"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `COPY_FROM_FORMAT`
+
+<p class="api-atype"><code>str</code></p>
+
+: SQL ``FORMAT`` identifier users type, e.g. ``COPY t FROM 'x' (FORMAT myfmt)``.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.copy_from_function.CopyFromFunction.COPY_FROM_DIRECTION"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `COPY_FROM_DIRECTION`
+
+<p class="api-atype"><code>str</code></p>
+
+: Reserved for a future ``COPY ... TO``; only ``"from"`` is supported today.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.copy_from_function.CopyFromFunction.COPY_FROM_COMMENT"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `COPY_FROM_COMMENT`
+
+<p class="api-atype"><code>str | None</code></p>
+
+: Optional free-text comment surfaced by ``vgi_copy_formats()``.
+
+</div>
+
+</div>
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.copy_from_function.CopyFromFunction.on_bind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `on_bind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/copy_from_function.py#L86" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>on_bind(params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.BindParams">BindParams</a>[TArgs]) -&gt; <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse">BindResponse</a></code></pre>
+
+Bind the output schema to the COPY target's schema.
+
+DuckDB forces the scan's output types to the target table's columns, so a
+COPY-FROM reader must produce exactly ``expected_schema``.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.copy_from_function.CopyFromFunction.on_secrets"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `on_secrets`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/copy_from_function.py#L109" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>on_secrets(params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.BindParams">BindParams</a>[TArgs]) -&gt; None</code></pre>
+
+Request the credentials this reader needs to reach its source.
+
+Override to forward ``CREATE SECRET`` values to :meth:`read` for
+secret-backed cloud sources. Call ``params.secrets.get(secret_type,
+scope=..., name=...)`` — typically scoping by the source path
+(``params.bind_call.copy_from.file_path``) so DuckDB resolves the
+longest-prefix-matching secret. The framework issues a two-phase bind retry
+to resolve every requested secret from the caller's secret store, then
+surfaces the resolved values on ``params.secrets`` (a
+:class:[`ResolvedSecrets`](/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ResolvedSecrets)) at :meth:`read` time. Pass ``required=True`` to
+``get()`` to make a missing secret fail the bind.
+
+Default: request nothing (no secrets forwarded).
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.copy_from_function.CopyFromFunction.initial_state"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `initial_state`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/copy_from_function.py#L127" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>initial_state(params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[TArgs]) -&gt; _CopyFromState</code></pre>
+
+Allocate the single-shot read guard.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.copy_from_function.CopyFromFunction.process"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `process`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/copy_from_function.py#L133" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>process(
+    params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[TArgs],
+    state: _CopyFromState,
+    out: <a href="https://vgi-rpc-python.query.farm/" class="api-ext" target="_blank" rel="noopener">OutputCollector</a>,
+) -&gt; None</code></pre>
+
+Drive :meth:`read` once, then finish the stream.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.copy_from_function.CopyFromFunction.read"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `read`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/copy_from_function.py#L159" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>read(
+    *,
+    path: str,
+    options: TArgs,
+    expected_schema: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a>,
+    params: <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.ProcessParams">ProcessParams</a>[TArgs],
+    out: <a href="https://vgi-rpc-python.query.farm/" class="api-ext" target="_blank" rel="noopener">OutputCollector</a>,
+) -&gt; None</code></pre>
+
+Parse ``path`` and emit Arrow batches via ``out.emit(...)``.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">path</code></dt><dd>Source path from the <code>COPY ... FROM 'path'</code> statement.</dd><dt><code class="api-pname">options</code></dt><dd>Parsed COPY options (the <code>FunctionArguments</code> instance).</dd><dt><code class="api-pname">expected_schema</code></dt><dd>The COPY target's schema. Every emitted batch must have this exact schema (names + types, in order).</dd><dt><code class="api-pname">params</code></dt><dd>Full process parameters (settings, secrets, storage, auth).</dd><dt><code class="api-pname">out</code></dt><dd>Collector to emit batches / log. <code>finish()</code> is called for you.</dd></dl></div>
+
+
+</div>
+
+</div>
+<details class="api-inherited">
+<summary>Inherited members (13)</summary>
+
+- `get_metadata` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.MetadataMixin">MetadataMixin</a> — Get the resolved metadata for this function class.
+- `describe` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-metadata/#vgi.metadata.MetadataMixin">MetadataMixin</a> — Get metadata as a dictionary (for JSON serialization).
+- `logger` <span class="api-kind">attribute</span> · from Function
+- `storage` <span class="api-kind">attribute</span> · from Function
+- `FunctionArguments` <span class="api-kind">attribute</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a>
+- `bind` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — Bind protocol entry point. Do not override; use ``on_bind()``.
+- `on_init` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — One-time setup after bind, before processing batches.
+- `global_init` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — Global init protocol entry point. Do not override; use ``on_init()``.
+- `cardinality` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — Return the cardinality for the output.
+- `dynamic_to_string` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — Return diagnostics rendered as Extra Info under EXPLAIN ANALYZE.
+- `statistics` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — Return per-output-column statistics for this invocation.
+- `pushdown_filters` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionBase">TableFunctionBase</a> — Get deserialized pushdown filters, or None if not present.
+- `on_cancel` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-table_function/#vgi.table_function.TableFunctionGenerator">TableFunctionGenerator</a>
+
+</details>
+
+
+</div>

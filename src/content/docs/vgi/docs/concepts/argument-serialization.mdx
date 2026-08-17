@@ -3,14 +3,18 @@ title: Argument serialization
 description: "How VGI serializes a function's argument specifications to Apache Arrow schemas for IPC and DuckDB registration — the metadata keys, field order, and parse rules."
 ---
 
-import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Callout from '../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../components/ui/CodeBlock.astro';
 
 How VGI turns a function's argument specifications into Apache Arrow schemas for IPC transmission and
-DuckDB function registration — the metadata keys, field ordering, and parse rules. This is wire-level
-reference; you don't need it to write a worker (declare arguments with `Annotated[...]` and VGI
-handles the rest).
+DuckDB function registration — the metadata keys, field ordering, and parse rules.
 
-## Quick Reference
+This is the **wire format**, so every SDK produces and parses the same schema; a Go worker and a
+Python worker advertising the same signature are byte-identical here. You don't need any of it to
+write a worker — declare arguments in your language's idiom (Python `Annotated[...]`, Go `vgi:"..."`
+struct tags) and the SDK handles the rest. The examples below are Python.
+
+## Quick reference
 
 <table>
 <thead>
@@ -24,17 +28,17 @@ handles the rest).
 </tbody>
 </table>
 
-## Schema Format
+## Schema format
 
 Arguments are serialized as a **single Arrow schema** where each field
 represents one argument.
 
-### Field Order
+### Field order
 
 1. **Positional arguments** come first, in order (field index = position index)
 2. **Named arguments** follow, marked with metadata
 
-### Field Components
+### Field components
 
 <table>
 <thead>
@@ -47,7 +51,7 @@ represents one argument.
 </tbody>
 </table>
 
-## Positional Arguments
+## Positional arguments
 
 Positional arguments have no special metadata. Their position index is
 determined by their order in the schema.
@@ -58,7 +62,7 @@ pa.field("count", pa.int64())
 # name: Annotated[str, Arg(1)] becomes:
 pa.field("name", pa.utf8())`} lang="python" tryable={false} />
 
-## Named Arguments
+## Named arguments
 
 Named arguments have `vgi_arg=named` metadata. The field name is the
 argument key used in SQL.
@@ -66,9 +70,9 @@ argument key used in SQL.
 <CodeBlock code={`# format: Annotated[str, Arg("format")] becomes:
 pa.field("format", pa.utf8(), metadata={b"vgi_arg": b"named"})`} lang="python" tryable={false} />
 
-## Special Types
+## Special types
 
-### Table Input
+### Table input
 
 Table input arguments (`Annotated[TableInput, Arg(...)]`) receive streaming
 RecordBatches rather than scalar values.
@@ -79,7 +83,7 @@ RecordBatches rather than scalar values.
 <CodeBlock code={`# data: Annotated[TableInput, Arg(1)] becomes:
 pa.field("data", pa.null(), metadata={b"vgi_type": b"table"})`} lang="python" tryable={false} />
 
-### Any Type
+### Any type
 
 Any-type arguments (`Annotated[AnyArrowValue, Arg(...)]`) accept any valid
 Arrow scalar type at runtime.
@@ -90,7 +94,7 @@ Arrow scalar type at runtime.
 <CodeBlock code={`# value: Annotated[AnyArrowValue, Arg(0)] becomes:
 pa.field("value", pa.null(), metadata={b"vgi_type": b"any"})`} lang="python" tryable={false} />
 
-### Variable Arguments
+### Variable arguments
 
 Varargs arguments (`varargs=True`) collect all remaining positional
 arguments from their position onwards.
@@ -101,7 +105,27 @@ arguments from their position onwards.
 <CodeBlock code={`# columns: Annotated[tuple[str, ...], Arg(0, varargs=True)] becomes:
 pa.field("columns", pa.utf8(), metadata={b"vgi_varargs": b"true"})`} lang="python" tryable={false} />
 
-## Combined Metadata
+### Union types
+
+DuckDB `UNION` / Arrow union arguments are *tagged*: the discriminator — which
+member is present — lives in the Arrow `UnionScalar.type_code`, not in the member
+value. A plain `Scalar.as_py()` returns only the member value and **drops the
+tag**, which loses exactly the information a union argument exists to carry.
+
+Since **0.8.3**, union arguments decode into a `TaggedUnion` instead, preserving
+both halves. Table varargs decode the same way since 0.9.0.
+
+<CodeBlock code={`config: Annotated[TaggedUnion, Arg("config", arrow_type=pa.sparse_union([...]))]
+...
+cfg = params.args.config          # TaggedUnion(tag=..., value=...)
+if cfg.tag == "random_forest_classifier":
+    grid = cfg.value              # the member struct, as a dict`} lang="python" tryable={false} />
+
+`tag` is the active member's field name (or `None`) and `value` is its Python
+value. Every non-union type is unchanged — `TaggedUnion` appears only where a
+union is declared.
+
+## Combined metadata
 
 Fields can have multiple metadata keys. For example, a named argument
 that accepts any type:
@@ -112,9 +136,9 @@ pa.field("threshold", pa.null(), metadata={
     b"vgi_type": b"any",
 })`} lang="python" tryable={false} />
 
-## Complete Examples
+## Complete examples
 
-### Example 1: Simple Function
+### Example 1: a simple function
 
 <CodeBlock code={`from typing import Annotated
 
@@ -130,7 +154,7 @@ schema = pa.schema([
     pa.field("verbose", pa.bool_(), metadata={b"vgi_arg": b"named"}),
 ])`} lang="python" tryable={false} />
 
-### Example 2: Function with Table Input
+### Example 2: a function with table input
 
 <CodeBlock code={`from typing import Annotated
 from vgi.arguments import TableInput
@@ -145,7 +169,7 @@ schema = pa.schema([
     pa.field("data", pa.null(), metadata={b"vgi_type": b"table"}),
 ])`} lang="python" tryable={false} />
 
-### Example 3: Function with Varargs
+### Example 3: a function with varargs
 
 <CodeBlock code={`from typing import Annotated
 
@@ -157,7 +181,7 @@ schema = pa.schema([
     pa.field("columns", pa.utf8(), metadata={b"vgi_varargs": b"true"}),
 ])`} lang="python" tryable={false} />
 
-### Example 4: Complex Function
+### Example 4: a complex function
 
 <CodeBlock code={`from typing import Annotated
 from vgi import AnyArrowValue
@@ -182,9 +206,9 @@ schema = pa.schema([
     }),
 ])`} lang="python" tryable={false} />
 
-## Serialization Code
+## Serialization code
 
-### Serialize to Bytes
+### Serialize to bytes
 
 <CodeBlock code={`from vgi.argument_spec import argument_specs_to_schema
 
@@ -194,7 +218,7 @@ schema = argument_specs_to_schema(specs)
 # Serialize to bytes
 schema_bytes = schema.serialize().to_pybytes()`} lang="python" tryable={false} />
 
-### Deserialize from Bytes
+### Deserialize from bytes
 
 <CodeBlock code={`import pyarrow as pa
 from vgi.argument_spec import schema_to_argument_specs
@@ -205,7 +229,7 @@ schema = pa.ipc.read_schema(pa.py_buffer(schema_bytes))
 # Convert to ArgumentSpec objects
 specs = schema_to_argument_specs(schema)`} lang="python" tryable={false} />
 
-## Parsing Algorithm
+## Parsing algorithm
 
 To parse a schema back to argument specifications:
 
@@ -249,13 +273,46 @@ To parse a schema back to argument specifications:
 
     return specs`} lang="python" tryable={false} />
 
-## Not Included
+## Discovery metadata
 
-The following are **not** serialized in the schema:
+Since **0.9.0** the per-argument documentation, and since **0.10.0** the declared
+constraints, ride on the same Arrow field metadata — so a client (or an agent
+introspecting the catalog) can describe an argument without a Python runtime.
+These keys are surfaced by the C++ `vgi_function_arguments()` diagnostic.
 
-- **Default values** - handled at runtime by the `Arg` descriptor
-- **Validation constraints** (`ge`, `le`, `choices`, `pattern`) - Python-side validation
-- **Documentation strings** - available via `ParameterInfo` in metadata
+<table>
+<thead>
+<tr><th>Key</th><th>Value</th><th>Source</th></tr>
+</thead>
+<tbody>
+<tr><td><code>vgi_doc</code></td><td>UTF-8 description</td><td><code>Arg(doc=...)</code> / <code>Param(doc=...)</code></td></tr>
+<tr><td><code>vgi_default</code></td><td>JSON scalar</td><td>the arg's default (named/optional args only)</td></tr>
+<tr><td><code>vgi_choices</code></td><td>JSON array</td><td><code>choices=</code> — the closed set of allowed values</td></tr>
+<tr><td><code>vgi_range</code></td><td>Interval notation, e.g. <code>"[0, 100]"</code></td><td>built from <code>ge</code>/<code>le</code>/<code>gt</code>/<code>lt</code></td></tr>
+<tr><td><code>vgi_pattern</code></td><td>Raw regex</td><td><code>pattern=</code> — an open set</td></tr>
+</tbody>
+</table>
 
-These are implementation details of the Python function runtime, not part
-of the argument type specification needed for function registration.
+The same `vgi_doc` key carries per-parameter documentation for **macros**
+(0.9.0+), so a macro's parameters are described the same way a function's are.
+
+<Callout type="note" title="Const constraints are enforced; columnar ones are advisory">
+Since **0.10.0**, `choices`/`ge`/`le`/`gt`/`lt`/`pattern` on a **`ConstParam`** are validated once at
+bind by `validate_const_arg_constraints()`, raising `ArgumentValidationError` — so a constraint you
+advertised is actually binding. Constraints on a columnar `Param` remain advisory: they describe the
+argument for discovery but are not checked per row.
+</Callout>
+
+## Not included
+
+Runtime-only concerns stay out of the schema — it carries the argument *type
+specification* needed for function registration, plus the discovery metadata
+above, and nothing else. Behaviour that depends on the call itself (coercion
+rules, row-level validation, the bind-time checks described above) lives in the
+Python function runtime.
+## Next steps
+
+- **Declare the arguments in the first place** → [Function API → Declaring value
+  constraints](/vgi/docs/python/how-to/generator-api/#declaring-value-constraints).
+- **What else a function advertises** → [Function metadata](/vgi/docs/python/how-to/metadata/).
+- **Exact types** → [API Reference: arguments](/vgi/docs/python/api/vgi-arguments/).

@@ -3,45 +3,66 @@ title: Function lifecycle
 description: "When each VGI lifecycle method runs — bind, init, exchange, update, combine, and finalize — across scalar, table, table-in-out, aggregate, and buffering functions."
 ---
 
-import Callout from '../../../../../../components/docs/Callout.astro';
-import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import Callout from '../../../../../components/docs/Callout.astro';
+import InfoTip from '../../../../../components/docs/InfoTip.astro';
 
 Knowing **when** each lifecycle method runs is key to managing resources and getting distributed
-processing right. Every VGI [function shape](/vgi/docs/python/how-to/function-patterns/) is driven by
-the engine through the same skeleton — **bind → init → per-batch processing → (optionally) finalize** —
-but the shapes differ in whether they have a finalize phase and how they behave across parallel
-workers. The sequence diagrams below trace the calls between the DuckDB engine and your worker.
+processing right. Every VGI function shape is driven by the engine through the same skeleton —
+**bind → init → per-batch processing → (optionally) finalize** — but the shapes differ in whether
+they have a finalize phase and how they behave across parallel workers. The sequence diagrams below
+trace the calls between the DuckDB engine and your worker.
+
+This page describes the **protocol**, so it applies to every SDK. The phase names are the protocol's;
+each language spells the callbacks in its own idiom. Not every shape runs every phase — a scalar
+function has no init and no state, an aggregate accumulates with `update` rather than a per-batch
+`process` — so read this as a glossary, and the per-shape sections below for what actually fires:
+
+<table>
+<thead>
+<tr><th>Phase</th><th>Python</th><th>Go</th></tr>
+</thead>
+<tbody>
+<tr><td>Bind</td><td><code>on_bind()</code></td><td><code>OnBind()</code></td></tr>
+<tr><td>Init</td><td><code>on_init()</code> / <code>global_init()</code></td><td><code>OnInit()</code></td></tr>
+<tr><td>Initial state</td><td><code>initial_state()</code></td><td><code>NewState()</code></td></tr>
+<tr><td>Per batch</td><td><code>compute()</code> (scalar) / <code>process()</code></td><td><code>Process()</code></td></tr>
+<tr><td>Accumulate (aggregate)</td><td><code>update()</code></td><td><code>Update()</code></td></tr>
+<tr><td>Merge partials</td><td><code>combine()</code></td><td><code>Combine()</code></td></tr>
+<tr><td>Finalize</td><td><code>finalize()</code></td><td><code>Finalize()</code></td></tr>
+</tbody>
+</table>
 
 <InfoTip label="DuckDB callbacks?" title="DuckDB lifecycle, VGI worker callbacks">
-The phases mirror DuckDB's execution model, but these method names are the VGI Python API. The VGI
-extension translates DuckDB's bind/init/scan/aggregate work into typed worker calls, then moves
-batches across that boundary as Arrow.
+The phases mirror DuckDB's execution model, but the method names above are the VGI worker API, not
+DuckDB's. The VGI extension translates DuckDB's bind/init/scan/aggregate work into typed worker
+calls, then moves batches across that boundary as Arrow.
 </InfoTip>
 
 ## The shapes at a glance
 
-Each row links to the full pattern in [Function patterns](/vgi/docs/python/how-to/function-patterns/).
+A runnable worker for every shape lives in the Function patterns guide for your language:
+**[Python](/vgi/docs/python/how-to/function-patterns/)** · **[Go](/vgi/docs/go/how-to/function-patterns/)**.
 
 <table>
 <thead>
 <tr><th>Shape</th><th>Lifecycle</th><th>Finalize phase?</th></tr>
 </thead>
 <tbody>
-<tr><td><strong><a href="/vgi/docs/python/how-to/function-patterns/#scalar">Scalar</a></strong></td><td><code>bind</code> → <code>init</code> → <code>compute</code> per batch</td><td>No — ends when input ends</td></tr>
-<tr><td><strong><a href="/vgi/docs/python/how-to/function-patterns/#table">Table</a></strong> (producer)</td><td><code>bind</code> → <code>init</code> → <code>process</code> emits batches</td><td>Self-terminated via <code>out.finish()</code></td></tr>
-<tr><td><strong><a href="/vgi/docs/python/how-to/function-patterns/#table-in-out">Table-in-out</a></strong></td><td><code>bind</code> → <code>init(INPUT)</code> → <code>process</code> per batch → <code>init(FINALIZE)</code> → <code>finalize</code></td><td>Yes</td></tr>
-<tr><td><strong><a href="/vgi/docs/python/how-to/function-patterns/#aggregate">Aggregate</a></strong></td><td><code>initial_state</code> → <code>update</code> → <code>combine</code> → <code>finalize</code></td><td>Yes — one row per group</td></tr>
-<tr><td><strong><a href="/vgi/docs/python/how-to/function-patterns/#buffering">Buffering</a></strong></td><td><code>process</code> (sink) → <code>combine</code> → <code>finalize</code> (source)</td><td>Yes — streamed from storage</td></tr>
+<tr><td><strong><a href="#scalar--batches-in-one-column-out">Scalar</a></strong></td><td><code>bind</code> → <code>init</code> → <code>compute</code> per batch</td><td>No — ends when input ends</td></tr>
+<tr><td><strong>Table</strong> (producer)</td><td><code>bind</code> → <code>init</code> → <code>process</code> emits batches</td><td>Self-terminated via <code>out.finish()</code></td></tr>
+<tr><td><strong><a href="#table-in-out--stream-through-then-finalize">Table-in-out</a></strong></td><td><code>bind</code> → <code>init(INPUT)</code> → <code>process</code> per batch → <code>init(FINALIZE)</code> → <code>finalize</code></td><td>Yes — except blended, which has none</td></tr>
+<tr><td><strong><a href="#aggregate--update-combine-finalize">Aggregate</a></strong></td><td><code>initial_state</code> → <code>update</code> → <code>combine</code> → <code>finalize</code></td><td>Yes — one row per group</td></tr>
+<tr><td><strong><a href="#buffering--sink-combine-source">Buffering</a></strong></td><td><code>process</code> (sink) → <code>combine</code> → <code>finalize</code> (source)</td><td>Yes — streamed from storage</td></tr>
 </tbody>
 </table>
 
 The producer **Table** lifecycle is the simplest stateful generator — `init` builds state, then
 `process` is called repeatedly to emit batches until it calls `out.finish()`; see the
-[tutorial](/vgi/docs/python/tutorial/table/). The remaining shapes are detailed below.
+tutorial ([Python](/vgi/docs/python/tutorial/table/) · [Go](/vgi/docs/go/tutorial/table/)). The remaining shapes are detailed below.
 
 ## Scalar — batches in, one column out
 
-<div class="kind-banner kind-banner--scalar"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><div class="kind-banner__text"><code class="kind-banner__formula">1 row → 1 value</code><p class="kind-banner__desc">A pure per-row transform — see <a href="/vgi/docs/python/how-to/function-patterns/#scalar">Function patterns → Scalar</a>.</p></div></div>
+<div class="kind-banner kind-banner--scalar"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><div class="kind-banner__text"><code class="kind-banner__formula">1 row → 1 value</code><p class="kind-banner__desc">A pure per-row transform.</p></div></div>
 
 The simplest lifecycle: `bind`, then `init`, then a `compute` call for each input batch returning an
 output array with the **same row count** — ending when the input stream closes. There is **no
@@ -51,7 +72,7 @@ finalize phase** and no distributed state.
 
 ## Table-in-out — stream through, then finalize
 
-<div class="kind-banner kind-banner--table-in-out"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table-in-out.svg" alt="table-in-out shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → M rows</code><p class="kind-banner__desc">Consumes a relation and streams a transformed relation back — see <a href="/vgi/docs/python/how-to/function-patterns/#table-in-out">Function patterns → Table-in-out</a>.</p></div></div>
+<div class="kind-banner kind-banner--table-in-out"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table-in-out.svg" alt="table-in-out shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → M rows</code><p class="kind-banner__desc">Consumes a relation and streams a transformed relation back.</p></div></div>
 
 In a single worker (`max_workers=1`), a table-in-out function processes every input batch, then gets
 a distinct **finalize** phase to emit anything it held back.
@@ -79,7 +100,7 @@ finalize.
 
 ## Aggregate — update, combine, finalize
 
-<div class="kind-banner kind-banner--aggregate"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/aggregate.svg" alt="aggregate shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → 1 value</code><p class="kind-banner__desc">Folds many rows into one value per group — see <a href="/vgi/docs/python/how-to/function-patterns/#aggregate">Function patterns → Aggregate</a>.</p></div></div>
+<div class="kind-banner kind-banner--aggregate"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/aggregate.svg" alt="aggregate shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → 1 value</code><p class="kind-banner__desc">Folds many rows into one value per group.</p></div></div>
 
 Aggregates are driven by DuckDB's `GROUP BY` and run four hooks per invocation:
 
@@ -95,7 +116,7 @@ Aggregates are driven by DuckDB's `GROUP BY` and run four hooks per invocation:
 
 ## Buffering — sink, combine, source
 
-<div class="kind-banner kind-banner--buffering"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/buffering.svg" alt="buffering shape" /><div class="kind-banner__text"><code class="kind-banner__formula">stream → [state] → stream</code><p class="kind-banner__desc">Holds every input row before emitting — sorts, top-k, full reductions — see <a href="/vgi/docs/python/how-to/function-patterns/#buffering">Function patterns → Buffering</a>.</p></div></div>
+<div class="kind-banner kind-banner--buffering"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/buffering.svg" alt="buffering shape" /><div class="kind-banner__text"><code class="kind-banner__formula">stream → [state] → stream</code><p class="kind-banner__desc">Holds every input row before emitting — sorts, top-k, full reductions.</p></div></div>
 
 Use a buffering function when output depends on the **whole** input (a global sort, top-k, or a full
 reduction). It runs in three phases, and because they can run in different worker processes, state
@@ -128,7 +149,15 @@ relation in cross-process `params.storage` because it needs every row before emi
 <tr><td><code>process()</code> / <code>transform()</code></td><td>table, table-in-out, buffering</td><td>Per input batch — emit (or stash, for buffering) output</td></tr>
 <tr><td><code>initial_state()</code> / <code>update()</code></td><td>aggregate</td><td>Create per-group state, then fold each batch into it</td></tr>
 <tr><td><code>combine()</code></td><td>aggregate, buffering</td><td>Merge partial states across parallel workers</td></tr>
-<tr><td><code>finalize()</code></td><td>table-in-out, aggregate, buffering</td><td>Emit final results (one row per group for aggregate; streamed for buffering)</td></tr>
+<tr><td><code>finalize()</code></td><td>table-in-out, aggregate, buffering</td><td>Emit final results (one row per group for aggregate; streamed for buffering). <strong>Not</strong> available on a blended <code>RowTransformFunction</code> — overriding it is rejected at <code>resolve_metadata</code>, because DuckDB forbids <code>FinalExecute</code> under correlated <code>LATERAL</code>.</td></tr>
 <tr><td><code>params.storage</code></td><td>buffering</td><td>Cross-process state keyed by <code>execution_id</code> (sink → source)</td></tr>
 </tbody>
 </table>
+## Next steps
+
+- **A runnable worker for each shape** → Function patterns:
+  [Python](/vgi/docs/python/how-to/function-patterns/) · [Go](/vgi/docs/go/how-to/function-patterns/).
+- **The exact callback contracts** → [Python Function API](/vgi/docs/python/how-to/generator-api/) ·
+  [Python aggregates](/vgi/docs/python/how-to/aggregate-functions/) ·
+  [Go API reference](/vgi/docs/go/api/).
+- **Why phases can't share memory** → [Persist state across workers](/vgi/docs/python/how-to/state-storage/).

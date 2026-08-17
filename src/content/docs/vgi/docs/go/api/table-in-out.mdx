@@ -1,0 +1,256 @@
+---
+title: "Table-in-out functions"
+description: "Stream a relation through, batch by batch."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Stream a relation through, batch by batch.
+
+</div>
+
+<div class="api-class">
+
+<a id="TableInOutFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableInOutFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out.go#L15" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TableInOutFunction interface {
+	// Name returns the function name used in SQL.
+	Name() string
+	// Metadata returns descriptive metadata.
+	Metadata() FunctionMetadata
+	// ArgumentSpecs returns the function's argument specifications.
+	ArgumentSpecs() []ArgSpec
+	// OnBind resolves the output schema given the bind parameters.
+	OnBind(params *BindParams) (*BindResponse, error)
+	// OnInit performs one-time initialization and returns execution parameters.
+	OnInit(params *InitParams) (*GlobalInitResponse, error)
+	// NewState creates the initial mutable state for this function execution.
+	NewState(params *ProcessParams) (interface{}, error)
+	// Process transforms one input batch into output. Must emit exactly one
+	// output batch via out.Emit.
+	Process(ctx context.Context, params *ProcessParams, state interface{}, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error
+	// Finalize is called after all input batches have been processed.
+	// Returns batches to emit during the FINALIZE phase.
+	Finalize(ctx context.Context, params *ProcessParams, state interface{}) ([]arrow.RecordBatch, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+TableInOutFunction is the interface for table-in-out VGI functions.
+Table-in-out functions transform input tables, with an INPUT phase (Exchange)
+and an optional FINALIZE phase (Producer).
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="AsTableInOutFunction"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `AsTableInOutFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out_typed.go#L49" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func AsTableInOutFunction[S any](f TypedTableInOutFunc[S]) TableInOutFunction</code></pre>
+
+AsTableInOutFunction wraps a TypedTableInOutFunc into a TableInOutFunction
+for registration with Worker.RegisterTableInOut. The adapter:
+  - Provides type-safe state casting (returns error instead of panic)
+  - Defaults OnInit to DefaultInit() (MaxWorkers: 1) unless OnIniter is implemented
+
+Usage:
+
+<Code lang="go" code={`func NewEchoFunction() vgi.TableInOutFunction {
+return vgi.AsTableInOutFunction[struct{}](&EchoFunction{})
+}`} />
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="TableInOutFunctionWithCardinality"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableInOutFunctionWithCardinality`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out.go#L37" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TableInOutFunctionWithCardinality interface {
+	TableInOutFunction
+	// Cardinality returns an estimated row count for query optimization.
+	Cardinality(params *BindParams) (*TableCardinality, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+TableInOutFunctionWithCardinality extends TableInOutFunction with cardinality estimation.
+
+</div>
+
+<div class="api-class">
+
+<a id="TypedTableInOutFunc"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TypedTableInOutFunc`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out_typed.go#L21" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TypedTableInOutFunc[S any] interface {
+	// Name returns the function name used to invoke it in SQL.
+	Name() string
+	// Metadata returns descriptive metadata for the function.
+	Metadata() FunctionMetadata
+	// ArgumentSpecs returns the function's argument specifications.
+	ArgumentSpecs() []ArgSpec
+	// OnBind resolves the output schema and bind state from the bind parameters.
+	OnBind(params *BindParams) (*BindResponse, error)
+	// NewState creates a fresh, typed per-scan state value.
+	NewState(params *ProcessParams) (*S, error)
+	// Process transforms one input batch into output rows, emitting them via out.
+	Process(ctx context.Context, params *ProcessParams, state *S,
+		batch arrow.RecordBatch, out *vgirpc.OutputCollector) error
+	// Finalize returns any trailing batches to emit after the last input batch.
+	Finalize(ctx context.Context, params *ProcessParams, state *S) ([]arrow.RecordBatch, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+TypedTableInOutFunc is the recommended interface for table-in-out functions.
+It provides compile-time type safety for state management, eliminating
+the unsafe state.(*myType) assertions required by the lower-level
+TableInOutFunction interface.
+
+Implementations may also satisfy OnIniter (custom OnInit). This is detected
+automatically by AsTableInOutFunction.
+
+</div>
+
+<div class="api-class">
+
+<a id="typedTableInOutAdapter"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `typedTableInOutAdapter`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out_typed.go#L61" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type typedTableInOutAdapter[S any] struct {
+	inner	TypedTableInOutFunc[S]
+	onInit	func(*InitParams) (*GlobalInitResponse, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+typedTableInOutAdapter implements TableInOutFunction by delegating to a TypedTableInOutFunc[S].
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="typedTableInOutAdapter[S].ArgumentSpecs"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ArgumentSpecs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out_typed.go#L73" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableInOutAdapter[S]) ArgumentSpecs() []ArgSpec</code></pre>
+
+ArgumentSpecs forwards to the wrapped typed function's ArgumentSpecs.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableInOutAdapter[S].Finalize"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Finalize`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out_typed.go#L106" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableInOutAdapter[S]) Finalize(ctx context.Context, params *ProcessParams, state interface&#123;&#125;) ([]arrow.RecordBatch, error)</code></pre>
+
+Finalize type-asserts the untyped state to *S and forwards to the wrapped
+typed function's Finalize, returning an error on a state type mismatch.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableInOutAdapter[S].Metadata"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out_typed.go#L70" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableInOutAdapter[S]) Metadata() FunctionMetadata</code></pre>
+
+Metadata forwards to the wrapped typed function's Metadata.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableInOutAdapter[S].Name"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Name`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out_typed.go#L67" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableInOutAdapter[S]) Name() string</code></pre>
+
+Name forwards to the wrapped typed function's Name.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableInOutAdapter[S].NewState"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `NewState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out_typed.go#L90" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableInOutAdapter[S]) NewState(params *ProcessParams) (interface&#123;&#125;, error)</code></pre>
+
+NewState forwards to the wrapped typed function's NewState, returning the
+typed state as an untyped interface&#123;&#125;.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableInOutAdapter[S].OnBind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnBind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out_typed.go#L76" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableInOutAdapter[S]) OnBind(params *BindParams) (*BindResponse, error)</code></pre>
+
+OnBind forwards to the wrapped typed function's OnBind.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableInOutAdapter[S].OnInit"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnInit`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out_typed.go#L81" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableInOutAdapter[S]) OnInit(params *InitParams) (*GlobalInitResponse, error)</code></pre>
+
+OnInit invokes the optional OnIniter hook if present, otherwise returns DefaultInit.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableInOutAdapter[S].Process"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Process`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_in_out_typed.go#L96" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableInOutAdapter[S]) Process(ctx context.Context, params *ProcessParams, state interface&#123;&#125;, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error</code></pre>
+
+Process type-asserts the untyped state to *S and forwards to the wrapped
+typed function's Process, returning an error on a state type mismatch.
+
+</div>
+</div>
+
+</div>
+

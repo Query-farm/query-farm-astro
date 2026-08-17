@@ -1,0 +1,79 @@
+---
+title: Expose a catalog
+description: "Present a Java worker as a database — schemas, function-backed tables, views and macros DuckDB can query with ordinary qualified names."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import catalogSrc from '../../../../../../examples/vgi-java/CatalogExample.java?raw';
+
+Functions are one half of what a worker can serve; the other is the **catalog** — the schemas,
+tables, views and macros SQL users expect. None of these extend a base class: you build small
+descriptor objects, register them on the `Worker` builder, and DuckDB surfaces them like any local
+catalog object.
+
+## The whole example
+
+<Collapsible summary="CatalogExample.java">
+<CodeBlock code={catalogSrc} lang="java" tryable={false} />
+</Collapsible>
+
+It builds a `catalog` schema holding a function-backed table, a view over it, and two macros.
+
+## Function-backed tables
+
+The table is not stored — its rows come from a table function the worker already registered:
+
+<CodeBlock code={`SELECT * FROM demo.catalog.first_five;`} lang="sql" tryable={false} />
+
+<QueryResult columns={["n"]} rows={[[0], [1], [2], [3], [4]]} />
+
+The user writes a table name and passes nothing. The `numbers` function and its baked-in arguments
+are invisible to them, which is the point: a catalog is a way to publish a *dataset*, not an API.
+
+<InfoTip label="Same as DuckDB?" title="How this differs from a native table">
+VGI tables live in DuckDB's catalog model, so you query them with ordinary qualified names, and
+`duckdb_tables()` and `duckdb_columns()` see them. The difference is where the rows come from: a
+native table is stored and managed by DuckDB, while a VGI table delegates its scan to your worker.
+</InfoTip>
+
+## Views
+
+A view is pure SQL, evaluated by DuckDB once the definition has been advertised at attach time —
+there is no worker round trip for the view itself, only for whatever tables it reads:
+
+<CodeBlock code={`SELECT * FROM demo.catalog.evens;`} lang="sql" tryable={false} />
+
+<QueryResult columns={["n"]} rows={[[0], [2], [4]]} />
+
+## Macros
+
+Java is the SDK that surfaces **macros** most directly — both scalar and table macros are catalog
+objects you register alongside tables and views. A macro is SQL text DuckDB expands at the call site,
+so it costs the worker nothing at query time; it is the right tool for a shorthand your users keep
+writing by hand.
+
+<Callout type="note" title="Qualifying a definition with the catalog name is safe">
+A view or macro body that names `demo.catalog.first_five` is not fragile, even though it hardcodes
+the catalog. The name in `ATTACH` must match the worker's `catalogName(...)` — attaching under any
+other name fails outright — so the name you declare is the name the definition is always read under.
+</Callout>
+
+## What else a table can declare
+
+`CatalogTable` carries more than the example uses: inline schemas, comments and tags, `NOT NULL` and
+other constraints, foreign keys, and **per-column statistics that feed the optimizer**. Beyond that,
+the Java catalog supports semver data/implementation version negotiation, release manifests,
+multi-branch tables, transactions and attach options — the richest catalog surface in the family.
+
+Those are documented per type in the [Catalogs reference](/vgi/docs/java/api/catalog/); this page
+covers the shapes you need first.
+
+## Next steps
+
+- **The functions behind the tables** → [Function patterns](/vgi/docs/java/how-to/function-patterns/).
+- **Serving it** → [Running a worker](/vgi/docs/java/how-to/running/).
+- **Exact types** → [Catalogs](/vgi/docs/java/api/catalog/).

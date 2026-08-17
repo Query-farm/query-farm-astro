@@ -1,0 +1,349 @@
+---
+title: "Cache control"
+description: "Advertising a result as reusable by the client."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Advertising a result as reusable by the client.
+
+</div>
+
+<div class="api-member">
+
+<a id="Builder"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `Builder`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/cache/CacheControl.java#L188" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public static final class Builder</code></pre>
+
+<p class="api-section">Description</p>
+
+Builder for `CacheControl`; see the class javadoc for field semantics.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder ttl(int seconds)</code></pre>
+
+Freshness lifetime in whole seconds, relative to full-result receipt.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder expires(String rfc3339Utc)</code></pre>
+
+Absolute RFC 3339 UTC deadline; the lifetime is `expires - now`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder scope(String scope)</code></pre>
+
+Reuse scope.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder noStore(boolean noStore)</code></pre>
+
+Explicit "never cache"; overrides any freshness key.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder etag(String etag)</code></pre>
+
+Strong validator for conditional revalidation.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder lastModified(String rfc3339Utc)</code></pre>
+
+Weaker RFC 3339 UTC validator; fallback when no ETag is advertised.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder revalidatable(boolean revalidatable)</code></pre>
+
+Whether the worker can confirm freshness cheaply without recomputing;
+gates whether the client ever sends a conditional request.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder staleWhileRevalidate(int seconds)</code></pre>
+
+Grace window to serve stale while revalidating in the background.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder staleIfError(int seconds)</code></pre>
+
+Grace window to serve stale if a revalidation RPC fails.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder notModified(boolean notModified)</code></pre>
+
+304-equivalent: set on a 0-row batch replying to a conditional request
+to assert the client's stored payload is still fresh.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder partitionScope(boolean partitionScope)</code></pre>
+
+Opt in to per-partition caching: on a `SINGLE_VALUE_PARTITIONS`
+function the client ADDITIONALLY stores the result split by partition
+value, so a later `=`/`IN` scan on the partition column(s)
+serves the requested partitions without calling the worker. Additive —
+the whole-scan entry is still stored and served.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder perValue(boolean perValue)</code></pre>
+
+Opt in to per-*value* memoization: the client ADDITIONALLY
+memoizes each distinct worker-input tuple's output, keyed on that
+tuple, so the same value is served without calling the worker on a
+later chunk or a later query. Only meaningful for an exchange-mode
+map — a scalar, or a blended table-in-out invoked through a
+correlated `LATERAL`.
+
+**Defaults off, and should stay off unless one call is
+genuinely expensive.** A per-value serve is not free: it costs
+a key probe, a decode of the stored value and a row-assembly step,
+for every distinct value. That only pays back when it is cheaper than
+simply asking the worker. For a cheap arithmetic map it is a large net
+loss — the probe-and-assemble path measures roughly 50x the cost of
+the worker call it replaces. The engine cannot tell an expensive call
+from a cheap one, which is why this is an explicit advertisement
+rather than a heuristic: only the function author knows. Turn it on
+for a model inference, a geocode, or a rate-limited remote fetch,
+where one call dwarfs a cache probe.
+
+Independent of whole-result cacheability: a function can be worth
+caching by `ttl` without per-value memoization paying off, and
+vice versa.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>CacheControl build()</code></pre>
+
+Validate and freeze.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="CacheControl"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `CacheControl`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/cache/CacheControl.java#L33" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class CacheControl</code></pre>
+
+<p class="api-section">Description</p>
+
+Result-cache control metadata (`vgi.cache.*`) advertised by a table
+function on the *first* data batch it emits.
+
+The vocabulary mirrors HTTP caching (RFC 9111/9110): a freshness lifetime
+(`Builder#ttl`/`Builder#expires`), a reuse `Builder#scope`,
+validators (`Builder#etag` / `Builder#lastModified`) for
+conditional revalidation, and stale-serving grace windows. Presence of
+`ttl` *or* `expires` is what makes a result cacheable;
+`Builder#noStore` overrides any freshness key.
+
+The key strings are the single source of truth shared with the C++
+extension, which reads them by string off each batch's `custom_metadata`.
+Render them with `#toMetadata()` and hand the map to
+`OutputCollector.emit(root, metadata)`:
+
+```java
+`BatchUtil.emit(schema, rows, out, CacheControl.ttl(300).toMetadata(), filler);`
+```
+
+Booleans render as `"1"` and are omitted when false; unset optional
+fields are omitted entirely. `scope` is always emitted. Mirrors
+vgi-python's `vgi/cache_control.py`.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>String TTL_KEY = "vgi.cache.ttl"</code></pre>
+
+Freshness lifetime in whole seconds, relative to full-result receipt.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String EXPIRES_KEY = "vgi.cache.expires"</code></pre>
+
+Absolute RFC 3339 UTC freshness deadline.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String NO_STORE_KEY = "vgi.cache.no_store"</code></pre>
+
+Explicit "never cache"; overrides any freshness key.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String SCOPE_KEY = "vgi.cache.scope"</code></pre>
+
+Reuse scope — `#SCOPE_CATALOG` or `#SCOPE_TRANSACTION`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String ETAG_KEY = "vgi.cache.etag"</code></pre>
+
+Strong validator (opaque quoted string) for conditional revalidation.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String LAST_MODIFIED_KEY = "vgi.cache.last_modified"</code></pre>
+
+Weaker RFC 3339 UTC validator; fallback when no ETag.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String REVALIDATABLE_KEY = "vgi.cache.revalidatable"</code></pre>
+
+The worker can check freshness cheaply without recomputing.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String STALE_WHILE_REVALIDATE_KEY = "vgi.cache.stale_while_revalidate"</code></pre>
+
+Grace window (seconds) to serve stale while revalidating in the background.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String STALE_IF_ERROR_KEY = "vgi.cache.stale_if_error"</code></pre>
+
+Grace window (seconds) to serve stale if a revalidation RPC fails.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String NOT_MODIFIED_KEY = "vgi.cache.not_modified"</code></pre>
+
+304-equivalent, set on a 0-row batch replying to a conditional request.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String PARTITION_SCOPE_KEY = "vgi.cache.partition_scope"</code></pre>
+
+Opt in to per-partition caching: the client ALSO stores the result split by
+partition value. Only meaningful on a `SINGLE_VALUE_PARTITIONS` function.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String PER_VALUE_KEY = "vgi.cache.per_value"</code></pre>
+
+Opt in to per-*value* memoization: the client ALSO memoizes each
+distinct input tuple's output. Only meaningful for an exchange-mode map
+(a scalar, or a blended table-in-out called via correlated `LATERAL`).
+Default OFF — see `Builder#perValue(boolean)` for why.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String IF_NONE_MATCH_KEY = "vgi.cache.if_none_match"</code></pre>
+
+Request-side key: the client's stored ETag, delivered on the first tick's
+input `custom_metadata` when it asks the worker to confirm freshness.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String IF_MODIFIED_SINCE_KEY = "vgi.cache.if_modified_since"</code></pre>
+
+Request-side key: the client's stored Last-Modified validator.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String SCOPE_CATALOG = "catalog"</code></pre>
+
+Reusable across transactions within the calling catalog identity (default).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String SCOPE_TRANSACTION = "transaction"</code></pre>
+
+Reusable only within the transaction that produced it.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Builder builder()</code></pre>
+
+A fresh builder with no freshness keys and `#SCOPE_CATALOG`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>CacheControl ttl(int seconds)</code></pre>
+
+Shorthand for the common case: a catalog-scoped result with a freshness
+lifetime and nothing else.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>CacheControl noStore()</code></pre>
+
+Shorthand for a result the client must never store.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Map&lt;String, String&gt; toMetadata()</code></pre>
+
+Render to the `vgi.cache.*` batch-metadata keys.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Map&lt;String, String&gt; merge(Map&lt;String, String&gt; metadata, CacheControl cacheControl)</code></pre>
+
+Fold a cache control into an existing emit-metadata map. The rendered
+cache keys win on collision (last write), matching vgi-python's
+`_merge_cache_control`.
+
+</div>
+</div>
+
+</div>

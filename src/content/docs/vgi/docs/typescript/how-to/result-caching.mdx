@@ -1,0 +1,121 @@
+---
+title: Cache results on the client
+description: "Advertise a TypeScript worker's result as reusable so repeat queries never reach it — TTLs, validators, and the diagnostics that prove it engaged."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import cacheSrc from '../../../../../../examples/vgi-typescript/cache.ts?raw';
+
+Caching is **advertised, not requested**. The worker attaches `vgi.cache.*` metadata to the batches
+it emits, and the client — the DuckDB extension — decides what to do with it. Nothing is cached
+unless you say so, which is the right default for a function that might not be pure.
+
+## The whole worker
+
+<Collapsible summary="cache.ts">
+<CodeBlock code={cacheSrc} lang="typescript" tryable={false} />
+</Collapsible>
+
+## Metadata rides the first data batch
+
+<CodeBlock code={`out.emit(
+  batchFromColumns({ pair: [...], rate: [...] }, ratesSchema),
+  cacheControlMetadata({ ttl: 300, etag: '"rates-v1"', revalidatable: true }),
+);`} lang="typescript" tryable={false} />
+
+It cannot go on the schema. The IPC stream fixes the schema when the stream opens, before `process`
+has produced anything — so batch metadata is the only channel that exists at the point where you know
+what you are returning.
+
+Emit it on the **first** data batch. Later batches carrying it is not an error, but nothing reads
+them.
+
+## Freshness
+
+<table>
+<thead>
+<tr><th>Field</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ttl</code></td><td>Lifetime in seconds from full-result receipt. Skew-immune, and it wins over <code>expires</code>.</td></tr>
+<tr><td><code>expires</code></td><td>An absolute RFC 3339 UTC deadline.</td></tr>
+<tr><td><code>noStore</code></td><td>Explicit "never cache". Overrides any freshness key.</td></tr>
+<tr><td><code>scope</code></td><td><code>"catalog"</code> (default) or <code>"transaction"</code> — reused only inside the transaction that produced it.</td></tr>
+<tr><td><code>staleWhileRevalidate</code></td><td>Grace window to serve stale immediately while refreshing in the background.</td></tr>
+<tr><td><code>staleIfError</code></td><td>Grace window to keep serving stale when a refresh fails.</td></tr>
+</tbody>
+</table>
+
+Presence of `ttl` or `expires` is what makes a result cacheable at all.
+
+## Validators, and the 304 equivalent
+
+`etag` plus `revalidatable: true` tells the client it may ask *"is this still good?"* instead of
+paying for a recompute. The question arrives as `params.ifNoneMatch`:
+
+<CodeBlock code={`if (params.ifNoneMatch === ETAG) {
+  out.emit(
+    batchFromColumns({ pair: [], rate: [] }, ratesSchema),
+    cacheControlMetadata({ notModified: true, ttl: TTL_SECONDS, etag: ETAG, revalidatable: true }),
+  );
+  return;
+}`} lang="typescript" tryable={false} />
+
+A **zero-row batch carrying `notModified`** is the 304: keep what you have. The client reuses its
+stored rows without a restream.
+
+<Callout type="warning" title="Only advertise `revalidatable` if answering is genuinely cheap">
+The flag is what gates whether the client ever sends a conditional request at all. Setting it on a
+function whose freshness check costs as much as recomputing turns one round trip into two.
+</Callout>
+
+## Prove it engaged
+
+Guessing is not good enough here, and the worker itself can settle it. `cache.ts` counts real
+invocations:
+
+<CodeBlock code={`SELECT count(*) FROM rates.rates();
+SELECT count(*) FROM rates.rates();
+SELECT count(*) FROM rates.rates();
+SELECT count(*) FROM rates.rates();
+
+SELECT hits, misses, inserts, entries FROM vgi_result_cache_stats();
+SELECT * FROM rates.upstream_calls();`} lang="sql" tryable={false} />
+
+<QueryResult columns={["hits", "misses", "inserts", "entries"]} rows={[[3, 2, 1, 1]]} />
+
+<QueryResult columns={["calls"]} rows={[[1]]} />
+
+Four queries, **one** upstream call. That second result is the one that matters: it is measured
+inside the worker, so it cannot be explained away by the extension's own bookkeeping.
+
+<InfoTip label="The other diagnostics" title="Four functions, not one">
+`vgi_result_cache()` lists one row per entry; `vgi_result_cache_flush()` drops everything, which is
+the quickest way to get a clean measurement; `vgi_result_cache_reap()` evicts what has expired
+without waiting for the reaper.
+</InfoTip>
+
+## Per-value memoization
+
+`perValue: true` additionally memoizes each distinct input tuple's output — for a scalar, or a
+blended table-in-out called through a correlated `LATERAL`.
+
+<Callout type="warning" title="Off by default, and it should usually stay off">
+A per-value serve is not free: the client pays a key probe, a decode, and a per-value assembly step,
+and that only pays back when it costs *less* than the worker call it replaces. For a cheap map —
+arithmetic, a string tweak, a lookup in memory — the engine measures it at roughly **50× slower**
+than just calling the worker.
+
+Turn it on when a single call is genuinely heavy and repeats across rows: a model inference, a
+geocode, a rate-limited HTTP fetch. Only you know which side of that line your function is on, which
+is why the engine will not guess.
+</Callout>
+
+## Next steps
+
+- **Every field** → [Cache control](/vgi/docs/typescript/api/cache-control/).
+- **Caching a whole table** → [Expose a catalog](/vgi/docs/typescript/how-to/catalogs/).

@@ -1,0 +1,177 @@
+---
+title: Function patterns
+description: "The five VGI function shapes in Rust — scalar, table, table-in-out, aggregate, buffering — each with a complete, runnable worker."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryIO from '../../../../../../components/docs/QueryIO.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import scalarSrc from '../../../../../../examples/vgi-rust/calcscalar.rs?raw';
+import calcSrc from '../../../../../../examples/vgi-rust/calc.rs?raw';
+import filterSrc from '../../../../../../examples/vgi-rust/filter.rs?raw';
+import sumSrc from '../../../../../../examples/vgi-rust/sum.rs?raw';
+import rowCountSrc from '../../../../../../examples/vgi-rust/rowcount.rs?raw';
+
+Each of the five VGI function shapes in Rust, with a complete, runnable worker for each — so you can
+find the shape that fits your problem. (Do the [tutorial](/vgi/docs/rust/tutorial/scalar/) first.)
+
+<InfoTip label="Before you run these" title="Session setup">
+Each section assumes you're in a **[Haybarn](/haybarn)** shell that has loaded the extension once
+with `INSTALL vgi FROM community;` then `LOAD vgi;`, and that you've built the worker:
+
+<CodeBlock code={`cargo build --release`} lang="bash" tryable={false} />
+
+`LOCATION` is resolved relative to the directory the engine was started in.
+</InfoTip>
+
+## Which shape do I need?
+
+<table>
+<thead>
+<tr><th>If your function…</th><th>Use</th><th>Trait</th></tr>
+</thead>
+<tbody>
+<tr><td>maps each row independently</td><td>Scalar</td><td><code>ScalarFunction</code></td></tr>
+<tr><td>produces rows from arguments</td><td>Table</td><td><code>TableFunction</code> + <code>TableProducer</code></td></tr>
+<tr><td>transforms a relation as it streams</td><td>Table-in-out</td><td><code>TableInOutFunction</code></td></tr>
+<tr><td>folds rows to one value per group</td><td>Aggregate</td><td><code>AggregateFunction</code></td></tr>
+<tr><td>needs every row before it can answer</td><td>Buffering</td><td><code>TableBufferingFunction</code></td></tr>
+</tbody>
+</table>
+
+## Scalar
+
+<div class="kind-banner kind-banner--scalar"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><div class="kind-banner__text"><code class="kind-banner__formula">1 row → 1 value</code><p class="kind-banner__desc">Runs on each row independently and returns a single value — a pure per-row transform.</p></div></div>
+
+One value out per value in. No state, no finalize phase — `process` gets a whole column and returns a
+column of the same length.
+
+<Collapsible summary="calcscalar.rs">
+<CodeBlock code={scalarSrc} lang="rust" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION './target/release/calcscalar');
+SELECT calc.double(21);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["double(21)"]} rows={[[42]]} />
+
+## Table
+
+<div class="kind-banner kind-banner--table"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table.svg" alt="table shape" /><div class="kind-banner__text"><code class="kind-banner__formula">args → N rows</code><p class="kind-banner__desc">A table-valued source: scalar arguments in, a whole set of rows out.</p></div></div>
+
+Generate rows from arguments, with no input relation. The function is shared and immutable; the
+per-scan cursor is a separate `TableProducer`, pulled until it answers `Ok(None)`.
+
+<Collapsible summary="calc.rs">
+<CodeBlock code={calcSrc} lang="rust" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION './target/release/calc');
+SELECT * FROM calc.series(3);`} lang="sql" tryable={false} />
+
+<QueryIO inColumns={["count"]} inRows={[[3]]} outColumns={["n"]} outRows={[[0], [1], [2]]} />
+
+## Table-in-out
+
+<div class="kind-banner kind-banner--table-in-out"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table-in-out.svg" alt="table-in-out shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → M rows</code><p class="kind-banner__desc">Consumes a relation and streams a transformed relation back, batch by batch.</p></div></div>
+
+Stream an input relation through, emitting per batch. Memory stays flat however large the scan is,
+because nothing is held back.
+
+<Collapsible summary="filter.rs">
+<CodeBlock code={filterSrc} lang="rust" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'filters' (TYPE vgi, LOCATION './target/release/filter');
+SELECT * FROM filters.filter_positive((SELECT * FROM (VALUES (-2), (5), (0), (9), (-1)) AS t(value)));`} lang="sql" tryable={false} />
+
+<QueryIO inColumns={["value"]} inRows={[[-2], [5], [0], [9], [-1]]} outColumns={["value"]} outRows={[[5], [9]]} />
+
+<Callout type="warning" title="Declare the TABLE argument, or the call will not bind">
+The input relation is an ordinary `ArgSpec` with the Arrow type string `"table"`:
+
+<CodeBlock code={`fn argument_specs(&self) -> Vec<ArgSpec> {
+    vec![ArgSpec::column("data", 0, "table", "Rows to filter")]
+}`} lang="rust" tryable={false} />
+
+Leave it out and the extension does not know this function takes a relation. The failure is
+*"Binder Error: Table function cannot contain subqueries"* — which does not mention the worker, the
+function, or the missing spec, so it is worth recognizing on sight.
+
+`on_bind`'s default echoes the input schema, which is what a row-dropping function like this one
+wants; override it when the output shape differs.
+</Callout>
+
+## Aggregate
+
+<div class="kind-banner kind-banner--aggregate"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/aggregate.svg" alt="aggregate shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → 1 value</code><p class="kind-banner__desc">Folds many rows down into a single value per group.</p></div></div>
+
+Four phases — `initial_state`, `update`, `combine`, `finalize` — and the split is what lets DuckDB
+parallelise it. `combine` must be associative and commutative, because DuckDB decides how many
+workers run and in what order their partials merge.
+
+<Collapsible summary="sum.rs">
+<CodeBlock code={sumSrc} lang="rust" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'agg' (TYPE vgi, LOCATION './target/release/sum');
+CREATE TABLE t AS SELECT * FROM (VALUES ('a',1),('a',2),('b',10),('b',NULL),('c',NULL)) AS v(category, value);
+SELECT category, agg.vgi_sum(value::BIGINT) AS total FROM t GROUP BY category ORDER BY category;`} lang="sql" tryable={false} />
+
+<QueryResult columns={["category", "total"]} rows={[["a", 3], ["b", 10], ["c", null]]} />
+
+<InfoTip label="State is bytes" title="You choose the encoding">
+Aggregate state is an opaque `Vec<u8>`. The framework moves it between phases and possibly between
+processes, so it never inspects it — encoding is your job. Eight little-endian bytes covers a sum;
+anything richer reaches for serde. This is more explicit than Go (which uses gob) or TypeScript
+(where state is a plain object), and it is why a Rust aggregate has no registration step.
+</InfoTip>
+
+<Callout type="note" title="An all-NULL group returns NULL, and that is not an accident">
+`null_handling: "DEFAULT"` means DuckDB never calls `update` for a NULL input. A group whose values
+are all NULL therefore never appears in `group_ids`, so `finalize` is handed `None` for it and emits
+SQL `NULL` — matching built-in `SUM`. Group `c` above is that case.
+</Callout>
+
+## Buffering
+
+<div class="kind-banner kind-banner--buffering"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/buffering.svg" alt="buffering shape" /><div class="kind-banner__text"><code class="kind-banner__formula">stream → [state] → stream</code><p class="kind-banner__desc">Holds every input row in state before emitting — the basis for sorts, top-k, and full-stream reductions.</p></div></div>
+
+When output depends on the **whole** input — a global sort, top-k, a full reduction — use a buffering
+function. It runs in three phases: `process` (the **sink**, per batch and parallel), `combine` (once,
+on the coordinator), and `finalize_producer` (the **source**).
+
+<Collapsible summary="rowcount.rs">
+<CodeBlock code={rowCountSrc} lang="rust" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'buffers' (TYPE vgi, LOCATION './target/release/rowcount');
+SELECT * FROM buffers.row_count((SELECT * FROM (VALUES (1), (2), (3), (4), (5)) AS t(x)));`} lang="sql" tryable={false} />
+
+<QueryIO inColumns={["x"]} inRows={[[1], [2], [3], [4], [5]]} outColumns={["count"]} outRows={[[5]]} />
+
+<Callout type="warning" title="A `static` will not survive the phases">
+The sink and source phases can run in **different worker processes**, so anything a `static`
+accumulates during `process` may simply not be there in `finalize_producer`. State goes in
+`params.storage`, which is scoped to the execution and shared by every worker serving it.
+
+`append` is an append-only log, which is what makes the parallel sink safe: concurrent appends cannot
+lose each other the way a read-modify-write would.
+</Callout>
+
+<Callout type="info" title="Buffering vs. table-in-out">
+Both consume a relation, but a **table-in-out** function emits *per input batch* and never holds the
+whole input — use it for streaming transforms. Reach for **buffering** only when output genuinely
+depends on every row. One observable difference: an empty input yields **no rows** from a buffering
+function rather than a zero — with nothing to sink, the source phase never runs.
+</Callout>
+
+## Next steps
+
+- **The guided build** → [1. Scalar function](/vgi/docs/rust/tutorial/scalar/) ·
+  [2. Table function](/vgi/docs/rust/tutorial/table/).
+- **When each callback fires** → [Function lifecycle](/vgi/docs/concepts/lifecycle/).
+- **Exact contracts** → [Package overview](/vgi/docs/rust/api/).

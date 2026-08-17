@@ -36,7 +36,7 @@ exists for the cases where that isn't enough — state that has to be reached fr
 or *another phase*:
 
 - **Combining partial results** — when a function runs across [parallel
-  workers](/vgi/docs/python/concepts/lifecycle/), each worker writes its partial output to shared
+  workers](/vgi/docs/concepts/lifecycle/), each worker writes its partial output to shared
   storage and the primary reads them all back to produce the final answer (a distributed aggregate,
   or a buffering function's `combine`).
 - **Buffering across phases** — a [buffering
@@ -47,18 +47,58 @@ or *another phase*:
   processes (for example, a shared work queue).
 - **Outliving a single call** — any state that must survive beyond one RPC call.
 
-Because that state crosses process boundaries it is serialized (your aggregate/buffer state must be
-an `ArrowSerializableDataclass`) and kept in a pluggable **store** — by default a local SQLite
-database, with cloud backends for when workers run on separate hosts.
+Because that state crosses process boundaries it is serialized to bytes and kept in a pluggable
+**store** — by default a local SQLite database, with cloud backends for when workers run on separate
+hosts.
 
 ## Two kinds of "state" — don't confuse them
 
-- **Generator cursor state** — the small `ArrowSerializableDataclass` a table generator keeps
-  *within one scan* (see [streaming with state](/vgi/docs/python/how-to/function-patterns/#streaming-with-state)). It
-  lives in the worker for the duration of the call.
+- **Generator cursor state** — the small state a table generator keeps *within one scan* (see
+  [streaming with state](/vgi/docs/python/how-to/function-patterns/#streaming-with-state)). It lives
+  in the worker for the duration of the call.
 - **Shared storage** (this page) — state that must outlive a single call or be shared across
   **separate worker processes**, e.g. combining partial aggregate results. This is backed by a
   pluggable store.
+
+## State doesn't have to be Arrow
+
+Whichever kind of state you're holding, the framework needs exactly two things of it: turn the state
+into bytes, and turn those bytes back into state. That requirement is a structural protocol,
+`StreamStateCodec` — not a base class — for table generators and table-in-out functions since
+**0.24.0**, and for **aggregates** too as of the next release.
+
+`ArrowSerializableDataclass` satisfies it and remains the default: declare a dataclass and the
+encoding is written for you. Implement the two methods yourself when you want to own the bytes:
+
+<CodeBlock code={`import struct
+from dataclasses import dataclass
+
+@dataclass(slots=True)
+class CountdownState:
+    remaining: int
+    emitted: int = 0
+
+    def serialize_to_bytes(self) -> bytes:
+        return struct.pack("<qq", self.remaining, self.emitted)
+
+    @classmethod
+    def deserialize_from_bytes(cls, data: bytes) -> "CountdownState":
+        return cls(*struct.unpack("<qq", data))`} lang="python" tryable={false} />
+
+Two reasons this matters. Small states pay heavily for Arrow IPC framing: a one-row Arrow stream pays
+for a schema message, a batch message and an end-of-stream marker no matter the payload, which
+measured **416 bytes and 36µs** for a two-integer state against **16 bytes and 0.21µs** packed
+directly. That is per serialization — and an aggregate serializes once **per group, per batch**, so
+the framing cost scales with cardinality. And a Python worker may need to match the state encoding a
+sibling VGI implementation in another language already uses. Neither was expressible before.
+
+<Callout type="warning" title="A codec must round-trip exactly">
+`T.deserialize_from_bytes(s.serialize_to_bytes())` must equal `s` for every state your function can
+produce, including the initial one. The framework never inspects the bytes, so it cannot check this —
+a lossy codec surfaces as a stream that silently restarts or skips rows, not as an error.
+</Callout>
+
+A plain dataclass that implements neither still raises at class-definition time, as before.
 
 ## The `BoundStorage` interface
 
@@ -80,8 +120,8 @@ fits how your data is shaped:
   the statements of one SQL transaction (e.g. snapshot-isolation watermarks).
 
 Values are bytes, so serialize first — `serialize_record_batch` / `deserialize_record_batch` helpers
-are provided, and aggregate/buffer state extends `ArrowSerializableDataclass`. The full method list
-is in the [State storage API reference](/vgi/docs/python/api/vgi-function_storage/).
+are provided for Arrow payloads. The full method list is in the [State storage API
+reference](/vgi/docs/python/api/vgi-function_storage/).
 
 ## The default: SQLite (zero config)
 

@@ -1,0 +1,756 @@
+---
+title: "Table functions"
+description: "Set-returning producers, and the producer state that streams their rows."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Set-returning producers, and the producer state that streams their rows.
+
+</div>
+
+<div class="api-member">
+
+<a id="BatchState"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `BatchState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/table/BatchState.java#L21" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class BatchState</code></pre>
+
+<p class="api-section">Description</p>
+
+Iteration cursor for batch-emitting producers. Tracks total row count and
+emits batches of `batchSize`; mirrors vgi-go's `BatchState`.
+
+Field shape is a plain mutable POJO with a public no-arg constructor so
+Jackson can round-trip it as a nested component of a `farm.query.vgirpc.StreamState`.
+
+```java
+`BatchState bs = new BatchState(count, batchSize);
+if (bs.done()) \{ out.finish(); return;`
+int n = bs.nextBatchSize();
+out.emit(...);
+bs.advance(n);
+}
+```
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>BatchState()</code></pre>
+
+Creates an empty cursor for Jackson round-tripping.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>BatchState(long total, long batchSize)</code></pre>
+
+Creates a cursor over `total` rows emitted in `batchSize` chunks.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>long total()</code></pre>
+
+`the total number of rows to emit`
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>long batchSize()</code></pre>
+
+`the configured rows-per-batch`
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>long index()</code></pre>
+
+`the number of rows already emitted`
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>boolean done()</code></pre>
+
+`{@code true` once every row has been emitted\}
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>int nextBatchSize()</code></pre>
+
+`the row count for the next batch, clamped to the remaining rows`
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void advance(long n)</code></pre>
+
+Advances the cursor after emitting a batch.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="CopyFromFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `CopyFromFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/table/CopyFromFunction.java#L45" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public abstract class CopyFromFunction implements TableFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+Base class for custom `COPY ... FROM` format readers. Mirrors
+vgi-python's `vgi.copy_from_function.CopyFromFunction`.
+
+A `CopyFromFunction` lets a VGI catalog act as a remote file-format
+reader: the user runs `COPY target FROM 'path' (FORMAT <name>, opt val, ...)`
+and the worker parses the source and streams Arrow batches that DuckDB inserts
+into the local `target` table.
+
+Mechanically it is an ordinary producer-mode `TableFunction` (so it
+reuses the whole bind/init/scan path). What makes it a COPY format is twofold:
+
+  
+- it returns its `FORMAT` identifier from `#copyFromFormat()`, and
+  
+- the catalog advertises it through `catalog_copy_from_formats`, so the
+  VGI DuckDB extension registers a DuckDB `CopyFunction` for it.
+
+The COPY statement's file path and the target table's schema arrive on the
+bind via `CopyFromContext` (`params.copyFrom()`); the COPY options
+arrive as the function's normal `#argumentSpecs() argument specs`
+(declare them like any other function — their `doc` becomes the option
+description). The `file_path` is supplied by COPY, not as an option.
+
+Subclasses implement `#read`, emitting batches whose schema matches
+`expectedSchema` exactly — DuckDB inserts **no** cast between the scan
+and the INSERT, so a type/arity mismatch is rejected at COPY bind.
+
+</div>
+
+<div class="api-member">
+
+<a id="CopySecretLookup"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `CopySecretLookup`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/table/CopySecretLookup.java#L17" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record CopySecretLookup(String secretType, String scope, String name)</code></pre>
+
+<p class="api-section">Description</p>
+
+A single secret to resolve via the two-phase secret bind, returned from a COPY
+format's secret-bind hook (`CopyToFunction#secretLookups` /
+`CopyFromFunction#secretLookups`). Mirrors a vgi-python
+`SecretLookupEntry`.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>CopySecretLookup scoped(String secretType, String scope)</code></pre>
+
+A scoped lookup with no explicit secret name.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="CopyToFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `CopyToFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/table/CopyToFunction.java#L69" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public abstract class CopyToFunction implements TableBufferingFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+Base class for custom `COPY ... TO` format writers. Mirrors vgi-python's
+`vgi.copy_to_function.CopyToFunction`.
+
+A `CopyToFunction` lets a VGI catalog act as a remote sink: the user
+runs `COPY (query|table) TO 'path' (FORMAT <name>, opt val, ...)` and
+DuckDB streams the source rows out to the worker, which writes them to a
+destination (a proprietary format, a remote API/object store, a custom sink).
+
+Mechanically a `CopyToFunction` is a buffered (Sink+Combine)
+`TableBufferingFunction` with **no Source phase** — it reuses the
+whole `table_buffering_process` / `table_buffering_combine`
+machinery on both sides:
+
+  
+- `#write` is called once per input batch (the buffered
+  `process()` step, fanned out across DuckDB's sink threads /
+  per-thread workers). Persist the batch to a shard via
+  `params.storage()` (`execution_id`-scoped — see below).
+  
+- `#close` is called **exactly once** on the coordinator worker
+  (the buffered `combine()` step, driven by DuckDB's once-only
+  `copy_to_finalize`). Read the shards back and perform the terminal
+  write+flush+close of the destination.
+
+There is no finalize/drain phase, so the destination MUST be fully written
+and closed inside `#close` — a writer that forgets leaves a silent
+partial file.
+
+**Cross-process invariant.** `#write` and `#close` may run on
+different worker processes (pool rotation / HTTP). Any shard state
+`#close` needs MUST live in cross-process storage scoped by
+`params.executionId()` (`params.storage()` is the canonical choice)
+or be written to a destination that tolerates concurrent writers. Buffering on
+`this` / static fields silently breaks under rotation.
+
+The destination `path` + `format` arrive via the bind's
+`copy_to` context (`params.copyTo()`); the COPY options arrive as
+the function's normal `#argumentSpecs() argument specs`. The source
+schema rides the bind's input schema (`params.inputSchema()`); each
+`#write` also receives the batch directly.
+
+**Ordering.** By default the sink is parallel (per-thread workers write
+shards, `#close` merges) and rows arrive in no particular order. To
+require source order, override `#sinkOrderDependent()` to return
+`true` — discovery surfaces `ordered=true` and the extension then
+uses a single-threaded sink (`REGULAR_COPY_TO_FILE`).
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>String copyToFormat()</code></pre>
+
+The SQL `FORMAT` identifier users type, e.g. `COPY t TO 'x'
+(FORMAT myfmt)`. Mirrors vgi-python's `COPY_TO_FORMAT`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String copyToComment()</code></pre>
+
+Optional free-text comment surfaced by `vgi_copy_formats()`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String copyToDirection()</code></pre>
+
+The COPY direction. Always `"to"` for this base.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;CopySecretLookup&gt; secretLookups(TableInOutBindParams params)</code></pre>
+
+Secret-bind hook: forward `CREATE SECRET` credentials for
+secret-backed cloud writes (S3/GCS/HTTP/…). Override to request the secrets
+the writer needs — typically scoped by the destination path
+(`params.copyTo().file_path()`). The framework's two-phase secret bind
+resolves each lookup from the caller's secret store and surfaces the resolved
+values on `params.secrets()` at `#write` / `#close` time.
+Defaults to none, so a writer that never touched credentials is unaffected.
+Mirrors vgi-python's `CopyToFunction.on_secrets`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>BindResponse onBind(TableInOutBindParams params)</code></pre>
+
+A sink produces no rows — bind to an empty output schema. Final; subclasses
+customise `#write` / `#close` / `#secretLookups`, not the
+bind itself. On the first bind pass this forwards any `#secretLookups`
+as a two-phase secret-scope request.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>byte[] process(VectorSchemaRoot batch, TableBufferingProcessParams params)</code></pre>
+
+Sink one input batch (delegates to `#write`) and return the
+`execution_id` bucket so every batch of a query lands together.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;byte[]&gt; combine(List&lt;byte[]&gt; stateIds, TableBufferingCombineParams params)</code></pre>
+
+Terminal write (delegates to `#close`), once on the coordinator. No
+Source phase — returns an empty finalize-id list.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>TableProducerState createFinalizeProducer(TableBufferingFinalizeParams params)</code></pre>
+
+Never invoked on the COPY-TO path (`#combine` returns no finalize
+ids). Returns an immediately-finishing producer for safety.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void write(VectorSchemaRoot batch, Arguments options, String filePath, TableBufferingProcessParams params)</code></pre>
+
+Persist one input `batch` to a shard (called per sink batch).
+
+Store the batch in cross-process storage scoped by
+`params.executionId()` (`params.storage()`) so `#close` —
+which may run on a different worker process — can read it back; or write
+directly to a concurrency-tolerant destination. Do NOT buffer on
+`this`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>long close(Arguments options, String filePath, TableBufferingCombineParams params)</code></pre>
+
+Write the destination and close it, exactly once.
+
+Read the shards persisted by `#write` (via `params.storage()`)
+and perform the terminal write + flush + close of `filePath`. Called
+even when zero rows were written (empty COPY) — produce an empty or
+header-only file. The returned count is informational (DuckDB reports its
+own row count); return the number of rows written.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="CountdownTableFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `CountdownTableFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/table/CountdownTableFunction.java#L38" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public abstract class CountdownTableFunction extends SimpleTableFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+Base for sequence-like table functions that emit a known number of rows in
+fixed-size batches. Mirrors vgi-python's
+`TableFunctionGenerator + @bind_fixed_schema + @cardinality_from_count`
+pattern.
+
+Subclasses declare:
+
+  
+- `#outputSchema()` — the fixed output schema, used by both
+  `#onBind` and (typically) by the producer state.
+  
+- `#createProducer(TableInitParams)` — construct the per-execution
+  state. The standard countdown args are accessible via the
+  `TableInitParams#arguments()` as `positional[0] = count`,
+  `named["batch_size"]`, plus any `#extraArgs() extras`.
+  
+- Override `#extraArgs()` to add named-only args beyond the
+  built-in `count + batch_size` pair.
+
+The base class provides `argumentSpecs`, `onBind`, and
+`cardinality` so subclasses don't repeat that scaffolding.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;ArgSpec&gt; argumentSpecs()</code></pre>
+
+`the {@code count` positional plus `batch_size` named arg and any `#extraArgs() extras`\}
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>long cardinality(TableBindParams p)</code></pre>
+
+`the {@code count` positional argument as the row estimate, or `-1` when absent\}
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;ColumnStatistics&gt; statistics(TableBindParams params)</code></pre>
+
+Default statistics for the canonical countdown pattern: a single-column
+output schema where the column is BIGINT or DOUBLE and the values are
+`0, increment, 2*increment, ...`. Mirrors vgi-python's
+`@_cardinality_from_count` decorator.
+
+Returns `null` (no stats) when:
+
+  
+- `positional[0]` is absent or not a `Number`,
+  
+- `count <= 0`,
+  
+- the output schema isn't single-column INT64 or FLOAT64.
+
+Subclasses with multi-column or non-arithmetic schemas should override
+`statistics` themselves.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="Emitter"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `Emitter`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/table/CopyFromFunction.java#L49" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface Emitter</code></pre>
+
+<p class="api-section">Description</p>
+
+Sink for the batches a `#read` call produces.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>String copyFromFormat()</code></pre>
+
+The SQL `FORMAT` identifier users type, e.g. `COPY t FROM 'x'
+(FORMAT myfmt)`. Mirrors vgi-python's `COPY_FROM_FORMAT`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String copyFromComment()</code></pre>
+
+Optional free-text comment surfaced by `vgi_copy_formats()`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String copyFromDirection()</code></pre>
+
+The COPY direction. Only `"from"` is supported today; reserved for a
+future `COPY ... TO`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>BindResponse onBind(TableBindParams params)</code></pre>
+
+Bind the output schema to the COPY target's schema. DuckDB forces the
+scan's output types to the target table's columns, so a COPY-FROM reader
+must produce exactly `expected_schema`. Final — subclasses customise
+`#read`, not the bind.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;CopySecretLookup&gt; secretLookups(TableBindParams params)</code></pre>
+
+Secret-bind hook: forward `CREATE SECRET` credentials for
+secret-backed cloud sources (S3/GCS/HTTP/…). Override to request the secrets
+the reader needs — typically scoped by the source path
+(`params.copyFrom().file_path()`). The framework's two-phase secret
+bind resolves each lookup and surfaces the resolved values on
+`params.secrets()` at `#read` time. Defaults to none. Mirrors
+vgi-python's `CopyFromFunction.on_secrets`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>TableProducerState createProducer(TableInitParams params)</code></pre>
+
+Build the single-shot producer that drives `#read` once and streams
+its batches. Final — subclasses customise `#read`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void read(String path, Arguments options, Schema expectedSchema, TableInitParams params, Emitter out, CallContext ctx)</code></pre>
+
+Parse `path` and emit Arrow batches via `out.emit(...)`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void produceTick(OutputCollector out, CallContext ctx)</code></pre>
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="SimpleTableFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `SimpleTableFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/table/SimpleTableFunction.java#L23" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public abstract class SimpleTableFunction implements TableFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+Base for table functions with a *fixed* output schema. Handles
+schema → IPC-bytes caching and the trivial `#onBind` that ships them.
+
+Subclasses implement `#outputSchema()` (returns a constant) and
+`#createProducer(TableInitParams)`; everything else is inherited from
+`TableFunction` with sensible defaults.
+
+For sequence-like fixtures that emit `count` rows in
+`count`/`batch_size` loops, extend
+`CountdownTableFunction` instead — it adds `argumentSpecs`,
+`cardinality`, and a default `statistics` on top of this
+contract.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>BindResponse onBind(TableBindParams params)</code></pre>
+
+`a bind response carrying the cached IPC-serialized {@link #outputSchema()`\}
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableBindParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `TableBindParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/table/TableBindParams.java#L31" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record TableBindParams( String functionName, Arguments arguments, Schema inputSchema, Map&lt;String, Object&gt; settings, byte[] secrets, boolean resolvedSecretsProvided, byte[] attachId, TransactionStorage transactionStorage, farm.query.vgi.storage.BoundStorage attachStorage, farm.query.vgi.protocol.CopyFromContext copyFrom)</code></pre>
+
+<p class="api-section">Description</p>
+
+Parameters passed to `TableFunction#onBind` and the other bind-time
+hooks (`cardinality`, `statistics`). Decoded from the wire
+`BindRequest`.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>TableBindParams(String functionName, Arguments arguments, Schema inputSchema, Map&lt;String, Object&gt; settings)</code></pre>
+
+Convenience constructor with no secrets, attach id, or transaction storage.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>TableBindParams(String functionName, Arguments arguments, Schema inputSchema, Map&lt;String, Object&gt; settings, byte[] secrets, boolean resolvedSecretsProvided)</code></pre>
+
+Convenience constructor with secrets but no attach id or transaction storage.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>TableBindParams(String functionName, Arguments arguments, Schema inputSchema, Map&lt;String, Object&gt; settings, byte[] secrets, boolean resolvedSecretsProvided, byte[] attachId)</code></pre>
+
+Convenience constructor with secrets and attach id but no transaction storage.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/table/TableFunction.java#L21" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface TableFunction extends FunctionDescriptor</code></pre>
+
+<p class="api-section">Description</p>
+
+A VGI table function: generates a stream of `org.apache.arrow.vector.VectorSchemaRoot`
+batches with no input columns. Mirrors `vgi.TableFunction` in vgi-go.
+
+Lifecycle:
+
+  
+- `#onBind` — validate args, return output schema.
+  
+- `#createProducer` — instantiate per-execution producer state.
+  
+- The framework drives the producer state's `produce()` repeatedly
+  until it signals `out.finish()` or emits no batch.
+
+</div>
+
+<div class="api-member">
+
+<a id="TableInitParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `TableInitParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/table/TableInitParams.java#L52" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record TableInitParams( String functionName, Arguments arguments, Schema outputSchema, Map&lt;String, Object&gt; settings, BufferAllocator allocator, byte[] pushdownFilters, List&lt;Integer&gt; projectionIds, List&lt;byte[]&gt; joinKeys, Double tablesamplePercentage, Long tablesampleSeed, String orderByColumnName, String orderByDirection, String orderByNullOrder, Long orderByLimit, byte[] executionId, byte[] secrets, byte[] attachId, byte[] bindOpaqueData, String atUnit, String atValue, farm.query.vgi.storage.BoundStorage storage, farm.query.vgi.protocol.CopyFromContext copyFrom)</code></pre>
+
+<p class="api-section">Description</p>
+
+Parameters passed to `TableFunction#createProducer`.
+
+`executionId` is the per-execution identifier DuckDB threads
+through every callback (init, statistics, dynamic_to_string). Producers
+that publish per-execution diagnostics keep state keyed off this byte[]
+so the `TableFunction#dynamicToString` hook can match the snapshot
+back to its scan.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>FilterApplier filters()</code></pre>
+
+Wrap the raw `#pushdownFilters` / `#joinKeys` bytes into a
+`FilterApplier` ready to call `apply(root)` on each emitted
+batch. Cheap to construct — the actual decode happens lazily on first
+`apply`. Producers should cache the returned applier on their
+state (see `TableProducerState`) so the decode runs once.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Schema projectedOutputSchema()</code></pre>
+
+Alias for `#outputSchema()` — kept for symmetry with
+`#projectionIds()` and to document the projection contract:
+the framework (`VgiServiceImpl.initTable`) already narrowed
+`outputSchema` down to the columns DuckDB requested
+*before* handing the params to the fixture, so the schema
+delivered here matches the batches the fixture must emit. Use
+`outputSchema()` directly in new code; this method exists for
+pre-fix callers who expected to do the projection themselves.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableProducerState"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableProducerState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/table/TableProducerState.java#L42" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public abstract class TableProducerState extends ProducerState</code></pre>
+
+<p class="api-section">Description</p>
+
+Base class for table-function producer states. Subclasses implement
+`#produceTick(OutputCollector, CallContext)` which is called once per
+tick; each call must either emit one data batch via `out.emit(...)`
+or call `out.finish()` to signal end-of-stream.
+
+The framework also delivers per-tick `custom_metadata` (dynamic
+filter updates, cancel signals) via the `AnnotatedBatch` input.
+Producers that need this information override `#produceTick(AnnotatedBatch, OutputCollector, CallContext)` instead;
+the no-input variant is the default for fixtures that don't care.
+
+Subclasses that need filter pushdown or the projected output schema
+should call the `#TableProducerState(TableInitParams)` constructor;
+`#filters` and `#outputSchema` are then populated once and
+reused across every tick.
+
+**State serialisation note.** Producer state is process-local for the
+stdio and AF_UNIX transports — the framework never serialises it. The HTTP
+transport *does* persist state across requests via state tokens, but
+does so through `StateSerializer` (Jackson JSON) by default, or
+`farm.query.vgirpc.PortableStreamState` when the subclass takes over
+encoding. In neither case does the framework use Java's
+`java.io.Serializable` machinery, so declaring
+`implements Serializable` or carrying a `serialVersionUID` on a
+subclass has no effect and should be removed from older fixtures. Hold
+decoded forms (`org.apache.arrow.vector.types.pojo.Schema`, the
+pre-built `farm.query.vgi.pushdown.FilterApplier`) on plain fields
+rather than the raw IPC bytes that the wire delivered.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>void produce(OutputCollector out, CallContext ctx)</code></pre>
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void produce(AnnotatedBatch input, OutputCollector out, CallContext ctx)</code></pre>
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void produceTick(OutputCollector out, CallContext ctx)</code></pre>
+
+User-supplied per-tick generator. Emit one batch or call `out.finish()`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void produceTick(AnnotatedBatch input, OutputCollector out, CallContext ctx)</code></pre>
+
+Per-tick generator with access to the framework's tick `custom_metadata`. Default delegates to the no-input overload so
+existing fixtures keep working unchanged.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TransactionStorage"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TransactionStorage`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/table/TransactionStorage.java#L17" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface TransactionStorage</code></pre>
+
+<p class="api-section">Description</p>
+
+Per-transaction key/value store handed to a table function's `TableFunction#onBind` via `TableBindParams#transactionStorage()`.
+
+Scoped to a single `transaction_opaque_data` — the C++ extension
+populates `BindRequest.transaction_opaque_data` only when the SQL
+statement runs inside an explicit `BEGIN`/`COMMIT` block. Outside
+a transaction the storage handle is `null` and no caching is possible.
+
+Mirrors vgi-python's `BindParams.transaction_storage`. The backing
+map is cleared by `catalog_transaction_commit` / `_rollback`.
+
+</div>

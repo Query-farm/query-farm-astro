@@ -1,0 +1,111 @@
+---
+title: What's new
+description: "What changed in vgi-go through v0.22.0 — new capabilities, protocol bumps, and the breaking changes."
+---
+
+import Callout from '../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../components/ui/CodeBlock.astro';
+
+vgi-go is at **v0.22.0**, speaking wire protocol **1.3.0** — the same protocol the Python and
+TypeScript SDKs speak, driven by the same DuckDB extension. This page groups what landed by theme.
+
+<Callout type="note" title="Versions are per SDK">
+vgi-go versions on its own line and does **not** track vgi-python's numbers. Protocol version is what
+they share: a v0.22.0 Go worker and a 0.28.x Python worker both speak 1.3.0 and are interchangeable
+behind the same extension.
+</Callout>
+
+## Breaking changes
+
+<Callout type="warning" title="v0.18.0 — functions resolve by (catalog, schema, name)">
+A function name was never a unique key. Dispatch was a flat name lookup, so the same name registered
+in two schemas collided as overloads. Resolution is now keyed on the full path, and the unary RPCs
+that re-resolve a function by name carry the schema too — without that, a call bound correctly and
+then ran the *other* schema's implementation, returning a wrong-but-plausible answer.
+
+Protocol 1.0.0 → 1.2.0.
+</Callout>
+
+<Callout type="warning" title="v0.15.0 — required_field_filter_paths → required_filters">
+Renamed, and the shape changed from a flat list to conjunctive normal form: an AND of OR-groups. See
+[Requiring a filter](/vgi/docs/go/how-to/catalogs/#requiring-a-filter).
+</Callout>
+
+## Result caching
+
+A worker can advertise that its result is reusable by attaching `vgi.cache.*` metadata to its first
+data batch. The vocabulary is HTTP's — a freshness lifetime, a reuse scope, validators for
+conditional revalidation, and stale-serving grace windows.
+
+<table>
+<thead>
+<tr><th>Release</th><th>What landed</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>v0.15.0</strong></td><td><code>CacheControl</code> and the <code>vgi.cache.*</code> keys for table functions.</td></tr>
+<tr><td><strong>v0.16.0</strong></td><td>Cache control from a buffered <code>finalize</code>; conditional-revalidation validators surfaced as <code>params.IfNoneMatch</code> / <code>IfModifiedSince</code>.</td></tr>
+<tr><td><strong>v0.16.0</strong></td><td>Opt-in for <strong>scalar</strong> functions.</td></tr>
+<tr><td><strong>v0.17.0</strong></td><td><code>PartitionScope</code> for per-partition caching.</td></tr>
+<tr><td><strong>v0.18.0</strong></td><td><code>PerValue</code> — per-VALUE memoization for exchange-mode maps.</td></tr>
+</tbody>
+</table>
+
+→ **[Cache results on the client](/vgi/docs/go/how-to/result-caching/)**
+
+## Function shapes
+
+- **Blended table-in-out (v0.16.0)** — set `FunctionMetadata.InputFromArgs`; positional args *are* the per-row input
+  columns, so one registration serves a literal call, a column call, and a correlated `LATERAL`.
+  v0.16.0 also added per-output-row provenance so batched correlated `LATERAL` stays correct.
+- **Parallel finalize / `substream_id` (v0.16.0)** for table-in-out functions.
+- **Const-argument constraints enforced at bind** — scalars in **v0.10.0**, aggregates in
+  **v0.11.0**. A `ge=`/`le=`/`choices=` you declared is actually binding.
+
+→ **[Function patterns](/vgi/docs/go/how-to/function-patterns/)**
+
+## Catalogs
+
+<table>
+<thead>
+<tr><th>Release</th><th>What landed</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>v0.19.0</strong></td><td><strong>Global functions</strong> — publish selected functions into DuckDB's <code>system.main</code> so they are callable unqualified. Protocol 1.2.0 → 1.3.0.</td></tr>
+<tr><td><strong>v0.21.0</strong></td><td>Per-catalog attach options.</td></tr>
+<tr><td><strong>v0.15.0</strong></td><td><code>RequiredFilters</code> in CNF — refuse an unbounded scan.</td></tr>
+</tbody>
+</table>
+
+→ **[Expose a catalog](/vgi/docs/go/how-to/catalogs/)**
+
+## v0.22.0 — three failures moved to where they are caused
+
+Each of these used to register cleanly and fail somewhere unrelated.
+
+<table>
+<thead>
+<tr><th>Fix</th><th>What used to happen</th></tr>
+</thead>
+<tbody>
+<tr><td><code>type=</code> rejects unknown Arrow type names</td><td><strong>Was:</strong> <code>vgi:"type=bigint"</code> silently became <code>VARCHAR</code>, then failed to bind against an integer literal with an error naming the <em>call site</em>. <strong>Now:</strong> rejected at registration, with the right Arrow name suggested.</td></tr>
+<tr><td><code>RegisterAggregate</code> gob-registers its state</td><td><strong>Was:</strong> you had to call <code>gob.Register(&amp;MyState{})</code> yourself, or the first <code>GROUP BY</code> failed. <strong>Now:</strong> registered from <code>NewState</code>; your own call is a harmless no-op.</td></tr>
+<tr><td>COPY format name collisions are rejected</td><td><strong>Was:</strong> a reader and a writer sharing a format name silently lost one of them. <strong>Now:</strong> rejected at registration, with one handler serving both directions merged to <code>direction="both"</code>.</td></tr>
+</tbody>
+</table>
+
+<Callout type="warning" title="Upgrading from ≤ v0.21.0 can stop a worker that used to start">
+A worker carrying an unrecognised `type=` will now refuse to start rather than registering a wrong
+signature. That is the point of the change, but it is a behaviour change and not merely a better
+message — check your struct tags before upgrading. The error names the value and suggests the
+correct Arrow name.
+</Callout>
+
+## Performance
+
+- **Data plane (v0.17.0)** — per-row and per-batch allocation and CPU cut in the hot paths.
+
+## Next steps
+
+- **Start building** → [Function patterns](/vgi/docs/go/how-to/function-patterns/).
+- **The full API** → [Package overview](/vgi/docs/go/api/).
+- **Upstream history** → [Query-farm/vgi-go releases](https://github.com/Query-farm/vgi-go/releases).

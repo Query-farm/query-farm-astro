@@ -1,0 +1,357 @@
+---
+title: "Filter pushdown"
+description: "Receiving the predicates DuckDB pushed toward the scan, and applying them."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Receiving the predicates DuckDB pushed toward the scan, and applying them.
+
+</div>
+
+<div class="api-member">
+
+<a id="ComparisonOperator"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">enum</span> `ComparisonOperator`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/pushdown/ComparisonOperator.java#L10" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public enum ComparisonOperator</code></pre>
+
+<p class="api-section">Description</p>
+
+The six comparison operators a `PushdownFilter.Constant` can carry.
+Wire tokens (`eq`, `ne`, ...) come from the C++ extension's
+filter-spec JSON.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>String wireToken()</code></pre>
+
+The wire token for this operator (e.g. `"eq"`).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String symbol()</code></pre>
+
+SQL-like symbol used by the diagnostic format helpers.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ComparisonOperator fromWire(String token)</code></pre>
+
+Resolve a wire token to its operator.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>boolean test(int cmp)</code></pre>
+
+Apply this operator to a `Comparable#compareTo` result.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>boolean testEquality(boolean equal)</code></pre>
+
+Apply this operator when only equality is known (unordered operands).
+Only `EQ`/`NE` yield a definite answer; ordered comparisons
+against unordered operands are treated as non-matching.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="FilterApplier"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `FilterApplier`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/pushdown/FilterApplier.java#L19" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class FilterApplier</code></pre>
+
+<p class="api-section">Description</p>
+
+Helper for table-function fixtures that opt into filter pushdown
+(`FunctionMetadata.filterPushdown=true`, `autoApplyFilters=true`).
+
+Decoded once per init via `#from` and reused across emits — each
+`#apply` evaluates the pre-parsed filter AST against the batch and
+returns a compacted batch (closing the original on row drop).
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>FilterApplier from(byte[] filterBytes, List&lt;byte[]&gt; joinKeysIpc)</code></pre>
+
+Create an applier over the init-time pushdown payload; decoding is deferred
+to first `#apply`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;String&gt; expressionPredicates()</code></pre>
+
+The rendered SQL predicates of any pushed expression filters (spatial
+`&&`, `list_contains`, ...). `#apply` only handles
+column filters; expression filters are pass-through there and must be
+applied separately via the worker's expression evaluator.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>VectorSchemaRoot apply(VectorSchemaRoot src)</code></pre>
+
+Compact `src` to only rows that pass the parsed filters. Returns
+`src` unchanged when no filters were pushed; closes `src`
+and returns a new root when rows are dropped.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>VectorSchemaRoot compact(VectorSchemaRoot src, boolean[] mask)</code></pre>
+
+Compact `src` to only the rows whose `mask` entry is `true`.
+Returns `src` unchanged when every row is kept; otherwise builds a new
+root and closes `src` (ownership transfer). Shared by the column-filter
+path here and the worker's expression-filter evaluator.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="PushdownFilter"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `PushdownFilter`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/pushdown/PushdownFilter.java#L17" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed interface PushdownFilter permits PushdownFilter.Constant, PushdownFilter.IsNull, PushdownFilter.IsNotNull, PushdownFilter.In, PushdownFilter.And, PushdownFilter.Or, PushdownFilter.Struct, PushdownFilter.Expression</code></pre>
+
+<p class="api-section">Description</p>
+
+Sealed AST for VGI filter-pushdown predicates. Mirrors vgi-go's
+`Filter` hierarchy. The wire format is a JSON array of filter specs
+encoded as a single string column inside an Arrow batch; sibling columns
+carry the actual constant values referenced by `value_ref` indices.
+
+Currently the AST is read-only — fixtures inspect filters and DuckDB
+applies them post-emit (auto-apply). A future pass will add per-filter
+`Evaluate` for fixtures that opt out of auto-apply.
+
+</div>
+
+<div class="api-member">
+
+<a id="PushdownFilterType"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">enum</span> `PushdownFilterType`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/pushdown/PushdownFilterType.java#L6" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public enum PushdownFilterType</code></pre>
+
+<p class="api-section">Description</p>
+
+Discriminator tag for a filter spec entry in the pushdown wire JSON.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>String wireToken()</code></pre>
+
+The wire token for this filter type (e.g. `"constant"`).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>PushdownFilterType fromWire(String token)</code></pre>
+
+Resolve a wire token, or `null` if it isn't a recognised type.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="PushdownFilters"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `PushdownFilters`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/pushdown/PushdownFilters.java#L19" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record PushdownFilters(List&lt;PushdownFilter&gt; filters, String version)</code></pre>
+
+<p class="api-section">Description</p>
+
+Container for the parsed top-level filter list (implicit AND).
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>PushdownFilters empty()</code></pre>
+
+An empty filter set at the current supported version.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String formatInline()</code></pre>
+
+Format the filters as a human-readable `AND`-joined SQL-like
+string with values inlined. Used by diagnostic fixtures like
+`filter_echo`; matches vgi-go's `formatFiltersInline`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String formatRepr()</code></pre>
+
+Python-`repr`-style format that wraps each leaf in its filter
+class name (e.g. `ConstantFilter(n < 9500)`, `IsNullFilter(c
+IS NULL)`). The dynamic-filter integration test asserts `LIKE
+'%ConstantFilter(n <%'` on this representation to confirm the C++
+extension extracted the dynamic bound from inside a
+`ConjunctionAndFilter`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;String&gt; expressionPredicates()</code></pre>
+
+The rendered SQL predicates of the top-level expression filters (e.g.
+`("geom" && ST_MakeEnvelope(...))`). These can't be evaluated
+row-at-a-time — `#evaluate` treats them as pass-through; the worker
+applies them via an embedded engine (see vgi-example-worker's
+`ExpressionFilterEvaluator`).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>java.util.Set&lt;String&gt; filteredColumns()</code></pre>
+
+The set of column names referenced by the top-level filters (each
+filter's `column_name`). Mirrors vgi-python's
+`PushdownFilters.filtered_columns`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>boolean hasFilterForColumn(String name)</code></pre>
+
+Whether any top-level filter constrains column `name`. Mirrors
+vgi-python's `PushdownFilters.has_filter_for_column`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;PushdownFilter&gt; filtersForColumn(String name)</code></pre>
+
+Return the top-level filters that directly target column `name`.
+"Top-level" means an entry in `#filters()` — does not descend into
+nested `And`/`Or`/`Struct`, since those don't admit a
+simple per-column extraction. Useful for fixtures that want to know
+"what bounds did DuckDB push down on column X?" without re-implementing
+the AST walk.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;Object&gt; directEqualityValues(String name)</code></pre>
+
+Extract the set of values that `name` is *definitely* constrained
+to equal at the top level: collects `eq`-Constant values and
+`In` value lists. Returns an empty list when no such constraint
+exists; callers can treat that as "no direct equality push-down".
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>java.util.Optional&lt;List&lt;Object&gt;&gt; getColumnValues(String name)</code></pre>
+
+The discrete set of values `name` could take, when the pushed
+filters pin it to an enumerable set — an equality, an `IN` list, or
+an `OR` whose every branch pins `name` to discrete values
+(their union). Descends one level into a top-level `And` (see
+`#collectColumnFilters`). Returns `empty` when not enumerable
+(no filter, a bare range, an `OR` with a range/other-column branch,
+or deeper nesting) — the caller must then fall back to a full scan rather
+than an unsafe subset. Mirrors vgi-python's `get_column_values`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>boolean[] evaluate(VectorSchemaRoot root)</code></pre>
+
+Evaluate every filter against `root` and return a boolean mask
+(one entry per row) — `true` means the row passes all filters
+(top-level AND). The mask is a `boolean[]` so callers can drive
+fixture-side row filtering without an Arrow allocation.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="PushdownFiltersDecoder"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `PushdownFiltersDecoder`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/pushdown/PushdownFiltersDecoder.java#L28" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class PushdownFiltersDecoder</code></pre>
+
+<p class="api-section">Description</p>
+
+Decode pushdown-filter IPC bytes into a `PushdownFilters` AST.
+
+Wire shape: a single Arrow record batch with column 0 holding a single
+UTF-8 string row containing the JSON-encoded filter spec list. Siblings
+carry the actual constant values referenced by `value_ref` indices
+(so the JSON stays type-agnostic).
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>PushdownFilters decode(byte[] data)</code></pre>
+
+Decode pushdown-filter IPC bytes with no join-key inputs.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>PushdownFilters decode(byte[] data, List&lt;byte[]&gt; joinKeysIpc)</code></pre>
+
+Decode pushdown-filter IPC bytes, resolving `join_keys` filters against
+the supplied out-of-band key batches.
+
+</div>
+</div>
+
+</div>

@@ -1,0 +1,116 @@
+---
+title: Vector Gateway Interface for Rust
+description: Build DuckDB scalar, table, and aggregate functions in Rust on Apache Arrow — the official documentation for the vgi crate.
+---
+
+import { CardGrid, LinkCard, LinkButton } from '@astrojs/starlight/components';
+import CodeBlock from '../../../../../components/ui/CodeBlock.astro';
+import GitHubStar from '../../../../../components/GitHubStar.astro';
+
+<div class="vgi-hero">
+<picture><source srcset="/vgi/vgi-emblem.webp" type="image/webp" /><img src="/vgi/vgi-emblem.png" alt="Vector Gateway Interface" class="vgi-hero__logo" width="800" height="588" fetchpriority="high" /></picture>
+<p class="vgi-hero__tagline">Extend DuckDB with functions written in Rust — backed by Apache&nbsp;Arrow, callable straight from SQL.</p>
+</div>
+
+<div class="vgi-hero__links">
+<LinkButton href="/vgi/docs/rust/tutorial/scalar/" icon="rocket">Get started</LinkButton>
+<LinkButton href="https://github.com/Query-farm/vgi-rust" variant="secondary" icon="github">GitHub repository</LinkButton>
+</div>
+
+<div class="vgi-hero__star"><GitHubStar repo="Query-farm/vgi-rust" /></div>
+
+The **`vgi`** crate implements the Vector Gateway Interface (VGI) for Rust: you write a small worker
+exposing typed functions, and DuckDB calls them as if they were native. Data moves as Apache Arrow
+record batches on [arrow-rs](https://github.com/apache/arrow-rs), so it stays columnar across the
+boundary — no row-by-row marshalling.
+
+No C++ extension to compile, no linking against DuckDB, no version coupling. `cargo build`, ship the
+binary.
+
+## Install
+
+<CodeBlock code={`cargo add vgi arrow-array arrow-schema`} lang="bash" tryable={false} />
+
+Requires **Rust 1.97+** and **arrow-rs 59**. A worker is an ordinary binary crate:
+
+<CodeBlock code={`use vgi::catalog::CatalogModel;
+use vgi::function::{ArgSpec, FunctionMetadata, ProcessParams, ScalarFunction};
+use vgi::{Result, RpcError};
+
+struct Double;
+
+impl ScalarFunction for Double {
+    fn name(&self) -> &str { "double" }
+    fn metadata(&self) -> FunctionMetadata { /* … */ }
+    fn argument_specs(&self) -> Vec<ArgSpec> {
+        vec![ArgSpec::column("n", 0, "int64", "Value to double")]
+    }
+    fn process(&self, params: &ProcessParams, batch: &RecordBatch) -> Result<RecordBatch> {
+        /* … one output value per input row … */
+    }
+}
+
+fn main() {
+    let mut worker = vgi::Worker::new();
+    worker.register_scalar(Double);
+    worker.set_catalog(CatalogModel { name: "calc".to_string(), ..Default::default() });
+    worker.run();
+}`} lang="rust" tryable={false} />
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION './target/release/calcscalar');
+SELECT calc.double(21);   -- 42`} lang="sql" tryable={false} />
+
+## Start here
+
+<CardGrid>
+  <LinkCard
+    title="Tutorial"
+    href="/vgi/docs/rust/tutorial/scalar/"
+    description="Zero to a scalar and a table function callable from DuckDB, in about 20 minutes."
+  />
+  <LinkCard
+    title="Concepts"
+    href="/vgi/docs/concepts/"
+    description="What VGI is, the worker model, and the Arrow data path — shared across every SDK."
+  />
+  <LinkCard
+    title="API reference"
+    href="/vgi/docs/rust/api/"
+    description="The vgi, vgi-protocol and vgi-client crates — generated from the source."
+  />
+  <LinkCard
+    title="Function lifecycle"
+    href="/vgi/docs/concepts/lifecycle/"
+    description="When bind, init, process, combine and finalize each run, and how they map to DuckDB."
+  />
+</CardGrid>
+
+## Three things to know up front
+
+- **A trait is the function.** No macro, no derive, no registry attribute — implement
+  `ScalarFunction` (or one of its four siblings) and hand the value to `Worker::register_*`.
+- **Shared function, per-scan producer.** A `TableFunction` is `Send + Sync` and immutable; the
+  cursor that walks a scan is a separate `TableProducer` built per execution. That split is why the
+  function itself never needs a lock.
+- **It runs where you need it.** The same functions serve stdio, a Unix socket, TCP or HTTP — and
+  compiled to `wasm32`, the whole worker runs **inside the browser page** next to a DuckDB-WASM
+  engine. See [Transports & runtimes](/vgi/docs/rust/how-to/transports/).
+
+Coming from another SDK? The protocol is identical and a Rust worker is wire-compatible with a
+Python, Go or TypeScript one — the same DuckDB extension drives all of them, so the concepts carry
+over unchanged.
+
+## Reference
+
+<CardGrid>
+  <LinkCard
+    title="Package overview"
+    href="/vgi/docs/rust/api/"
+    description="Orientation for the crates, plus the map of every reference page."
+  />
+  <LinkCard
+    title="Argument serialization"
+    href="/vgi/docs/concepts/argument-serialization/"
+    description="The Arrow schema every SDK produces for a function signature — the shared wire format."
+  />
+</CardGrid>

@@ -1,0 +1,97 @@
+---
+title: Report errors well
+description: "How a Rust VGI worker reports failure — the RpcError constructors, what each one means to DuckDB, and the panic that takes the worker with it."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+Every trait method returns `Result<T, RpcError>`, and which constructor you reach for decides what
+the person running the query sees. There is no separate error hierarchy to learn — `RpcError` has a
+type string, and the constructors name the sensible ones.
+
+## The constructors
+
+<table>
+<thead>
+<tr><th>Constructor</th><th>Use it when</th></tr>
+</thead>
+<tbody>
+<tr><td><code>RpcError::value_error</code></td><td>An argument or input value is wrong — out of range, wrong shape, unparseable. The one you will use most.</td></tr>
+<tr><td><code>RpcError::type_error</code></td><td>A column or value is the wrong <em>type</em> for what the function declared.</td></tr>
+<tr><td><code>RpcError::runtime_error</code></td><td>Something failed while doing the work: an upstream call, an Arrow build, an I/O error.</td></tr>
+<tr><td><code>RpcError::permission_error</code></td><td>The caller is not allowed to do this.</td></tr>
+<tr><td><code>RpcError::protocol_error</code> / <code>version_error</code></td><td>The peer sent something the protocol does not allow, or a version this worker cannot serve. Mostly raised by the framework.</td></tr>
+<tr><td><code>RpcError::new(ty, msg)</code></td><td>Any other type string, when you need one the helpers do not cover.</td></tr>
+</tbody>
+</table>
+
+The natural Rust move — `map_err` at the boundary — is also the right one:
+
+<CodeBlock code={`let cast = arrow_cast::cast(col, &DataType::Int64)
+    .map_err(|e| RpcError::value_error(format!("\`value\` must be an integer: {e}")))?;`} lang="rust" tryable={false} />
+
+<InfoTip label="Where it shows up" title="How an error reaches the user">
+The error crosses the wire and is re-raised by the extension, so what the user sees is
+`Invalid Input Error: VGI Worker Exception: <your message>` with the worker command appended. Write
+the message for that reader: name the argument, say what was expected, and don't assume they know a
+worker exists.
+</InfoTip>
+
+## Constraints you get for free
+
+Before writing a validation by hand, check whether the argument spec already covers it. Declared
+constraints are validated by the framework **at bind**, before your code runs:
+
+<CodeBlock code={`ArgSpec::const_arg("count", 0, "int64", "How many numbers to generate").with_ge(0.0)`} lang="rust" tryable={false} />
+
+<CodeBlock code={`Invalid Input Error: VGI Worker Exception: argument count: must be >= 0`} lang="text" tryable={false} />
+
+`with_ge`, `with_le`, `with_gt`, `with_lt`, choices and a regex `pattern` are all available, and they
+double as discovery metadata — `vgi_function_arguments()` reports them, so an agent inspecting the
+catalog learns the valid range without calling anything.
+
+## A panic takes the worker with it
+
+<Callout type="warning" title="Return an error; do not unwrap">
+There is no panic recovery around your function. A `panic!`, an `unwrap()` on `None`, an
+out-of-bounds index or an arithmetic overflow in debug aborts the **process**, and DuckDB reports a
+broken pipe rather than anything about your function. The whole query fails, and so does every other
+query using that worker.
+
+That makes the ordinary Rust discipline load-bearing here:
+
+<CodeBlock code={`// Kills the worker if the column is missing.
+let col = batch.column_by_name("value").unwrap();
+
+// Fails the query with a message naming the problem.
+let col = batch
+    .column_by_name("value")
+    .ok_or_else(|| RpcError::value_error("expected a \`value\` column"))?;`} lang="rust" tryable={false} />
+
+`as_primitive::<Int64Type>()` is in the same family — it panics on the wrong type. It is safe when
+the argument spec declared that type, because the extension will not route anything else; it is not
+safe on a column whose type came from the caller's relation. Use `arrow_cast::cast` there, which
+returns an error you can map.
+</Callout>
+
+## Two log channels
+
+- **`eprintln!` / the `log` crate** → the worker's **stderr**. For operators.
+- **`out.client_log(level, msg)`** → back to the DuckDB client in-band, surfacing in `duckdb_logs()`
+  with `type='VGI'`. For the person running the query.
+
+Use the in-band channel for something the user can act on — a row skipped, a credential about to
+expire — and stderr for everything else.
+
+<Callout type="warning" title="Never print to stdout">
+On the stdio transport, stdout **is** the protocol. A stray `println!` injects bytes into the Arrow
+IPC stream, and the failure is a decode error that looks nothing like a stray print. `eprintln!` is
+the one you want.
+</Callout>
+
+## Next steps
+
+- **The error type in full** → [Protocol & Arrow](/vgi/docs/rust/api/protocol/).
+- **Declaring constraints** → [Arguments](/vgi/docs/rust/api/arguments/).

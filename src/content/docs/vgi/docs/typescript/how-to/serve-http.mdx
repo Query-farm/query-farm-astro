@@ -1,0 +1,144 @@
+---
+title: Serve over HTTP
+description: "Run a TypeScript VGI worker as a network service with serveVgiWorker — the signing key every real deployment needs, CORS, and the landing surface you get for free."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+
+Run a worker as a **network service** instead of a subprocess DuckDB spawns — on another machine, in
+a container, or behind a shared endpoint.
+
+## Prerequisites
+
+- A working worker (see the [tutorial](/vgi/docs/typescript/tutorial/scalar/)).
+
+## Don't hand-roll it
+
+`@query-farm/vgi/serve` assembles the protocol, the signed state-token key, the TTL, CORS, and the
+standardized landing surface, then binds the port. A worker repo's serve script becomes its registry
+and catalog and nothing else:
+
+<CodeBlock code={`// serve.ts
+import { serveVgiWorker } from "@query-farm/vgi/serve";
+import { FunctionRegistry, ReadOnlyCatalogInterface } from "@query-farm/vgi";
+import { double } from "./calcscalar.ts";
+
+const registry = new FunctionRegistry();
+const catalogInterface = new ReadOnlyCatalogInterface(
+  { name: "calc", schemas: [{ name: "main", functions: [double] }] },
+  registry,
+);
+
+serveVgiWorker({
+  name: "calc",
+  doc: "Tutorial worker over HTTP.",
+  version: "0.1.0",
+  registry,
+  catalogInterface,
+});`} lang="typescript" tryable={false} />
+
+<CodeBlock code={`VGI_SIGNING_KEY=$(openssl rand -hex 32) PORT=8791 bun run serve.ts`} lang="bash" tryable={false} />
+
+<CodeBlock code={`calc VGI HTTP worker listening on http://localhost:8791
+  landing page   http://localhost:8791/
+  client bundle  http://localhost:8791/vgi-client.js
+  health         http://localhost:8791/health
+  attach         ATTACH 'calc' AS calc (TYPE vgi, LOCATION 'http://localhost:8791');`} lang="text" tryable={false} />
+
+Note the shape of the worker here: `serveVgiWorker` takes a **registry plus a catalog interface**,
+not the `Worker` class the stdio tutorial used. `ReadOnlyCatalogInterface` builds one from the same
+declarative descriptor, so the function definitions carry over unchanged.
+
+## Attach it from DuckDB
+
+The routes are mounted at the origin root, so DuckDB attaches the bare URL:
+
+<CodeBlock code={`LOAD vgi;
+ATTACH 'calc' (TYPE vgi, LOCATION 'http://localhost:8791');
+SELECT calc.double(21);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["double(21)"]} rows={[[42]]} />
+
+## Configuration
+
+Every variable has an explicit option that takes precedence over it.
+
+<table>
+<thead>
+<tr><th>Variable</th><th>Default</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>PORT</code></td><td><code>8787</code></td><td>Listen port. <code>0</code> binds an ephemeral port.</td></tr>
+<tr><td><code>VGI_SIGNING_KEY</code></td><td>random</td><td>State-token HMAC key, <strong>exactly 64 hex characters</strong>.</td></tr>
+<tr><td><code>VGI_TOKEN_TTL</code></td><td><code>3600</code></td><td>State-token lifetime in seconds.</td></tr>
+<tr><td><code>CORS_ORIGINS</code></td><td><code>*</code></td><td>Allowed origins. Pass <code>corsOrigins: null</code> to disable CORS entirely.</td></tr>
+</tbody>
+</table>
+
+<Callout type="warning" title="Set a signing key before running more than one instance">
+The HTTP transport is stateless: a scan's cursor round-trips through the client inside a
+self-contained token, sealed with an HMAC key. That is what lets requests be load-balanced across
+hosts at all.
+
+Without `VGI_SIGNING_KEY` a **random key is generated per process** and a warning is printed. One
+process never notices. Two do, intermittently: a token minted by instance A presents to instance B,
+which cannot verify it, and the failure reads as flakiness rather than as misconfiguration. A restart
+has the same effect on a single instance — every outstanding token becomes invalid.
+
+A key that isn't exactly 64 hex characters is rejected rather than silently truncated, which is the
+behaviour you want from this particular knob.
+</Callout>
+
+<Callout type="warning" title="CORS is open by default">
+Since **0.27.0** `CORS_ORIGINS` defaults to `*`, matching what the browser client needs to work out
+of the box. That is a deliberate default for a data endpoint you intend to be public, and the wrong
+one for a worker on an internal network — set `CORS_ORIGINS` to the origins you actually serve, or
+`corsOrigins: null` to switch CORS off.
+
+Note that CORS is a browser policy, not an access control: it does not stop a non-browser client.
+An HTTP worker with no authentication is open to anyone who can reach the port.
+</Callout>
+
+## What you get on the side
+
+- `GET /` — a landing page for browsers, or a JSON status document for health checks and
+  `?format=json`. Content negotiation decides.
+- `GET /describe.json` — the catalog contract, for tooling.
+- `GET /health` — `{"status":"ok","server_id":"calc","protocol":"vgi"}`.
+- `GET /vgi-client.js` — the browser client build the landing page itself uses.
+
+<InfoTip label="Mounting inside your own server" title="createVgiWorkerFetch">
+`serveVgiWorker` calls `Bun.serve` for you, so it is Bun-only. To add the VGI routes to a server you
+already own, use `createVgiWorkerFetch` — same module, `@query-farm/vgi/serve` — which returns the
+`fetch` handler without binding a port. On Cloudflare Workers use `createVgiFetch` from
+`@query-farm/vgi/worker-cf` instead; all three share one implementation. See
+[Runtimes](/vgi/docs/typescript/how-to/runtimes/).
+</InfoTip>
+
+## The other transports
+
+The same worker serves all of them; only the entry point changes.
+
+<table>
+<thead>
+<tr><th>Transport</th><th>How</th><th>When</th></tr>
+</thead>
+<tbody>
+<tr><td>stdin/stdout</td><td><code>new Worker(…).run()</code></td><td>The default. DuckDB spawns the process.</td></tr>
+<tr><td>AF_UNIX</td><td><code>run()</code> with <code>--unix &lt;path&gt;</code> in argv</td><td>A long-lived warm worker, reused across calls.</td></tr>
+<tr><td>HTTP</td><td><code>serveVgiWorker</code></td><td>Remote, shared, or load-balanced.</td></tr>
+</tbody>
+</table>
+
+`run()` parses `--unix`, `--tcp` and `--idle-timeout` out of argv itself and dispatches accordingly,
+so one entry point covers both local transports without a flag of your own. With no `--unix` it falls
+back to stdin/stdout.
+
+## Next steps
+
+- **Where it can run** → [Runtimes](/vgi/docs/typescript/how-to/runtimes/).
+- **Making repeat queries free** → [Cache results](/vgi/docs/typescript/how-to/result-caching/).
+- **Exact signatures** → [Worker & serving](/vgi/docs/typescript/api/worker/).

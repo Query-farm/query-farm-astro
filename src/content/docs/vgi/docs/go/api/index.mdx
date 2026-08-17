@@ -1,0 +1,98 @@
+---
+title: "Package vgi"
+description: "Overview of the vgi-go package: function shapes, declarative arguments, logging, and errors."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">Package overview</p>
+
+Package vgi implements the VGI (Vector Gateway Interface) protocol for Go.
+
+VGI lets DuckDB call functions hosted in external worker processes via Arrow
+IPC over stdin/stdout, an AF_UNIX socket, or HTTP. This package is the
+framework for building VGI worker processes in Go; a worker registers one
+or more functions on a [`Worker`](/vgi/docs/go/api/worker/#Worker) and then calls a transport method like
+[`Worker.RunStdio`](/vgi/docs/go/api/worker/#Worker.RunStdio), [`Worker.RunUnix`](/vgi/docs/go/api/worker/#Worker.RunUnix), or [`Worker.RunHttp`](/vgi/docs/go/api/worker/#Worker.RunHttp).
+
+**Function types**
+
+
+VGI supports several function shapes, each with a corresponding interface:
+
+  - [`ScalarFunction`](/vgi/docs/go/api/scalar/#ScalarFunction): 1:1 row mapping; each input batch produces an output
+<Code lang="go" code={`batch with the same number of rows. See [TypedScalarFunc] and
+[AsScalarFunction] for the declarative struct-tag variant.`} />
+
+  - [`TableFunction`](/vgi/docs/go/api/table/#TableFunction): row generator with no streamed input. See [`TypedTableFunc`](/vgi/docs/go/api/table/#TypedTableFunc)
+<Code lang="go" code={`and [AsTableFunction] for typed state.`} />
+
+  - [`TableInOutFunction`](/vgi/docs/go/api/table-in-out/#TableInOutFunction): streams input rows to output, optionally with a
+<Code lang="go" code={`final flush.`} />
+
+  - [`TableBufferingFunction`](/vgi/docs/go/api/table-buffering/#TableBufferingFunction): buffers all input before producing output (sort,
+<Code lang="go" code={`aggregation, join-style operations).`} />
+
+  - [`AggregateFunction`](/vgi/docs/go/api/aggregate/#AggregateFunction): cumulative state update + final emit.
+
+**Declarative arguments**
+
+
+Function arguments can be described once as a Go struct with `vgi:"..."`
+tags. The framework derives ArgumentSpecs from the tags ([DeriveArgSpecs])
+and binds runtime values back into the struct ([`BindArgs`](/vgi/docs/go/api/arguments/#BindArgs)). See the
+[`TypedScalarFunc`](/vgi/docs/go/api/scalar/#TypedScalarFunc) / [`TypedTableFunc`](/vgi/docs/go/api/table/#TypedTableFunc) interfaces and the examples in
+examples/scalar and examples/table.
+
+**Logging**
+
+
+The worker writes structured logs through named slog loggers — [Log],
+[LogWorker], [LogCatalog], [LogRPC], [LogClient], [LogFilterPushdown].
+Configure logging from main() with [RegisterLoggingFlags] and
+[`LoggingFlags.Apply`](/vgi/docs/go/api/observability/#LoggingFlags.Apply), or programmatically with [`ConfigureLogging`](/vgi/docs/go/api/observability/#ConfigureLogging).
+
+**Errors**
+
+
+Custom error types ([`ArgumentError`](/vgi/docs/go/api/observability/#ArgumentError), [`SchemaValidationError`](/vgi/docs/go/api/observability/#SchemaValidationError), [`TypeBoundError`](/vgi/docs/go/api/observability/#TypeBoundError),
+[`WorkerPanicError`](/vgi/docs/go/api/observability/#WorkerPanicError)) carry richer context than bare fmt.Errorf and surface
+over the wire with a matching RpcError.Type. Panics in user code during
+bind/init/cardinality/statistics dispatch are recovered into
+[`WorkerPanicError`](/vgi/docs/go/api/observability/#WorkerPanicError) so the worker process stays alive.
+
+**Minimal worker**
+
+
+<Code lang="go" code={`w := vgi.NewWorker(vgi.WithCatalogName("example"))
+w.RegisterScalar(scalar.NewAddValues())
+w.RegisterTable(table.NewSequenceFunction())
+w.RunStdio()`} />
+
+</div>
+
+## Reference pages
+
+<table>
+<thead>
+<tr><th>Page</th><th>Covers</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="/vgi/docs/go/api/scalar/">Scalar functions</a></td><td>One row in, one value out — the per-row transform.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/table/">Table functions</a></td><td>Row generators: arguments in, a whole relation out.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/table-in-out/">Table-in-out functions</a></td><td>Stream a relation through, batch by batch.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/table-buffering/">Buffering functions</a></td><td>Sink every row, combine, then stream the result back.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/aggregate/">Aggregate functions</a></td><td>Per-group accumulation: update, combine, finalize.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/copy/">COPY formats</a></td><td>Custom COPY ... FROM readers and COPY ... TO writers.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/worker/">Worker &amp; serving</a></td><td>Registering functions and running a worker over each transport.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/catalog/">Catalogs</a></td><td>Exposing schemas, tables, and views to ATTACH.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/arguments/">Arguments</a></td><td>Declaring, deriving, and binding function arguments.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/cache-control/">Cache control</a></td><td>Advertising a result as reusable by the client.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/filter-pushdown/">Filter pushdown</a></td><td>Receiving and evaluating pushed-down WHERE predicates.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/storage/">State storage</a></td><td>Cross-process state: the store, its backends, and state codecs.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/arrow/">Arrow helpers</a></td><td>Building and emitting Arrow batches.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/protocol/">Protocol &amp; metadata</a></td><td>Function metadata and the on-the-wire request/response types.</td></tr>
+<tr><td><a href="/vgi/docs/go/api/observability/">Errors &amp; logging</a></td><td>Error types and the named structured loggers.</td></tr>
+</tbody>
+</table>

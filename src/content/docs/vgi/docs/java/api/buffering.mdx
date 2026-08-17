@@ -1,0 +1,165 @@
+---
+title: "Buffering functions"
+description: "Sink, combine, source — for output that depends on the whole input."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Sink, combine, source — for output that depends on the whole input.
+
+</div>
+
+<div class="api-member">
+
+<a id="BufferingFinalizeProducer"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `BufferingFinalizeProducer`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/buffering/BufferingFinalizeProducer.java#L27" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public abstract class BufferingFinalizeProducer extends TableProducerState</code></pre>
+
+<p class="api-section">Description</p>
+
+Base producer for the Source phase of a buffering function. Holds the
+`finalize_state_id` + storage view and reuses `TableProducerState`
+for the (already projection-narrowed) `#outputSchema` and the pushdown
+`#filters`. Subclasses implement `#produceTick` and call
+`#emitProjected` to ship a buffered batch — the base narrows it to the
+projected columns (by name) and applies pushdown filters, exactly as the
+C++ `_FilteringOutputCollector` does for the canonical worker.
+
+</div>
+
+<div class="api-member">
+
+<a id="BufferingStorageHolder"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `BufferingStorageHolder`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/buffering/BufferingStorageHolder.java#L20" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class BufferingStorageHolder</code></pre>
+
+<p class="api-section">Description</p>
+
+Process-wide handle to the worker's `FunctionStorage` backend, so a
+buffering source producer can re-bind its `BoundStorage` after an HTTP
+state-token round-trip. The HTTP transport is stateless: it serializes a
+producer's state between `/init` and `/exchange`, and a live
+storage view (a SQLite connection) can't be serialized. So buffering source
+producers keep their `storage` view `transient` and re-acquire it
+here from the `(executionId, attachId)` they did serialize.
+
+A single worker process serves one storage backend, so a static handle is
+sufficient; `VgiServiceImpl` registers it at construction.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>void register(FunctionStorage b)</code></pre>
+
+Register the worker's storage backend. Called once when the service is built.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>BoundStorage bind(byte[] executionId, byte[] attachId)</code></pre>
+
+Re-bind a `BoundStorage` for `executionId` on the registered
+backend (used when resuming a buffering source producer from a state token).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableBufferingCombineParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `TableBufferingCombineParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/buffering/TableBufferingCombineParams.java#L30" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record TableBufferingCombineParams( String functionName, byte[] executionId, BoundStorage storage, CallContext ctx, farm.query.vgi.function.Arguments args, org.apache.arrow.vector.types.pojo.Schema outputSchema, byte[] attachOpaqueData, org.apache.arrow.vector.types.pojo.Schema inputSchema, farm.query.vgi.protocol.CopyToContext copyTo, byte[] secrets)</code></pre>
+
+<p class="api-section">Description</p>
+
+Context passed to `TableBufferingFunction#combine`: the execution's
+storage view, `execution_id`, and the call context for
+`ctx.clientLog(...)`.
+
+</div>
+
+<div class="api-member">
+
+<a id="TableBufferingFinalizeParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `TableBufferingFinalizeParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/buffering/TableBufferingFinalizeParams.java#L21" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record TableBufferingFinalizeParams( byte[] executionId, byte[] finalizeStateId, byte[] attachId, BoundStorage storage, TableInitParams initParams)</code></pre>
+
+<p class="api-section">Description</p>
+
+Context passed to `TableBufferingFunction#createFinalizeProducer` for
+one `finalize_state_id`. `#initParams()` carries the (already
+projection-narrowed) output schema and the pre-built pushdown filter, so a
+finalize producer extending `TableProducerState` reuses the same
+narrow-and-filter machinery as a plain table function.
+
+</div>
+
+<div class="api-member">
+
+<a id="TableBufferingFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableBufferingFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/buffering/TableBufferingFunction.java#L33" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface TableBufferingFunction extends FunctionDescriptor</code></pre>
+
+<p class="api-section">Description</p>
+
+A VGI table-buffering (Sink+Source) function: must see every input row before
+producing output. Lifecycle, mirroring vgi-python `TableBufferingFunction`:
+
+  
+- **`#process`** (Sink, once per input batch) — stash the batch
+  in `params.storage()` and return an opaque `state_id`.
+  
+- **`#combine`** (once, end-of-input) — group/merge the
+  `state_ids` into `finalize_state_ids`, one per output
+  stream the Source will drain.
+  
+- **`#createFinalizeProducer`** (Source, once per
+  `finalize_state_id`) — return a `TableProducerState` that
+  emits one batch per tick until it calls `out.finish()`.
+
+The function's wire `function_type` is `"table_buffering"`,
+which selects the C++ Sink+Source operator. Ordering knobs (sink/source
+order, batch-index) ride on `FunctionMetadata`.
+
+</div>
+
+<div class="api-member">
+
+<a id="TableBufferingProcessParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `TableBufferingProcessParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/buffering/TableBufferingProcessParams.java#L32" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record TableBufferingProcessParams( String functionName, byte[] executionId, BoundStorage storage, Long batchIndex, CallContext ctx, farm.query.vgi.function.Arguments args, org.apache.arrow.vector.types.pojo.Schema outputSchema, byte[] attachOpaqueData, org.apache.arrow.vector.types.pojo.Schema inputSchema, farm.query.vgi.protocol.CopyToContext copyTo, byte[] secrets)</code></pre>
+
+<p class="api-section">Description</p>
+
+Context passed to `TableBufferingFunction#process`: the execution's
+storage view, its `execution_id`, the optional per-batch index
+(present only when `requires_input_batch_index` is declared), and the
+call context — `ctx.clientLog(...)` surfaces in `duckdb_logs()`.
+
+</div>

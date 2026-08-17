@@ -1,0 +1,234 @@
+---
+title: Cache results on the client
+description: "Advertise cacheability from a VGI worker: TTLs, validators, conditional revalidation, and per-partition or per-value reuse."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import cacheSrc from '../../../../../../examples/vgi-python/cache_worker.py?raw';
+
+How a worker tells the DuckDB client that a result can be reused, so the next query answers without
+calling you at all. Worth doing when your worker is slower than the query around it — a remote API, a
+rate-limited service, an expensive model.
+
+## Prerequisites
+
+- A working table, scalar, or buffering function (see
+  [Function patterns](/vgi/docs/python/how-to/function-patterns/)).
+- vgi-python **0.14.0+** for table functions, **0.16.1+** for scalar functions and `partition_scope`,
+  **0.18.0+** for `per_value`.
+
+## The model
+
+Caching is **advertised, not requested**. The worker attaches `vgi.cache.*` metadata to the **first**
+data batch it emits, and the client decides what to do with it. Nothing is cached unless you say so.
+
+The vocabulary is deliberately HTTP's (RFC 9111/9110), because the problem is the same one: a
+freshness lifetime, a reuse scope, validators for revalidating cheaply, and grace windows for serving
+stale.
+
+Here is the whole thing — a table function standing in for a slow upstream, advertising a five-minute
+TTL and a validator:
+
+<Collapsible summary="cache_worker.py">
+<CodeBlock code={cacheSrc} lang="python" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'rates' (TYPE vgi, LOCATION 'uv run cache_worker.py');
+SELECT * FROM rates.rates();   -- repeat calls inside the TTL never reach the worker`} lang="sql" tryable={false} />
+
+Running that `SELECT` four times in one session calls the worker's `process()` **once**.
+
+<Callout type="warning" title="Cast to VgiOutputCollector to reach cache_control">
+The `out` handed to `process()` is typed as vgi-rpc's `OutputCollector`, whose `emit()` takes only
+`(batch, metadata)`. The object the framework actually passes is a VGI wrapper that also accepts
+`cache_control=`, `batch_index=` and `partition_values=`. Reach it by casting — the base type can't
+carry the wider signature without breaking `process()` override compatibility everywhere else:
+
+<CodeBlock code={`from typing import cast
+from vgi.protocol import VgiOutputCollector
+
+cast(VgiOutputCollector, out).emit(batch, cache_control=CacheControl(ttl=300))`} lang="python" tryable={false} />
+</Callout>
+
+`CacheControl` renders to the wire keys for you. If you're mirroring another implementation you can
+pass them directly instead — `metadata` is on the base `emit()`, so this form needs no cast:
+
+<CodeBlock code={`out.emit(first_batch, metadata={"vgi.cache.ttl": "300"})`} lang="python" tryable={false} />
+
+<Callout type="info" title="First batch only">
+The metadata rides on the first batch of the result. Attaching it to a later batch has no effect —
+by then the client has already decided how to treat the stream.
+</Callout>
+
+## Freshness
+
+Presence of **`ttl`** or **`expires`** is what makes a result cacheable at all. `no_store` overrides
+either.
+
+<table>
+<thead>
+<tr><th>Field</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ttl</code></td><td>Lifetime in whole seconds, measured from full-result receipt. Skew-immune, and wins over <code>expires</code>.</td></tr>
+<tr><td><code>expires</code></td><td>Absolute RFC 3339 UTC deadline. Lifetime is <code>expires - now</code> at receipt.</td></tr>
+<tr><td><code>no_store</code></td><td>Explicit "never cache". Overrides any freshness key.</td></tr>
+<tr><td><code>scope</code></td><td><code>"catalog"</code> (default) reuses across transactions within the calling catalog identity; <code>"transaction"</code> reuses only inside the same transaction.</td></tr>
+</tbody>
+</table>
+
+Prefer `ttl` unless your upstream genuinely publishes an absolute deadline — it doesn't depend on the
+client's clock agreeing with yours.
+
+## Revalidation
+
+A TTL alone means the result is recomputed from scratch once it expires. If you can check freshness
+more cheaply than you can recompute, advertise a **validator** and set `revalidatable`:
+
+<CodeBlock code={`cast(VgiOutputCollector, out).emit(
+    first_batch,
+    cache_control=CacheControl(
+        ttl=300,
+        etag='"rates-v3"',        # strong validator
+        revalidatable=True,       # "ask me instead of recomputing"
+    ),
+)`} lang="python" tryable={false} />
+
+`revalidatable` is what gates whether the client ever sends a conditional request at all. When it
+does, the validators it holds arrive on the scan params:
+
+<CodeBlock code={`@classmethod
+def process(cls, params, state, out) -> None:
+    vgi_out = cast(VgiOutputCollector, out)
+    if params.if_none_match == _DATA_VERSION:
+        # Nothing changed — 304-equivalent. Emit ZERO rows and say so.
+        vgi_out.emit(
+            pa.RecordBatch.from_pylist([], schema=_SCHEMA),
+            cache_control=CacheControl(ttl=300, etag=_DATA_VERSION, not_modified=True),
+        )
+        out.finish()
+        return
+    ...  # changed: stream the result normally`} lang="python" tryable={false} />
+
+`params.if_none_match` and `params.if_modified_since` are both `None` on a normal call. Answering
+with `not_modified=True` on a **0-row** batch tells the client its stored payload is still good, and
+it reuses that instead of re-streaming yours.
+
+Use `etag` when you have an opaque version token; `last_modified` (RFC 3339 UTC) is the weaker
+fallback when you only have a timestamp.
+
+### Serving stale
+
+Two grace windows let the client answer immediately instead of blocking on you:
+
+- **`stale_while_revalidate`** — seconds it may serve the stale result while revalidating in the
+  background.
+- **`stale_if_error`** — seconds it may serve the stale result if a revalidation RPC fails.
+
+Both are the difference between a slow upstream being a latency problem and being an availability
+problem.
+
+## Caching a slice instead of the whole scan
+
+Two opt-ins cache at a finer grain than "the whole result". Both are **additive** to the whole-scan
+cache, not replacements for it.
+
+### Per-partition
+
+For a `SINGLE_VALUE_PARTITIONS` table function, `partition_scope=True` also caches the result split
+by partition value — one entry per distinct partition-value tuple — so a later `=`/`IN`-filtered scan
+reuses the per-partition entries rather than re-running the whole scan.
+
+<CodeBlock code={`cast(VgiOutputCollector, out).emit(
+    first_batch, cache_control=CacheControl(ttl=600, partition_scope=True)
+)`} lang="python" tryable={false} />
+
+### Per-value
+
+For an exchange-mode map — a scalar function, or a blended table-in-out called via correlated
+`LATERAL` — `per_value=True` memoizes each distinct input tuple's output, so the same value is served
+without the worker on a later chunk or query.
+
+<Callout type="warning" title="Leave per_value off unless one call is genuinely expensive">
+A per-value serve costs a cache probe, a decode and an assembly step **per distinct value**. That
+only pays back when it is cheaper than calling you. For an arithmetic map it measures roughly **50x
+slower** than simply answering the call. Turn it on for model inference, geocoding, or a rate-limited
+remote fetch — not for arithmetic.
+</Callout>
+
+## Checking that it worked
+
+Caching is advertised, so a mistake is silent: everything still returns the right answer, just without
+the reuse. The extension exposes the counters directly — ask it rather than guessing.
+
+<CodeBlock code={`SELECT hits, misses, inserts, entries, total_bytes FROM vgi_result_cache_stats();`} lang="sql" tryable={false} />
+
+<CodeBlock code={`┌──────┬────────┬─────────┬─────────┬─────────────┐
+│ hits │ misses │ inserts │ entries │ total_bytes │
+├──────┼────────┼─────────┼─────────┼─────────────┤
+│    2 │      2 │       1 │       1 │         448 │
+└──────┴────────┴─────────┴─────────┴─────────────┘`} lang="text" tryable={false} />
+
+Run your query several times and watch `hits` climb while `inserts` stays put. If `inserts` is 0 the
+result was never considered cacheable — check that the metadata is on the **first** batch and that
+`ttl` or `expires` is actually set, since neither is optional for a result to be cached at all.
+
+<table>
+<thead>
+<tr><th>Function</th><th>What it gives you</th></tr>
+</thead>
+<tbody>
+<tr><td><code>vgi_result_cache_stats()</code></td><td>Counters: hits, misses, inserts, evictions, entries, bytes — plus separate exchange-mode and per-partition tallies.</td></tr>
+<tr><td><code>vgi_result_cache()</code></td><td>One row per cached entry: catalog, function, key hash, scope, versions.</td></tr>
+<tr><td><code>vgi_result_cache_flush()</code></td><td>Drop everything — the quickest way to get a clean measurement.</td></tr>
+<tr><td><code>vgi_result_cache_reap()</code></td><td>Evict what has expired, without waiting for the reaper.</td></tr>
+</tbody>
+</table>
+
+`EXPLAIN ANALYZE` also annotates the scan with `Cache: hit (memory)` or `Cache: miss`, which is often
+the fastest way to see what one particular query did.
+
+## Wire keys
+
+`CacheControl.to_metadata()` renders these; the C++ extension reads them by exact string. Booleans
+render as `"1"` and are omitted when false, unset optionals are omitted entirely, and `scope` is
+always emitted so the client never infers the default.
+
+<table>
+<thead>
+<tr><th>Key</th><th>Field</th></tr>
+</thead>
+<tbody>
+<tr><td><code>vgi.cache.ttl</code></td><td><code>ttl</code> (integer seconds)</td></tr>
+<tr><td><code>vgi.cache.expires</code></td><td><code>expires</code> (RFC 3339 UTC)</td></tr>
+<tr><td><code>vgi.cache.no_store</code></td><td><code>no_store</code></td></tr>
+<tr><td><code>vgi.cache.scope</code></td><td><code>scope</code> — <code>catalog</code> | <code>transaction</code></td></tr>
+<tr><td><code>vgi.cache.etag</code></td><td><code>etag</code></td></tr>
+<tr><td><code>vgi.cache.last_modified</code></td><td><code>last_modified</code></td></tr>
+<tr><td><code>vgi.cache.revalidatable</code></td><td><code>revalidatable</code></td></tr>
+<tr><td><code>vgi.cache.stale_while_revalidate</code></td><td><code>stale_while_revalidate</code></td></tr>
+<tr><td><code>vgi.cache.stale_if_error</code></td><td><code>stale_if_error</code></td></tr>
+<tr><td><code>vgi.cache.not_modified</code></td><td><code>not_modified</code></td></tr>
+<tr><td><code>vgi.cache.partition_scope</code></td><td><code>partition_scope</code></td></tr>
+<tr><td><code>vgi.cache.per_value</code></td><td><code>per_value</code></td></tr>
+</tbody>
+</table>
+
+Request-side validators travel the other way on the input batch's metadata, as
+`vgi.cache.if_none_match` and `vgi.cache.if_modified_since`; the framework unpacks them onto
+`params` for you.
+
+<InfoTip label="Validation" title="CacheControl checks itself">
+`scope` must be `catalog` or `transaction`, and `ttl` / `stale_while_revalidate` / `stale_if_error`
+must be non-negative — both raise `ValueError` at construction, not at emit time.
+</InfoTip>
+
+## Next steps
+
+- **[API Reference — cache_control](/vgi/docs/python/api/vgi-cache_control/)** — every field and
+  constant.
+- **[Integrate with the optimizer](/vgi/docs/python/how-to/pushdown-and-statistics/)** — the other
+  half of making a worker cheap to query.

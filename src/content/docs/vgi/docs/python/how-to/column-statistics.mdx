@@ -9,7 +9,7 @@ How a worker reports per-column statistics — min/max values, null counts, dist
 DuckDB's query optimizer can make cost-based decisions: eliminate unnecessary scans, improve join
 ordering, and push down spatial filters.
 
-## How It Works
+## How it works
 
 1. The worker declares `supports_column_statistics=True` on tables that provide statistics
 2. When DuckDB plans a query, it calls the `catalog_table_column_statistics_get` RPC
@@ -25,9 +25,10 @@ EXPLAIN SELECT * FROM mydb.data.departments WHERE id > 100;
 EXPLAIN SELECT * FROM mydb.data.departments WHERE id > 100;
 -- Physical Plan: FILTER → VGI_TABLE_SCAN`} lang="sql" tryable={false} />
 
-## Declarative Statistics (Recommended)
+## Declarative statistics (recommended)
 
-The simplest approach: add a `statistics` dict to your `Table` descriptor. Types are auto-inferred from the table's column schema.
+The simplest approach: add a `statistics` dict to your `Table` descriptor. Types are auto-inferred
+from the table's column schema.
 
 <CodeBlock code={`from vgi.catalog import Table, Schema, Catalog
 from vgi.catalog.descriptors import ColumnStatisticsInput
@@ -57,7 +58,7 @@ catalog = Catalog(
     ],
 )`} lang="python" tryable={false} />
 
-### ColumnStatisticsInput Fields
+### `ColumnStatisticsInput` fields
 
 <table>
 <thead>
@@ -74,7 +75,8 @@ catalog = Catalog(
 </tbody>
 </table>
 
-Values can be plain Python literals (`int`, `float`, `str`) which are auto-converted using the column's Arrow type, or explicit `pa.Scalar` values for precise control:
+Values can be plain Python literals (`int`, `float`, `str`) which are auto-converted using the
+column's Arrow type, or explicit `pa.Scalar` values for precise control:
 
 <CodeBlock code={`# Plain Python values — types inferred from schema
 ColumnStatisticsInput(min=1, max=100)
@@ -84,7 +86,8 @@ ColumnStatisticsInput(min=pa.scalar(1, pa.int32()), max=pa.scalar(100, pa.int32(
 
 ### Cache TTL
 
-`statistics_cache_max_age_seconds` controls how long DuckDB caches the statistics before making another RPC call:
+`statistics_cache_max_age_seconds` controls how long DuckDB caches the statistics before making
+another RPC call:
 
 <table>
 <thead>
@@ -97,9 +100,10 @@ ColumnStatisticsInput(min=pa.scalar(1, pa.int32()), max=pa.scalar(100, pa.int32(
 </tbody>
 </table>
 
-## Dynamic Statistics from DuckDB
+## Dynamic statistics from DuckDB
 
-For workers that proxy data from a DuckDB database, use the `statistics_from_duckdb` helper to extract real statistics:
+For workers that proxy data from a DuckDB database, use the `statistics_from_duckdb` helper to
+extract real statistics:
 
 <CodeBlock code={`import duckdb
 from vgi.catalog.duckdb_statistics import statistics_from_duckdb
@@ -114,9 +118,12 @@ Table(
     statistics_cache_max_age_seconds=3600,
 )`} lang="python" tryable={false} />
 
-The helper queries `min()`, `max()`, `approx_count_distinct()`, and null counts per column using DuckDB's Arrow API, returning properly typed `pa.Scalar` values.
+The helper queries `min()`, `max()`, `approx_count_distinct()`, and null counts per column using
+DuckDB's Arrow API, returning properly typed `pa.Scalar` values. Since **0.16.1** it collects every
+column in a **single scan** (with a small Arrow batch size) rather than one pass per column, so the
+cost no longer scales with table width.
 
-### Special Type Handling
+### Special type handling
 
 <table>
 <thead>
@@ -132,9 +139,10 @@ The helper queries `min()`, `max()`, `approx_count_distinct()`, and null counts 
 </tbody>
 </table>
 
-## Dynamic Statistics (Override Method)
+## Dynamic statistics (override method)
 
-For computed or live statistics, override `table_column_statistics_get()` on your `CatalogInterface`:
+For computed or live statistics, override `table_column_statistics_get()` on your
+`CatalogInterface`:
 
 <CodeBlock code={`from vgi.catalog.catalog_interface import CatalogInterface, TableColumnStatisticsResult
 from vgi.catalog.duckdb_statistics import column_statistics_from_duckdb
@@ -149,9 +157,10 @@ class MyCatalog(CatalogInterface):
             cache_max_age_seconds=60,  # Re-fetch every minute
         )`} lang="python" tryable={false} />
 
-`column_statistics_from_duckdb()` returns `list[ColumnStatistics]` with fully resolved PyArrow scalars — ready to wrap in `TableColumnStatisticsResult`.
+`column_statistics_from_duckdb()` returns `list[ColumnStatistics]` with fully resolved PyArrow
+scalars — ready to wrap in `TableColumnStatisticsResult`.
 
-## Debugging Statistics
+## Debugging statistics
 
 Use the `vgi_table_statistics()` SQL function to inspect what statistics DuckDB has for a VGI table:
 
@@ -174,7 +183,7 @@ Notes:
 - Geometry columns show the bounding box extent: `BOX(xmin ymin, xmax ymax)`
 - Tables without `supports_column_statistics=True` return zero rows
 
-## Wire Format
+## Wire format
 
 Statistics are transmitted via the `catalog_table_column_statistics_get` RPC method:
 
@@ -200,11 +209,30 @@ Statistics are transmitted via the `catalog_table_column_statistics_get` RPC met
 
 Cache TTL is carried as IPC batch `custom_metadata` with key `cache_max_age_seconds`.
 
-## Capability Flags
+### Reading the bytes back
+
+`serialize_column_statistics()` had no inverse, so any non-DuckDB client holding the bytes had to
+re-implement the sparse-union layout to read them. Since **0.28.0** there is
+`deserialize_column_statistics()`, plus a one-call convenience on the client:
+
+<CodeBlock code={`stats = client.table_column_statistics(schema_name="main", name="widgets")`} lang="python" tryable={false} />
+
+Unwrapping the union correctly needs **both** levels checked: a `min`/`max` cell is valid while
+wrapping a null child, which is what an unknown statistic for that row looks like. Treating a valid
+cell as a known value is the mistake this function exists to prevent.
+
+## Capability flags
 
 Statistics are opt-in at two levels:
 
 1. **Catalog level**: `CatalogAttachResult.supports_column_statistics` — global gate. If `False`, DuckDB never calls the statistics RPC.
 2. **Table level**: `TableInfo.supports_column_statistics` — per-table opt-in. Mixed catalogs can have some tables with stats and others without.
 
-When using the `Table` descriptor, both flags are auto-derived from whether the `statistics` dict is non-empty.
+When using the `Table` descriptor, both flags are auto-derived from whether the `statistics` dict is
+non-empty.
+## Next steps
+
+- **The task-level guide** → [Integrate with the optimizer](/vgi/docs/python/how-to/pushdown-and-statistics/).
+- **The other optimizer lever** → [Filter pushdown wire format](/vgi/docs/python/how-to/filter-pushdown/).
+- **Reading stats from a client** → [Use VGI from a Python app](/vgi/docs/python/how-to/python-app/#reading-column-statistics).
+- **Exact types** → [API Reference: catalog](/vgi/docs/python/api/vgi-catalog/).

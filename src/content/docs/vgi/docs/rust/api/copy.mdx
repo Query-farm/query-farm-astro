@@ -1,0 +1,209 @@
+---
+title: "COPY formats"
+description: "Reading and writing your own format through COPY … FROM / TO."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Reading and writing your own format through COPY … FROM / TO.
+
+</div>
+
+<div class="api-member">
+
+<a id="CopyFromFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">trait</span> `CopyFromFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/copy_from.rs#L66" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub trait CopyFromFunction: Send + Sync {
+    fn format(&self) -> &str;
+
+    fn handler_name(&self) -> &str;
+
+    fn comment(&self) -> Option<String> {
+        None
+    }
+
+    fn metadata(&self) -> FunctionMetadata {
+        FunctionMetadata::default()
+    }
+
+    fn argument_specs(&self) -> Vec<ArgSpec>;
+
+    fn secret_lookups(&self, _params: &BindParams) -> Vec<crate::secrets::SecretLookup> {
+        Vec::new()
+    }
+
+    fn read(
+        &self,
+        ctx: &CopyFromReadContext,
+        out: &mut OutputCollector,
+    ) -> Result<Vec<RecordBatch>>;
+
+    fn read_stream(&self, _ctx: &CopyFromReadContext) -> Result<Option<Box<dyn TableProducer>>> {
+        Ok(None)
+    }
+}`} />
+
+<p class="api-section">Description</p>
+
+A custom `COPY ... FROM` format reader.
+
+Implement [`format`](Self::format), [`handler_name`](Self::handler_name),
+[`argument_specs`](Self::argument_specs) (the COPY options — the source
+`file_path` is supplied by the COPY statement, **not** an option), and
+[`read`](Self::read) (parse the source and return Arrow batches matching the
+target schema). Register with
+[`Worker::register_copy_from`](crate::Worker::register_copy_from).
+
+</div>
+
+<div class="api-member">
+
+<a id="CopyToFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">trait</span> `CopyToFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/copy_to.rs#L92" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub trait CopyToFunction: Send + Sync {
+    fn format(&self) -> &str;
+
+    fn handler_name(&self) -> &str;
+
+    fn comment(&self) -> Option<String> {
+        None
+    }
+
+    fn metadata(&self) -> FunctionMetadata {
+        FunctionMetadata::default()
+    }
+
+    fn argument_specs(&self) -> Vec<ArgSpec>;
+
+    fn secret_lookups(&self, _params: &BindParams) -> Vec<crate::secrets::SecretLookup> {
+        Vec::new()
+    }
+
+    fn ordered(&self) -> bool {
+        false
+    }
+
+    fn write(&self, ctx: &CopyToWriteContext, batch: &RecordBatch) -> Result<()>;
+
+    fn close(&self, ctx: &CopyToCloseContext) -> Result<i64>;
+}`} />
+
+<p class="api-section">Description</p>
+
+A custom `COPY ... TO` format writer.
+
+Implement [`format`](Self::format), [`handler_name`](Self::handler_name),
+[`argument_specs`](Self::argument_specs) (the COPY options — the destination
+`file_path` is supplied by the COPY statement, **not** an option),
+[`write`](Self::write) (persist one batch to a shard), and
+[`close`](Self::close) (terminal destination write). Register with
+[`Worker::register_copy_to`](crate::Worker::register_copy_to).
+
+</div>
+
+<div class="api-member">
+
+<a id="CopyFromReadContext"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CopyFromReadContext`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/copy_from.rs#L46" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct CopyFromReadContext<'a> {
+    pub path: &'a str,
+    pub options: &'a Arguments,
+    pub expected_schema: &'a SchemaRef,
+    pub params: &'a ProcessParams,
+}`} />
+
+<p class="api-section">Description</p>
+
+Context handed to [`CopyFromFunction::read`].
+
+</div>
+
+<div class="api-member">
+
+<a id="CopyFromTable"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CopyFromTable`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/copy_from.rs#L138" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub struct CopyFromTable(pub Arc&lt;dyn CopyFromFunction&gt;);</code></pre>
+
+<p class="api-section">Description</p>
+
+Adapter that exposes a [`CopyFromFunction`] as an ordinary producer-mode
+[`TableFunction`], so the entire table bind/init/scan path is reused. The
+COPY-FROM context arrives via [`ProcessParams::copy_from`].
+
+</div>
+
+<div class="api-member">
+
+<a id="CopyToBuffering"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CopyToBuffering`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/copy_to.rs#L156" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub struct CopyToBuffering(pub Arc&lt;dyn CopyToFunction&gt;);</code></pre>
+
+<p class="api-section">Description</p>
+
+Adapter that exposes a [`CopyToFunction`] as a [`TableBufferingFunction`], so
+the entire buffering sink/combine RPC path is reused. There is no Source
+phase: `combine` returns an empty finalize list and `finalize_producer` is
+never invoked.
+
+</div>
+
+<div class="api-member">
+
+<a id="CopyToCloseContext"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CopyToCloseContext`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/copy_to.rs#L68" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct CopyToCloseContext<'a> {
+    pub path: &'a str,
+    pub options: &'a Arguments,
+    pub storage: &'a Arc<dyn FunctionStorage>,
+    pub execution_id: &'a [u8],
+    pub input_schema: Option<&'a SchemaRef>,
+    pub params: &'a BufferingParams,
+}`} />
+
+<p class="api-section">Description</p>
+
+Context handed to [`CopyToFunction::close`] (terminal write, once).
+
+</div>
+
+<div class="api-member">
+
+<a id="CopyToWriteContext"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CopyToWriteContext`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/copy_to.rs#L52" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct CopyToWriteContext<'a> {
+    pub path: &'a str,
+    pub options: &'a Arguments,
+    pub storage: &'a Arc<dyn FunctionStorage>,
+    pub execution_id: &'a [u8],
+    pub params: &'a BufferingParams,
+}`} />
+
+<p class="api-section">Description</p>
+
+Context handed to [`CopyToFunction::write`] (per input batch).
+
+</div>

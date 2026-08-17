@@ -1,0 +1,86 @@
+---
+title: 2. Your first table function
+description: Add a row-generating table function to your Java VGI worker, and scan it in parallel without duplicating rows.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import workerSrc from '../../../../../../examples/vgi-java/TableExample.java?raw';
+
+Step two: add a **table** function. A scalar function transforms a column; a table function
+*produces* rows, so it is called in a `FROM` clause. About **10 minutes**.
+
+<div class="kind-banner kind-banner--table"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table.svg" alt="table shape" /><div class="kind-banner__text"><code class="kind-banner__formula">args → N rows</code><p class="kind-banner__desc">A table-valued source: scalar arguments in, a whole set of rows out.</p></div></div>
+
+## The worker
+
+<Collapsible summary="TableExample.java">
+<CodeBlock code={workerSrc} lang="java" title="TableExample.java" tryable={false} />
+</Collapsible>
+
+Four things to notice:
+
+- **`CountdownTableFunction` is a base for generators.** Extend it and you get the `count` positional
+  argument and a `batch_size := 2048` named argument for free — 2048 being DuckDB's standard vector
+  size, so each batch fills one of its chunks.
+- **`produceTick` is the pull loop.** DuckDB calls it repeatedly; emit one batch per call and call
+  `out.finish()` when there is nothing left.
+- **The producer is per-thread; storage is per-scan.** That distinction is the whole point of the
+  next section.
+- **The schema is built once**, at class level, because it never varies.
+
+## Call it
+
+<CodeBlock code={`ATTACH 'demo' (TYPE vgi, LOCATION 'launch:/abs/path/bin/demo');
+SELECT * FROM demo.numbers(5);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["n"]} rows={[[0], [1], [2], [3], [4]]} />
+
+## Parallel scans, and the trap underneath them
+
+`maxWorkers()` returns `4`, so DuckDB may scan this function on four threads at once. **Each thread
+gets its own producer.** A producer that simply counted from `0` to `count` would therefore emit the
+entire range once per thread — four times the rows, no error, no warning.
+
+This example avoids that by coordinating rather than counting. Every parallel producer in one scan
+shares an `execution_id`, and therefore the same `params.storage()`. An atomic counter there is a
+single cursor they all draw disjoint chunks from:
+
+<CodeBlock code={`private static final byte[] CURSOR_NS = "cursor".getBytes(StandardCharsets.UTF_8);
+private static final byte[] CURSOR_KEY = new byte[0];`} lang="java" tryable={false} />
+
+The union covers `0..count-1` exactly once, which a query can check rather than assume:
+
+<CodeBlock code={`SELECT count(*) AS rows, count(DISTINCT n) AS distinct_n, sum(n) AS total
+FROM demo.numbers(1000000);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["rows", "distinct_n", "total"]} rows={[[1000000, 1000000, 499999500000]]} />
+
+A million rows, a million distinct values, and the sum a closed form agrees with — across four
+threads.
+
+<Callout type="warning" title="Raising `maxWorkers` without coordinating multiplies your output">
+This is worth stating on its own, because the failure is silent and the fix is not obvious. If your
+producer derives its rows from the arguments alone, leave `maxWorkers()` at 1. Raise it only once
+the producers agree on who emits what — through `params.storage()`, a work queue, or a partition
+column.
+
+The [Go SDK's version of this](/vgi/docs/go/how-to/function-patterns/#parallelism-and-oninit) shows
+the same failure concretely: four workers turned `series(10)` into forty rows.
+</Callout>
+
+<InfoTip label="Why “producer” and not just “function”?" title="Why a producer?" width="32rem">
+A table function is pulled, not called: the engine asks the worker for output until it signals
+completion. `produceTick` is the pull handler. The function object is shared across threads and must
+stay safe to call concurrently; the producer is per-scan-thread state, which is where a cursor
+belongs.
+</InfoTip>
+
+## Next steps
+
+- **The other three shapes** → [Function patterns](/vgi/docs/java/how-to/function-patterns/).
+- **When each callback fires** → [Function lifecycle](/vgi/docs/concepts/lifecycle/).
+- **Exact contracts** → [Table functions](/vgi/docs/java/api/table/).

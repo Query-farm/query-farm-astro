@@ -50,13 +50,92 @@ co-located and trusted). To gate the service with bearer tokens or JWT/OAuth, se
 [Authentication](/vgi/docs/python/how-to/authentication/).
 </Callout>
 
+## TCP, for trusted networks
+
+Since **0.8.7** a worker can also serve raw Arrow IPC over TCP — lower overhead than HTTP, because
+there is no HTTP framing in the path:
+
+<CodeBlock code={`vgi-serve my_worker.py --tcp 0.0.0.0:9000`} lang="bash" tryable={false} />
+
+It prints a `TCP:<host>:<port>` discovery line, and `--tcp` is mutually exclusive with `--http` and
+`--unix`. From Python, connect with `Client.from_tcp(host, port)` (or `transport="tcp"`); catalog
+calls route over TCP too.
+
+<Callout type="warning" title="TCP carries no auth and no encryption">
+Use it on loopback or a trusted network only. HTTP remains the transport for anything untrusted —
+it's the one that authenticates.
+</Callout>
+
 ## Going to production
 
 The HTTP layer — pre-fork hosting, response-size caps, externalized payloads, graceful drain — is
 provided by **vgi-rpc**, the RPC framework VGI runs on. For deployment specifics see vgi-rpc's
-[hosting guide](https://vgi-rpc-python.query.farm/hosting/).
+[hosting guide](https://vgi-rpc-python.query.farm/hosting/). What follows is what `vgi-serve` itself
+exposes on top.
+
+### Set a signing key before you run more than one process
+
+The signing key seals HTTP state tokens and catalog opaque data. If `VGI_SIGNING_KEY` is unset,
+`vgi-serve` mints an ephemeral one **per process** — correct for a single process, and silently wrong
+for more than one.
+
+<Callout type="warning" title="The failure is load-dependent, which is what makes it expensive">
+A client whose connection stays pinned to one process never notices. One that reconnects mid-stream —
+`seek_to_token`, a load balancer, a respawned worker — hits a token sealed under a key the receiving
+process doesn't have, and gets an intermittent `400` that reads as flakiness. Set the key explicitly
+for any load-balanced or multi-instance deployment; nothing in the process can reach a peer it didn't
+start. Since **0.24.0** an ephemeral key is at least announced at `WARNING`, naming the env var and
+the symptom, rather than staying silent as before.
+</Callout>
+
+<CodeBlock code={`export VGI_SIGNING_KEY="$(openssl rand -hex 32)"
+vgi-serve my_worker.py --http --port 8080`} lang="bash" tryable={false} />
+
+### Choosing a server
+
+`--server waitress` (the default) is pure Python. `--server granian` runs socket I/O and HTTP parsing
+in Rust, off the GIL, which on this workload measured **1.9x** over the best waitress configuration
+from a *single* process — the win comes from the I/O leaving the interpreter, not from process
+fan-out. It's an optional extra because it's a compiled extension.
+
+<CodeBlock code={`vgi-serve my_worker.py --http --server granian --http-workers 4`} lang="bash" tryable={false} />
+
+`--http-workers` applies to granian only. Note that granian builds the app inside each forked worker,
+so every worker must seal state tokens with the same key — `vgi-serve` mints and exports one before
+forking, but see the warning above for anything spanning more than one *machine*.
+
+### Deployment caps and proxies
+
+<table>
+<thead>
+<tr><th>Flag</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--max-stream-response-bytes</code></td><td>Soft cap for producer streams — a continuation token carries the overshoot to the next turn.</td></tr>
+<tr><td><code>--max-externalized-response-bytes</code></td><td><strong>Hard</strong> cap on a single externalized response (the payload uploaded to blob storage and replaced on the wire by a pointer). Applies to every method type with no continuation escape — bytes already uploaded can't be un-uploaded. Set it when a load balancer, API gateway or object-store policy won't carry an arbitrary body. Default is no cap, and the header's <em>absence</em> is what tells a client there is no ceiling.</td></tr>
+<tr><td><code>--prefix</code></td><td>URL prefix for the RPC endpoints.</td></tr>
+<tr><td><code>--access-log-sample</code>, <code>--access-log-async</code></td><td>Access-log sampling and off-thread emission.</td></tr>
+</tbody>
+</table>
+
+Two more, for workers behind a reverse proxy that terminates the only public listener:
+
+- **`Worker.resolve_token()`** — override it to expose `POST {prefix}/__introspect_token__`, which
+  resolves an opaque bearer credential to a principal. The route does not exist until you override
+  the hook.
+- **`VGI_PROXY_PROOF_MODE=require`** — makes `create_app` advertise `VGI-Proxy-Proof-Required`, so a
+  proxy minting proofs can confirm the worker actually enforces them. Without the advertisement,
+  `allow` and `require` are indistinguishable from the proxy's side.
+
+### The landing page
+
+Since **0.27.0** an HTTP worker serves a browsable landing page at its root that reads the catalog
+over the protocol — schemas, functions, macros, and argument types — instead of the static
+`describe.json` it produced before. Disable it with `--no-describe`.
 
 ## Next steps
 
 - **Lock it down** → [Authentication](/vgi/docs/python/how-to/authentication/).
+- **Drive it from Python** → [Use VGI from a Python app](/vgi/docs/python/how-to/python-app/).
+- **API Reference** → [`vgi.serve`](/vgi/docs/python/api/vgi-serve/).
 - **The transport underneath** → [vgi-rpc](https://vgi-rpc-python.query.farm/).

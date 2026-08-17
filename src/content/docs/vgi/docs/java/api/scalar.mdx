@@ -1,0 +1,301 @@
+---
+title: "Scalar functions"
+description: "One row in, one value out — the annotation-driven shape."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+One row in, one value out — the annotation-driven shape.
+
+</div>
+
+<div class="api-member">
+
+<a id="Const"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">annotation</span> `Const`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/scalar/Const.java#L20" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public @interface Const</code></pre>
+
+<p class="api-section">Description</p>
+
+Marks a `compute()` parameter as a const positional arg (bind-time
+constant). The Java type drives Arrow type inference:
+`long → INT64`, `double → FLOAT64`, `String → UTF8`,
+`boolean → BOOL`.
+
+Equivalent to vgi-python's `Annotated[int, ConstParam(doc=...)]`.
+
+</div>
+
+<div class="api-member">
+
+<a id="OutputLength"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">annotation</span> `OutputLength`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/scalar/OutputLength.java#L19" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public @interface OutputLength</code></pre>
+
+<p class="api-section">Description</p>
+
+Inject the batch row count. Use for functions that emit values driven by
+row index (e.g. `random_bytes(seed, length)` — no vector input).
+Parameter type must be `int`.
+
+Equivalent to vgi-python's `Annotated[int, OutputLength()]`.
+
+</div>
+
+<div class="api-member">
+
+<a id="ScalarBindParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `ScalarBindParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/scalar/ScalarBindParams.java#L23" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record ScalarBindParams( String functionName, Arguments arguments, Schema inputSchema, Map&lt;String, Object&gt; settings, byte[] secrets, boolean resolvedSecretsProvided)</code></pre>
+
+<p class="api-section">Description</p>
+
+Parameters passed to `ScalarFunction#onBind`.
+
+`inputSchema` may be `null` if no input columns were bound.
+`settings` carries DuckDB session settings the worker declared.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>ScalarBindParams(String functionName, Arguments arguments, Schema inputSchema, Map&lt;String, Object&gt; settings)</code></pre>
+
+Convenience constructor for bindings with no secrets.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="ScalarFn"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `ScalarFn`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/scalar/ScalarFn.java#L69" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public abstract class ScalarFn implements ScalarFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+Pythonic scalar function base. Subclass and define a single `compute()`
+method; the framework reads its signature to derive `FunctionSpec`,
+output schema, and per-batch dispatch.
+
+**compute() signature rules**
+
+  
+- Parameters annotated `@Vector` are per-row inputs. The parameter's
+  Java type (concrete Arrow vector class) drives Arrow type inference.
+  Use `@Vector(any=true) FieldVector` for any-typed inputs and
+  `@Vector(varargs=true) List<FieldVector>` for varargs.
+  
+- Parameters annotated `@Const` are bind-time constant positional args.
+  Type mapping: `long/int → INT64`, `double → FLOAT64`,
+  `String → UTF8`, `boolean → BOOL`.
+  
+- Parameters annotated `@Setting` pull from session settings.
+  
+- `@OutputLength int` — injected batch row count.
+  
+- The *last* parameter that is an Arrow vector class (unannotated)
+  is the **output** — pre-allocated by the framework with
+  the right row count. `compute()` returns `void`.
+
+For dynamic output types override `#outputType(Schema, Arguments)`.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>String name()</code></pre>
+
+SQL function name.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String description()</code></pre>
+
+One-line description (shown by `duckdb_functions()`).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>FunctionMetadata metadata()</code></pre>
+
+Override for richer metadata (categories, pushdown, etc.).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>FunctionSpec spec()</code></pre>
+
+\{@inheritDoc\}
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;ArgSpec&gt; argumentSpecs()</code></pre>
+
+Argument specs. Default: auto-derived from `compute()` parameter
+annotations + Arrow vector class type-mapping. Override when arguments
+use nested Arrow types (`STRUCT`, `LIST`, `FixedSizeList`)
+whose children can't be inferred from the Java vector class alone.
+`compute()` still drives the per-batch dispatch — only argument
+metadata changes.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>BindResponse onBind(ScalarBindParams params)</code></pre>
+
+\{@inheritDoc\}
+
+Resolves `#outputSchema` first (so fixtures with domain-specific
+reject messages report before the framework's generic type-bound check),
+then enforces any declared `TypeBoundPredicate`s.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>VectorSchemaRoot process(ScalarProcessParams params, VectorSchemaRoot input, BufferAllocator alloc)</code></pre>
+
+\{@inheritDoc\}
+
+Binds the input columns, consts, and settings to `compute()`'s
+parameters and invokes it via a cached `MethodHandle` into a
+framework-allocated output vector.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void close()</code></pre>
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Object resolve(ScalarProcessParams params, VectorSchemaRoot input, BufferAllocator alloc, int vectorIdx)</code></pre>
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Object resolve(ScalarProcessParams params, VectorSchemaRoot input, BufferAllocator alloc, int vectorIdx)</code></pre>
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Object resolve(ScalarProcessParams params, VectorSchemaRoot input, BufferAllocator alloc, int vectorIdx)</code></pre>
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Object resolve(ScalarProcessParams params, VectorSchemaRoot input, BufferAllocator alloc, int vectorIdx)</code></pre>
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Object resolve(ScalarProcessParams params, VectorSchemaRoot input, BufferAllocator alloc, int vectorIdx)</code></pre>
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Object resolve(ScalarProcessParams params, VectorSchemaRoot input, BufferAllocator alloc, int vectorIdx)</code></pre>
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Object resolve(ScalarProcessParams params, VectorSchemaRoot input, BufferAllocator alloc, int vectorIdx)</code></pre>
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="ScalarFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `ScalarFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/scalar/ScalarFunction.java#L16" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface ScalarFunction extends FunctionDescriptor</code></pre>
+
+<p class="api-section">Description</p>
+
+A scalar VGI function: 1:1 row mapping. Output row count must equal input row count.
+
+Mirrors `vgi.ScalarFunction` in vgi-go.
+
+</div>
+
+<div class="api-member">
+
+<a id="ScalarProcessParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `ScalarProcessParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/scalar/ScalarProcessParams.java#L19" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record ScalarProcessParams( String functionName, Arguments arguments, Schema outputSchema, Map&lt;String, Object&gt; settings, byte[] secrets)</code></pre>
+
+<p class="api-section">Description</p>
+
+Parameters passed to `ScalarFunction#process`.
+
+</div>
+
+<div class="api-member">
+
+<a id="Setting"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">annotation</span> `Setting`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/scalar/Setting.java#L18" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public @interface Setting</code></pre>
+
+<p class="api-section">Description</p>
+
+Marks a `compute()` parameter as a session setting. Same type-mapping
+rules as `Const`.
+
+Equivalent to vgi-python's `Annotated[..., Setting("key")]`.
+
+</div>
+
+<div class="api-member">
+
+<a id="Vector"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">annotation</span> `Vector`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/scalar/Vector.java#L23" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public @interface Vector</code></pre>
+
+<p class="api-section">Description</p>
+
+Marks a `compute()` parameter as a per-row input column (vector arg).
+The Java type of the parameter must be a concrete Arrow vector class
+(`BigIntVector`, `VarCharVector`, `Float8Vector`, …); the
+Arrow type for the `farm.query.vgi.function.FunctionSpec` entry is
+inferred from it.
+
+Equivalent to vgi-python's `Annotated[pa.Int64Array, Param(doc=...)]`.
+
+</div>

@@ -39,11 +39,69 @@ repository — so a plain `import duckdb` can't `INSTALL vgi` today. `haybarn` i
 
 To invoke a worker's functions **directly from Python** — for tests or scripts, with no DuckDB engine
 in the loop — use the [`Client`](/vgi/docs/python/api/vgi-client/) instead. It speaks to the worker
-over the subprocess or HTTP transport and exposes the same calls. See
+over the subprocess, HTTP or TCP transport and exposes the same calls. See
 [Serve over HTTP](/vgi/docs/python/how-to/serve-http/) for the HTTP variant.
+
+### Every call names its schema
+
+<Callout type="warning" title="Breaking change in 0.18.0">
+All five `Client` entry points now **require** `schema_name`, and `vgi-client` gained `--schema`.
+Code written against 0.17 and earlier will raise a `TypeError` until you add it.
+</Callout>
+
+A function name was never a unique key: a worker may register the same name in several catalog
+schemas, and dispatch used to be a flat name lookup, so two such functions collided as overloads and
+the call failed as *"Ambiguous function call"*. Resolution is now keyed on `(schema, name)`, which
+makes a schema-qualified lookup exact:
+
+<CodeBlock code={`from vgi.client import Client
+
+with Client(server_path="uv run calc_worker.py") as client:
+    for batch in client.table_function(
+        function_name="series",
+        schema_name="main",       # required since 0.18.0
+        arguments=Arguments(...),
+    ):
+        ...`} lang="python" tryable={false} />
+
+Functions declared in the legacy flat `functions` list register into the catalog's `default_schema`,
+which is the schema DuckDB registers them into — so `schema_name="main"` is usually what you want.
+
+### Spawning a worker
+
+`server_path` accepts a **sequence** as well as a string (since 0.28.1). Take the sequence form
+whenever an argument contains spaces or quotes: splitting a command string is ambiguous on Windows,
+where `shlex` must run with `posix=False` so backslashes in paths survive, which in turn leaves quotes
+attached to the token.
+
+<CodeBlock code={`Client(server_path=["python", "-c", "import sys; run_worker(sys.argv)"])`} lang="python" tryable={false} />
+
+Workers are spawned **without a shell**, so the client owns the real process rather than a shell
+wrapping it — which is what makes the next section work.
+
+### Cancelling a call that has overrun
+
+A graceful `stop()` closes the stream and shuts the RPC connection down first, and both block on a
+worker wedged inside a handler — exactly the case you want to escape. `stop(force=True)` SIGKILLs
+direct subprocess workers first, unblocking any thread waiting on their output:
+
+<CodeBlock code={`client.stop(force=True)   # returns the signal exit code (-9 on POSIX)`} lang="python" tryable={false} />
+
+This only applies to **direct** subprocess workers. A pooled worker is returned to its pool rather
+than owned by the client, so `force` is inert there — construct the client with `pool=None` when you
+need to be able to cancel it. HTTP and TCP workers are already prompt to close.
+
+### Reading column statistics
+
+`Client.table_column_statistics()` fetches and decodes a table's statistics in one call, so a
+non-DuckDB client no longer has to re-implement the sparse-union layout to read the bytes from
+`catalog_table_column_statistics_get`. The standalone inverse is
+`deserialize_column_statistics()`. See
+[Column statistics](/vgi/docs/python/how-to/column-statistics/).
 
 ## Next steps
 
 - **Run the worker as a network service** → [Serve over HTTP](/vgi/docs/python/how-to/serve-http/).
 - **Expose tables and views, not just functions** → [Expose a catalog](/vgi/docs/python/how-to/catalogs/).
+- **API Reference** → [`vgi.client`](/vgi/docs/python/api/vgi-client/).
 - **The CLI path** → the [tutorial](/vgi/docs/python/tutorial/scalar/) drives the same SQL with `npx haybarn@rc`.

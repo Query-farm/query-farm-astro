@@ -1,0 +1,109 @@
+---
+title: What's new
+description: "Recent releases of @query-farm/vgi, and what each one changes for a worker author."
+---
+
+import Callout from '../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../components/ui/CodeBlock.astro';
+
+These docs describe **0.28.0**, the current release. The package is pre-1.0, so minor versions still
+carry breaking changes — each one below says what breaks and what to do about it.
+
+## 0.28.0 — workerd compression is opt-in
+
+Requires `@query-farm/vgi-rpc` 0.21.0, in which response compression on workerd became opt-in rather
+than automatic. Nothing in your worker code changes; the peer range moves to
+`>=0.21.0 <0.22.0`, so an install that pinned an older `vgi-rpc` needs bumping alongside.
+
+## 0.27.0 — CORS is open by default
+
+`createVgiFetch` now defaults `corsOrigins` to `"*"` instead of leaving CORS off when the option is
+omitted. A worker that never configured CORS is now reachable from a browser on another origin.
+
+<Callout type="warning" title="If you relied on omission meaning “no CORS”, this changes behaviour">
+That is why it is a minor rather than a patch. The explicit opt-out is `corsOrigins: null`, accepted
+by both `createVgiFetch` and `serveVgiWorker`.
+
+CORS is a browser policy, not access control — it never stopped a non-browser client. If the worker
+should not be public, the fix is authentication or a network boundary, not the CORS setting. See
+[Serve over HTTP](/vgi/docs/typescript/how-to/serve-http/#configuration).
+</Callout>
+
+## 0.26.0 — the landing surface, and `landingInfo` required
+
+Two breaking changes.
+
+**The landing page and browser client moved into this package.** They were shipped by
+`@query-farm/vgi-rpc`, which knows nothing about catalogs and had no business serving a page that
+renders them. Requires `@query-farm/vgi-rpc` >= 0.20.0, which removed them.
+
+**`landingInfo` is now required on `createVgiFetch`.** It was optional and failed *silently*: a
+Cloudflare worker built without it served vgi-rpc's generic RPC-endpoint placeholder and 404'd
+`/vgi-client.js`, so the page looked like a stub while the RPC surface worked perfectly.
+
+<CodeBlock code={`export default {
+  fetch: createVgiFetch({
+    registry,
+    catalogInterface,
+    landingInfo: { name: "calc", doc: "…", version: "0.1.0" },   // now required
+  }),
+};`} lang="typescript" tryable={false} />
+
+`serveVgiWorker` builds it from its own required `name`/`doc`/`version`, so only the Cloudflare entry
+passes it explicitly.
+
+## 0.25.x — Cloudflare and the landing page
+
+A run of fixes for running on workerd: a `vgi-rpc` that Cloudflare cannot double-encode (0.25.1),
+blended row-transforms reachable from the workerd facade (0.25.2), a `vgi-rpc` that actually runs
+there (0.25.3), and `@noble/ciphers` 2.3.0 with a TypeScript 7 build (0.25.4). 0.25.0 made the
+landing page read the catalog over the protocol rather than a bespoke route.
+
+## 0.24.x — protocol 1.3.0
+
+**Upgrade if you are on anything older.** The community extension serves VGI protocol 1.3.0, and a
+worker emitting the old 15-field `catalog_attach` result fails `ATTACH` against what users install
+today. The failure is at attach time, not build time — the result shape was loosely typed, so it
+surfaced only at runtime.
+
+0.24.0 also added global functions (publishing a function into DuckDB's global namespace rather than
+only under the catalog), and 0.24.1 made the package installable from npm with a documented browser
+backend.
+
+## Peer dependencies, since 0.3.0
+
+`@query-farm/apache-arrow` and `@query-farm/vgi-rpc` are **peerDependencies**, not transitive
+installs:
+
+<CodeBlock code={`bun add @query-farm/vgi @query-farm/apache-arrow @query-farm/vgi-rpc`} lang="bash" tryable={false} />
+
+The SDK marks both external so a single shared instance is used. Two copies produce duplicate-type
+errors — most visibly a `Protocol` clash the moment you import anything from `vgi-rpc` directly.
+
+## The type-handling break
+
+A pre-1.0 change to how columnar values are represented, in both directions:
+
+- **`date32` / `date64` are JS `Date` in *and* out** under the default `rich` representation.
+  Previously a day-number went in but a `Date` came back out.
+- **Non-date temporal types are lossless `bigint` raw units** — `time64`, `timestamp` and `duration`
+  are the exact count in their declared unit. No `Date` narrowing, no precision loss.
+- **Decimals are unscaled `bigint`.** A `DECIMAL(18,2)` of `123.45` is `12345n`.
+- **`repr: "raw"`** opts into branded, unit-tagged values everywhere.
+
+<CodeBlock code={`// BEFORE — wrote a day-number, read back a Date.
+returns: dateDay(),
+compute: () => [20000],
+
+// AFTER (rich, default) — write a Date, read a Date.
+returns: dateDay(),
+compute: () => [new Date("2024-10-19")],`} lang="typescript" tryable={false} />
+
+The full mapping, and the read path that bypasses all of it, are on
+[Value representations](/vgi/docs/typescript/how-to/value-representations/).
+
+## Next steps
+
+- **Start building** → [1. Your first scalar function](/vgi/docs/typescript/tutorial/scalar/).
+- **The full changelog** →
+  [releases on GitHub](https://github.com/Query-farm/vgi-typescript/releases).

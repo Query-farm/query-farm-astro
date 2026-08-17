@@ -1,0 +1,104 @@
+---
+title: Running a worker
+description: "The JVM flags a Java VGI worker needs, why `launch:` matters, the four transports, and the shared-memory path that skips the pipe entirely."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+Java is the one SDK where *how you run it* needs as much attention as what you write. A JVM has a
+startup cost, needs flags Arrow depends on, and can hand batches through shared memory when the JDK
+is new enough.
+
+## The build settings that are not optional
+
+<CodeBlock code={`tasks.withType<JavaCompile> {
+    options.compilerArgs.add("-parameters")
+}
+
+application {
+    applicationDefaultJvmArgs = listOf(
+        "--add-opens=java.base/java.nio=ALL-UNNAMED",
+        "--enable-native-access=ALL-UNNAMED",
+    )
+}`} lang="kotlin" tryable={false} />
+
+<table>
+<thead><tr><th>Setting</th><th>Why</th><th>Symptom if missing</th></tr></thead>
+<tbody>
+<tr><td><code>-parameters</code></td><td>The annotation API reads parameter <em>names</em> to build the SQL signature.</td><td><strong>Silent.</strong> Arguments are named <code>arg0</code>; positional calls still work, named calls stop resolving.</td></tr>
+<tr><td><code>--add-opens=java.base/java.nio=ALL-UNNAMED</code></td><td>Arrow reaches into <code>java.nio</code> internals.</td><td>An <code>IllegalAccessError</code> at first use.</td></tr>
+<tr><td><code>--enable-native-access=ALL-UNNAMED</code></td><td>The shared-memory transport makes native calls.</td><td>A native-access warning, then a fall back to the pipe.</td></tr>
+</tbody>
+</table>
+
+Only the first fails quietly, which is why it is worth setting before writing a single function. See
+the [tutorial](/vgi/docs/java/tutorial/scalar/#step-1--the-build-file) for what it looks like when
+it is missing.
+
+## Use `launch:`
+
+A cold JVM takes seconds to start. A bare `LOCATION` spawns a fresh one for **every query**:
+
+<CodeBlock code={`-- A new JVM per query. Unusable interactively.
+ATTACH 'demo' (TYPE vgi, LOCATION '/abs/path/bin/demo');
+
+-- One JVM, reused across queries over a flock-coordinated Unix socket.
+ATTACH 'demo' (TYPE vgi, LOCATION 'launch:/abs/path/bin/demo');`} lang="sql" tryable={false} />
+
+<Callout type="warning" title="A pooled worker outlives your rebuild">
+The flip side of reuse: after `./gradlew installDist`, the running worker is **still the old build**.
+It keeps answering until it idles out, so a fix can appear not to work for reasons that have nothing
+to do with the fix.
+
+`DETACH`, kill the JVM, then re-attach. This is worth internalising early — it is the single most
+confusing thing about developing a Java worker, and it looks exactly like a bug in your code.
+</Callout>
+
+## The four transports
+
+`Worker.builder()…runFromArgs(args)` reads argv and picks one, so a single binary covers all of
+them:
+
+<table>
+<thead><tr><th>Arguments</th><th>Transport</th><th>When</th></tr></thead>
+<tbody>
+<tr><td>(none)</td><td>stdin/stdout</td><td>The default. The engine spawns and owns the process.</td></tr>
+<tr><td><code>--unix PATH</code></td><td>AF_UNIX socket</td><td>What <code>launch:</code> uses. A warm worker, reused.</td></tr>
+<tr><td><code>--http PORT</code></td><td>HTTP</td><td>Remote, shared, or load-balanced.</td></tr>
+<tr><td><code>--idle-timeout SEC</code></td><td>modifier</td><td>How long a socket worker waits before exiting. <code>0</code> keeps it up.</td></tr>
+</tbody>
+</table>
+
+## Shared memory, on JDK 22+
+
+By default Arrow batches travel over the transport's pipe, and for large batches that copy dominates.
+VGI can instead pass them through a **POSIX shared-memory segment** both processes map.
+
+**It needs no code changes in your worker** — it is negotiated at the transport layer. Set one
+environment variable on the *engine* side:
+
+<CodeBlock code={`export VGI_RPC_SHM_SIZE_BYTES=67108864   # 64 MiB`} lang="bash" tryable={false} />
+
+The client creates and owns the segment and advertises it on each `init`; the worker attaches it,
+writes large batches into it, and sends a zero-row **pointer batch** down the pipe carrying an offset
+and length. The same path runs inbound for large input batches.
+
+<Callout type="note" title="It degrades rather than fails">
+If a batch does not fit, is dictionary-encoded, or the segment is full, the transport falls back to
+the inline pipe. Correctness never depends on shared memory being available — which also means a
+misconfiguration costs you throughput silently rather than breaking a query. Check
+`--enable-native-access` is set if you expected the fast path and did not get it.
+</Callout>
+
+<InfoTip label="Version requirement" title="JDK 21 runs; JDK 22 goes fast">
+The SDK needs **JDK 21+** at runtime. The shared-memory side channel additionally needs **JDK 22+**;
+on 21 it transparently falls back to the pipe. That is the only capability difference between the
+two.
+</InfoTip>
+
+## Next steps
+
+- **What a worker exposes** → [Function patterns](/vgi/docs/java/how-to/function-patterns/).
+- **Exact signatures** → [Worker & serving](/vgi/docs/java/api/worker/).

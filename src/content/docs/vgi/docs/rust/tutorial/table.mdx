@@ -1,0 +1,99 @@
+---
+title: 2. Your first table function
+description: Add a row-generating table function to your Rust VGI worker, and call it in a FROM clause.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import workerSrc from '../../../../../../examples/vgi-rust/calc.rs?raw';
+
+Step two: add a **table** function to the worker from
+[step 1](/vgi/docs/rust/tutorial/scalar/). A scalar function transforms a column; a table function
+*produces* rows, so it is called in a `FROM` clause. About **10 minutes**.
+
+<div class="kind-banner kind-banner--table"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table.svg" alt="table shape" /><div class="kind-banner__text"><code class="kind-banner__formula">args → N rows</code><p class="kind-banner__desc">A table-valued source: scalar arguments in, a whole set of rows out.</p></div></div>
+
+## Step 1 — Add the function
+
+Replace `src/main.rs`, keeping `Double` and adding `Series`:
+
+<Collapsible summary="src/main.rs">
+<CodeBlock code={workerSrc} lang="rust" title="src/main.rs" tryable={false} />
+</Collapsible>
+
+Five things to notice:
+
+- **A table function is two types.** `TableFunction` is the registered, shared description —
+  `Send + Sync`, one instance for the whole worker. `TableProducer` is the per-scan cursor, built
+  fresh by `producer()`. Anything that changes as rows are emitted lives on the producer, which is
+  what lets the function itself stay immutable and shared.
+- **`next_batch` is the pull loop.** DuckDB calls it until it answers `Ok(None)`. Returning an empty
+  batch instead of `None` does not end the stream — it loops forever.
+- **Arguments are read once, in `producer()`.** They are fixed for the whole scan, so decoding them
+  per batch would be waste.
+- **`const_arg`, not `column`.** A table function's arguments are bind-time scalars, not per-row
+  columns. `params.arguments.const_i64(0)` reads the first one.
+- **`with_ge(0.0)` is enforced.** The framework validates declared constraints before your code
+  runs, so `series(-1)` fails at bind rather than looping or silently returning nothing.
+
+<InfoTip label="Why “producer” and not just “function”?" title="Why a producer?" width="32rem">
+A table function is pulled, not called: the engine asks the worker for output until it signals
+completion. `next_batch` is the pull handler. `series` knows up front how many rows it owes, so its
+producer is just a counter — but one reading a paginated API would keep its cursor in the same
+struct and decide for itself when it is done.
+</InfoTip>
+
+## Step 2 — Call it
+
+<CodeBlock code={`cargo build --release`} lang="bash" tryable={false} />
+
+Re-attach and query it in a `FROM` clause:
+
+<CodeBlock code={`LOAD vgi;
+ATTACH 'calc' (TYPE vgi, LOCATION './target/release/calc');
+
+SELECT * FROM calc.series(3);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["n"]} rows={[[0], [1], [2]]} />
+
+Both functions live in one worker, so they compose in a single query:
+
+<CodeBlock code={`SELECT calc.double(n) AS doubled FROM calc.series(3);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["doubled"]} rows={[[0], [2], [4]]} />
+
+The batching is real, not decorative — `series(5000)` streams through in chunks of 1024:
+
+<CodeBlock code={`SELECT count(*), sum(n) FROM calc.series(5000);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["count_star()", "sum(n)"]} rows={[[5000, 12497500]]} />
+
+And the constraint does its job:
+
+<CodeBlock code={`SELECT * FROM calc.series(-1);`} lang="sql" tryable={false} />
+
+<CodeBlock code={`Invalid Input Error: VGI Worker Exception: argument count: must be >= 0`} lang="text" tryable={false} />
+
+**What just happened:** one `calc` worker now serves two functions. `series` ran in the `FROM` clause
+— DuckDB pulled batches from `next_batch` until it answered `None` — and `double` transformed them,
+all in the same process.
+
+<InfoTip label="It didn't work?" title="Troubleshooting" width="34rem" up>
+- **`Binder Error: Failed to attach database: database with name "calc" already exists`** — `calc` is
+  still attached from step 1. Run `DETACH calc;` or open a fresh shell.
+- **`Function "series" is a table function but it was used as a scalar function`** — table functions
+  go in `FROM`, not `SELECT`.
+- **The scan never ends** — `next_batch` must eventually answer `Ok(None)`. An empty batch is not an
+  end-of-stream signal.
+- **Empty result** — `series(0)` is legitimately zero rows. Try `series(5)`.
+</InfoTip>
+
+## Next steps
+
+- **The other three shapes** → [Function patterns](/vgi/docs/rust/how-to/function-patterns/) —
+  table-in-out, aggregate and buffering, each with a runnable worker.
+- **When each callback fires** → [Function lifecycle](/vgi/docs/concepts/lifecycle/).
+- **Exact contracts** → [Table functions](/vgi/docs/rust/api/table/).

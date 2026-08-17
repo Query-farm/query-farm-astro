@@ -1,0 +1,1624 @@
+---
+title: "State storage"
+description: "Cross-process state: the store, its backends, and state codecs."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Cross-process state: the store, its backends, and state codecs.
+
+</div>
+
+<div class="api-class">
+
+<a id="AggregateConstArgs"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `AggregateConstArgs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage.go#L63" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type AggregateConstArgs struct {
+	FunctionName	string
+	Args		[]byte
+}`} />
+
+<p class="api-section">Description</p>
+
+AggregateConstArgs is a (function_name, args) pair stashed at bind time
+for an aggregate, recovered at finalize time. Unlike the Python protocol
+(where const args ride the wire on every phase), Go's aggregate runtime
+stashes them in storage so all worker processes see the same bind-time
+arguments. Backends can implement this against any (execution_id,
+function_name) → bytes K/V table.
+
+</div>
+
+<div class="api-class">
+
+<a id="AggregateStateEntry"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `AggregateStateEntry`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage.go#L46" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type AggregateStateEntry struct {
+	GroupID	int64
+	State	[]byte
+}`} />
+
+<p class="api-section">Description</p>
+
+AggregateStateEntry is one (group_id, state) pair.
+
+</div>
+
+<div class="api-class">
+
+<a id="AttachScanOptions"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `AttachScanOptions`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage.go#L105" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type AttachScanOptions struct {
+	Start	[]byte
+	End	[]byte
+	Reverse	bool
+	Limit	int
+}`} />
+
+<p class="api-section">Description</p>
+
+AttachScanOptions bounds an AttachStateScan. Start/End describe a half-open
+key range [Start, End) compared bytewise (a nil bound is open on that side);
+Reverse flips the result order to descending; Limit caps the number of rows
+returned, with Limit &lt;= 0 meaning no limit (matching StateLogScan). The zero
+value scans the whole namespace ascending. Mirrors vgi-python's state_scan
+keyword arguments. The range predicate is independent of Reverse: Start is
+always the &gt;= bound and End always the &lt; bound regardless of direction.
+
+</div>
+
+<div class="api-class">
+
+<a id="AttachStateKV"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `AttachStateKV`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage.go#L93" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type AttachStateKV struct {
+	Key	[]byte
+	Value	[]byte
+}`} />
+
+<p class="api-section">Description</p>
+
+AttachStateKV is one (key, value) pair returned by an attach-state scan,
+ordered by key.
+
+</div>
+
+<div class="api-class">
+
+<a id="AttachStateStorage"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `AttachStateStorage`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage.go#L124" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type AttachStateStorage interface {
+	// AttachStatePut stores or replaces value under (scope, ns, key).
+	AttachStatePut(scope, ns, key, value []byte) error
+	// AttachStateGet returns the value under (scope, ns, key), or (nil, nil) if absent.
+	AttachStateGet(scope, ns, key []byte) ([]byte, error)
+	// AttachStateScan returns the (key, value) pairs in (scope, ns) ordered by
+	// key, bounded and limited per opts. See AttachScanOptions.
+	AttachStateScan(scope, ns []byte, opts AttachScanOptions) ([]AttachStateKV, error)
+	// AttachStateDeleteKey removes one key. No-op if absent.
+	AttachStateDeleteKey(scope, ns, key []byte) error
+	// AttachStateDeleteNS removes every key in (scope, ns).
+	AttachStateDeleteNS(scope, ns []byte) error
+	// AttachStateDeleteRange removes every key in the half-open range
+	// [start, end) of (scope, ns) (a nil bound is open on that side) and returns
+	// the number of keys removed.
+	AttachStateDeleteRange(scope, ns, start, end []byte) (int, error)
+	// AttachStateDrain atomically reads and removes every (key, value) in
+	// (scope, ns), returning them ordered by key.
+	AttachStateDrain(scope, ns []byte) ([]AttachStateKV, error)
+
+	// AttachCounterGet returns the int64 counter under (scope, ns, key), or 0 if
+	// absent.
+	AttachCounterGet(scope, ns, key []byte) (int64, error)
+	// AttachCounterAdd atomically adds delta to the counter under (scope, ns,
+	// key) (initializing absent counters to 0) and returns the new value.
+	AttachCounterAdd(scope, ns, key []byte, delta int64) (int64, error)
+	// AttachCounterSet overwrites the counter under (scope, ns, key) with value.
+	AttachCounterSet(scope, ns, key []byte, value int64) error
+	// AttachCounterDelete removes the counter under (scope, ns, key). No-op if
+	// absent.
+	AttachCounterDelete(scope, ns, key []byte) error
+}`} />
+
+<p class="api-section">Description</p>
+
+AttachStateStorage is an optional capability: a scoped, namespaced, ordered
+key/value store that persists for the life of the shared backend rather than
+a single execution — i.e. across queries (and, for the SQLite backend, across
+worker processes). It is keyed by (scope, ns, key); Scan returns the entries
+in a (scope, ns) ordered by key. Attach-scoped fixtures such as the
+`accumulate` example use it to keep per-ATTACH row collections alive between
+the fresh worker processes a subprocess-transport query spawns. Mirrors the
+subset of vgi-python's attach-scoped BoundStorage those fixtures rely on.
+
+Implemented by the SQLite backend (over the same function_state table that
+backs worker/transaction state); backends that don't implement it cause
+AttachStore() to return an error at runtime.
+
+</div>
+
+<div class="api-class">
+
+<a id="AttachStore"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `AttachStore`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L119" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type AttachStore struct {
+	back	AttachStateStorage
+	scope	[]byte
+}`} />
+
+<p class="api-section">Description</p>
+
+AttachStore is a namespaced, ordered key/value view bound to one ATTACH
+scope. Unlike ExecutionStorage's execution-scoped state, it persists for the
+life of the shared backend, so it survives the fresh worker process a
+subprocess-transport query spawns. Used by attach-scoped fixtures such as the
+accumulate example.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="AttachStore.CounterAdd"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `CounterAdd`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L208" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *AttachStore) CounterAdd(ns, key []byte, delta int64) (int64, error)</code></pre>
+
+CounterAdd atomically adds delta to the counter under (ns, key) and returns
+the new value.
+
+</div>
+<div class="api-member">
+
+<a id="AttachStore.CounterDelete"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `CounterDelete`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L218" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *AttachStore) CounterDelete(ns, key []byte) error</code></pre>
+
+CounterDelete removes the counter under (ns, key). No-op if absent.
+
+</div>
+<div class="api-member">
+
+<a id="AttachStore.CounterGet"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `CounterGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L202" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *AttachStore) CounterGet(ns, key []byte) (int64, error)</code></pre>
+
+CounterGet returns the int64 counter under (ns, key), or 0 if absent.
+
+</div>
+<div class="api-member">
+
+<a id="AttachStore.CounterSet"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `CounterSet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L213" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *AttachStore) CounterSet(ns, key []byte, value int64) error</code></pre>
+
+CounterSet overwrites the counter under (ns, key) with value.
+
+</div>
+<div class="api-member">
+
+<a id="AttachStore.DeleteKey"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `DeleteKey`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L180" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *AttachStore) DeleteKey(ns, key []byte) error</code></pre>
+
+DeleteKey removes one key under ns. No-op if absent.
+
+</div>
+<div class="api-member">
+
+<a id="AttachStore.DeleteNS"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `DeleteNS`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L185" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *AttachStore) DeleteNS(ns []byte) error</code></pre>
+
+DeleteNS removes every key under ns.
+
+</div>
+<div class="api-member">
+
+<a id="AttachStore.DeleteRange"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `DeleteRange`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L191" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *AttachStore) DeleteRange(ns, start, end []byte) (int, error)</code></pre>
+
+DeleteRange removes every key in the half-open range [start, end) under ns
+(a nil bound is open on that side) and returns the number removed.
+
+</div>
+<div class="api-member">
+
+<a id="AttachStore.Drain"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Drain`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L197" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *AttachStore) Drain(ns []byte) ([]AttachStateKV, error)</code></pre>
+
+Drain atomically reads and removes every (key, value) under ns, returning
+them ordered by key.
+
+</div>
+<div class="api-member">
+
+<a id="AttachStore.Get"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Get`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L164" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *AttachStore) Get(ns, key []byte) ([]byte, error)</code></pre>
+
+Get returns the value under (ns, key), or (nil, nil) if absent.
+
+</div>
+<div class="api-member">
+
+<a id="AttachStore.Put"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Put`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L159" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *AttachStore) Put(ns, key, value []byte) error</code></pre>
+
+Put stores or replaces value under (ns, key) in this attach scope.
+
+</div>
+<div class="api-member">
+
+<a id="AttachStore.Scan"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Scan`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L171" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *AttachStore) Scan(ns []byte, opts ...ScanOption) ([]AttachStateKV, error)</code></pre>
+
+Scan returns the (key, value) pairs under ns ordered by key. With no options
+it returns the whole namespace ascending; pass WithRange/WithReverse/WithLimit
+to bound it.
+
+</div>
+<div class="api-member">
+
+<a id="newAttachStore"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `newAttachStore`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L125" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func newAttachStore(back FunctionStorage, scope []byte) (*AttachStore, error)</code></pre>
+
+newAttachStore binds an AttachStateStorage-capable backend to one scope.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="ExecutionStorage"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ExecutionStorage`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L39" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type ExecutionStorage struct {
+	mu		sync.Mutex
+	back		FunctionStorage
+	executionID	[]byte
+	// shardKey routes per logical ATTACH for the CfDo backend (att-<hex uuid>);
+	// "" for non-attach / non-sharding paths. The framework sets it from the
+	// unwrapped attach UUID when the execution's storage is created.
+	shardKey	string
+}`} />
+
+<p class="api-section">Description</p>
+
+ExecutionStorage binds a FunctionStorage to one execution_id.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="ExecutionStorage.AttachStore"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachStore`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L225" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) AttachStore(scope []byte) (*AttachStore, error)</code></pre>
+
+AttachStore returns an attach-scoped key/value store bound to scope, using
+this execution's underlying backend. The scope is typically
+ProcessParams.AttachScope. Errors if the backend lacks AttachStateStorage.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.Cleanup"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Cleanup`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L377" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) Cleanup()</code></pre>
+
+Cleanup drops every record under this execution_id: all scope-keyed state
+(worker, scan-worker, aggregate, attach, log, counters — via ExecutionClear)
+plus the separately-keyed work queue. The underlying FunctionStorage is owned
+by the Worker and is shared across executions; it is NOT closed here.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.Collect"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Collect`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L365" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) Collect() ([][]byte, error)</code></pre>
+
+Collect returns all stored worker values and removes them.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.ExecutionID"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ExecutionID`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L81" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) ExecutionID() []byte</code></pre>
+
+ExecutionID returns the bound execution_id, or nil if unset.
+
+</div>
+<div class="api-member">
+
+<a id="NewExecutionStorage"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `NewExecutionStorage`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L51" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func NewExecutionStorage() *ExecutionStorage</code></pre>
+
+NewExecutionStorage creates a new unbound ExecutionStorage. SetBackend and
+SetExecutionID must be called before use; the Worker does this for you.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.Put"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Put`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L339" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) Put(data []byte) error</code></pre>
+
+Put stores a value keyed by the current worker PID. Upsert semantics.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.QueuePop"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `QueuePop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L248" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) QueuePop() ([]byte, error)</code></pre>
+
+QueuePop atomically claims one item. Returns (nil, nil) when the queue is
+empty or the execution_id was never pushed (no registration).
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.QueuePopBatch"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `QueuePopBatch`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L270" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) QueuePopBatch() (arrow.RecordBatch, error)</code></pre>
+
+QueuePopBatch claims and deserializes the next batch, or (nil, nil) if empty.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.QueuePush"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `QueuePush`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L237" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) QueuePush(items [][]byte) error</code></pre>
+
+QueuePush appends items to the per-execution work queue.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.QueuePushBatches"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `QueuePushBatches`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L257" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) QueuePushBatches(batches []arrow.RecordBatch) error</code></pre>
+
+QueuePushBatches serializes record batches and appends them.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.SetBackend"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `SetBackend`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L57" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) SetBackend(back FunctionStorage)</code></pre>
+
+SetBackend wires a FunctionStorage into this binding wrapper. Called once
+by the framework before SetExecutionID.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.SetExecutionID"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `SetExecutionID`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L64" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) SetExecutionID(execID []byte) error</code></pre>
+
+SetExecutionID binds this wrapper to one execution_id.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.SetShardKey"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `SetShardKey`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L74" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) SetShardKey(shardKey string)</code></pre>
+
+SetShardKey pins the per-attach routing key (att-&lt;hex uuid&gt;). A no-op for
+backends that ignore sharding; used by the CfDo backend to route to the
+right Durable Object. Empty means "no attach" (CfDo would reject it).
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.Snapshot"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Snapshot`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L348" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) Snapshot() ([][]byte, error)</code></pre>
+
+Snapshot returns all stored worker values without removing them.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.StateAppend"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `StateAppend`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L307" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) StateAppend(key, value []byte) (int64, error)</code></pre>
+
+StateAppend appends value under key in the execution-scoped log, returning
+the new monotonic log id.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.StateLogClear"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `StateLogClear`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L326" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) StateLogClear() error</code></pre>
+
+StateLogClear removes all state-log rows for this execution.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.StateLogScan"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `StateLogScan`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L317" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) StateLogScan(key []byte, afterID int64, limit int) ([]StateLogEntry, error)</code></pre>
+
+StateLogScan returns entries under key with id &gt; afterID (use -1 from the
+start), ordered by id. limit &lt;= 0 means no limit.
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.resolve"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `resolve`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L87" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) resolve() (FunctionStorage, []byte, error)</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="ExecutionStorage.stateLog"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `stateLog`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L293" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *ExecutionStorage) stateLog() (StateLogStorage, []byte, error)</code></pre>
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="FunctionStorage"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `FunctionStorage`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage.go#L162" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type FunctionStorage interface {
+
+	// WorkerPut stores or replaces the state for one worker process under
+	// the given execution_id.
+	WorkerPut(executionID []byte, workerID int64, state []byte) error
+
+	// WorkerCollect atomically reads and deletes all worker states for an
+	// execution_id. Typically called by the primary worker at finalize time.
+	WorkerCollect(executionID []byte) ([][]byte, error)
+
+	// WorkerScan reads all worker states without deleting them. Order is
+	// implementation-defined. Used by best-effort end-of-stream consumers
+	// like dynamic_to_string where multiple readers see the same state.
+	WorkerScan(executionID []byte) ([]WorkerStateEntry, error)
+
+	// ScanWorkerPut stores or replaces state for one scan worker.
+	ScanWorkerPut(executionID, streamID, state []byte) error
+
+	// ScanWorkerScan reads all per-stream-worker states without deleting.
+	ScanWorkerScan(executionID []byte) ([]ScanWorkerStateEntry, error)
+
+	// QueuePush appends items to the queue for the given execution_id. There
+	// is no registration step (matching the Cloudflare DO).
+	QueuePush(executionID []byte, items [][]byte) (int, error)
+
+	// QueuePop atomically claims one item from the queue. Returns:
+	//   - (item, nil) when an item was claimed.
+	//   - (nil, nil) when the queue is empty or the execution_id was never
+	//     pushed (the two are indistinguishable — no registration).
+	QueuePop(executionID []byte) ([]byte, error)
+
+	// QueueClear removes all remaining items for an execution_id. Returns the
+	// number of items dropped.
+	QueueClear(executionID []byte) (int, error)
+
+	// AggregateStateGet loads states for the given group_ids. Returns a
+	// list parallel to group_ids: each entry is the state for that group
+	// or nil if no state has been stored. DuckDB's thread-local hash tables
+	// guarantee no two callers race on the same group_id during update.
+	AggregateStateGet(executionID []byte, groupIDs []int64) ([]AggregateStateEntry, error)
+
+	// AggregateStatePut writes states for the given group_ids using
+	// INSERT OR REPLACE semantics.
+	AggregateStatePut(executionID []byte, entries []AggregateStateEntry) error
+
+	// AggregateStateClear drops all aggregate state for an execution_id.
+	AggregateStateClear(executionID []byte) error
+
+	// AggregateConstArgsPut stashes serialized bind-time arguments for an
+	// aggregate execution.
+	AggregateConstArgsPut(executionID []byte, functionName string, args []byte) error
+
+	// AggregateConstArgsGet loads previously stashed arguments. Returns
+	// (nil, nil) if no args have been stashed (the aggregate had no const args).
+	AggregateConstArgsGet(executionID []byte, functionName string) ([]byte, error)
+
+	// AggregateWindowPartitionPut writes the cached payload for a single
+	// window-aggregate partition. INSERT OR REPLACE.
+	AggregateWindowPartitionPut(executionID []byte, partitionID int64, data []byte) error
+
+	// AggregateWindowPartitionGet loads the cached payload for a window
+	// partition, or (nil, nil) if absent.
+	AggregateWindowPartitionGet(executionID []byte, partitionID int64) ([]byte, error)
+
+	// AggregateWindowPartitionDelete removes one partition. No-op if absent.
+	AggregateWindowPartitionDelete(executionID []byte, partitionID int64) error
+
+	// AggregateWindowPartitionClear drops every cached partition for an
+	// execution_id (safety sweep for dropped destructor RPCs).
+	AggregateWindowPartitionClear(executionID []byte) error
+
+	// TransactionStateGet loads values for the given keys under one
+	// transaction_opaque_data. Returns a list parallel to keys: nil entries for
+	// keys with no stored value.
+	TransactionStateGet(transactionOpaqueData []byte, keys [][]byte) ([][]byte, error)
+
+	// TransactionStatePut writes (key, value) pairs for a transaction_opaque_data
+	// using INSERT OR REPLACE semantics.
+	TransactionStatePut(transactionOpaqueData []byte, items []TransactionStateItem) error
+
+	// TransactionStateClear removes all keys for a transaction_opaque_data. Called
+	// when the catalog observes commit/rollback; implementations should
+	// also TTL-sweep to handle leaked transaction_opaque_data values.
+	TransactionStateClear(transactionOpaqueData []byte) error
+
+	// ExecutionClear wipes every K/V state row, append-log row and counter under
+	// the given scope (an execution_id or transaction_opaque_data), across all
+	// namespaces, in one shot. It does NOT touch the work queue (keyed
+	// separately). Returns the total number of rows removed and is idempotent.
+	// Consolidates the per-family Clear/Collect calls a teardown would otherwise
+	// issue. Mirrors vgi-python's execution_clear.
+	ExecutionClear(scope []byte) (int, error)
+
+	// Close releases any underlying resources (DB handles, HTTP clients).
+	// Safe to call multiple times.
+	Close() error
+}`} />
+
+<p class="api-section">Description</p>
+
+FunctionStorage is the cross-process shared-state interface backing
+distributed VGI execution. One implementation per backend (SQLite,
+Cloudflare Durable Object, ...); selected at worker startup.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="NewSQLiteStorage"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `NewSQLiteStorage`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L86" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func NewSQLiteStorage(opts SQLiteStorageOptions) (FunctionStorage, error)</code></pre>
+
+NewSQLiteStorage opens (or creates) a SQLite-backed FunctionStorage. Safe for
+concurrent use across goroutines and across processes (WAL + busy_timeout):
+when DuckDB spawns subprocess workers for one execution, every subprocess
+opens the same database file and sees the others' rows.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="SQLiteStorageOptions"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `SQLiteStorageOptions`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L66" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type SQLiteStorageOptions struct {
+	// Path is the SQLite database file path. Empty defaults to a per-user,
+	// per-machine state path. Use ":memory:" for the in-process tier.
+	Path string
+}`} />
+
+<p class="api-section">Description</p>
+
+SQLiteStorageOptions tunes a SQLite-backed FunctionStorage.
+
+</div>
+
+<div class="api-class">
+
+<a id="ScanOption"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">func type</span> `ScanOption`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L138" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>type ScanOption func(*AttachScanOptions)</code></pre>
+
+<p class="api-section">Description</p>
+
+ScanOption configures an AttachStore.Scan. See WithRange / WithStart /
+WithEnd / WithReverse / WithLimit.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="WithEnd"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `WithEnd`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L144" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func WithEnd(end []byte) ScanOption</code></pre>
+
+WithEnd bounds a scan to keys &lt; end (exclusive).
+
+</div>
+<div class="api-member">
+
+<a id="WithLimit"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `WithLimit`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L156" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func WithLimit(n int) ScanOption</code></pre>
+
+WithLimit caps the scan at n rows (n &lt;= 0 means no limit).
+
+</div>
+<div class="api-member">
+
+<a id="WithRange"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `WithRange`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L148" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func WithRange(start, end []byte) ScanOption</code></pre>
+
+WithRange bounds a scan to the half-open key range [start, end) (a nil bound
+is open on that side).
+
+</div>
+<div class="api-member">
+
+<a id="WithReverse"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `WithReverse`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L153" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func WithReverse() ScanOption</code></pre>
+
+WithReverse returns the scan in descending key order.
+
+</div>
+<div class="api-member">
+
+<a id="WithStart"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `WithStart`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L141" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func WithStart(start []byte) ScanOption</code></pre>
+
+WithStart bounds a scan to keys &gt;= start (inclusive).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="ScanWorkerStateEntry"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ScanWorkerStateEntry`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage.go#L40" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type ScanWorkerStateEntry struct {
+	StreamID	[]byte
+	State		[]byte
+}`} />
+
+<p class="api-section">Description</p>
+
+ScanWorkerStateEntry is one (stream_id, state) pair returned by ScanWorkerScan.
+
+</div>
+
+<div class="api-class">
+
+<a id="ShardedBackend"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `ShardedBackend`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/storage.go#L33" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type ShardedBackend interface {
+	// ForShard returns a FunctionStorage view of the backend pinned to shardKey.
+	ForShard(shardKey string) FunctionStorage
+}`} />
+
+<p class="api-section">Description</p>
+
+ShardedBackend is implemented by FunctionStorage backends that route remotely
+on a per-attach shard key (the Cloudflare Durable Object backend). ForShard
+returns a view of the backend pinned to one shard key; backends that ignore
+sharding (SQLite) don't implement it. Lets ExecutionStorage attach the shard
+key without threading it through all ~22 FunctionStorage methods.
+
+</div>
+
+<div class="api-class">
+
+<a id="StateLogEntry"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `StateLogEntry`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage.go#L69" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type StateLogEntry struct {
+	ID	int64
+	Value	[]byte
+}`} />
+
+<p class="api-section">Description</p>
+
+StateLogEntry is one (id, value) row from an execution-scoped state log.
+
+</div>
+
+<div class="api-class">
+
+<a id="StateLogStorage"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `StateLogStorage`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage.go#L80" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type StateLogStorage interface {
+	// StateAppend appends value to the (executionID, key) log; returns the new
+	// monotonic log id.
+	StateAppend(executionID, key, value []byte) (int64, error)
+	// StateLogScan returns entries with id > afterID (use -1 from the start),
+	// ordered by id. limit <= 0 means no limit.
+	StateLogScan(executionID, key []byte, afterID int64, limit int) ([]StateLogEntry, error)
+	// StateLogClear removes all log rows for an execution_id.
+	StateLogClear(executionID []byte) error
+}`} />
+
+<p class="api-section">Description</p>
+
+StateLogStorage is an optional capability for an execution-scoped, keyed,
+append-only log with a monotonic cursor. Table-buffering functions use it to
+stash batches between the sink (process) and source (finalize) phases across
+worker processes. Implemented by the SQLite backend; backends that don't
+implement it cause buffering functions to error at runtime. Mirrors
+vgi-python's BoundStorage.state_append / state_log_scan.
+
+</div>
+
+<div class="api-class">
+
+<a id="TransactionStateItem"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `TransactionStateItem`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage.go#L52" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TransactionStateItem struct {
+	Key	[]byte
+	Value	[]byte
+}`} />
+
+<p class="api-section">Description</p>
+
+TransactionStateItem is one (key, value) pair for transaction-scoped K/V.
+
+</div>
+
+<div class="api-class">
+
+<a id="WorkerStateEntry"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `WorkerStateEntry`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage.go#L34" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type WorkerStateEntry struct {
+	WorkerID	int64
+	State		[]byte
+}`} />
+
+<p class="api-section">Description</p>
+
+WorkerStateEntry is one (worker_id, state) pair returned by WorkerScan.
+
+</div>
+
+<div class="api-class">
+
+<a id="sqliteStorage"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `sqliteStorage`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L78" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type sqliteStorage struct {
+	db *sql.DB
+}`} />
+
+<p class="api-section">Description</p>
+
+sqliteStorage implements FunctionStorage against a single SQLite database.
+Concurrency is handled entirely by database/sql + SQLite WAL:
+  - Within-process: MaxOpenConns(1) serializes operations through one
+<Code lang="go" code={`connection. database/sql queues callers transparently.`} />
+
+  - Cross-process: WAL mode + busy_timeout=30000 lets multiple worker
+<Code lang="go" code={`subprocesses share the file.`} />
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="sqliteStorage.AggregateConstArgsGet"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AggregateConstArgsGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L562" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AggregateConstArgsGet(executionID []byte, functionName string) ([]byte, error)</code></pre>
+
+AggregateConstArgsGet returns the constant arguments stored for an aggregate
+function, or nil if none are stored.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AggregateConstArgsPut"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AggregateConstArgsPut`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L556" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AggregateConstArgsPut(executionID []byte, functionName string, args []byte) error</code></pre>
+
+AggregateConstArgsPut stores the constant arguments for an aggregate
+function, keyed by function name.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AggregateStateClear"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AggregateStateClear`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L546" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AggregateStateClear(executionID []byte) error</code></pre>
+
+AggregateStateClear removes all aggregate state for the execution.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AggregateStateGet"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AggregateStateGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L505" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AggregateStateGet(executionID []byte, groupIDs []int64) ([]AggregateStateEntry, error)</code></pre>
+
+AggregateStateGet returns the aggregate state for each requested group ID,
+omitting groups with no stored state.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AggregateStatePut"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AggregateStatePut`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L521" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AggregateStatePut(executionID []byte, entries []AggregateStateEntry) error</code></pre>
+
+AggregateStatePut stores the aggregate state for each entry, keyed by group
+ID, in a single transaction.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AggregateWindowPartitionClear"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AggregateWindowPartitionClear`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L590" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AggregateWindowPartitionClear(executionID []byte) error</code></pre>
+
+AggregateWindowPartitionClear removes all window-partition data for the
+execution.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AggregateWindowPartitionDelete"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AggregateWindowPartitionDelete`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L584" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AggregateWindowPartitionDelete(executionID []byte, partitionID int64) error</code></pre>
+
+AggregateWindowPartitionDelete removes the window-partition data for the
+given partition ID.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AggregateWindowPartitionGet"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AggregateWindowPartitionGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L578" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AggregateWindowPartitionGet(executionID []byte, partitionID int64) ([]byte, error)</code></pre>
+
+AggregateWindowPartitionGet returns the window-partition data for the given
+partition ID, or nil if none is stored.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AggregateWindowPartitionPut"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AggregateWindowPartitionPut`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L572" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AggregateWindowPartitionPut(executionID []byte, partitionID int64, data []byte) error</code></pre>
+
+AggregateWindowPartitionPut stores window-partition data, keyed by partition
+ID.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AttachCounterAdd"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachCounterAdd`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L779" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AttachCounterAdd(scope, ns, key []byte, delta int64) (int64, error)</code></pre>
+
+AttachCounterAdd atomically adds delta to the counter under (scope, ns, key),
+initializing an absent counter to 0, and returns the new value.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AttachCounterDelete"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachCounterDelete`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L802" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AttachCounterDelete(scope, ns, key []byte) error</code></pre>
+
+AttachCounterDelete removes the counter under (scope, ns, key). No-op if
+absent.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AttachCounterGet"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachCounterGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L765" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AttachCounterGet(scope, ns, key []byte) (int64, error)</code></pre>
+
+AttachCounterGet returns the int64 counter under (scope, ns, key), or 0 if
+absent.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AttachCounterSet"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachCounterSet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L791" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AttachCounterSet(scope, ns, key []byte, value int64) error</code></pre>
+
+AttachCounterSet overwrites the counter under (scope, ns, key) with value.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AttachStateDeleteKey"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachStateDeleteKey`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L729" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AttachStateDeleteKey(scope, ns, key []byte) error</code></pre>
+
+AttachStateDeleteKey removes a single attach-state entry by scope, namespace,
+and key.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AttachStateDeleteNS"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachStateDeleteNS`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L735" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AttachStateDeleteNS(scope, ns []byte) error</code></pre>
+
+AttachStateDeleteNS removes all attach-state entries under the given scope and
+namespace.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AttachStateDeleteRange"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachStateDeleteRange`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L741" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AttachStateDeleteRange(scope, ns, start, end []byte) (int, error)</code></pre>
+
+AttachStateDeleteRange removes attach-state entries in the half-open key
+range [start, end) of (scope, ns) and returns the number removed.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AttachStateDrain"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachStateDrain`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L747" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AttachStateDrain(scope, ns []byte) ([]AttachStateKV, error)</code></pre>
+
+AttachStateDrain atomically reads and removes every attach-state entry under
+(scope, ns), returning them ordered by key.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AttachStateGet"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachStateGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L709" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AttachStateGet(scope, ns, key []byte) ([]byte, error)</code></pre>
+
+AttachStateGet returns the attach-state value for the given scope, namespace,
+and key, or nil if none is stored.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AttachStatePut"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachStatePut`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L703" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AttachStatePut(scope, ns, key, value []byte) error</code></pre>
+
+AttachStatePut stores a value in attach state under the given scope,
+namespace, and key.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.AttachStateScan"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachStateScan`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L715" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) AttachStateScan(scope, ns []byte, opts AttachScanOptions) ([]AttachStateKV, error)</code></pre>
+
+AttachStateScan returns the attach-state key/value pairs under the given
+scope and namespace, ordered by key and bounded per opts.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.Close"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Close`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L841" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) Close() error</code></pre>
+
+Close closes the underlying SQLite database. Safe to call multiple times.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.ExecutionClear"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ExecutionClear`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L817" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) ExecutionClear(scope []byte) (int, error)</code></pre>
+
+ExecutionClear wipes function_state, function_state_log and function_counter
+rows for the scope across every namespace in one transaction, returning the
+total rows removed. Does not touch work_queue. Idempotent.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.QueueClear"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `QueueClear`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L490" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) QueueClear(executionID []byte) (int, error)</code></pre>
+
+QueueClear removes all items from the execution's work queue and returns the
+number removed.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.QueuePop"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `QueuePop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L464" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) QueuePop(executionID []byte) ([]byte, error)</code></pre>
+
+QueuePop atomically removes and returns the next item from the execution's
+work queue, or nil if the queue is empty.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.QueuePush"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `QueuePush`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L434" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) QueuePush(executionID []byte, items [][]byte) (int, error)</code></pre>
+
+QueuePush appends the given items to the execution's work queue and returns
+the number pushed.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.ScanWorkerPut"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ScanWorkerPut`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L410" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) ScanWorkerPut(executionID, streamID, state []byte) error</code></pre>
+
+ScanWorkerPut stores a scan worker's state under the execution's scan-worker
+namespace, keyed by stream ID.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.ScanWorkerScan"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ScanWorkerScan`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L416" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) ScanWorkerScan(executionID []byte) ([]ScanWorkerStateEntry, error)</code></pre>
+
+ScanWorkerScan returns all scan-worker states for the execution without
+removing them, ordered by stream ID.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.StateAppend"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `StateAppend`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L649" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) StateAppend(executionID, key, value []byte) (int64, error)</code></pre>
+
+StateAppend appends a value to the (executionID, key) log and returns the new
+monotonic log id.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.StateLogClear"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `StateLogClear`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L687" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) StateLogClear(executionID []byte) error</code></pre>
+
+StateLogClear removes all state-log rows for an execution_id.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.StateLogScan"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `StateLogScan`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L662" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) StateLogScan(executionID, key []byte, afterID int64, limit int) ([]StateLogEntry, error)</code></pre>
+
+StateLogScan returns log entries for (executionID, key) with id &gt; afterID,
+ordered by id. afterID = -1 reads from the start. limit &lt;= 0 means no limit.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.TransactionStateClear"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `TransactionStateClear`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L639" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) TransactionStateClear(transactionOpaqueData []byte) error</code></pre>
+
+TransactionStateClear removes all transaction state for the given scope.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.TransactionStateGet"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `TransactionStateGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L600" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) TransactionStateGet(transactionOpaqueData []byte, keys [][]byte) ([][]byte, error)</code></pre>
+
+TransactionStateGet returns the transaction-state value for each requested
+key, with nil entries for keys that have no stored value.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.TransactionStatePut"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `TransactionStatePut`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L614" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) TransactionStatePut(transactionOpaqueData []byte, items []TransactionStateItem) error</code></pre>
+
+TransactionStatePut stores each key/value item under the transaction scope in
+a single transaction.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.WorkerCollect"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `WorkerCollect`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L378" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) WorkerCollect(executionID []byte) ([][]byte, error)</code></pre>
+
+WorkerCollect drains and returns all worker states for the execution,
+removing them from the store.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.WorkerPut"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `WorkerPut`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L372" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) WorkerPut(executionID []byte, workerID int64, state []byte) error</code></pre>
+
+WorkerPut stores a worker's state under the execution's worker namespace,
+keyed by worker ID.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.WorkerScan"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `WorkerScan`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L392" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) WorkerScan(executionID []byte) ([]WorkerStateEntry, error)</code></pre>
+
+WorkerScan returns all worker states for the execution without removing them,
+ordered by worker ID.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.stateDeleteKey"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `stateDeleteKey`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L360" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) stateDeleteKey(scope, ns, key []byte) error</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.stateDeleteNS"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `stateDeleteNS`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L334" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) stateDeleteNS(scope, ns []byte) error</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.stateDeleteRange"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `stateDeleteRange`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L341" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) stateDeleteRange(scope, ns, start, end []byte) (int, error)</code></pre>
+
+stateDeleteRange removes keys in the half-open range [start, end) of
+(scope, ns) (nil bound = open) and returns the number removed.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.stateDrain"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `stateDrain`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L256" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) stateDrain(scope, ns []byte) ([][2][]byte, error)</code></pre>
+
+stateDrain reads and deletes every (key, value) in (scope, ns), ordered by
+key, in one transaction.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.stateGetOne"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `stateGetOne`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L242" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) stateGetOne(scope, ns, key []byte) ([]byte, error)</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.statePut"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `statePut`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L234" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) statePut(scope, ns, key, value []byte) error</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.stateScan"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `stateScan`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L291" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) stateScan(scope, ns []byte) ([][2][]byte, error)</code></pre>
+
+stateScan returns every (key, value) in (scope, ns), ordered by key.
+
+</div>
+<div class="api-member">
+
+<a id="sqliteStorage.stateScanRange"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `stateScanRange`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L298" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *sqliteStorage) stateScanRange(scope, ns []byte, opts AttachScanOptions) ([][2][]byte, error)</code></pre>
+
+stateScanRange returns the (key, value) pairs in (scope, ns) within the
+half-open range [opts.Start, opts.End) (nil bound = open), ordered by key
+(descending when opts.Reverse), capped at opts.Limit (&lt;= 0 = no limit).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="columnExists"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `columnExists`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L212" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func columnExists(db *sql.DB, table, col string) bool</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="defaultSQLitePath"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `defaultSQLitePath`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L129" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func defaultSQLitePath() string</code></pre>
+
+defaultSQLitePath returns a per-user, per-machine stable path for the
+FunctionStorage SQLite database. Honors XDG_STATE_HOME, falling back to
+~/.local/state/vgi/storage.db on Unix or %LOCALAPPDATA%/vgi/storage.db on
+Windows. The path is created if absent.
+
+</div>
+<div class="api-member">
+
+<a id="deriveShardKey"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `deriveShardKey`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/shardkey.go#L20" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func deriveShardKey(attachUUID []byte) (string, error)</code></pre>
+
+deriveShardKey returns the Cloudflare-DO routing key for an attach: the
+16-byte framework UUID at the head of the unwrapped attach plaintext, as
+"att-" + hex(uuid). One DO per logical ATTACH — stable across re-seals and
+globally unique (unlike the random-nonce ciphertext or possibly-non-unique
+catalog bytes). Mirrors vgi-python's _derive_shard_key.
+
+The UUID must be exactly 16 bytes: the storage path is always bound to a
+logical ATTACH, so a missing/short value is a programming error.
+
+</div>
+<div class="api-member">
+
+<a id="initSQLiteSchema"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `initSQLiteSchema`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L148" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func initSQLiteSchema(db *sql.DB) error</code></pre>
+
+initSQLiteSchema creates the unified tables. Idempotent. Drops any legacy
+split-schema or idempotency-column tables left over from an older on-disk DB
+(all this state is ephemeral in-progress worker state).
+
+</div>
+<div class="api-member">
+
+<a id="int64FromKey"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `int64FromKey`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L58" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func int64FromKey(b []byte) int64</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="int64Key"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `int64Key`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/function_storage_sqlite.go#L52" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func int64Key(v int64) []byte</code></pre>
+
+int64Key encodes an int64 worker/group/partition id as an 8-byte big-endian
+state key (matching the DO client).
+
+</div>

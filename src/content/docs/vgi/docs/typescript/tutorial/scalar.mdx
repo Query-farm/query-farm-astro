@@ -1,0 +1,171 @@
+---
+title: 1. Your first scalar function
+description: Build and run a scalar VGI function in TypeScript, callable from DuckDB.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import workerSrc from '../../../../../../examples/vgi-typescript/calcscalar.ts?raw';
+
+The first tutorial step: build a worker with one **scalar** function and call it from SQL — about
+**10 minutes**, for first-time VGI users with Bun or Node.js 22.15+.
+
+<InfoTip label="What's a “worker”?" title="What's a “worker”?">
+A **worker** is a small program DuckDB launches as a subprocess and talks to over Apache Arrow. It
+exposes one or more typed functions, and DuckDB calls them like built-ins. It is an ordinary
+TypeScript program — nothing is compiled into DuckDB.
+</InfoTip>
+
+<div class="kind-banner kind-banner--scalar"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><div class="kind-banner__text"><code class="kind-banner__formula">1 row → 1 value</code><p class="kind-banner__desc">Runs on each row independently and returns a single value — a pure per-row transform.</p></div></div>
+
+<Callout type="tip" title="Why this is powerful">
+`double` is intentionally trivial — DuckDB can already do `n * 2`. The point is that `compute` is
+**ordinary TypeScript**: drop in an npm package, a model, a `fetch`, a parser DuckDB has never heard
+of, and DuckDB calls it like a **native SQL function**.
+</Callout>
+
+## Step 1 — Write the worker
+
+Create a project and add the SDK:
+
+<CodeBlock code={`mkdir calcscalar && cd calcscalar
+bun init -y
+bun add @query-farm/vgi @query-farm/apache-arrow @query-farm/vgi-rpc`} lang="bash" tryable={false} />
+
+All three go in explicitly. `@query-farm/apache-arrow` and `@query-farm/vgi-rpc` are
+**peerDependencies** of the SDK, not transitive installs — the SDK marks them external so a single
+shared copy is used, which is what prevents the duplicate-`Protocol` type clash you would otherwise
+hit the moment you import anything from `vgi-rpc` directly.
+
+<Callout type="note" title="Bun reports a blocked postinstall. Ignore it.">
+`bun add` prints *"Blocked 1 postinstall"*. The script it blocked is a development-only fixup for
+the SDK's own monorepo — it checks for a sibling `vgi-rpc-typescript` checkout and exits immediately
+when there isn't one, so it is a no-op in your project either way.
+</Callout>
+
+Then `calcscalar.ts`:
+
+<CodeBlock code={workerSrc} lang="typescript" title="calcscalar.ts" tryable={false} />
+
+Four things to notice:
+
+- **`params` is the signature.** It declares the argument types *and their order*. DuckDB calls
+  scalar functions positionally, so the keys are names for documentation and introspection — inside
+  `compute` you read columns by position.
+- **A whole column at a time.** `compute` receives an Arrow batch, not one row. It runs once per
+  batch and returns one output value per input row.
+- **`int` means `bigint`.** DuckDB's `BIGINT` does not fit in a JS `number`, so the SDK never
+  narrows it. Values arrive and leave as `bigint`.
+- **The catalog name is the `ATTACH` name.** They are not independent: attaching under any other
+  name fails with *"No worker handles catalog …"*.
+
+<Callout type="warning" title="Columns are erased — cast at the use site">
+`batch.getChildAt(0)` is a `VgiColumn`: an `Iterable<unknown>` whose `get()` returns `unknown`. That
+is deliberate — the two Arrow backends the SDK can run on parameterize their column types
+differently, so the facade erases the value type rather than picking one.
+
+The consequence is that under `strict` you must say what you are reading:
+
+<CodeBlock code={`const ns = batch.getChildAt(0)! as Iterable<bigint | null>;
+return Array.from(ns, (v) => (v == null ? null : v * 2n));`} lang="typescript" tryable={false} />
+
+Without the cast, `Array.from`'s mapper receives `unknown` and the call does not typecheck. Your
+declared `params` are what make the real type known at that point.
+</Callout>
+
+<InfoTip label="New to Apache Arrow?" title="New to Apache Arrow?" width="34rem">
+[Apache Arrow](https://arrow.apache.org/) is a language-independent **columnar** memory format.
+Rather than rows of objects, data lives in **arrays**: a contiguous, typed sequence of values for a
+single column. VGI hands your function a whole column, and operating on it at once is what keeps it
+fast across the process boundary.
+
+<a href="https://arrow.apache.org/" target="_blank" rel="noopener" class="arrow-logo-link"><img src="/vgi/apache-arrow.svg" alt="Apache Arrow" class="arrow-logo" /></a>
+</InfoTip>
+
+## Step 2 — Check it starts
+
+There is nothing to build — `bun run` executes TypeScript directly. Run the worker once to confirm
+it starts:
+
+<CodeBlock code={`bun run calcscalar.ts`} lang="bash" tryable={false} />
+
+It prints a couple of startup lines to stderr and then exits with *"Input stream closed before first
+IPC message"*. That is the correct outcome: the worker speaks Arrow over stdin/stdout and there is
+nobody on the other end yet. What you are checking for is the absence of an import or syntax error.
+
+## Step 3 — Start Haybarn
+
+VGI functions run inside a DuckDB-compatible engine. We'll use **[Haybarn](/haybarn)** — start it
+from the folder holding your worker:
+
+<CodeBlock code={`npx haybarn@rc`} lang="bash" tryable={false} />
+
+This opens Haybarn's in-memory SQL shell — the `memory H` prompt. (First run downloads the CLI; see
+[other install options](/haybarn/install).)
+
+<InfoTip label="Why Haybarn?" title="Haybarn serves the vgi extension">
+Haybarn distributes the `vgi` extension through its own channel, so `INSTALL vgi FROM community;`
+works out of the box. `vgi` isn't in DuckDB's public community repository, so stock DuckDB can't
+`INSTALL` it today — Haybarn is the supported path. The extension is the same one Python, Go and
+TypeScript workers all talk to.
+</InfoTip>
+
+## Step 4 — Attach and call it
+
+At the `memory H` prompt:
+
+<CodeBlock code={`INSTALL vgi FROM community;
+LOAD vgi;
+
+ATTACH 'calc' (TYPE vgi, LOCATION 'bun run ./calcscalar.ts');`} lang="sql" tryable={false} />
+
+`LOCATION` is the **command** DuckDB runs, not a path to a binary — which is why a TypeScript worker
+needs no build step at all.
+
+Now call it:
+
+<CodeBlock code={`SELECT calc.double(21);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["double(21)"]} rows={[[42]]} />
+
+…or over a whole column:
+
+<CodeBlock code={`SELECT calc.double(n) FROM (VALUES (1), (2), (3)) AS t(n);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["double(n)"]} rows={[[2], [4], [6]]} />
+
+Nulls pass straight through, because `compute` maps them to `null`:
+
+<CodeBlock code={`SELECT calc.double(n) FROM (VALUES (5), (NULL)) AS t(n);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["double(n)"]} rows={[[10], [null]]} />
+
+**What just happened:** `ATTACH` ran `bun run ./calcscalar.ts` as a subprocess and registered
+`calc.double` in your SQL session. DuckDB handed your TypeScript the `n` column as a single Arrow
+array, `compute` ran over the whole thing, and the result streamed back — no row-by-row round trips.
+Swap the body for any TypeScript you like and the SQL above doesn't change.
+
+You've built and run your first VGI function in TypeScript. 🎉
+
+<InfoTip label="It didn't work?" title="Troubleshooting" width="34rem" up>
+- **`IO Error: VGI worker not found or not executable`** — `LOCATION` is a command run from the
+  directory the engine was started in. Check that `bun` is on `PATH` and the relative path resolves.
+- **`No worker handles catalog 'x'`** — the name in `ATTACH` must equal the `catalog.name` in the
+  worker. It is not a free alias.
+- **`Cannot find package '@query-farm/apache-arrow'`** — the peer dependencies were not installed.
+  Add all three packages, not just `@query-farm/vgi`.
+- **The `ATTACH` hangs** — run `bun run ./calcscalar.ts` directly. It *looks* like it hangs waiting
+  for input; you're checking for a startup error on stderr.
+- **`Catalog Error: Scalar Function with name double does not exist!`** — the name comes from the
+  function's `name` field, qualified by the catalog name.
+</InfoTip>
+
+## Next steps
+
+- **[2. Your first table function](/vgi/docs/typescript/tutorial/table/)** — generate rows instead of
+  transforming them.
+- **The other function shapes** → [Function lifecycle](/vgi/docs/concepts/lifecycle/).
+- **The exact contracts** → [Package overview](/vgi/docs/typescript/api/) and
+  [Scalar functions](/vgi/docs/typescript/api/scalar/).

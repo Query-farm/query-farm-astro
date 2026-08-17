@@ -1,0 +1,2505 @@
+---
+title: "Catalogs"
+description: "Exposing schemas, tables, and views to ATTACH."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Exposing schemas, tables, and views to ATTACH.
+
+</div>
+
+<div class="api-class">
+
+<a id="AttachCatalogInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `AttachCatalogInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/attach_catalog_info.go#L21" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type AttachCatalogInfo struct {
+	// Alias is the ATTACH alias; also the SourceCatalog a catalog-table
+	// ScanBranch references. Namespace it by your catalog identity so two workers
+	// don't both claim the same name (collisions are rejected, never merged).
+	Alias	string
+	// Target is the ATTACH target — a path or DSN, e.g.
+	// "ducklake:sqlite:/data/meta.sqlite" or "postgres:dbname=... host=...".
+	Target	string
+	// DBType is the DuckDB db type (e.g. "ducklake", "postgres"). Empty => the
+	// extension infers it from the Target scheme prefix.
+	DBType	string
+	// Options are extra ATTACH options forwarded verbatim (e.g. DuckLake DATA_PATH).
+	Options	map[string]string
+	// Hidden attaches the companion excluded from duckdb_databases() (still
+	// resolvable by qualified name and by branches).
+	Hidden	bool
+	// Required: when true, a failure to attach fails the whole VGI ATTACH; when
+	// false it is logged and skipped.
+	Required	bool
+	// SecretRef optionally names a credential to inject into the companion's
+	// ATTACH options (opt-in on the client via attach_companion_secrets).
+	SecretRef	string
+}`} />
+
+<p class="api-section">Description</p>
+
+AttachCatalogInfo is a companion catalog the client should ATTACH when this
+VGI catalog attaches (lakehouse federation). It is IPC-serialized into
+CatalogAttachResult.attach_catalogs; the C++ VGI extension attaches each entry
+at VGI-attach time so multi-branch catalog-table branches (and direct queries)
+can resolve tables in a companion DuckLake / Iceberg / Postgres / DuckDB.
+
+</div>
+
+<div class="api-class">
+
+<a id="AttachOptionSpec"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `AttachOptionSpec`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/attach_option.go#L32" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type AttachOptionSpec struct {
+	Name		string
+	Description	string
+	Type		arrow.DataType
+	DefaultBatch	arrow.RecordBatch
+	Required	bool
+}`} />
+
+<p class="api-section">Description</p>
+
+AttachOptionSpec describes an ATTACH-time option the worker accepts.
+Mirrors vgi-python's AttachOptionSpec: wire format is the same as
+SettingSpec so DuckDB can parse both with shared code.
+
+DefaultBatch, when non-nil, must be a single-row RecordBatch whose only
+column (name "value") has type Type. Use this to carry defaults for types
+like list/struct/decimal/date/time/timestamp that are awkward to express
+as Go scalars. Callers that only need primitive defaults can use
+BuildDefaultValueBatch.
+
+Required marks an option the caller must supply at ATTACH time. A catalog
+that cannot be attached without it advertises that at discovery, so a client
+can say so before attempting the attach rather than surfacing a failure that
+reads like an empty catalog. It is mutually exclusive with a default: an
+option that falls back to a value is by definition satisfiable without the
+caller.
+
+</div>
+
+<div class="api-class">
+
+<a id="CatalogDataVersionRelease"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CatalogDataVersionRelease`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_info.go#L20" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CatalogDataVersionRelease struct {
+	// Version is the concrete published version (e.g. "1.0.0"), not a spec.
+	Version	string
+	// ReleasedAt is the release date (UTC). Nil when the worker doesn't track
+	// dates.
+	ReleasedAt	*time.Time
+	// Summary is a one-line human summary; empty string when unknown.
+	Summary	string
+	// NotesURL optionally links to detailed notes for this release.
+	NotesURL	*string
+}`} />
+
+<p class="api-section">Description</p>
+
+CatalogDataVersionRelease is one published data version of a catalog. It
+mirrors vgi-python's CatalogDataVersionRelease. Entries on
+CatalogInfo.Releases must be newest-first and unique by Version.
+
+</div>
+
+<div class="api-class">
+
+<a id="CatalogExample"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CatalogExample`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_types.go#L17" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CatalogExample struct {
+	SQL		string
+	Description	string
+	ExpectedOutput	*string
+}`} />
+
+<p class="api-section">Description</p>
+
+CatalogExample is a usage example attached to a FunctionInfo.
+
+</div>
+
+<div class="api-class">
+
+<a id="CatalogInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CatalogInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_info.go#L33" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CatalogInfo struct {
+	Name			string
+	ImplementationVersion	*string
+	DataVersionSpec		*string
+	// AttachOptionSpecs holds pre-serialized AttachOptionSpec records (one per
+	// declared ATTACH-time option). Surfaced to DuckDB via vgi_catalogs() so
+	// the extension can validate ATTACH options before attach.
+	AttachOptionSpecs	[][]byte
+	// Releases lists the concrete published data versions, newest-first. Empty
+	// when the worker doesn't track release history.
+	Releases	[]CatalogDataVersionRelease
+	// SourceURL points at where this worker's code lives (repo, build, docs).
+	// Nil when the worker doesn't advertise a source location.
+	SourceURL	*string
+}`} />
+
+<p class="api-section">Description</p>
+
+CatalogInfo is the discovery record returned by catalog_catalogs.
+
+</div>
+
+<div class="api-class">
+
+<a id="CatalogMacro"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CatalogMacro`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_macro_info.go#L40" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CatalogMacro struct {
+	// Name is the macro name visible in SQL.
+	Name	string
+	// MacroType is "scalar" or "table".
+	MacroType	MacroType
+	// Parameters lists the parameter names in order.
+	Parameters	[]string
+	// ParameterDefaultValues is the serialized Arrow IPC bytes of a 1-row
+	// RecordBatch containing default values (nil when no defaults).
+	ParameterDefaultValues	[]byte
+	// Definition is the SQL expression (scalar) or query (table).
+	Definition	string
+	// Comment is a human-readable description.
+	Comment	string
+	// Tags are arbitrary key/value annotations attached to this macro;
+	// surfaced through MacroInfo.tags.
+	Tags	map[string]string
+	// ParameterDocs is an optional mapping of parameter name to a
+	// human/agent-facing description. Keys must appear in Parameters.
+	// Descriptions flow over the wire via the macro arguments_schema's
+	// vgi_doc field metadata (the same channel functions use for per-argument
+	// docs). Empty/nil means no per-parameter docs.
+	ParameterDocs	map[string]string
+}`} />
+
+<p class="api-section">Description</p>
+
+CatalogMacro describes a macro to register in the catalog.
+
+</div>
+
+<div class="api-class">
+
+<a id="CatalogTable"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CatalogTable`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L24" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CatalogTable struct {
+	// Name is the table name visible in SQL.
+	Name	string
+	// Comment is a human-readable description.
+	Comment	string
+	// Columns is the explicit column schema. If nil and Function is set,
+	// columns are derived from the function's OnBind response.
+	Columns	*arrow.Schema
+	// Function is the backing table function (nil for handler-only tables).
+	Function	TableFunction
+	// FuncArgs are the arguments to pass when calling the backing function.
+	FuncArgs	[]CatalogTableArg
+	// NotNull lists column names with NOT NULL constraints.
+	NotNull	[]string
+	// Unique lists groups of column names for UNIQUE constraints.
+	Unique	[][]string
+	// Check lists check constraint expressions.
+	Check	[]string
+	// PrimaryKey lists groups of column names for PRIMARY KEY constraints.
+	PrimaryKey	[][]string
+	// ForeignKey lists foreign key definitions.
+	ForeignKey	[]ForeignKeyConstraint
+	// Defaults maps column names to their default values.
+	// Supported types: Sql (raw SQL), string, int/int64/int32, float64/float32, bool, nil.
+	Defaults	map[string]any
+	// ColumnComments maps column names to per-column comments surfaced
+	// through duckdb_columns().comment.
+	ColumnComments	map[string]string
+	// Generated maps column names to SQL expressions for generated (virtual)
+	// columns. Encoded as \`generated_expression\` Arrow field metadata.
+	Generated	map[string]string
+	// Statistics holds optimizer hints per column name. When non-empty,
+	// the catalog reports supports_column_statistics=true for this table and
+	// answers catalog_table_column_statistics_get from this map.
+	Statistics	map[string]*ColumnStatistics
+	// StatisticsCacheMaxAgeSeconds, when set, is emitted as
+	// cache_max_age_seconds schema metadata on the stats batch.
+	// Nil means cache indefinitely; 0 means do not cache.
+	StatisticsCacheMaxAgeSeconds	*int64
+	// SupportsTimeTravel indicates this table supports AT (VERSION/TIMESTAMP) queries.
+	SupportsTimeTravel	bool
+	// CardinalityEstimate, when non-nil, inlines the table's row-count estimate
+	// on TableInfo. The C++ extension uses it directly and skips the per-bind
+	// table_function_cardinality RPC. Use only for read-only / slow-changing
+	// tables where cardinality is statically known.
+	CardinalityEstimate	*int64
+	// CardinalityMax mirrors CardinalityEstimate for the cardinality upper bound.
+	CardinalityMax	*int64
+	// Tags are arbitrary key/value annotations attached to this table.
+	// They surface to DuckDB on TableInfo.tags and are visible through
+	// duckdb_tables().tags. Useful for category/coverage/example_queries
+	// metadata.
+	Tags	map[string]string
+	// RequiredFilters is the required WHERE-filter set in conjunctive normal
+	// form (CNF): an AND (outer list) of OR-groups (inner lists) of dotted-path
+	// column references. A group is satisfied when any one of its member paths
+	// has a WHERE filter; every group must be satisfied. So
+	// [][]string{{"accession_number"}, {"ticker", "cik"}} means
+	// "accession_number AND one of (ticker, cik)"; a singleton group
+	// [][]string{{"country"}} is a plain mandatory filter. Paths are top-level
+	// names ("country") or struct subfields ("bbox.xmin", "nested.outer.inner").
+	// Empty (default) means no enforcement — the zero-cost fast path. The VGI
+	// DuckDB extension's optimizer pass enforces this at bind time and throws
+	// BinderException listing any unsatisfied groups; satisfaction is
+	// prefix-based (a filter on a parent path satisfies its child paths).
+	RequiredFilters	[][]string
+	// InlineBind, when true and the table's columns are statically known,
+	// inlines the bind result onto TableInfo.bind_result so the C++ extension
+	// skips the per-scan bind RPC. Safe only for tables whose output schema is
+	// static (the resolved Columns schema is authoritative for every scan).
+	InlineBind	bool
+}`} />
+
+<p class="api-section">Description</p>
+
+CatalogTable describes a table to register in the catalog.
+
+</div>
+
+<div class="api-class">
+
+<a id="CatalogTableArg"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CatalogTableArg`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L110" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CatalogTableArg struct {
+	// Position is the 0-based positional index, or -1 for named arguments.
+	Position	int
+	// Name is the argument name (for named args).
+	Name	string
+	// Value is the Go value (int64, float64, string, bool, []byte).
+	Value	interface{}
+	// Type is the Arrow type for serialization.
+	Type	arrow.DataType
+}`} />
+
+<p class="api-section">Description</p>
+
+CatalogTableArg describes a single argument for a function-backed table.
+
+</div>
+
+<div class="api-class">
+
+<a id="CatalogView"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CatalogView`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_view_info.go#L17" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CatalogView struct {
+	// Name is the view name visible in SQL.
+	Name	string
+	// Definition is the SQL query backing the view.
+	Definition	string
+	// Comment is a human-readable description.
+	Comment	string
+	// Tags are arbitrary key/value annotations attached to this view;
+	// surfaced through ViewInfo.tags.
+	Tags	map[string]string
+	// ColumnComments maps output column names to per-column comments. The
+	// C++ extension aligns these by name against the columns DuckDB binds
+	// from the view definition and surfaces them via duckdb_columns().comment.
+	ColumnComments	map[string]string
+}`} />
+
+<p class="api-section">Description</p>
+
+CatalogView describes a view to register in the catalog.
+
+</div>
+
+<div class="api-class">
+
+<a id="ColumnStatistics"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ColumnStatistics`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/column_statistics.go#L20" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type ColumnStatistics struct {
+	ColumnName	string
+	Type		arrow.DataType	// Arrow type of Min/Max (required if either is set)
+	Min		interface{}	// e.g. int64(1), float64(0.99), "Accounting", nil
+	Max		interface{}
+	HasNull		bool
+	HasNotNull	bool
+	DistinctCount	int64	// 0 treated as unknown
+	// ContainsUnicode and MaxStringLength apply only to string/binary columns.
+	ContainsUnicode		*bool
+	MaxStringLength		*int64
+	distinctCountSet	bool	// zero-value disambiguator
+}`} />
+
+<p class="api-section">Description</p>
+
+ColumnStatistics describes optimizer hints for one column. Match the
+Python ColumnStatistics dataclass in vgi-python/vgi/catalog/catalog_interface.py.
+
+Min/Max are stored as Go scalars; SerializeColumnStatistics handles the
+Arrow sparse-union encoding the wire protocol expects.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="ColumnStatistics.SetDistinctCount"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `SetDistinctCount`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/column_statistics.go#L35" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (c *ColumnStatistics) SetDistinctCount(n int64)</code></pre>
+
+SetDistinctCount sets the distinct-count estimator (including 0 as a valid value).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="DefaultReadOnlyCatalog"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `DefaultReadOnlyCatalog`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog.go#L524" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type DefaultReadOnlyCatalog struct {
+	catalogName		string
+	schemas			map[string]*catalogSchemaInfo
+	version			int64
+	attachOpaqueData	[]byte
+}`} />
+
+<p class="api-section">Description</p>
+
+DefaultReadOnlyCatalog auto-generates from registered functions.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="NewDefaultReadOnlyCatalog"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `NewDefaultReadOnlyCatalog`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog.go#L540" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func NewDefaultReadOnlyCatalog(catalogName string, w *Worker) *DefaultReadOnlyCatalog</code></pre>
+
+NewDefaultReadOnlyCatalog creates a catalog from registered functions.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="ForeignKeyConstraint"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ForeignKeyConstraint`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L98" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type ForeignKeyConstraint struct {
+	// Columns are the column names in this table.
+	Columns	[]string
+	// ReferencedTable is the name of the referenced table.
+	ReferencedTable	string
+	// ReferencedColumns are the column names in the referenced table.
+	ReferencedColumns	[]string
+	// ReferencedSchema is the schema of the referenced table (empty = same schema).
+	ReferencedSchema	string
+}`} />
+
+<p class="api-section">Description</p>
+
+ForeignKeyConstraint describes a foreign key relationship.
+
+</div>
+
+<div class="api-class">
+
+<a id="FunctionInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `FunctionInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_types.go#L24" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type FunctionInfo struct {
+	Name				string
+	SchemaName			string
+	FunctionType			FunctionType
+	ArgSchema			*arrow.Schema	// argument schema
+	OutputSchema			*arrow.Schema	// return schema
+	Stability			FunctionStability
+	NullHandling			NullHandling
+	Description			string
+	Comment				string
+	Tags				map[string]string
+	Examples			[]CatalogExample
+	Categories			[]string
+	ProjectionPushdown		*bool
+	FilterPushdown			*bool
+	SamplingPushdown		*bool
+	LateMaterialization		*bool
+	SupportedExpressionFilters	[]string
+	OrderPreservation		OrderPreservation	// "" = null
+	MaxWorkers			int32
+	SupportsBatchIndex		bool			// opt-in per-batch batch_index tagging
+	PartitionKind			PartitionKind		// default PartitionKindNotPartitioned
+	OrderDependent			OrderDependence		// default NOT_ORDER_DEPENDENT
+	DistinctDependent		DistinctDependence	// default NOT_DISTINCT_DEPENDENT
+	SupportsWindow			bool
+	StreamingPartitioned		bool
+	HasFinalize			bool
+	// Table-buffering (sink/source) ordering hints. Default false.
+	SourceOrderDependent	bool
+	SinkOrderDependent	bool
+	RequiresInputBatchIndex	bool
+	// InputFromArgs marks a blended ("UNNEST-style") table-in-out function: its
+	// positional args ARE the per-row input columns (real typed args, no TABLE
+	// placeholder), so one registration serves literal / column / LATERAL call
+	// shapes. The C++ extension reads it to enter the in-out registration branch
+	// with real-typed args and drive the literal single-row scan-mode.
+	InputFromArgs		bool
+	RequiredSettings	[]string
+	RequiredSecrets		[]SecretRequirement
+
+	// catalogHome is the single catalog that owns this registration. It lives
+	// on the entry rather than in a name-keyed map because two catalogs served
+	// by one worker may each declare their own implementation of one name.
+	catalogHome	string
+	// unlisted hides the entry from every function listing without changing its
+	// home (it exists to back a catalog table).
+	unlisted	bool
+}`} />
+
+<p class="api-section">Description</p>
+
+FunctionInfo describes a function in the catalog.
+
+</div>
+
+<div class="api-class">
+
+<a id="MacroDefault"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `MacroDefault`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_macro_info.go#L212" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type MacroDefault struct {
+	Name	string
+	Value	interface{}
+	Type	arrow.DataType
+}`} />
+
+<p class="api-section">Description</p>
+
+MacroDefault describes a single parameter default value.
+
+</div>
+
+<div class="api-class">
+
+<a id="MacroInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `MacroInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_macro_info.go#L66" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type MacroInfo struct {
+	Name			string
+	SchemaName		string
+	Comment			string
+	Tags			map[string]string
+	MacroType		MacroType
+	Parameters		[]string
+	ParameterDefaultValues	[]byte
+	Definition		string
+	// ArgumentsSchema is the optional macro arguments schema, serialized as
+	// Arrow IPC bytes: one nullable field per parameter, in Parameters order,
+	// each carrying its description via the vgi_doc field-metadata key (the
+	// same channel functions use). nil when no per-parameter docs are supplied.
+	ArgumentsSchema	[]byte
+}`} />
+
+<p class="api-section">Description</p>
+
+MacroInfo describes a macro in the catalog for wire serialization.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="macroInfoFromCatalogMacro"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `macroInfoFromCatalogMacro`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_macro_info.go#L193" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func macroInfoFromCatalogMacro(cm CatalogMacro, schemaName string) (*MacroInfo, error)</code></pre>
+
+macroInfoFromCatalogMacro builds the wire MacroInfo for a registered
+CatalogMacro in the given schema, including the per-parameter arguments_schema
+(carrying vgi_doc field metadata for documented parameters).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="MacroType"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">type</span> `MacroType`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_macro_info.go#L18" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>type MacroType string</code></pre>
+
+<p class="api-section">Description</p>
+
+MacroType identifies the kind of macro.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="macroKindFilter"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `macroKindFilter`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_macro_info.go#L29" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func macroKindFilter(s string) MacroType</code></pre>
+
+macroKindFilter maps a schema_contents_macros "type" filter value (as sent
+by DuckDB) to a MacroType. Returns "" for an unrecognized value.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="MissingAttachOptionsError"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `MissingAttachOptionsError`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/attach_option.go#L131" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type MissingAttachOptionsError struct {
+	CatalogName	string
+	Missing		[]string
+}`} />
+
+<p class="api-section">Description</p>
+
+MissingAttachOptionsError reports an ATTACH that omitted options declared
+Required. Missing carries the names so a caller can act on them without
+parsing the message. Mirrors Python's MissingAttachOptionsError, message
+included — the extension's integration suite matches on its text.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="MissingAttachOptionsError.Error"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Error`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/attach_option.go#L138" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (e *MissingAttachOptionsError) Error() string</code></pre>
+
+Error renders the missing option names, matching the Python and Go
+implementations' message text.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="ScanArg"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ScanArg`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L144" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type ScanArg struct {
+	Value	interface{}
+	Type	arrow.DataType
+}`} />
+
+<p class="api-section">Description</p>
+
+ScanArg is a single argument value with its Arrow type.
+
+</div>
+
+<div class="api-class">
+
+<a id="ScanBranch"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ScanBranch`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L151" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type ScanBranch struct {
+	// FunctionName is the function to call (a VGI table function or any native
+	// DuckDB function such as read_parquet).
+	FunctionName	string
+	// PositionalArguments / NamedArguments are passed to the function's bind.
+	PositionalArguments	[]ScanArg
+	NamedArguments		map[string]ScanArg
+	// BranchFilter, when non-nil, is a SQL expression ANDed into every scan of
+	// this branch before filter pushdown. Used to make overlapping physical
+	// sources non-overlapping at scan time.
+	BranchFilter	*string
+	// Writable declares this branch as the INSERT target. At most one branch
+	// per table may be writable (the C++ extension enforces this at parse time).
+	Writable	bool
+	// SourceCatalog/SourceSchema/SourceTable define a *catalog-table* branch:
+	// when FunctionName is "" and SourceTable is set, the branch scans the base
+	// table SourceCatalog.SourceSchema.SourceTable in a companion catalog
+	// (lakehouse federation) instead of calling a table function. Nil = function
+	// branch.
+	SourceCatalog	*string
+	SourceSchema	*string
+	SourceTable	*string
+}`} />
+
+<p class="api-section">Description</p>
+
+ScanBranch is one physical source backing a multi-branch scan. It mirrors
+vgi-python's ScanBranch.
+
+</div>
+
+<div class="api-class">
+
+<a id="ScanBranchesResult"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ScanBranchesResult`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L178" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type ScanBranchesResult struct {
+	Branches	[]ScanBranch
+	// RequiredExtensions is the union of DuckDB extensions needed across all
+	// branches, hoisted to the top level.
+	RequiredExtensions	[]string
+}`} />
+
+<p class="api-section">Description</p>
+
+ScanBranchesResult is the list of physical sources backing a multi-branch
+table. The branches list must be non-empty. It mirrors vgi-python's
+ScanBranchesResult.
+
+</div>
+
+<div class="api-class">
+
+<a id="ScanFunctionGetHandler"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">func type</span> `ScanFunctionGetHandler`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L124" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>type ScanFunctionGetHandler func(schemaName, tableName string, atUnit, atValue *string) (*ScanFunctionResult, error)</code></pre>
+
+<p class="api-section">Description</p>
+
+ScanFunctionGetHandler is a callback for resolving table scan functions
+that are not backed by a registered CatalogTable with a Function field.
+atUnit and atValue carry time-travel AT clause parameters (both nil when absent).
+
+</div>
+
+<div class="api-class">
+
+<a id="ScanFunctionResult"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ScanFunctionResult`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L132" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type ScanFunctionResult struct {
+	// FunctionName is the name of the function to invoke.
+	FunctionName	string
+	// PositionalArguments are the positional arguments.
+	PositionalArguments	[]ScanArg
+	// NamedArguments are the named arguments.
+	NamedArguments	map[string]ScanArg
+	// RequiredExtensions lists DuckDB extensions that must be loaded.
+	RequiredExtensions	[]string
+}`} />
+
+<p class="api-section">Description</p>
+
+ScanFunctionResult describes the function to call when scanning a catalog table.
+
+</div>
+
+<div class="api-class">
+
+<a id="SchemaInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `SchemaInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_types.go#L425" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type SchemaInfo struct {
+	Name			string
+	Comment			string
+	Tags			map[string]string
+	AttachOpaqueData	[]byte
+	// EstimatedObjectCount, when non-nil, advertises the approximate per-kind
+	// population (e.g. {"table": 0, "view": 12}). A value of 0 is a hard
+	// guarantee — the C++ client skips the corresponding bulk RPC and any
+	// per-name lookup for that kind. Nil disables the optimisation entirely.
+	EstimatedObjectCount	map[string]int64
+}`} />
+
+<p class="api-section">Description</p>
+
+SchemaInfo describes a schema in the catalog.
+
+</div>
+
+<div class="api-class">
+
+<a id="SerializedItems"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">type</span> `SerializedItems`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog.go#L76" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>type SerializedItems = [][]byte</code></pre>
+
+<p class="api-section">Description</p>
+
+SerializedItems is a list of Arrow-IPC-encoded items sent over the wire.
+
+</div>
+
+<div class="api-class">
+
+<a id="Sql"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">type</span> `Sql`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L21" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>type Sql string</code></pre>
+
+<p class="api-section">Description</p>
+
+Sql represents a raw SQL expression that should be passed through verbatim
+(e.g. current_timestamp, nextval('seq')).
+
+</div>
+
+<div class="api-class">
+
+<a id="TableColumnStatisticsResult"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `TableColumnStatisticsResult`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/column_statistics.go#L41" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TableColumnStatisticsResult struct {
+	Statistics	[]ColumnStatistics
+	// CacheMaxAgeSeconds: nil means cache indefinitely; 0 means no cache.
+	CacheMaxAgeSeconds	*int64
+}`} />
+
+<p class="api-section">Description</p>
+
+TableColumnStatisticsResult is the full reply to catalog_table_column_statistics_get.
+
+</div>
+
+<div class="api-class">
+
+<a id="TableGetHandler"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">func type</span> `TableGetHandler`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L129" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>type TableGetHandler func(schemaName, tableName string, atUnit, atValue *string) ([]byte, error)</code></pre>
+
+<p class="api-section">Description</p>
+
+TableGetHandler is a callback for customizing catalog_table_get responses,
+e.g. to return version-specific schemas for time-travel queries.
+Return nil to fall through to the default table lookup.
+
+</div>
+
+<div class="api-class">
+
+<a id="TableInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `TableInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table_info.go#L17" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TableInfo struct {
+	Name				string
+	SchemaName			string
+	Comment				string
+	Tags				map[string]string
+	Columns				*arrow.Schema	// serialized as IPC schema bytes
+	NotNullConstraints		[]int32
+	UniqueConstraints		[][]int32
+	CheckConstraints		[]string
+	PrimaryKeyConstraints		[][]int32
+	ForeignKeyConstraints		[][]byte	// each []byte is an IPC-serialized FK RecordBatch
+	SupportsInsert			bool
+	SupportsUpdate			bool
+	SupportsDelete			bool
+	SupportsReturning		bool
+	SupportsColumnStatistics	bool
+
+	// Optional inlined function-discovery results. When populated (non-nil),
+	// the C++ extension uses the cached bytes and skips the corresponding
+	// catalog_table_{scan,insert,update,delete}_function_get RPC. Bytes are
+	// the IPC payload from SerializeScanFunctionResult.
+	ScanFunction	[]byte
+	InsertFunction	[]byte
+	UpdateFunction	[]byte
+	DeleteFunction	[]byte
+
+	// Optional inlined cardinality. When set, the C++ extension uses these
+	// directly and skips the table_function_cardinality RPC. Use nil to leave
+	// the field unset (per-bind RPC continues to fire).
+	CardinalityEstimate	*int64
+	CardinalityMax		*int64
+
+	// Optional inlined column statistics. Bytes are the IPC payload from
+	// SerializeColumnStatistics. When non-nil, the C++ extension skips the
+	// per-bind catalog_table_column_statistics_get and the per-scan
+	// table_function_statistics RPCs.
+	ColumnStatistics	[]byte
+
+	// Optional inlined bind result. Bytes are the IPC payload from a bind
+	// response. When non-nil, the C++ extension threads it straight into
+	// bind_data and skips the per-scan bind RPC.
+	BindResult	[]byte
+
+	// RequiredFilters is the required WHERE-filter set in conjunctive normal
+	// form (CNF): an AND (outer list) of OR-groups (inner lists) of dotted-path
+	// column references that MUST appear in a WHERE expression for any scan of
+	// this table. A group is satisfied when any one of its member paths has a
+	// filter; every group must be satisfied. So [["accession_number"],
+	// ["ticker","cik"]] means "accession_number AND one of (ticker, cik)".
+	// Paths are top-level names ("country") or struct subfields ("bbox.xmin").
+	// Empty (default) means no enforcement. The C++ extension's optimizer pass
+	// consults this at bind time and throws BinderException listing any
+	// unsatisfied groups. Satisfaction is prefix-based — a filter on a parent
+	// path satisfies every required child path.
+	//
+	// This is the trailing field of the TableInfo wire schema.
+	RequiredFilters	[][]string
+}`} />
+
+<p class="api-section">Description</p>
+
+TableInfo describes a table in the catalog for wire serialization.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="tableInfoFromWritable"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `tableInfoFromWritable`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L384" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func tableInfoFromWritable(t *writableTable, schemaName string) (*TableInfo, error)</code></pre>
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="ViewInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ViewInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_view_info.go#L34" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type ViewInfo struct {
+	Name		string
+	SchemaName	string
+	Comment		string
+	Tags		map[string]string
+	Definition	string
+	ColumnComments	map[string]string
+}`} />
+
+<p class="api-section">Description</p>
+
+ViewInfo describes a view in the catalog for wire serialization.
+
+</div>
+
+<div class="api-class">
+
+<a id="WritableCatalog"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `WritableCatalog`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_catalog.go#L18" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type WritableCatalog struct {
+	// Name is the SQL-visible catalog name (must match ATTACH '<name>').
+	Name	string
+	// Comment is an optional human-readable description.
+	Comment	string
+
+	mu			sync.Mutex
+	attachOpaqueData	[]byte
+	version			int64
+	// schemas keyed by schema name (lower-case canonical form).
+	schemas	map[string]*writableSchema
+	// store persists schemas/tables/rows across worker processes.
+	store	*writableStore
+}`} />
+
+<p class="api-section">Description</p>
+
+WritableCatalog is a name-bound writable catalog hosted by a Worker.
+It owns a per-catalog set of schemas and tables that can be created,
+dropped, and mutated via DDL/DML over the VGI protocol.
+
+Storage is currently in-memory; use a fresh worker process for an
+empty starting state. Cross-process state sharing (analogous to the
+SQLite-backed aggregate storage) is a follow-up.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="WritableCatalog.AttachOpaqueData"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `AttachOpaqueData`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_catalog.go#L73" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (c *WritableCatalog) AttachOpaqueData() []byte</code></pre>
+
+AttachOpaqueData returns the attach_opaque_data assigned to this catalog after first attach.
+
+</div>
+<div class="api-member">
+
+<a id="NewWritableCatalog"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `NewWritableCatalog`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_catalog.go#L59" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func NewWritableCatalog(name string) *WritableCatalog</code></pre>
+
+NewWritableCatalog builds an empty writable catalog with one default
+schema "main". The catalog uses a SQLite-backed store so DuckDB-spawned
+worker subprocesses see the same state.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="catalogSchemaInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `catalogSchemaInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog.go#L531" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type catalogSchemaInfo struct {
+	info		*SchemaInfo
+	functions	[]FunctionInfo
+	tables		[]CatalogTable
+	views		[]CatalogView
+	macros		[]CatalogMacro
+}`} />
+
+</div>
+
+<div class="api-class">
+
+<a id="onConflictAction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">type</span> `onConflictAction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L58" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>type onConflictAction string</code></pre>
+
+<p class="api-section">Description</p>
+
+onConflictAction encodes the SQL ON-CONFLICT semantics carried as a
+dictionary-encoded string by the C++ extension.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="parseOnConflict"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `parseOnConflict`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L66" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func parseOnConflict(s string) onConflictAction</code></pre>
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="writableDeleteFn"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `writableDeleteFn`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L350" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>type writableDeleteFn struct&#123; w *Worker &#125;</code></pre>
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="writableDeleteFn.ArgumentSpecs"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ArgumentSpecs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L361" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableDeleteFn) ArgumentSpecs() []ArgSpec</code></pre>
+
+ArgumentSpecs declares the constant schema_name and table_name arguments.
+
+</div>
+<div class="api-member">
+
+<a id="writableDeleteFn.Finalize"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Finalize`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L408" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableDeleteFn) Finalize(ctx context.Context, p *ProcessParams, state interface&#123;&#125;) ([]arrow.RecordBatch, error)</code></pre>
+
+Finalize emits no additional batches; per-batch counts are returned inline.
+
+</div>
+<div class="api-member">
+
+<a id="writableDeleteFn.Metadata"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L356" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableDeleteFn) Metadata() FunctionMetadata</code></pre>
+
+Metadata reports the function as a volatile, internal writable table function.
+
+</div>
+<div class="api-member">
+
+<a id="writableDeleteFn.Name"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Name`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L353" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableDeleteFn) Name() string</code></pre>
+
+Name returns the registered function name for the writable delete function.
+
+</div>
+<div class="api-member">
+
+<a id="writableDeleteFn.NewState"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `NewState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L374" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableDeleteFn) NewState(p *ProcessParams) (interface&#123;&#125;, error)</code></pre>
+
+NewState creates the per-call state holding the target schema and table names.
+
+</div>
+<div class="api-member">
+
+<a id="writableDeleteFn.OnBind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnBind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L364" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableDeleteFn) OnBind(p *BindParams) (*BindResponse, error)</code></pre>
+
+OnBind binds the output to a single-column "rows_deleted" count schema.
+
+</div>
+<div class="api-member">
+
+<a id="writableDeleteFn.OnInit"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnInit`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L369" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableDeleteFn) OnInit(p *InitParams) (*GlobalInitResponse, error)</code></pre>
+
+OnInit limits processing to a single worker to serialize mutations.
+
+</div>
+<div class="api-member">
+
+<a id="writableDeleteFn.Process"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Process`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L381" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableDeleteFn) Process(ctx context.Context, p *ProcessParams, state interface&#123;&#125;, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error</code></pre>
+
+Process deletes rows identified by their synthesized row IDs in the incoming
+batch and emits the deleted row count.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="writableInsertFn"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `writableInsertFn`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L231" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>type writableInsertFn struct&#123; w *Worker &#125;</code></pre>
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="writableInsertFn.ArgumentSpecs"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ArgumentSpecs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L242" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableInsertFn) ArgumentSpecs() []ArgSpec</code></pre>
+
+ArgumentSpecs declares the constant schema_name and table_name arguments.
+
+</div>
+<div class="api-member">
+
+<a id="writableInsertFn.Finalize"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Finalize`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L282" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableInsertFn) Finalize(ctx context.Context, p *ProcessParams, state interface&#123;&#125;) ([]arrow.RecordBatch, error)</code></pre>
+
+Finalize emits no additional batches; per-batch counts are returned inline.
+
+</div>
+<div class="api-member">
+
+<a id="writableInsertFn.Metadata"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L237" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableInsertFn) Metadata() FunctionMetadata</code></pre>
+
+Metadata reports the function as a volatile, internal writable table function.
+
+</div>
+<div class="api-member">
+
+<a id="writableInsertFn.Name"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Name`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L234" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableInsertFn) Name() string</code></pre>
+
+Name returns the registered function name for the writable insert function.
+
+</div>
+<div class="api-member">
+
+<a id="writableInsertFn.NewState"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `NewState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L255" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableInsertFn) NewState(p *ProcessParams) (interface&#123;&#125;, error)</code></pre>
+
+NewState creates the per-call state holding the target schema and table names.
+
+</div>
+<div class="api-member">
+
+<a id="writableInsertFn.OnBind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnBind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L245" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableInsertFn) OnBind(p *BindParams) (*BindResponse, error)</code></pre>
+
+OnBind binds the output to a single-column "rows_inserted" count schema.
+
+</div>
+<div class="api-member">
+
+<a id="writableInsertFn.OnInit"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnInit`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L250" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableInsertFn) OnInit(p *InitParams) (*GlobalInitResponse, error)</code></pre>
+
+OnInit limits processing to a single worker to serialize mutations.
+
+</div>
+<div class="api-member">
+
+<a id="writableInsertFn.Process"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Process`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L262" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableInsertFn) Process(ctx context.Context, p *ProcessParams, state interface&#123;&#125;, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error</code></pre>
+
+Process appends the incoming batch rows to the table and emits the inserted
+row count.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="writableMutateState"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `writableMutateState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L179" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type writableMutateState struct {
+	SchemaName	string
+	TableName	string
+	Count		int64
+
+	// catalog memoizes the resolved writable catalog for the life of the
+	// mutation (one DML statement). findWritableTable does a locked SQLite
+	// QueryRow + schema-IPC deserialize + gob decode; without this cache every
+	// input batch would repeat it. Unexported so gob ignores it on the HTTP
+	// continuation round-trip (it re-resolves after rehydration).
+	catalog	*WritableCatalog
+}`} />
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="writableMutateState.resolveCatalog"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `resolveCatalog`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L194" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (st *writableMutateState) resolveCatalog(w *Worker) (*WritableCatalog, error)</code></pre>
+
+resolveCatalog returns the writable catalog owning this mutation's table,
+resolving it once and caching it on the state.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="writableScanFn"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `writableScanFn`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L58" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>type writableScanFn struct&#123; w *Worker &#125;</code></pre>
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="writableScanFn.ArgumentSpecs"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ArgumentSpecs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L78" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableScanFn) ArgumentSpecs() []ArgSpec</code></pre>
+
+ArgumentSpecs declares the constant schema_name and table_name arguments
+identifying the writable table to scan.
+
+</div>
+<div class="api-member">
+
+<a id="writableScanFn.Cardinality"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Cardinality`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L99" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableScanFn) Cardinality(params *BindParams) (*TableCardinality, error)</code></pre>
+
+Cardinality estimates the result size from the table's stored row count,
+returning zero if the table cannot be found.
+
+</div>
+<div class="api-member">
+
+<a id="writableScanFn.Metadata"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L67" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableScanFn) Metadata() FunctionMetadata</code></pre>
+
+Metadata reports the function as a volatile, internal writable table function
+with projection pushdown enabled.
+
+</div>
+<div class="api-member">
+
+<a id="writableScanFn.Name"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Name`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L63" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableScanFn) Name() string</code></pre>
+
+Name returns the registered function name for the writable scan function.
+
+</div>
+<div class="api-member">
+
+<a id="writableScanFn.NewState"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `NewState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L118" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableScanFn) NewState(params *ProcessParams) (*writableScanState, error)</code></pre>
+
+NewState creates the per-scan state tracking whether rows have been emitted.
+
+</div>
+<div class="api-member">
+
+<a id="writableScanFn.OnBind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnBind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L87" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableScanFn) OnBind(params *BindParams) (*BindResponse, error)</code></pre>
+
+OnBind looks up the target table and binds the output to its schema plus a
+synthesized row-ID column.
+
+</div>
+<div class="api-member">
+
+<a id="writableScanFn.Process"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Process`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L124" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableScanFn) Process(ctx context.Context, params *ProcessParams, state *writableScanState, out *vgirpc.OutputCollector) error</code></pre>
+
+Process emits all stored rows once as a single batch, honoring projection
+pushdown, then finishes the stream.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="writableScanState"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `writableScanState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L113" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type writableScanState struct {
+	Emitted bool	// exported for gob round-trip via the framework
+}`} />
+
+</div>
+
+<div class="api-class">
+
+<a id="writableSchema"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `writableSchema`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_catalog.go#L33" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type writableSchema struct {
+	name	string
+	comment	string
+	tables	map[string]*writableTable
+}`} />
+
+</div>
+
+<div class="api-class">
+
+<a id="writableStore"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `writableStore`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L28" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type writableStore struct {
+	mu	sync.Mutex
+	db	*sql.DB
+	once	sync.Once
+	openErr	error
+}`} />
+
+<p class="api-section">Description</p>
+
+writableStore is a SQLite-backed persistence layer that mirrors the
+in-memory writableSchema/writableTable/row data so DuckDB-spawned worker
+subprocesses see the same writable catalog state. Same rationale and
+same SQLite file as the aggregate state store.
+
+Schema:
+
+<Code lang="go" code={`wc_schema(catalog, name PK, comment, created_version)
+wc_table(catalog, schema_name, name PK, schema_ipc, meta_blob, comment)
+wc_row(catalog, schema_name, table_name, row_id INTEGER PK auto, data_blob)
+`} />
+
+`meta_blob` is a gob-encoded writableTableMeta capturing not-null /
+PK / unique / check / FK / defaults / column comments — keeps the
+table row narrow.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="writableStore.ensureOpen"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ensureOpen`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L37" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) ensureOpen() error</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="newWritableStore"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `newWritableStore`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L35" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func newWritableStore() *writableStore</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.rowsAppend"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `rowsAppend`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L325" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) rowsAppend(catalog, schemaName, tableName string, rows []map[string]interface&#123;&#125;) (int64, error)</code></pre>
+
+rowsAppend writes new rows, returning the next row_id base.
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.rowsCount"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `rowsCount`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L408" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) rowsCount(catalog, schemaName, tableName string) (int64, error)</code></pre>
+
+rowsCount returns the number of rows for cardinality estimates.
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.rowsDelete"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `rowsDelete`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L490" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) rowsDelete(catalog, schemaName, tableName string, rowIDs []int64) (int64, error)</code></pre>
+
+rowsDelete removes rows by row_id.
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.rowsScan"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `rowsScan`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L374" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) rowsScan(catalog, schemaName, tableName string) ([]map[string]interface&#123;&#125;, error)</code></pre>
+
+rowsScan returns all rows ordered by row_id, attaching the row_id under
+rowIDFieldName.
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.rowsUpdate"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `rowsUpdate`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L422" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) rowsUpdate(catalog, schemaName, tableName string, updates []map[string]interface&#123;&#125;) (int64, error)</code></pre>
+
+rowsUpdate replaces specified columns in rows identified by row_id.
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.schemaDrop"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaDrop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L178" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) schemaDrop(catalog, name string, cascade bool) error</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.schemaExists"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaExists`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L164" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) schemaExists(catalog, name string) (bool, error)</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.schemaList"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaList`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L205" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) schemaList(catalog string) ([]struct&#123; Name, Comment string &#125;, error)</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.schemaUpsert"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaUpsert`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L151" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) schemaUpsert(catalog, name, comment string) error</code></pre>
+
+schemaUpsert writes a schema record. Returns existing comment if found.
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.tableDrop"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableDrop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L246" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) tableDrop(catalog, schemaName, tableName string) error</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.tableList"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableList`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L302" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) tableList(catalog, schemaName string) ([]string, error)</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.tableLoad"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableLoad`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L268" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) tableLoad(catalog, schemaName, tableName string) (*writableTable, error)</code></pre>
+
+tableLoad fetches a table definition and rehydrates it (without rows).
+
+</div>
+<div class="api-member">
+
+<a id="writableStore.tableUpsert"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableUpsert`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L228" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (s *writableStore) tableUpsert(catalog, schemaName string, t *writableTable) error</code></pre>
+
+tableUpsert writes a table definition record.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="writableTable"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `writableTable`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_catalog.go#L39" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type writableTable struct {
+	name	string
+	schema	*arrow.Schema
+	comment	string
+	// rows is the in-memory row store; each row is a map of column name
+	// to Go value (nil for NULL).
+	rows	[]map[string]interface{}
+	// constraints captured at CREATE TABLE time.
+	notNull		[]string
+	primaryKey	[][]string
+	unique		[][]string
+	check		[]string
+	foreignKey	[]ForeignKeyConstraint
+	defaults	map[string]any
+	columnComment	map[string]string
+}`} />
+
+</div>
+
+<div class="api-class">
+
+<a id="writableTableMeta"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `writableTableMeta`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L88" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type writableTableMeta struct {
+	NotNull		[]string
+	PrimaryKey	[][]string
+	Unique		[][]string
+	Check		[]string
+	ForeignKey	[]ForeignKeyConstraint
+	Defaults	map[string][]byte	// gob-encoded defaultValue per column
+	ColumnComment	map[string]string
+}`} />
+
+<p class="api-section">Description</p>
+
+writableTableMeta is the gob-serializable per-table metadata.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="decodeTableMeta"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `decodeTableMeta`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L120" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func decodeTableMeta(data []byte) (*writableTableMeta, error)</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="writableTableMeta.toDefaults"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `toDefaults`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L128" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (m *writableTableMeta) toDefaults() map[string]any</code></pre>
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="writableUpdateFn"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `writableUpdateFn`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L290" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>type writableUpdateFn struct&#123; w *Worker &#125;</code></pre>
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="writableUpdateFn.ArgumentSpecs"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ArgumentSpecs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L301" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableUpdateFn) ArgumentSpecs() []ArgSpec</code></pre>
+
+ArgumentSpecs declares the constant schema_name and table_name arguments.
+
+</div>
+<div class="api-member">
+
+<a id="writableUpdateFn.Finalize"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Finalize`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L342" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableUpdateFn) Finalize(ctx context.Context, p *ProcessParams, state interface&#123;&#125;) ([]arrow.RecordBatch, error)</code></pre>
+
+Finalize emits no additional batches; per-batch counts are returned inline.
+
+</div>
+<div class="api-member">
+
+<a id="writableUpdateFn.Metadata"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L296" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableUpdateFn) Metadata() FunctionMetadata</code></pre>
+
+Metadata reports the function as a volatile, internal writable table function.
+
+</div>
+<div class="api-member">
+
+<a id="writableUpdateFn.Name"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Name`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L293" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableUpdateFn) Name() string</code></pre>
+
+Name returns the registered function name for the writable update function.
+
+</div>
+<div class="api-member">
+
+<a id="writableUpdateFn.NewState"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `NewState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L314" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableUpdateFn) NewState(p *ProcessParams) (interface&#123;&#125;, error)</code></pre>
+
+NewState creates the per-call state holding the target schema and table names.
+
+</div>
+<div class="api-member">
+
+<a id="writableUpdateFn.OnBind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnBind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L304" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableUpdateFn) OnBind(p *BindParams) (*BindResponse, error)</code></pre>
+
+OnBind binds the output to a single-column "rows_updated" count schema.
+
+</div>
+<div class="api-member">
+
+<a id="writableUpdateFn.OnInit"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnInit`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L309" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableUpdateFn) OnInit(p *InitParams) (*GlobalInitResponse, error)</code></pre>
+
+OnInit limits processing to a single worker to serialize mutations.
+
+</div>
+<div class="api-member">
+
+<a id="writableUpdateFn.Process"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Process`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L321" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (f *writableUpdateFn) Process(ctx context.Context, p *ProcessParams, state interface&#123;&#125;, batch arrow.RecordBatch, out *vgirpc.OutputCollector) error</code></pre>
+
+Process applies the incoming batch rows as updates to the table and emits the
+updated row count.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="BuildMacroArgumentsSchema"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `BuildMacroArgumentsSchema`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_macro_info.go#L270" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func BuildMacroArgumentsSchema(parameters []string, parameterDefaultValues []byte, parameterDocs map[string]string) ([]byte, error)</code></pre>
+
+BuildMacroArgumentsSchema builds the macro arguments_schema describing macro
+parameters, mirroring the function arguments_schema mechanism: one nullable
+Arrow field per parameter, in parameters order. Each parameter's field type is
+the type of its default value when known (derived from parameterDefaultValues,
+the serialized 1-row RecordBatch of typed defaults) else arrow.Null. The
+per-parameter description rides as field metadata under the same vgi_doc key
+functions use (UTF-8, presence-only — the key is omitted entirely when there
+is no doc).
+
+Returns nil when there are no parameters (nothing to describe). The returned
+bytes are Arrow IPC schema bytes suitable for MacroInfo.ArgumentsSchema and
+the macro create-request arguments_schema slot.
+
+</div>
+<div class="api-member">
+
+<a id="BuildMacroDefaultValues"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `BuildMacroDefaultValues`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_macro_info.go#L221" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func BuildMacroDefaultValues(defaults []MacroDefault) ([]byte, error)</code></pre>
+
+BuildMacroDefaultValues builds the serialized Arrow IPC bytes for macro
+parameter defaults. Returns a 1-row RecordBatch where column names are
+parameter names and values are typed defaults.
+
+</div>
+<div class="api-member">
+
+<a id="MacroParameterDocsFromSchema"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `MacroParameterDocsFromSchema`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_macro_info.go#L315" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func MacroParameterDocsFromSchema(argumentsSchema []byte) (map[string]string, error)</code></pre>
+
+MacroParameterDocsFromSchema extracts per-parameter descriptions from a macro
+arguments_schema (Arrow IPC schema bytes). Inverse of
+BuildMacroArgumentsSchema's vgi_doc handling: reads the vgi_doc field metadata
+(UTF-8) for each field. Fields without the key (undocumented) are omitted from
+the result. Returns an empty map when the input is empty or carries no docs.
+
+</div>
+<div class="api-member">
+
+<a id="SerializeAttachCatalogInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `SerializeAttachCatalogInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/attach_catalog_info.go#L50" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func SerializeAttachCatalogInfo(info AttachCatalogInfo) ([]byte, error)</code></pre>
+
+SerializeAttachCatalogInfo serializes one AttachCatalogInfo to IPC bytes
+matching AttachCatalogInfoSchema (alias, target, db_type, options, hidden,
+required, secret_ref).
+
+</div>
+<div class="api-member">
+
+<a id="SerializeCatalogInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `SerializeCatalogInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_info.go#L52" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func SerializeCatalogInfo(info *CatalogInfo) ([]byte, error)</code></pre>
+
+SerializeCatalogInfo serializes a CatalogInfo to IPC bytes.
+
+</div>
+<div class="api-member">
+
+<a id="SerializeColumnStatistics"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `SerializeColumnStatistics`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/column_statistics.go#L50" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func SerializeColumnStatistics(stats []ColumnStatistics, cacheMaxAgeSeconds *int64) ([]byte, error)</code></pre>
+
+SerializeColumnStatistics encodes per-column stats as the sparse-union IPC
+batch DuckDB's VGI extension expects. See vgi-python's
+catalog_interface.serialize_column_statistics for the reference layout.
+
+</div>
+<div class="api-member">
+
+<a id="SerializeFunctionInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `SerializeFunctionInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_types.go#L95" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func SerializeFunctionInfo(info *FunctionInfo) ([]byte, error)</code></pre>
+
+SerializeFunctionInfo serializes a FunctionInfo to IPC bytes.
+
+</div>
+<div class="api-member">
+
+<a id="SerializeMacroInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `SerializeMacroInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_macro_info.go#L85" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func SerializeMacroInfo(info *MacroInfo) ([]byte, error)</code></pre>
+
+SerializeMacroInfo serializes a MacroInfo to IPC bytes.
+
+</div>
+<div class="api-member">
+
+<a id="SerializeScanBranch"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `SerializeScanBranch`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L189" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func SerializeScanBranch(branch *ScanBranch) ([]byte, error)</code></pre>
+
+SerializeScanBranch serializes one ScanBranch to IPC bytes (the per-branch
+blob carried in ScanBranchesResult.branches).
+
+</div>
+<div class="api-member">
+
+<a id="SerializeScanFunctionResult"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `SerializeScanFunctionResult`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L262" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func SerializeScanFunctionResult(result *ScanFunctionResult) ([]byte, error)</code></pre>
+
+SerializeScanFunctionResult serializes a ScanFunctionResult to IPC bytes.
+
+</div>
+<div class="api-member">
+
+<a id="SerializeSchemaInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `SerializeSchemaInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_types.go#L440" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func SerializeSchemaInfo(info *SchemaInfo) ([]byte, error)</code></pre>
+
+SerializeSchemaInfo serializes a SchemaInfo to IPC bytes.
+
+</div>
+<div class="api-member">
+
+<a id="SerializeTableInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `SerializeTableInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table_info.go#L79" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func SerializeTableInfo(info *TableInfo) ([]byte, error)</code></pre>
+
+SerializeTableInfo serializes a TableInfo to IPC bytes.
+
+</div>
+<div class="api-member">
+
+<a id="SerializeViewInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `SerializeViewInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_view_info.go#L46" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func SerializeViewInfo(info *ViewInfo) ([]byte, error)</code></pre>
+
+SerializeViewInfo serializes a ViewInfo to IPC bytes.
+
+</div>
+<div class="api-member">
+
+<a id="appendValue"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `appendValue`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L367" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func appendValue(b array.Builder, val interface&#123;&#125;)</code></pre>
+
+appendValue appends a Go value to the appropriate Arrow builder.
+
+</div>
+<div class="api-member">
+
+<a id="applyColumnComments"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `applyColumnComments`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L454" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func applyColumnComments(schema *arrow.Schema, comments map[string]string) (*arrow.Schema, error)</code></pre>
+
+applyColumnComments adds "comment" metadata to Arrow schema fields for
+columns with per-column descriptions. Existing metadata is preserved.
+
+</div>
+<div class="api-member">
+
+<a id="applyDefaults"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `applyDefaults`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L484" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func applyDefaults(schema *arrow.Schema, defaults map[string]any) (*arrow.Schema, error)</code></pre>
+
+applyDefaults adds "default" metadata to Arrow schema fields for columns
+that have default values defined. Existing field metadata is preserved.
+
+</div>
+<div class="api-member">
+
+<a id="applyGenerated"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `applyGenerated`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L421" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func applyGenerated(schema *arrow.Schema, generated map[string]string) (*arrow.Schema, error)</code></pre>
+
+applyGenerated adds "generated_expression" metadata to Arrow schema fields
+for generated/virtual columns. Existing field metadata is preserved.
+
+</div>
+<div class="api-member">
+
+<a id="arrowValueAccessor"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `arrowValueAccessor`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L621" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func arrowValueAccessor(col arrow.Array) func(i int) interface&#123;&#125;</code></pre>
+
+arrowValueAccessor resolves the concrete column type once and returns a
+per-row extractor, hoisting the type switch out of per-row loops. Unsupported
+types yield an accessor that returns nil (mirrors arrowValueAt's default).
+
+</div>
+<div class="api-member">
+
+<a id="arrowValueAt"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `arrowValueAt`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L614" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func arrowValueAt(col arrow.Array, i int) interface&#123;&#125;</code></pre>
+
+arrowValueAt extracts one cell as a Go scalar. For per-cell loops over a
+whole column, resolve arrowValueAccessor once instead (this convenience form
+re-runs the type switch on every call).
+
+</div>
+<div class="api-member">
+
+<a id="batchToRows"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `batchToRows`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L588" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func batchToRows(batch arrow.RecordBatch) ([]map[string]interface&#123;&#125;, error)</code></pre>
+
+batchToRows converts a RecordBatch into a slice of column-name → Go-value maps.
+
+</div>
+<div class="api-member">
+
+<a id="buildColumnFromValues"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `buildColumnFromValues`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L452" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func buildColumnFromValues(mem memory.Allocator, f arrow.Field, rows []map[string]interface&#123;&#125;) (arrow.Array, error)</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="buildInt8Array"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `buildInt8Array`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/column_statistics.go#L221" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func buildInt8Array(mem memory.Allocator, data []int8) arrow.Array</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="buildStatChildArray"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `buildStatChildArray`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/column_statistics.go#L233" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func buildStatChildArray(mem memory.Allocator, t arrow.DataType, target int8, codes []int8, stats []ColumnStatistics, wantMin bool) (arrow.Array, error)</code></pre>
+
+buildStatChildArray builds the per-type child array of a sparse union.
+Only rows whose typeCode matches the target are populated with the real
+value; others get null.
+
+</div>
+<div class="api-member">
+
+<a id="catalogNameOf"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `catalogNameOf`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog.go#L24" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func catalogNameOf(attachOpaqueData []byte) string</code></pre>
+
+catalogNameOf returns the catalog name carried in an unwrapped attach
+plaintext: the bytes before the first NUL separator, or the whole value when
+there is none. Alias-info catalogs (WithCatalogAliasInfo) mint
+"&lt;name&gt;\x00&lt;random&gt;" so each ATTACH is unique; plain catalogs/aliases use the
+bare name. Catalog-scoped function visibility compares against this name.
+
+</div>
+<div class="api-member">
+
+<a id="columnGroupsByIndex"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `columnGroupsByIndex`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L192" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func columnGroupsByIndex(schema *arrow.Schema, groups [][]int32) [][]string</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="columnsByIndex"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `columnsByIndex`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L182" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func columnsByIndex(schema *arrow.Schema, idx []int32) []string</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="defaultToSQL"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `defaultToSQL`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L391" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func defaultToSQL(value any) string</code></pre>
+
+defaultToSQL converts a Go default value to a SQL expression string.
+
+</div>
+<div class="api-member">
+
+<a id="defaultsFromSchemaMetadata"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `defaultsFromSchemaMetadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L203" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func defaultsFromSchemaMetadata(schema *arrow.Schema) map[string]any</code></pre>
+
+defaultsFromSchemaMetadata extracts the default-value SQL expression
+stored as Arrow field metadata (key "default") set by DuckDB's column
+definition serializer.
+
+</div>
+<div class="api-member">
+
+<a id="encodeTableMeta"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `encodeTableMeta`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L98" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func encodeTableMeta(t *writableTable) []byte</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="init"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `init`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_storage.go#L142" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func init()</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="makeUnionFields"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `makeUnionFields`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/column_statistics.go#L213" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func makeUnionFields(types []arrow.DataType, names []string) []arrow.Field</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="pickScalar"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `pickScalar`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/column_statistics.go#L325" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func pickScalar(s ColumnStatistics, wantMin bool) interface&#123;&#125;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="resolveColumnGroupIndices"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `resolveColumnGroupIndices`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog.go#L1913" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func resolveColumnGroupIndices(columns *arrow.Schema, groups [][]string) [][]int32</code></pre>
+
+resolveColumnGroupIndices maps groups of column names to groups of indices.
+
+</div>
+<div class="api-member">
+
+<a id="resolveColumnIndices"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `resolveColumnIndices`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog.go#L1896" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func resolveColumnIndices(columns *arrow.Schema, names []string) []int32</code></pre>
+
+resolveColumnIndices maps column names to their indices in the schema.
+
+</div>
+<div class="api-member">
+
+<a id="rowsToBatch"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `rowsToBatch`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L433" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func rowsToBatch(schema *arrow.Schema, rows []map[string]interface&#123;&#125;) (arrow.RecordBatch, error)</code></pre>
+
+rowsToBatch builds a RecordBatch from a slice of column-name → value maps.
+
+</div>
+<div class="api-member">
+
+<a id="serializeAttachOptionSpec"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `serializeAttachOptionSpec`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/attach_option.go#L52" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func serializeAttachOptionSpec(spec AttachOptionSpec) ([]byte, error)</code></pre>
+
+serializeAttachOptionSpec serializes an AttachOptionSpec to Arrow IPC bytes.
+
+</div>
+<div class="api-member">
+
+<a id="serializeForeignKey"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `serializeForeignKey`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog.go#L2088" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func serializeForeignKey(schemaName string, fk *ForeignKeyConstraint) ([]byte, error)</code></pre>
+
+serializeForeignKey serializes a ForeignKeyConstraint to IPC bytes.
+
+</div>
+<div class="api-member">
+
+<a id="serializeInlineBindResult"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `serializeInlineBindResult`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table_info.go#L317" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func serializeInlineBindResult(schema *arrow.Schema) ([]byte, error)</code></pre>
+
+serializeInlineBindResult produces the IPC bytes for an inlined bind result
+carrying a static output schema. It mirrors the payload a regular bind RPC
+would return (vgi-python's BindResponse(output_schema=...).serialize_to_bytes()):
+the given schema in output_schema, null opaque_data, and empty secret-lookup
+lists. Set on TableInfo.BindResult so the C++ extension threads it straight
+into bind_data and skips the per-scan bind RPC.
+
+</div>
+<div class="api-member">
+
+<a id="serializeScanArgs"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `serializeScanArgs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog_table.go#L319" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func serializeScanArgs(mem memory.Allocator, positional []ScanArg, named map[string]ScanArg) ([]byte, error)</code></pre>
+
+serializeScanArgs builds and serializes the nested arguments batch.
+Positional args are named arg_0, arg_1, ...; named args use their name.
+
+</div>
+<div class="api-member">
+
+<a id="suppliedAttachOptionNames"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `suppliedAttachOptionNames`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/attach_option.go#L157" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func suppliedAttachOptionNames(optionsIPC []byte) (map[string]struct&#123;&#125;, error)</code></pre>
+
+suppliedAttachOptionNames reads the option keys out of the serialized
+options batch. Each supplied option is a column of a single-row batch, so
+the column names are the keys; nil or empty bytes mean none were supplied.
+
+</div>
+<div class="api-member">
+
+<a id="toFloat64"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `toFloat64`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L561" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func toFloat64(v interface&#123;&#125;) float64</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="toInt64"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `toInt64`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L543" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func toInt64(v interface&#123;&#125;) int64</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="toString"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `toString`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L577" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func toString(v interface&#123;&#125;) string</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="validateRequiredAttachOptions"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `validateRequiredAttachOptions`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/attach_option.go#L177" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func validateRequiredAttachOptions(catalogName string, specs []AttachOptionSpec, optionsIPC []byte) error</code></pre>
+
+validateRequiredAttachOptions returns a *MissingAttachOptionsError when a
+spec marked Required has no corresponding entry in the supplied options.
+Names are matched case-insensitively, mirroring DuckDB's handling of ATTACH
+option keys.
+
+</div>
+<div class="api-member">
+
+<a id="validateRequiredFilters"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `validateRequiredFilters`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/catalog.go#L1937" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func validateRequiredFilters(tableName string, columns *arrow.Schema, groups [][]string) error</code></pre>
+
+validateRequiredFilters checks a table's CNF required-filter groups. Each
+OR-group must be non-empty and contain no empty strings, and the leading
+dotted segment of every path must name a real column on the table. Returns
+nil when groups is empty (the no-enforcement fast path) or columns is nil.
+
+</div>
+<div class="api-member">
+
+<a id="withSynthesizedRowID"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `withSynthesizedRowID`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_handlers.go#L26" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func withSynthesizedRowID(s *arrow.Schema) *arrow.Schema</code></pre>
+
+withSynthesizedRowID returns a new schema with __row_id (int64) appended
+if not already present.
+
+</div>
+<div class="api-member">
+
+<a id="writableArgs"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `writableArgs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L206" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func writableArgs(args *Arguments) (string, string)</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="writableCountBatch"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `writableCountBatch`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L169" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func writableCountBatch(name string, n int64) arrow.RecordBatch</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="writableCountSchema"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `writableCountSchema`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/writable_functions.go#L165" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func writableCountSchema(name string) *arrow.Schema</code></pre>
+
+</div>

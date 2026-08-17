@@ -1,0 +1,171 @@
+---
+title: vgi.otel
+description: API reference for vgi.otel
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">Module overview</p>
+
+VGI application-level OpenTelemetry and Sentry instrumentation.
+
+Provides [`VgiTracer`](/vgi/docs/python/api/vgi-otel/#vgi.otel.VgiTracer) — a thin wrapper that enriches both OTel spans and
+Sentry scopes with VGI-level attributes (function name, attach_opaque_data, etc.)
+and creates ``vgi.execute.*`` per-batch records (OTel spans + Sentry
+spans + Sentry breadcrumbs).
+
+All OTel and Sentry imports are deferred to ``VgiTracer.create()`` so that
+``import vgi.otel`` works even when neither dependency is installed.  When
+both backends are disabled, all operations are zero-cost no-ops.
+
+Despite the module name, this is the central instrumentation hook for both
+backends.  vgi-rpc's own Sentry auto-attach handles RPC-layer fields
+(method name, server id, auth principal); the helpers here add VGI-layer
+fields (function name, function type, attach id, transaction id, per-batch
+row counts) on top.
+
+Sentry spans:  every exchange creates a child span ``op=vgi.execute``,
+``name=<function_name>`` under the active RPC transaction.  Row counts and
+byte sizes land as ``vgi.execute.*`` span attributes — searchable in Trace
+Explorer (e.g. ``span.op:vgi.execute vgi.function.name:scan_orders ->
+p99(span.duration) GROUP BY vgi.execute.input_rows``).  Breadcrumbs are
+still emitted for the Issues-side chronological view of recent batches
+when an exception fires later.  High-volume streams may hit Sentry's
+per-transaction span cap (~1000); use ``traces_sample_rate`` to scale.
+
+
+</div>
+
+<a id="vgi.otel.get_noop_tracer"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `get_noop_tracer`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/otel.py#L226" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>get_noop_tracer() -&gt; <a href="/vgi/docs/python/api/vgi-otel/#vgi.otel.VgiTracer">VgiTracer</a></code></pre>
+
+Return the module-level noop tracer singleton.
+
+
+<div class="api-class">
+
+<a id="vgi.otel.VgiTracer"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `VgiTracer`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/otel.py#L76" target="_blank" rel="noopener">source</a>
+
+<p class="api-section">Description</p>
+
+Wraps OTel tracer + meter or acts as no-op.
+
+Use ``VgiTracer.create(otel_config)`` to build. When *otel_config* is
+``None``, returns the module-level ``_NOOP_TRACER`` singleton — all
+methods become zero-cost no-ops.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.otel.VgiTracer.enabled"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `enabled`
+
+<p class="api-atype"><code>bool</code></p>
+
+Return whether OTel instrumentation is active.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.otel.VgiTracer.sentry_enabled"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `sentry_enabled`
+
+<p class="api-atype"><code>bool</code></p>
+
+Return whether Sentry enrichment is active.
+
+
+</div>
+
+</div>
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.otel.VgiTracer.create"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `create`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/otel.py#L107" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>create(otel_config: <a href="https://vgi-rpc-python.query.farm/" class="api-ext" target="_blank" rel="noopener">OtelConfig</a> | None) -&gt; <a href="/vgi/docs/python/api/vgi-otel/#vgi.otel.VgiTracer">VgiTracer</a></code></pre>
+
+Create a [`VgiTracer`](/vgi/docs/python/api/vgi-otel/#vgi.otel.VgiTracer) from an `OtelConfig`.
+
+When *otel_config* is ``None`` and Sentry is not initialised, returns
+the module-level noop tracer.  When Sentry is initialised, returns a
+tracer with Sentry enrichment active even if OTel is disabled, so VGI
+scope context still flows into Sentry events.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.otel.VgiTracer.start_span"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `start_span`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/otel.py#L163" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>start_span(name: str, attributes: dict[str, Any] | None = None) -&gt; Any</code></pre>
+
+Start a child span. Returns ``_NOOP_SPAN`` when disabled.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.otel.VgiTracer.set_current_span_attributes"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `set_current_span_attributes`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/otel.py#L169" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>set_current_span_attributes(attributes: dict[str, Any]) -&gt; None</code></pre>
+
+Enrich the active OTel span and Sentry scope with VGI attributes.
+
+Each non-``None`` value is set as both an OTel span attribute and
+(when Sentry is initialised) a Sentry tag.  Tags are merged into the
+current scope, so calling this multiple times during a dispatch
+accumulates context rather than overwriting it.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.otel.VgiTracer.record_execute_metrics"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `record_execute_metrics`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/otel.py#L197" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>record_execute_metrics(
+    *,
+    function_name: str,
+    function_type: str,
+    duration_s: float,
+    input_rows: int | None = None,
+    output_rows: int | None = None,
+    input_bytes: int | None = None,
+    output_bytes: int | None = None,
+) -&gt; None</code></pre>
+
+Record per-batch execution metrics.
+
+
+</div>
+
+</div>
+
+</div>

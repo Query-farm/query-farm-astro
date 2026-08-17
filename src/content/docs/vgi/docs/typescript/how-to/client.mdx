@@ -1,0 +1,135 @@
+---
+title: Call a worker from TypeScript
+description: "Drive a VGI worker directly with VgiClient — no DuckDB in the middle. The fastest way to test a worker, and the basis of the browser client."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+`VgiClient` speaks the VGI protocol directly, so you can call a worker's functions from TypeScript
+without an engine in the middle. That makes it the fastest way to test a worker — and it is the same
+client the HTTP landing page ships to browsers.
+
+<InfoTip label="Not the usual path" title="This is not how production calls a worker">
+In production DuckDB is the client: it attaches the worker and calls functions as part of a query
+plan, which is what you want, because the planner's projection and filter pushdown only exist there.
+`VgiClient` is for tests, tooling, and browser front-ends that want the worker's data without a
+query engine.
+</InfoTip>
+
+## Calling a table function
+
+<CodeBlock code={`import { VgiClient, Arguments, subprocessConnect } from "@query-farm/vgi";
+
+const rpc = subprocessConnect(["bun", "run", "./calc.ts"]);
+const client = new VgiClient(rpc);
+
+for await (const rows of client.tableFunctionRows({
+  functionName: "series",
+  arguments: new Arguments([5]),
+})) {
+  console.log(rows);
+}
+
+client.close();`} lang="typescript" tryable={false} />
+
+<CodeBlock code={`[ { n: 0 }, { n: 1 }, { n: 2 }, { n: 3 }, { n: 4 } ]`} lang="text" tryable={false} />
+
+The method is an async generator yielding **one array per batch**, so a large scan streams rather
+than materializing. `Arguments([5])` is positional; the second constructor parameter takes a `Map`
+for named arguments.
+
+## Calling a scalar function
+
+A scalar function has no arguments of its own — it has *input columns*, so you hand it batches:
+
+<CodeBlock code={`import { VgiClient, subprocessConnect, batchFromColumns, toSchema, int } from "@query-farm/vgi";
+
+const rpc = subprocessConnect(["bun", "run", "./calc.ts"]);
+const client = new VgiClient(rpc);
+
+const schema = toSchema({ n: int });
+const input = [batchFromColumns({ n: [1n, 2n, 3n] }, schema)];
+
+for await (const rows of client.scalarFunctionRows({ functionName: "double", input })) {
+  console.log(rows);
+}
+
+client.close();`} lang="typescript" tryable={false} />
+
+<CodeBlock code={`[ { result: 2 }, { result: 4 }, { result: 6 } ]`} lang="text" tryable={false} />
+
+<Callout type="note" title="The first batch determines the input schema">
+`scalarFunctionRows` peeks the first batch to learn what it is binding against, so an input iterator
+that yields nothing throws rather than silently doing nothing:
+*"input iterator yielded no batches; at least one batch is required to determine the input schema"*.
+An empty scan therefore needs one empty batch, not zero batches.
+</Callout>
+
+Note the output column is called `result`, not `n` — a scalar function's output schema is its own,
+not a copy of its input's.
+
+## Transports
+
+`subprocessConnect` spawns the worker and speaks over its stdio. The others take a URL or an address:
+
+<table>
+<thead>
+<tr><th>Connect with</th><th>For</th></tr>
+</thead>
+<tbody>
+<tr><td><code>subprocessConnect(argv)</code></td><td>A local worker, spawned for you. Best for tests.</td></tr>
+<tr><td><code>httpConnect(url)</code></td><td>A worker behind <code>serveVgiWorker</code> or on Cloudflare Workers.</td></tr>
+<tr><td><code>tcpConnect(host, port)</code></td><td>Raw Arrow IPC on a trusted network.</td></tr>
+</tbody>
+</table>
+
+All three come from `@query-farm/vgi-rpc` and are re-exported for convenience. `httpConnect` is what
+the browser entry uses — import `@query-farm/vgi/client` there so no server-side code lands in the
+bundle.
+
+## Browsing a catalog
+
+The client also speaks the catalog side of the protocol, which is how the landing page renders a
+worker's contents without knowing anything about it in advance:
+
+<CodeBlock code={`const catalogs = await client.catalogs();                    // ["cat"]
+const attach = await client.catalogAttach("cat");
+const schemas = await client.schemas(attach.attach_opaque_data);
+const tables = await client.schemaContentsTables(attach.attach_opaque_data, "data");`} lang="typescript" tryable={false} />
+
+`catalogAttach` returns the opaque handle every later call needs — the worker uses it to tell one
+attachment from another, so it is not optional plumbing.
+
+## Testing a worker this way
+
+Because `subprocessConnect` needs nothing but the worker file, a test is a few lines and no engine:
+
+<CodeBlock code={`import { test, expect } from "bun:test";
+import { VgiClient, Arguments, subprocessConnect } from "@query-farm/vgi";
+
+test("series generates 0..n-1", async () => {
+  const client = new VgiClient(subprocessConnect(["bun", "run", "./calc.ts"]));
+  const out: number[] = [];
+  for await (const rows of client.tableFunctionRows({
+    functionName: "series",
+    arguments: new Arguments([3]),
+  })) {
+    out.push(...rows.map((r) => Number(r.n)));
+  }
+  client.close();
+  expect(out).toEqual([0, 1, 2]);
+});`} lang="typescript" tryable={false} />
+
+<Callout type="warning" title="A passing client test is not a passing query">
+This exercises your function and the protocol, and it will not catch anything the *engine* does:
+constraint enforcement at bind, projection and filter pushdown, parallel scan behaviour, or the
+result cache. Keep at least one end-to-end check against a real engine — the SDK's own documentation
+examples are verified that way for exactly this reason.
+</Callout>
+
+## Next steps
+
+- **Every method** → [Client](/vgi/docs/typescript/api/client/).
+- **Serving the worker it connects to** → [Serve over HTTP](/vgi/docs/typescript/how-to/serve-http/).

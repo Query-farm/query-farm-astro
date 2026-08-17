@@ -1,0 +1,92 @@
+---
+title: Transports & runtimes
+description: "The four ways a Rust VGI worker can be served — stdio, Unix socket, TCP, HTTP — and the wasm32 target that runs the worker inside the browser next to DuckDB-WASM."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+The same registered functions serve every transport; only the call at the bottom of `main` changes.
+Rust also has a target the other SDKs do not: compiled to `wasm32`, a worker runs **inside the
+browser page**, next to a DuckDB-WASM engine.
+
+## The four native transports
+
+<table>
+<thead>
+<tr><th>Call</th><th>Transport</th><th>When</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Worker::run()</code></td><td>stdin/stdout, or whatever argv asks for</td><td>The default. DuckDB spawns the process.</td></tr>
+<tr><td><code>transport::serve_unix</code></td><td>AF_UNIX socket</td><td>A long-lived warm worker, reused across calls.</td></tr>
+<tr><td><code>transport::serve_tcp</code></td><td>Raw Arrow IPC over TCP</td><td>A co-located sidecar on a trusted network.</td></tr>
+<tr><td><code>transport::serve_http</code></td><td>HTTP</td><td>Remote, shared, or load-balanced.</td></tr>
+</tbody>
+</table>
+
+`run()` is the one to reach for first: it parses the launcher's arguments out of argv itself and
+dispatches accordingly, so a single entry point covers stdio and the socket transports without a
+flag of your own. That is what makes the tutorial's `ATTACH … LOCATION './target/release/calc'` work
+with no arguments at all.
+
+<Callout type="warning" title="TCP carries no auth and no encryption">
+Raw Arrow IPC over TCP has no framing for either, so anyone who can reach the port can call every
+function. Bind loopback or a trusted network, and move to HTTP the moment the network is not one.
+This is a property of the transport, not of the language — the
+[Go](/vgi/docs/go/how-to/serve-http/#tcp-for-trusted-networks) and
+[Python](/vgi/docs/python/how-to/serve-http/#tcp-for-trusted-networks) SDKs make the same trade.
+</Callout>
+
+<InfoTip label="Feature flags" title="HTTP is a default feature you turn off for wasm">
+`transport-http` is in the crate's `default` features, so `serve_http` is there unless you asked for
+it not to be. It pulls tokio and the vgi-rpc HTTP stack, neither of which compiles to wasm — so a
+wasm build wants `default-features = false`, and the HTTP transport is the thing it gives up. The
+same applies to `sqlite`, the other default feature, which compiles C.
+</InfoTip>
+
+## In the browser, next to DuckDB-WASM
+
+This is the Rust-specific one. Compiled to `wasm32`, a worker is served over DuckDB-WASM's
+SharedArrayBuffer channel and runs in the same page as the engine — no process, no socket, no
+network.
+
+The glue that makes that work is a fixed set of C-ABI exports the page-side boot script calls, and
+it is identical for every worker. The `wasm_worker!` macro generates them from a builder you supply:
+
+<CodeBlock code={`fn build() -> vgi::Worker {
+    let mut w = vgi::Worker::new();
+    w.register_scalar(Double);
+    w.set_catalog(vgi::catalog::CatalogModel {
+        name: "calc".to_string(),
+        ..Default::default()
+    });
+    w
+}
+
+vgi::wasm_worker! { build = build }`} lang="rust" tryable={false} />
+
+The macro expands to **nothing** off `wasm32`, so a crate can invoke it unconditionally and still
+build a normal native binary from the same source.
+
+<Callout type="note" title="SharedArrayBuffer needs cross-origin isolation">
+The channel is a `SharedArrayBuffer`, which browsers only hand out to a cross-origin-isolated page —
+`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`. Without
+those headers the boot script has nothing to allocate and the worker never starts. That is a
+deployment property of your page, not something the worker can arrange for itself.
+</Callout>
+
+## Which one to pick
+
+- **Shipping a binary to a team** — `run()`, stdio. Nothing to operate.
+- **The same worker called constantly** — the Unix socket transport keeps one warm process instead
+  of paying spawn cost per query.
+- **A shared service** — HTTP, so the worker outlives any one client and can sit behind a load
+  balancer.
+- **A browser app with DuckDB-WASM** — the wasm32 target, so the whole thing runs client-side with
+  no server at all.
+
+## Next steps
+
+- **What a worker exposes** → [Expose a catalog](/vgi/docs/rust/how-to/catalogs/).
+- **Exact signatures** → [Worker & serving](/vgi/docs/rust/api/worker/).

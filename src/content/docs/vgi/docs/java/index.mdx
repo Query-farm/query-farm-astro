@@ -1,0 +1,113 @@
+---
+title: Vector Gateway Interface for Java
+description: Build DuckDB scalar, table, and aggregate functions in Java on Apache Arrow — the official documentation for the farm.query:vgi artifact.
+---
+
+import { CardGrid, LinkCard, LinkButton } from '@astrojs/starlight/components';
+import CodeBlock from '../../../../../components/ui/CodeBlock.astro';
+import GitHubStar from '../../../../../components/GitHubStar.astro';
+
+<div class="vgi-hero">
+<picture><source srcset="/vgi/vgi-emblem.webp" type="image/webp" /><img src="/vgi/vgi-emblem.png" alt="Vector Gateway Interface" class="vgi-hero__logo" width="800" height="588" fetchpriority="high" /></picture>
+<p class="vgi-hero__tagline">Extend DuckDB with functions written in Java — backed by Apache&nbsp;Arrow, callable straight from SQL.</p>
+</div>
+
+<div class="vgi-hero__links">
+<LinkButton href="/vgi/docs/java/tutorial/scalar/" icon="rocket">Get started</LinkButton>
+<LinkButton href="https://github.com/Query-farm/vgi-java" variant="secondary" icon="github">GitHub repository</LinkButton>
+</div>
+
+<div class="vgi-hero__star"><GitHubStar repo="Query-farm/vgi-java" /></div>
+
+**`farm.query:vgi`** implements the Vector Gateway Interface (VGI) for Java: you write a small worker
+exposing typed functions, and DuckDB calls them as if they were native. Data moves as Apache Arrow
+record batches, so it stays columnar across the boundary — no row-by-row marshalling.
+
+## Install
+
+<CodeBlock code={`implementation("farm.query:vgi:0.26.1")`} lang="kotlin" tryable={false} />
+
+Requires **JDK 21+** (JDK 22+ unlocks the shared-memory transport). Two JVM flags and the
+`-parameters` compiler flag are part of the contract — see
+[Running a worker](/vgi/docs/java/how-to/running/).
+
+A scalar function is a class with one method:
+
+<CodeBlock code={`public final class ScalarExample extends ScalarFn {
+    @Override public String name() { return "upper_case"; }
+
+    // @Vector marks a per-row input column; the last unannotated vector is the
+    // framework-allocated output.
+    public void compute(@Vector VarCharVector value, VarCharVector result) {
+        result.allocateNew();
+        for (int i = 0; i < value.getValueCount(); i++) {
+            if (value.isNull(i)) { result.setNull(i); continue; }
+            byte[] up = new String(value.get(i), UTF_8).toUpperCase(Locale.ROOT).getBytes(UTF_8);
+            result.setSafe(i, up, 0, up.length);
+        }
+    }
+
+    public static void main(String[] args) {
+        Worker.builder()
+              .catalogName("demo")
+              .registerScalar(new ScalarExample())
+              .runFromArgs(args);
+    }
+}`} lang="java" tryable={false} />
+
+<CodeBlock code={`ATTACH 'demo' (TYPE vgi, LOCATION 'launch:/abs/path/bin/demo');
+SELECT demo.upper_case('hello');   -- HELLO`} lang="sql" tryable={false} />
+
+## Start here
+
+<CardGrid>
+  <LinkCard
+    title="Tutorial"
+    href="/vgi/docs/java/tutorial/scalar/"
+    description="Zero to a scalar and a table function callable from DuckDB, in about 20 minutes."
+  />
+  <LinkCard
+    title="Concepts"
+    href="/vgi/docs/concepts/"
+    description="What VGI is, the worker model, and the Arrow data path — shared across every SDK."
+  />
+  <LinkCard
+    title="API reference"
+    href="/vgi/docs/java/api/"
+    description="The whole artifact — function shapes, worker, catalogs, client — generated from the sources."
+  />
+  <LinkCard
+    title="Function lifecycle"
+    href="/vgi/docs/concepts/lifecycle/"
+    description="When bind, init, process, combine and finalize each run, and how they map to DuckDB."
+  />
+</CardGrid>
+
+## Three things to know up front
+
+- **The method signature is the SQL signature.** `@Vector`, `@Const` and `@Setting` on `compute`'s
+  parameters generate the spec, the bind-time validation and the dispatch. There is no separate
+  declaration to keep in sync — and no schema boilerplate.
+- **How you run it matters as much as what you write.** A cold JVM costs seconds, so `launch:` (one
+  reused worker) rather than a bare path is the difference between usable and not.
+- **It can skip the pipe entirely.** On JDK 22+, large Arrow batches pass through a POSIX
+  shared-memory segment both processes map, negotiated at the transport layer with no code change in
+  your worker.
+
+Coming from another SDK? The protocol is identical and a Java worker is wire-compatible with a
+Python, Go, Rust or TypeScript one — the same DuckDB extension drives all of them.
+
+## Reference
+
+<CardGrid>
+  <LinkCard
+    title="Package overview"
+    href="/vgi/docs/java/api/"
+    description="Orientation for the artifact, plus the map of every reference page."
+  />
+  <LinkCard
+    title="Argument serialization"
+    href="/vgi/docs/concepts/argument-serialization/"
+    description="The Arrow schema every SDK produces for a function signature — the shared wire format."
+  />
+</CardGrid>

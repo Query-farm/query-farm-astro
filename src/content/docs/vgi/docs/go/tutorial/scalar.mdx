@@ -1,0 +1,163 @@
+---
+title: 1. Your first scalar function
+description: Build and run a scalar VGI function in Go, callable from DuckDB.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import workerSrc from '../../../../../../examples/vgi-go/calcscalar.go?raw';
+
+The first tutorial step: build a worker with one **scalar** function and call it from SQL — about
+**10 minutes**, for first-time VGI users with Go 1.25+ (the module's declared minimum).
+
+<InfoTip label="What's a “worker”?" title="What's a “worker”?">
+A **worker** is a small program DuckDB launches as a subprocess and talks to over Apache Arrow. It
+exposes one or more typed functions, and DuckDB calls them like built-ins. It is an ordinary Go
+binary — nothing is compiled into DuckDB.
+</InfoTip>
+
+<div class="kind-banner kind-banner--scalar"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><div class="kind-banner__text"><code class="kind-banner__formula">1 row → 1 value</code><p class="kind-banner__desc">Runs on each row independently and returns a single value — a pure per-row transform.</p></div></div>
+
+<Callout type="tip" title="Why this is powerful">
+`double` is intentionally trivial — DuckDB can already do `n * 2`. The point is that `ProcessTyped`
+is **ordinary Go**: drop in a library, a model, an HTTP call, a parser DuckDB has never heard of, and
+DuckDB calls it like a **native SQL function**.
+</Callout>
+
+## Step 1 — Write the worker
+
+Create a new module and add the SDK:
+
+<CodeBlock code={`mkdir calcscalar && cd calcscalar
+go mod init example.com/calcscalar
+go get github.com/Query-farm/vgi-go`} lang="bash" tryable={false} />
+
+You'll run `go mod tidy` after writing the file, below. `go get` fetches the SDK but not the other
+modules the worker imports — [arrow-go](https://github.com/apache/arrow-go) for the Arrow types, and
+`vgi-rpc-go` for the output collector — so a build before tidying fails with a wall of
+`missing go.sum entry` errors.
+
+Then `main.go`. The `DoubleFn` type is the whole function; the rest wires it into a worker that
+publishes the `calc` catalog:
+
+<CodeBlock code={workerSrc} lang="go" title="main.go" tryable={false} />
+
+Four things to notice:
+
+- **Struct tags are the signature.** `doubleArgs` declares one positional, columnar argument. The tag
+  drives both the spec DuckDB registers and the binding of runtime values into the struct, so the two
+  cannot disagree.
+- **The Go type infers the Arrow type.** An `int64` field becomes a `BIGINT` argument with no
+  `type=` override needed.
+- **A whole column at a time.** `ProcessTyped` receives an Arrow `RecordBatch`, not one row.
+  `MapColumn` walks the column and builds the result, propagating nulls for you.
+- **Bind declares the output type.** `OnBindTyped` runs once per query, before any data moves; that's
+  what lets DuckDB plan around your function.
+
+<Callout type="note" title="`type=` takes Arrow names, not SQL names">
+If you *do* override the inferred type, the tag wants `int64`, not `bigint` — and `timestamp_us`,
+not `timestamp`. A few SQL spellings happen to be valid (`varchar`, `double`, `boolean`, `blob`),
+which is what makes the others tempting.
+
+Since **v0.22.0** an unrecognised name is rejected at registration, with the right one suggested. On
+**v0.21.0 and earlier it silently became `VARCHAR`**, and the failure surfaced much later as a bind
+error naming the *call site* rather than the tag. Either way the safe habit is to omit `type=` and
+let the Go field type infer it, which is what this worker does.
+</Callout>
+
+<InfoTip label="New to Apache Arrow?" title="New to Apache Arrow?" width="34rem">
+[Apache Arrow](https://arrow.apache.org/) is a language-independent **columnar** memory format.
+Rather than rows of objects, data lives in **arrays**: a contiguous, typed sequence of values for a
+single column. VGI hands your function a whole column, and operating on it at once is what keeps it
+fast across the process boundary. In Go you work with these through
+[arrow-go](https://github.com/apache/arrow-go) — `arrow.RecordBatch` is a chunk of a table, and
+`array.Int64` is one int64 column of it.
+
+<a href="https://arrow.apache.org/" target="_blank" rel="noopener" class="arrow-logo-link"><img src="/vgi/apache-arrow.svg" alt="Apache Arrow" class="arrow-logo" /></a>
+</InfoTip>
+
+## Step 2 — Build it
+
+A VGI worker is a normal binary, so `ATTACH` can point straight at it:
+
+<CodeBlock code={`go mod tidy          # resolve arrow-go and vgi-rpc-go
+go build -o calcscalar .`} lang="bash" tryable={false} />
+
+<Callout type="note" title="cgo is required">
+The SDK depends on DuckDB's Go bindings, so `CGO_ENABLED=0` fails with
+*"build constraints exclude all Go files"*. Keep cgo on — it is the default locally, but not in every
+container or CI image. Expect a large binary (~100 MB); those bindings are most of it.
+</Callout>
+
+## Step 3 — Start Haybarn
+
+VGI functions run inside a DuckDB-compatible engine. We'll use **[Haybarn](/haybarn)** — start it
+from the folder holding the binary you just built:
+
+<CodeBlock code={`npx haybarn@rc`} lang="bash" tryable={false} />
+
+This opens Haybarn's in-memory SQL shell — the `memory H` prompt. (First run downloads the CLI; see
+[other install options](/haybarn/install).)
+
+<InfoTip label="Why Haybarn?" title="Haybarn serves the vgi extension">
+Haybarn distributes the `vgi` extension through its own channel, so `INSTALL vgi FROM community;`
+works out of the box. `vgi` isn't in DuckDB's public community repository, so stock DuckDB can't
+`INSTALL` it today — Haybarn is the supported path. The extension is the same one Python, Go and
+TypeScript workers all talk to.
+</InfoTip>
+
+## Step 4 — Attach and call it
+
+At the `memory H` prompt:
+
+<CodeBlock code={`INSTALL vgi FROM community;
+LOAD vgi;
+
+ATTACH 'calc' (TYPE vgi, LOCATION './calcscalar');`} lang="sql" tryable={false} />
+
+Now call it:
+
+<CodeBlock code={`SELECT calc.double(21);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["double(21)"]} rows={[[42]]} />
+
+…or over a whole column:
+
+<CodeBlock code={`SELECT calc.double(n) FROM (VALUES (1), (2), (3)) AS t(n);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["double(n)"]} rows={[[2], [4], [6]]} />
+
+Nulls pass straight through, because `MapColumn` propagates them:
+
+<CodeBlock code={`SELECT calc.double(n) FROM (VALUES (5), (NULL)) AS t(n);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["double(n)"]} rows={[[10], [null]]} />
+
+**What just happened:** `ATTACH` launched `./calcscalar` as a subprocess and registered `calc.double`
+in your SQL session. DuckDB handed your Go code the `n` column as a single Arrow array,
+`ProcessTyped` ran over the whole thing, and the result streamed back — no row-by-row round trips.
+Swap the body for any Go you like and the SQL above doesn't change.
+
+You've built and run your first VGI function in Go. 🎉
+
+<InfoTip label="It didn't work?" title="Troubleshooting" width="34rem" up>
+- **`IO Error: VGI worker not found or not executable`** — `LOCATION` is resolved from the directory
+  the engine was started in. Check the path, and that `go build` actually produced the binary.
+- **`type="bigint" is not a known Arrow type name (did you mean "int64"?)`** — the worker refuses to
+  start. Delete the `type=` override and let the field type infer it. (On v0.21.0 and earlier this
+  failed later instead, as `No function matches … 'double(INTEGER_LITERAL)'`.)
+- **The `ATTACH` hangs** — run `./calcscalar` directly. The worker speaks Arrow over stdin/stdout, so
+  it *looks* like it hangs waiting for input; you're checking for a startup panic on stderr.
+- **`Catalog Error: Scalar Function with name double does not exist!`** — the name comes from
+  `Name()`, qualified by the catalog name from `ATTACH`.
+</InfoTip>
+
+## Next steps
+
+- **The other function shapes** → [Function lifecycle](/vgi/docs/concepts/lifecycle/) — table,
+  table-in-out, aggregate and buffering, and when each callback fires.
+- **The exact contracts** → [Package overview](/vgi/docs/go/api/) and
+  [Scalar functions](/vgi/docs/go/api/scalar/).
+- **Why any of this** → [Concepts](/vgi/docs/concepts/).

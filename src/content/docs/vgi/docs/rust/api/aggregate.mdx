@@ -1,0 +1,289 @@
+---
+title: "Aggregate functions"
+description: "Per-group accumulation: update, combine, finalize."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Per-group accumulation: update, combine, finalize.
+
+</div>
+
+<div class="api-member">
+
+<a id="AggregateFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">trait</span> `AggregateFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/aggregate.rs#L39" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub trait AggregateFunction: Send + Sync {
+    fn name(&self) -> &str;
+    fn metadata(&self) -> FunctionMetadata;
+    fn argument_specs(&self) -> Vec<ArgSpec>;
+    fn on_bind(&self, params: &AggregateBindParams) -> Result<BindResponse>;
+    fn initial_state(&self) -> Vec<u8>;
+    fn update(
+        &self,
+        states: &mut HashMap<i64, Vec<u8>>,
+        group_ids: &Int64Array,
+        columns: &[ArrayRef],
+    ) -> Result<()>;
+    fn combine(&self, target: Vec<u8>, source: Vec<u8>) -> Result<Vec<u8>>;
+    fn finalize(
+        &self,
+        output_schema: &SchemaRef,
+        group_ids: &Int64Array,
+        states: &[Option<Vec<u8>>],
+    ) -> Result<RecordBatch>;
+    fn window(
+        &self,
+        _partition: &RecordBatch,
+        _output_schema: &SchemaRef,
+        _frames: &[Vec<(i64, i64)>],
+        _filter_mask: Option<&[bool]>,
+    ) -> Result<arrow_array::ArrayRef> {
+        Err(RpcError::runtime_error(
+            "window() not supported by this aggregate",
+        ))
+    }
+
+    fn streaming_chunk(
+        &self,
+        _chunk: &RecordBatch,
+        _partition_key_count: usize,
+        _order_key_count: usize,
+        _states: &mut HashMap<Vec<u8>, Vec<u8>>,
+    ) -> Result<ArrayRef> {
+        Err(RpcError::runtime_error(
+            "streaming_chunk() not supported by this aggregate",
+        ))
+    }
+
+    fn finalize_with_args(
+        &self,
+        output_schema: &SchemaRef,
+        group_ids: &Int64Array,
+        states: &[Option<Vec<u8>>],
+        _args: &crate::arguments::Arguments,
+    ) -> Result<RecordBatch> {
+        self.finalize(output_schema, group_ids, states)
+    }
+}`} />
+
+<p class="api-section">Description</p>
+
+An aggregate VGI function.
+
+</div>
+
+<div class="api-member">
+
+<a id="AggregateBindParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `AggregateBindParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/aggregate.rs#L25" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct AggregateBindParams {
+    pub arguments: Arguments,
+    pub input_schema: Option<SchemaRef>,
+    pub settings: Settings,
+    pub secrets: crate::secrets::Secrets,
+}`} />
+
+<p class="api-section">Description</p>
+
+Parameters for `aggregate_bind`.
+
+</div>
+
+<div class="api-member">
+
+<a id="BoundAggregate"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `BoundAggregate`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/aggregate.rs#L52" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct BoundAggregate {
+    execution_id: Bytes,
+    output_schema: SchemaRef,
+    raw_output_schema: Bytes,
+    function_name: String,
+    schema_name: Option<String>,
+}`} />
+
+<p class="api-section">Description</p>
+
+A bound aggregate execution.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="BoundAggregate.execution_id"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `execution_id`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/aggregate.rs#L66" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn execution_id(&amp;self) -&gt; &amp;Bytes</code></pre>
+
+The worker-minted id for this aggregation.
+
+Two executions of the same function have different ids; passing one
+execution's id to [`VgiClient::aggregate_combine`] is how parallel
+partial aggregates are merged.
+
+</div>
+<div class="api-member">
+
+<a id="BoundAggregate.output_schema"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `output_schema`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/aggregate.rs#L71" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn output_schema(&amp;self) -&gt; &amp;SchemaRef</code></pre>
+
+The result schema, resolved at bind.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="GROUP_COLUMN_NAME"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">constant</span> `GROUP_COLUMN_NAME`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/aggregate.rs#L22" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub const GROUP_COLUMN_NAME: &amp;str = "__vgi_group_id";</code></pre>
+
+<p class="api-section">Description</p>
+
+The reserved group-id column prepended to UPDATE input batches.
+
+</div>
+
+<div class="api-member">
+
+<a id="GROUP_COLUMN_NAME"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">constant</span> `GROUP_COLUMN_NAME`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/aggregate.rs#L48" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub const GROUP_COLUMN_NAME: &amp;str = "__vgi_group_id";</code></pre>
+
+<p class="api-section">Description</p>
+
+The group-id column every update batch must carry.
+
+Must match `vgi::aggregate::GROUP_COLUMN_NAME` on the worker side.
+
+</div>
+
+<div class="api-member">
+
+<a id="StreamingAggregate"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `StreamingAggregate`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/aggregate.rs#L458" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct StreamingAggregate {
+    execution_id: Bytes,
+    function_name: String,
+    schema_name: Option<String>,
+}`} />
+
+<p class="api-section">Description</p>
+
+An open streaming-aggregate session.
+
+The streaming protocol skips client-side partition materialisation
+entirely: input chunks go straight to the worker, which answers each with a
+same-length output batch.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="StreamingAggregate.execution_id"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `execution_id`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/aggregate.rs#L466" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn execution_id(&amp;self) -&gt; &amp;Bytes</code></pre>
+
+The worker's session token.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="WindowPartition"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `WindowPartition`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/aggregate.rs#L309" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct WindowPartition {
+    execution_id: Bytes,
+    partition_id: i64,
+    function_name: String,
+    schema_name: Option<String>,
+}`} />
+
+<p class="api-section">Description</p>
+
+A window partition cached on the worker.
+
+Window evaluation is two-phase: the whole partition is shipped once, then
+each output row's frames are evaluated against it. Dropping this releases
+nothing by itself — call [`VgiClient::window_destroy`], which the worker
+needs to free the cached partition.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="WindowPartition.partition_id"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `partition_id`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/aggregate.rs#L318" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn partition_id(&amp;self) -&gt; i64</code></pre>
+
+Which partition this is, within its execution.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="with_group_ids"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `with_group_ids`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi-client/src/aggregate.rs#L80" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn with_group_ids(group_ids: &amp;[i64], values: &amp;RecordBatch) -&gt; Result&lt;RecordBatch&gt;</code></pre>
+
+<p class="api-section">Description</p>
+
+Prepend the group-id column to a batch of value columns.
+
+The worker splits the batch back apart on the column *name*, so a caller
+that builds the batch by hand must use [`GROUP_COLUMN_NAME`].
+
+</div>

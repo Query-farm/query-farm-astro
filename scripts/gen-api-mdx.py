@@ -146,8 +146,18 @@ def build_index(modules: list[Module]) -> dict[str, tuple[str, str]]:
             add(obj, slug, alias_path)
             if isinstance(obj, Class):
                 for mname, member in obj.members.items():
-                    if not mname.startswith("_"):
+                    if mname.startswith("_"):
+                        continue
+                    # render_class only emits anchors for Functions and Attributes
+                    # (see its member filter). A nested class — a `Meta` config
+                    # block, say — gets no anchor, so indexing it to its own
+                    # canonical path would mint links to fragments that don't
+                    # exist. Point those at the enclosing class instead.
+                    if isinstance(member, (Function, Attribute)):
                         add(member, slug)
+                    else:
+                        index[member.canonical_path] = (slug, obj.canonical_path)
+                        _NAME_INDEX.setdefault(member.name, member.canonical_path)
     return index
 
 

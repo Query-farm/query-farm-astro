@@ -1,0 +1,173 @@
+---
+title: Cache results on the client
+description: "Advertise cacheability from a Go worker: TTLs, validators, conditional revalidation, and per-partition or per-value reuse."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import cacheSrc from '../../../../../../examples/vgi-go/cache.go?raw';
+
+How a worker tells the DuckDB client that a result can be reused, so the next query answers without
+calling you at all. Worth doing when your worker is slower than the query around it — a remote API, a
+rate-limited service, an expensive model.
+
+## Prerequisites
+
+- A working table or scalar function (see
+  [Function patterns](/vgi/docs/go/how-to/function-patterns/)).
+
+## The model
+
+Caching is **advertised, not requested**. The worker attaches `vgi.cache.*` metadata to the **first**
+data batch it emits, and the client decides what to do with it. Nothing is cached unless you say so.
+
+The vocabulary is deliberately HTTP's (RFC 9111/9110), because the problem is the same one: a
+freshness lifetime, a reuse scope, validators for revalidating cheaply, and grace windows for serving
+stale.
+
+<Collapsible summary="cache/main.go">
+<CodeBlock code={cacheSrc} lang="go" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'rates' (TYPE vgi, LOCATION './cacheworker');
+SELECT * FROM rates.rates();   -- repeat calls inside the TTL never reach the worker`} lang="sql" tryable={false} />
+
+Running that `SELECT` four times in one session calls the worker's `Process` **once**.
+
+`vgi.Emit` with `vgi.WithCacheControl` is the whole mechanism:
+
+<CodeBlock code={`err := vgi.Emit(out, batch, vgi.WithCacheControl(&vgi.CacheControl{
+    Ttl: vgi.Seconds(300),
+}))`} lang="go" tryable={false} />
+
+<Callout type="info" title="First batch only">
+The metadata rides on the first batch of the result. Attaching it to a later batch has no effect — by
+then the client has already decided how to treat the stream.
+</Callout>
+
+<InfoTip label="Why vgi.Seconds?" title="Optional durations are pointers">
+`Ttl`, `StaleWhileRevalidate` and `StaleIfError` are `*int64` so that *unset* and *zero* are
+different things: `vgi.Seconds(0)` means "always revalidate", while `nil` means the field was never
+advertised. `vgi.Seconds` is just a pointer helper.
+</InfoTip>
+
+## Freshness
+
+Presence of **`Ttl`** or **`Expires`** is what makes a result cacheable at all. `NoStore` overrides
+either.
+
+<table>
+<thead>
+<tr><th>Field</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Ttl</code></td><td>Lifetime in whole seconds, measured from full-result receipt. Skew-immune, and wins over <code>Expires</code>.</td></tr>
+<tr><td><code>Expires</code></td><td>Absolute RFC 3339 UTC deadline. Lifetime is <code>expires - now</code> at receipt.</td></tr>
+<tr><td><code>NoStore</code></td><td>Explicit "never cache". Overrides any freshness key.</td></tr>
+<tr><td><code>Scope</code></td><td><code>CacheScopeCatalog</code> (the default when empty) reuses across transactions within the calling catalog identity; <code>CacheScopeTransaction</code> reuses only inside the same transaction.</td></tr>
+</tbody>
+</table>
+
+Prefer `Ttl` unless your upstream genuinely publishes an absolute deadline — it doesn't depend on the
+client's clock agreeing with yours.
+
+## Revalidation
+
+A TTL alone means the result is recomputed from scratch once it expires. If you can check freshness
+more cheaply than you can recompute, advertise a **validator** and set `Revalidatable`:
+
+<CodeBlock code={`vgi.WithCacheControl(&vgi.CacheControl{
+    Ttl:           vgi.Seconds(300),
+    ETag:          dataVersion,  // strong validator
+    Revalidatable: true,         // "ask me instead of recomputing"
+})`} lang="go" tryable={false} />
+
+`Revalidatable` is what gates whether the client ever sends a conditional request at all. When it
+does, the validators it holds arrive on the process params:
+
+<CodeBlock code={`if params.IfNoneMatch != nil && *params.IfNoneMatch == dataVersion {
+    // Nothing changed — 304-equivalent. Emit ZERO rows and say so.
+    empty := array.NewRecordBatch(ratesSchema, emptyColumns(), 0)
+    defer empty.Release()
+    if err := vgi.Emit(out, empty, vgi.WithCacheControl(&vgi.CacheControl{
+        Ttl:         vgi.Seconds(300),
+        ETag:        dataVersion,
+        NotModified: true,
+    })); err != nil {
+        return err
+    }
+    out.Finish()
+    return nil
+}`} lang="go" tryable={false} />
+
+`params.IfNoneMatch` and `params.IfModifiedSince` are both `nil` on a normal call. Answering with
+`NotModified` on a **zero-row** batch tells the client its stored payload is still good; a non-empty
+batch would be treated as fresh data and replace it.
+
+Use `ETag` when you have an opaque version token; `LastModified` (RFC 3339 UTC) is the weaker
+fallback when you only have a timestamp.
+
+### Serving stale
+
+Two grace windows let the client answer immediately instead of blocking on you:
+
+- **`StaleWhileRevalidate`** — seconds it may serve the stale result while revalidating in the
+  background.
+- **`StaleIfError`** — seconds it may serve the stale result if a revalidation RPC fails.
+
+Both are the difference between a slow upstream being a latency problem and being an availability
+problem.
+
+## Caching a slice instead of the whole scan
+
+Two opt-ins cache at a finer grain. Both are **additive** to the whole-scan cache, not replacements.
+
+- **`PartitionScope`** — for a `SINGLE_VALUE_PARTITIONS` table function, also caches the result split
+  by partition value, so a later `=`/`IN`-filtered scan reuses per-partition entries.
+- **`PerValue`** — for an exchange-mode map (a scalar, or a blended table-in-out under a correlated
+  `LATERAL`), memoizes each distinct input tuple's output.
+
+<Callout type="warning" title="Leave PerValue off unless one call is genuinely expensive">
+A per-value serve costs a cache probe, a decode and an assembly step **per distinct value**. That only
+pays back when it is cheaper than calling you. Turn it on for model inference, geocoding, or a
+rate-limited remote fetch — not for arithmetic.
+</Callout>
+
+## Checking that it worked
+
+Caching is advertised, so a mistake is silent: everything still returns the right answer, just without
+the reuse. The extension exposes the counters directly — ask it rather than guessing.
+
+<CodeBlock code={`SELECT hits, misses, inserts, entries, total_bytes FROM vgi_result_cache_stats();`} lang="sql" tryable={false} />
+
+<CodeBlock code={`┌──────┬────────┬─────────┬─────────┬─────────────┐
+│ hits │ misses │ inserts │ entries │ total_bytes │
+├──────┼────────┼─────────┼─────────┼─────────────┤
+│    2 │      2 │       1 │       1 │         448 │
+└──────┴────────┴─────────┴─────────┴─────────────┘`} lang="text" tryable={false} />
+
+Run your query several times and watch `hits` climb while `inserts` stays put. If `inserts` is 0 the
+result was never considered cacheable — check that the metadata is on the **first** batch and that
+`ttl` or `expires` is actually set, since neither is optional for a result to be cached at all.
+
+<table>
+<thead>
+<tr><th>Function</th><th>What it gives you</th></tr>
+</thead>
+<tbody>
+<tr><td><code>vgi_result_cache_stats()</code></td><td>Counters: hits, misses, inserts, evictions, entries, bytes — plus separate exchange-mode and per-partition tallies.</td></tr>
+<tr><td><code>vgi_result_cache()</code></td><td>One row per cached entry: catalog, function, key hash, scope, versions.</td></tr>
+<tr><td><code>vgi_result_cache_flush()</code></td><td>Drop everything — the quickest way to get a clean measurement.</td></tr>
+<tr><td><code>vgi_result_cache_reap()</code></td><td>Evict what has expired, without waiting for the reaper.</td></tr>
+</tbody>
+</table>
+
+`EXPLAIN ANALYZE` also annotates the scan with `Cache: hit (memory)` or `Cache: miss`, which is often
+the fastest way to see what one particular query did.
+
+## Next steps
+
+- **The full field list** → [Cache control](/vgi/docs/go/api/cache-control/).
+- **The other way to make a scan cheap** → [Integrate with the optimizer](/vgi/docs/go/how-to/pushdown-and-statistics/).

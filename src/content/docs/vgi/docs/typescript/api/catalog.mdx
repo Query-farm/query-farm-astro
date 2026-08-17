@@ -1,0 +1,2619 @@
+---
+title: "Catalogs"
+description: "Presenting a worker as a database: schemas, tables, views, macros."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Presenting a worker as a database: schemas, tables, views, macros.
+
+</div>
+
+<div class="api-member">
+
+<a id="AttachOpaqueData"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">type</span> `AttachOpaqueData`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L7" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export type AttachOpaqueData = Uint8Array;</code></pre>
+
+</div>
+
+<div class="api-class">
+
+<a id="AttachOptionSpec"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `AttachOptionSpec`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/attach-option.ts#L54" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface AttachOptionSpec</code></pre>
+
+<p class="api-section">Description</p>
+
+Declarative spec for a single attach-time option.
+
+The catalog's `catalogsInfo()` emits these (serialized) in
+`CatalogInfo.attach_option_specs` so the DuckDB extension can validate
+user-supplied ATTACH options and cast them to the declared type before
+forwarding to the worker's `catalog_attach` handler.
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+<dd>
+
+Option name — matches the key users pass in the ATTACH statement.
+
+</dd>
+
+<dt><code class="api-fname">description</code><code class="api-ftype">string</code></dt>
+<dd>
+
+Human-readable description (shown in discovery UIs).
+
+</dd>
+
+<dt><code class="api-fname">type</code><code class="api-ftype">VgiDataType</code></dt>
+<dd>
+
+Arrow data type the extension should cast user input to.
+
+</dd>
+
+<dt><code class="api-fname">default</code><code class="api-ftype">unknown</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Default value used when the user omits this option. Passed through to
+the worker's catalog_attach handler as-is if no override is given.
+Use `null` for "no default" (an unset option will then be absent from
+the options dict delivered to attach()).
+
+</dd>
+
+<dt><code class="api-fname">required</code><code class="api-ftype">boolean</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+The caller must supply this option at ATTACH time. A catalog that cannot
+be attached without it advertises that fact at discovery, so a client can
+say so before attempting the attach rather than surfacing a failure that
+reads like an empty catalog.
+
+Mutually exclusive with `default` — an option that falls back to a value
+is by definition satisfiable without the caller.
+
+</dd>
+
+</dl>
+
+</div>
+
+<div class="api-member">
+
+<a id="AttachOptionValue"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">type</span> `AttachOptionValue`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/attach-options.ts#L28" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export type AttachOptionValue = string | number | bigint | boolean | null | Uint8Array;</code></pre>
+
+<p class="api-section">Description</p>
+
+Values supported in a CatalogAttach options map. The client infers an
+Arrow type per value:
+
+  string     → Utf8
+  bigint     → Int64
+  number     → Float64 (JS numbers are doubles — safe for small ints too)
+  boolean    → Bool
+  Uint8Array → Binary
+  null       → Null (column with no concrete type; value is null)
+
+If you need types this can't express (Decimal, Timestamp, Int32 vs Int64,
+nested structs), drop down to `optionsBytes` on CatalogAttachOptions and
+build the RecordBatch yourself.
+
+</div>
+
+<div class="api-member">
+
+<a id="buildScanBranchesResult"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `buildScanBranchesResult`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L327" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`export function buildScanBranchesResult(
+  branches: ScanBranchInput[],
+  requiredExtensions: string[] = [],
+): { branches: Uint8Array[]; required_extensions: string[] }`} />
+
+<p class="api-section">Description</p>
+
+Build a multi-branch `ScanBranchesResult` wire dict from explicit branch
+definitions. Each branch becomes its own 1-row `ScanBranchSchema` IPC
+stream carried in the `branches` list\<binary\> column. Mirrors vgi-python's
+`ScanBranchesResult` construction in the test fixture's
+`table_scan_branches_get`.
+
+An empty `branches` list is serialized verbatim — the C++ side loud-fails
+on it (that asymmetry is exercised by multi_branch_empty_branches.test).
+
+</div>
+
+<div class="api-class">
+
+<a id="CatalogAttachResult"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `CatalogAttachResult`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L373" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface CatalogAttachResult</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">attach_opaque_data</code><code class="api-ftype">Uint8Array</code></dt>
+
+<dt><code class="api-fname">supports_transactions</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">supports_time_travel</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">catalog_version_frozen</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">catalog_version</code><code class="api-ftype">number</code></dt>
+
+<dt><code class="api-fname">attach_opaque_data_required</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">default_schema</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">settings</code><code class="api-ftype">Uint8Array[]</code></dt>
+
+<dt><code class="api-fname">secret_types</code><code class="api-ftype">Uint8Array[]</code></dt>
+
+<dt><code class="api-fname">attach_catalogs</code><code class="api-ftype">Uint8Array[]</code></dt>
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code></dt>
+
+<dt><code class="api-fname">supports_column_statistics</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">global_functions</code><code class="api-ftype">Uint8Array[]</code></dt>
+
+<dt><code class="api-fname">global_function_prefix</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">comment</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">resolved_data_version</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">resolved_implementation_version</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="CatalogDescriptor"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `CatalogDescriptor`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/descriptors.ts#L156" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface CatalogDescriptor</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">schemas</code><code class="api-ftype">SchemaDescriptor[]</code></dt>
+
+<dt><code class="api-fname">defaultSchema</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">settings</code><code class="api-ftype">SettingDescriptor[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">secretTypes</code><code class="api-ftype">SecretTypeDescriptor[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">attachCatalogs</code><code class="api-ftype">AttachCatalogInfo[]</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Companion catalogs (lakehouse federation) the client should ATTACH when this
+VGI catalog attaches. Surfaced via `catalog_attach.attach_catalogs`.
+
+</dd>
+
+<dt><code class="api-fname">comment</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">sourceUrl</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Homepage for this catalog — repo, docs, or dataset landing page. Surfaced
+through the `catalog_catalogs` discovery record as `CatalogInfo.source_url`,
+which DuckDB exposes via `duckdb_databases()`. Optional; omitted/`undefined`
+advertises a null `source_url`.
+
+</dd>
+
+<dt><code class="api-fname">globalFunctions</code><code class="api-ftype">VgiFunction[]</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Functions this catalog asks the client to *additionally* publish into its
+global (DuckDB `system.main`) function namespace, on top of the normal
+schema-qualified registration. Surfaced as IPC-serialized `FunctionInfo`
+records on `catalog_attach.global_functions`.
+
+Every entry must also be declared in exactly one of this catalog's
+schemas — the `FunctionInfo.schema_name` it carries is the bind-dispatch
+key, not a sentinel. Mirrors vgi-python's `Catalog.global_functions`.
+
+</dd>
+
+<dt><code class="api-fname">globalFunctionPrefix</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Prefix applied client-side to every `globalFunctions` entry's name when it
+is published globally (e.g. prefix `vgi_example` + `global_scalar` →
+`vgi_example_global_scalar`). The advertised `FunctionInfo.name` stays
+unprefixed. Surfaced as `catalog_attach.global_function_prefix`.
+
+</dd>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="CatalogInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `CatalogInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L46" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface CatalogInfo</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">attach_option_specs</code><code class="api-ftype">Uint8Array[]</code></dt>
+
+<dt><code class="api-fname">releases</code><code class="api-ftype">CatalogDataVersionRelease[]</code></dt>
+
+<dt><code class="api-fname">implementation_version</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">data_version_spec</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">source_url</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="CatalogInterface"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `CatalogInterface`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L367" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export abstract class CatalogInterface</code></pre>
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="CatalogInterface.catalogNameForAttach"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalogNameForAttach`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L378" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>catalogNameForAttach(_attachOpaqueData: Uint8Array): string | null</code></pre>
+
+Which catalog an `attach_opaque_data` belongs to, or null if unknown.
+
+Two catalogs served by one worker may declare the same schema *and*
+function name, in which case the attachment is the only thing that tells
+them apart — the bind path uses this to scope function resolution. The
+default answers from `catalogs()` when this interface owns exactly one,
+which is right for every single-catalog implementation; the composite
+overrides it to route by its backend index byte.
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.catalogs"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalogs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L384" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>abstract catalogs(): string[];</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.attach"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `attach`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L392" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`abstract attach(
+    name: string,
+    options?: Record<string, unknown>,
+    dataVersionSpec?: string | null,
+    implementationVersion?: string | null,
+  ): Awaitable<CatalogAttachResult>;`} />
+
+Attach this catalog. The framework already validates ATTACH options
+(name + type) against the specs the worker advertises in
+`catalogsInfo().attach_option_specs`, so `options` arrives as a
+validated, decoded `{name: value}` dict with typed column values.
+Use `{}` if no options were supplied.
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.catalogsInfo"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalogsInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L405" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>catalogsInfo?(): Awaitable&lt;import("../generated/vgi-client.js").CatalogInfo[]&gt;;</code></pre>
+
+List the catalogs this worker exposes with their version metadata. The
+`implementation_version` / `data_version_spec` come from the CatalogInfo
+returned by the read-only catalogs() signature below — a versioned worker
+overrides `catalogs()` / `catalogsInfo()` to advertise real values; the
+default derives them from the registered descriptor(s).
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.detach"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `detach`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L406" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>abstract detach(attachOpaqueData: AttachOpaqueData): Awaitable&lt;void&gt;;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.version"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `version`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L407" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`abstract version(
+    attachOpaqueData: AttachOpaqueData,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<number>;`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.schemas"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemas`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L411" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`abstract schemas(
+    attachOpaqueData: AttachOpaqueData,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<SchemaInfo[]>;`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.create"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `create`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L417" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>create(name: string, onConflict: string, options?: any): Awaitable&lt;void&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.drop"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `drop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L420" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>drop(name: string): Awaitable&lt;void&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.schemaGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L423" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`schemaGet(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<SchemaInfo | null>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.schemaCreate"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaCreate`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L434" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`schemaCreate(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    comment?: string | null,
+    tags?: any,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.schemaDrop"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaDrop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L443" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`schemaDrop(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    ignoreNotFound?: boolean,
+    cascade?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.schemaContentsTables"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsTables`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L452" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`schemaContentsTables(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<TableInfo[]>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.schemaContentsViews"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsViews`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L459" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`schemaContentsViews(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<ViewInfo[]>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.schemaContentsFunctions"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsFunctions`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L466" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`schemaContentsFunctions(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    type: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<FunctionInfo[]>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L474" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    atUnit?: string,
+    atValue?: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<TableInfo | null>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableCreate"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableCreate`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L484" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableCreate(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    columns: Uint8Array,
+    onConflict: string,
+    notNullConstraints?: number[],
+    uniqueConstraints?: number[][],
+    checkConstraints?: string[],
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableDrop"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableDrop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L497" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableDrop(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableScanFunctionGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableScanFunctionGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L506" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableScanFunctionGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    atUnit?: string,
+    atValue?: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<any>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableScanBranchesGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableScanBranchesGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L522" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableScanBranchesGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    atUnit?: string,
+    atValue?: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<any>`} />
+
+Return the scan branches for a (possibly multi-source) table. Default
+delegates to `tableScanFunctionGet` and wraps the single result as a
+one-branch list, so every single-source catalog is compatible with the
+branches-aware C++ extension. Override for genuine multi-source tables.
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableColumnStatisticsGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableColumnStatisticsGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L545" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableColumnStatisticsGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData,
+  ): Awaitable<`} />
+
+Return serialized column statistics for a table, or null if none are
+available. The result is the IPC bytes of a ColumnStatistics RecordBatch
+(see src/util/statistics.ts for the schema) wrapped with an optional
+cache TTL. Callers typically override this to pull stats from a
+descriptor. Returning null signals "no stats" so DuckDB falls back to
+the function-level `table_function_statistics` path.
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableCommentSet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableCommentSet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L553" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableCommentSet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    comment?: string | null,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableRename"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableRename`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L563" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableRename(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    newName: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableColumnAdd"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableColumnAdd`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L573" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableColumnAdd(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    columnName: string,
+    columnType: string,
+    defaultValue?: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableColumnDrop"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableColumnDrop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L585" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableColumnDrop(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    columnName: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableColumnRename"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableColumnRename`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L595" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableColumnRename(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    columnName: string,
+    newName: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableColumnDefaultSet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableColumnDefaultSet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L606" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableColumnDefaultSet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    columnName: string,
+    defaultValue: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableColumnDefaultDrop"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableColumnDefaultDrop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L617" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableColumnDefaultDrop(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    columnName: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableColumnTypeChange"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableColumnTypeChange`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L627" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableColumnTypeChange(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    columnName: string,
+    newType: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableNotNullSet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableNotNullSet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L638" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableNotNullSet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    columnName: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.tableNotNullDrop"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableNotNullDrop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L648" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`tableNotNullDrop(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    columnName: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.viewGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `viewGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L658" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`viewGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<ViewInfo | null>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.viewCreate"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `viewCreate`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L666" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`viewCreate(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    definition: string,
+    onConflict: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.viewDrop"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `viewDrop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L676" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`viewDrop(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.viewRename"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `viewRename`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L685" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`viewRename(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    newName: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.viewCommentSet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `viewCommentSet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L695" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`viewCommentSet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    comment?: string | null,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.macroGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `macroGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L705" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`macroGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<MacroInfo | null>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.macroCreate"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `macroCreate`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L713" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`macroCreate(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    macroType: MacroType,
+    parameters: string[],
+    definition: string,
+    onConflict: string,
+    parameterDefaultValues?: Uint8Array | null,
+    /**
+     * Optional Arrow schema (one nullable field per parameter, in \`parameters\`
+     * order) serialized as IPC bytes, carrying per-parameter descriptions via the`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.macroDrop"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `macroDrop`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L733" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`macroDrop(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    ignoreNotFound?: boolean,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.schemaContentsMacros"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsMacros`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L742" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`schemaContentsMacros(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    type: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<MacroInfo[]>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.schemaContentsIndexes"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsIndexes`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L750" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`schemaContentsIndexes(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<IndexInfo[]>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.indexGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `indexGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L757" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`indexGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Awaitable<IndexInfo | null>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.copyFromFormats"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `copyFromFormats`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L772" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`copyFromFormats(
+    attachOpaqueData: AttachOpaqueData,
+    transactionOpaqueData?: TransactionOpaqueData,
+  ): Awaitable<CopyFromFormatInfo[]>`} />
+
+List custom `COPY ... FROM` formats advertised by this catalog. Catalog-level
+(not schema-scoped). The default returns an empty list, so catalogs that
+don't define COPY formats are unaffected. The VGI extension treats an empty
+list (or a not-implemented method) as "no custom formats". Mirrors
+vgi-python's `CatalogInterface.copy_from_formats`.
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.transactionBegin"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `transactionBegin`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L778" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>transactionBegin(attachOpaqueData: AttachOpaqueData): Awaitable&lt;Uint8Array | null&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.transactionCommit"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `transactionCommit`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L781" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`transactionCommit(
+    attachOpaqueData: AttachOpaqueData,
+    transactionOpaqueData: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+<div class="api-member">
+
+<a id="CatalogInterface.transactionRollback"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `transactionRollback`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L785" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`transactionRollback(
+    attachOpaqueData: AttachOpaqueData,
+    transactionOpaqueData: TransactionOpaqueData
+  ): Awaitable<void>`} />
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="CompositeCatalogInterface"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `CompositeCatalogInterface`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L42" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export class CompositeCatalogInterface extends CatalogInterface</code></pre>
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.catalogNameForAttach"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalogNameForAttach`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L60" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override catalogNameForAttach(attachOpaqueData: Uint8Array): string | null</code></pre>
+
+Route to the owning backend and ask it, so the answer is per-attachment.
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.catalogs"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalogs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L68" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>catalogs(): string[]</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.catalogsInfo"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalogsInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L74" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>async catalogsInfo(): Promise&lt;CatalogInfo[]&gt;</code></pre>
+
+List the catalogs this worker exposes with their version metadata. The
+`implementation_version` / `data_version_spec` come from the CatalogInfo
+returned by the read-only catalogs() signature below — a versioned worker
+overrides `catalogs()` / `catalogsInfo()` to advertise real values; the
+default derives them from the registered descriptor(s).
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.attach"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `attach`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L88" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`async attach(
+    name: string,
+    options?: Record<string, unknown>,
+    dataVersionSpec?: string | null,
+    implementationVersion?: string | null,
+  ): Promise<CatalogAttachResult>`} />
+
+Attach this catalog. The framework already validates ATTACH options
+(name + type) against the specs the worker advertises in
+`catalogsInfo().attach_option_specs`, so `options` arrives as a
+validated, decoded `{name: value}` dict with typed column values.
+Use `{}` if no options were supplied.
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.detach"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `detach`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L110" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>async detach(attachOpaqueData: AttachOpaqueData): Promise&lt;void&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.version"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `version`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L114" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>async version(attachOpaqueData: AttachOpaqueData, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;number&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.schemas"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemas`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L118" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>async schemas(attachOpaqueData: AttachOpaqueData, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;SchemaInfo[]&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.schemaGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L122" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async schemaGet(attachOpaqueData: AttachOpaqueData, name: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;SchemaInfo | null&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.schemaContentsTables"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsTables`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L126" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async schemaContentsTables(attachOpaqueData: AttachOpaqueData, name: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;TableInfo[]&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.schemaContentsViews"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsViews`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L130" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async schemaContentsViews(attachOpaqueData: AttachOpaqueData, name: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;ViewInfo[]&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.schemaContentsFunctions"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsFunctions`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L134" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async schemaContentsFunctions(attachOpaqueData: AttachOpaqueData, name: string, type: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;FunctionInfo[]&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.schemaContentsMacros"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsMacros`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L138" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async schemaContentsMacros(attachOpaqueData: AttachOpaqueData, name: string, type: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;MacroInfo[]&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.schemaContentsIndexes"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsIndexes`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L142" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async schemaContentsIndexes(attachOpaqueData: AttachOpaqueData, name: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;IndexInfo[]&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.indexGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `indexGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L146" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async indexGet(attachOpaqueData: AttachOpaqueData, schemaName: string, name: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;IndexInfo | null&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.tableGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L150" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async tableGet(attachOpaqueData: AttachOpaqueData, schemaName: string, name: string, atUnit?: string, atValue?: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;TableInfo | null&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.tableScanFunctionGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableScanFunctionGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L154" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async tableScanFunctionGet(attachOpaqueData: AttachOpaqueData, schemaName: string, name: string, atUnit?: string, atValue?: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;any&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.tableScanBranchesGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableScanBranchesGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L158" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async tableScanBranchesGet(attachOpaqueData: AttachOpaqueData, schemaName: string, name: string, atUnit?: string, atValue?: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;any&gt;</code></pre>
+
+Return the scan branches for a (possibly multi-source) table. Default
+delegates to `tableScanFunctionGet` and wraps the single result as a
+one-branch list, so every single-source catalog is compatible with the
+branches-aware C++ extension. Override for genuine multi-source tables.
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.tableColumnStatisticsGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableColumnStatisticsGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L162" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async tableColumnStatisticsGet(attachOpaqueData: AttachOpaqueData, schemaName: string, name: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;</code></pre>
+
+Return serialized column statistics for a table, or null if none are
+available. The result is the IPC bytes of a ColumnStatistics RecordBatch
+(see src/util/statistics.ts for the schema) wrapped with an optional
+cache TTL. Callers typically override this to pull stats from a
+descriptor. Returning null signals "no stats" so DuckDB falls back to
+the function-level `table_function_statistics` path.
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.viewGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `viewGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L166" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async viewGet(attachOpaqueData: AttachOpaqueData, schemaName: string, name: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;ViewInfo | null&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.macroGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `macroGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L170" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async macroGet(attachOpaqueData: AttachOpaqueData, schemaName: string, name: string, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;MacroInfo | null&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.copyFromFormats"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `copyFromFormats`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L174" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async copyFromFormats(attachOpaqueData: AttachOpaqueData, transactionOpaqueData?: TransactionOpaqueData): Promise&lt;CopyFromFormatInfo[]&gt;</code></pre>
+
+List custom `COPY ... FROM` formats advertised by this catalog. Catalog-level
+(not schema-scoped). The default returns an empty list, so catalogs that
+don't define COPY formats are unaffected. The VGI extension treats an empty
+list (or a not-implemented method) as "no custom formats". Mirrors
+vgi-python's `CatalogInterface.copy_from_formats`.
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.transactionBegin"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `transactionBegin`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L178" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async transactionBegin(attachOpaqueData: AttachOpaqueData): Promise&lt;Uint8Array | null&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.transactionCommit"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `transactionCommit`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L182" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async transactionCommit(attachOpaqueData: AttachOpaqueData, transactionOpaqueData: TransactionOpaqueData): Promise&lt;void&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="CompositeCatalogInterface.transactionRollback"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `transactionRollback`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/composite.ts#L186" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override async transactionRollback(attachOpaqueData: AttachOpaqueData, transactionOpaqueData: TransactionOpaqueData): Promise&lt;void&gt;</code></pre>
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="CopyFromFormatInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `CopyFromFormatInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L82" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface CopyFromFormatInfo</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code></dt>
+<dd>
+
+Function/format tags.
+
+</dd>
+
+<dt><code class="api-fname">format_name</code><code class="api-ftype">string</code></dt>
+<dd>
+
+The `FORMAT` identifier users type (single global namespace).
+
+</dd>
+
+<dt><code class="api-fname">handler</code><code class="api-ftype">string</code></dt>
+<dd>
+
+Registered name of the worker function that performs the read.
+
+</dd>
+
+<dt><code class="api-fname">options</code><code class="api-ftype">Uint8Array</code></dt>
+<dd>
+
+Serialized Arrow schema of the format's options (same encoding as
+`FunctionInfo.arguments`), each field carrying type / `vgi_doc` description.
+
+</dd>
+
+<dt><code class="api-fname">direction</code><code class="api-ftype">string</code></dt>
+<dd>
+
+`"from"` / `"to"` / `"both"` — the COPY direction this format serves.
+
+</dd>
+
+<dt><code class="api-fname">description</code><code class="api-ftype">string</code></dt>
+<dd>
+
+Intrinsic documentation from the handler's description.
+
+</dd>
+
+<dt><code class="api-fname">ordered</code><code class="api-ftype">boolean</code></dt>
+<dd>
+
+COPY ... TO only — when true the writer requires rows in source order, so
+the extension uses a single-threaded sink (`REGULAR_COPY_TO_FILE`) instead
+of the default parallel sharded write. Set via `Meta.sinkOrderDependent`
+on a CopyToFunction; always false for readers. Mirrors vgi-python's
+`CopyFromFormatInfo.ordered`.
+
+</dd>
+
+<dt><code class="api-fname">comment</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Free-text comment (CopyFromFunction's `copyFromComment`).
+
+</dd>
+
+</dl>
+
+</div>
+
+<div class="api-member">
+
+<a id="decodeCatalogInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `decodeCatalogInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L568" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const decodeCatalogInfo = (b: Uint8Array): CatalogInfo =&gt; decodeASD&lt;CatalogInfo&gt;(CatalogInfoSchema, b)</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<a id="decodeFunctionInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `decodeFunctionInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L570" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const decodeFunctionInfo = (b: Uint8Array): FunctionInfo =&gt; decodeASD&lt;FunctionInfo&gt;(FunctionInfoSchema, b)</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<a id="decodeMacroInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `decodeMacroInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L574" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const decodeMacroInfo = (b: Uint8Array): MacroInfo =&gt; decodeASD&lt;MacroInfo&gt;(MacroInfoSchema, b)</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<a id="decodeSchemaInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `decodeSchemaInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L576" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const decodeSchemaInfo = (b: Uint8Array): SchemaInfo =&gt; decodeASD&lt;SchemaInfo&gt;(SchemaInfoSchema, b)</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<a id="decodeTableInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `decodeTableInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L578" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const decodeTableInfo = (b: Uint8Array): TableInfo =&gt; decodeASD&lt;TableInfo&gt;(TableInfoSchema, b)</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<a id="decodeViewInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `decodeViewInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L580" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const decodeViewInfo = (b: Uint8Array): ViewInfo =&gt; decodeASD&lt;ViewInfo&gt;(ViewInfoSchema, b)</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<a id="DefaultValue"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">type</span> `DefaultValue`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/descriptors.ts#L25" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export type DefaultValue = string | number | boolean | null;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<a id="deserializeAttachOptionSpec"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `deserializeAttachOptionSpec`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/attach-option.ts#L151" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`export function deserializeAttachOptionSpec(
+  bytes: Uint8Array,
+): AttachOptionSpec`} />
+
+<p class="api-section">Description</p>
+
+Deserialize one AttachOptionSpec from the wire format above.
+
+Reads by column name, so a spec written by a peer that predates the
+`required` column deserializes with `required: false` rather than failing —
+the same tolerance the Python and C++ readers have.
+
+</div>
+
+<div class="api-member">
+
+<a id="deserializeAttachOptionSpecs"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `deserializeAttachOptionSpecs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/attach-option.ts#L188" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`export function deserializeAttachOptionSpecs(
+  specs: Iterable<Uint8Array>,
+): AttachOptionSpec[]`} />
+
+<p class="api-section">Description</p>
+
+Deserialize many specs — the shape `CatalogInfo.attach_option_specs` holds.
+
+</div>
+
+<div class="api-member">
+
+<a id="encodeCatalogInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `encodeCatalogInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L567" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const encodeCatalogInfo = (v: CatalogInfo): Uint8Array =&gt; encodeASD(CatalogInfoSchema, v)</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<a id="encodeCopyFromFormatInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `encodeCopyFromFormatInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L111" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const encodeCopyFromFormatInfo</code></pre>
+
+<p class="api-section">Description</p>
+
+Encode a CopyFromFormatInfo to Arrow IPC bytes (single-row batch).
+
+</div>
+
+<div class="api-member">
+
+<a id="encodeFunctionInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `encodeFunctionInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L569" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const encodeFunctionInfo = (v: FunctionInfo): Uint8Array =&gt; encodeASD(FunctionInfoSchema, v)</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<a id="encodeMacroInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `encodeMacroInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L573" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const encodeMacroInfo = (v: MacroInfo): Uint8Array =&gt; encodeASD(MacroInfoSchema, v)</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<a id="encodeSchemaInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `encodeSchemaInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L575" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const encodeSchemaInfo = (v: SchemaInfo): Uint8Array =&gt; encodeASD(SchemaInfoSchema, v)</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<a id="encodeTableInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `encodeTableInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L577" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const encodeTableInfo = (v: TableInfo): Uint8Array =&gt; encodeASD(TableInfoSchema, v)</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<a id="encodeViewInfo"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `encodeViewInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L579" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const encodeViewInfo = (v: ViewInfo): Uint8Array =&gt; encodeASD(ViewInfoSchema, v)</code></pre>
+
+</div>
+
+<div class="api-class">
+
+<a id="ForeignKeyDef"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `ForeignKeyDef`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/descriptors.ts#L18" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface ForeignKeyDef</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">columns</code><code class="api-ftype">string[]</code></dt>
+
+<dt><code class="api-fname">referencedTable</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">referencedColumns</code><code class="api-ftype">string[]</code></dt>
+
+<dt><code class="api-fname">referencedSchema</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="FunctionInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `FunctionInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L111" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface FunctionInfo</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code></dt>
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">schema_name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">function_type</code><code class="api-ftype">FunctionType</code></dt>
+
+<dt><code class="api-fname">arguments</code><code class="api-ftype">Uint8Array</code></dt>
+
+<dt><code class="api-fname">output_schema</code><code class="api-ftype">Uint8Array</code></dt>
+
+<dt><code class="api-fname">description</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">examples</code><code class="api-ftype">CatalogExample[]</code></dt>
+
+<dt><code class="api-fname">categories</code><code class="api-ftype">string[]</code></dt>
+
+<dt><code class="api-fname">supported_expression_filters</code><code class="api-ftype">string[]</code></dt>
+
+<dt><code class="api-fname">supports_batch_index</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">partition_kind</code><code class="api-ftype">PartitionKind</code></dt>
+
+<dt><code class="api-fname">order_dependent</code><code class="api-ftype">OrderDependence</code></dt>
+
+<dt><code class="api-fname">distinct_dependent</code><code class="api-ftype">DistinctDependence</code></dt>
+
+<dt><code class="api-fname">supports_window</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">streaming_partitioned</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">has_finalize</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">source_order_dependent</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">sink_order_dependent</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">requires_input_batch_index</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">input_from_args</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">required_settings</code><code class="api-ftype">string[]</code></dt>
+
+<dt><code class="api-fname">required_secrets</code><code class="api-ftype">SecretLookupEntry[]</code></dt>
+
+<dt><code class="api-fname">comment</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">stability</code><code class="api-ftype">FunctionStability | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">null_handling</code><code class="api-ftype">NullHandling | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">projection_pushdown</code><code class="api-ftype">boolean | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">filter_pushdown</code><code class="api-ftype">boolean | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">sampling_pushdown</code><code class="api-ftype">boolean | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">late_materialization</code><code class="api-ftype">boolean | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">order_preservation</code><code class="api-ftype">OrderPreservation | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">max_workers</code><code class="api-ftype">number | null</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-member">
+
+<a id="FunctionInfoOptions"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">type</span> `FunctionInfoOptions`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L55" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export type FunctionInfoOptions = FunctionInfo;</code></pre>
+
+<p class="api-deprecated">Deprecated — Use the FunctionInfo interface (snake_case) directly.</p>
+
+</div>
+
+<div class="api-class">
+
+<a id="MacroDescriptor"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `MacroDescriptor`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/descriptors.ts#L109" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface MacroDescriptor</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">macroType</code><code class="api-ftype">"scalar" | "table"</code></dt>
+
+<dt><code class="api-fname">parameters</code><code class="api-ftype">string[]</code></dt>
+
+<dt><code class="api-fname">definition</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">parameterDefaultValues</code><code class="api-ftype">Uint8Array | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">parameterDocs</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Optional mapping of parameter name to a human/agent-facing description.
+Keys must appear in `parameters`. Descriptions flow over the wire via the
+macro `arguments_schema`'s `vgi_doc` field metadata (the same channel
+functions use for per-argument docs), so the DuckDB extension's
+`vgi_function_arguments()` can surface them. Empty/omitted = no docs.
+
+</dd>
+
+<dt><code class="api-fname">comment</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="MacroInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `MacroInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L146" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface MacroInfo</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code></dt>
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">schema_name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">macro_type</code><code class="api-ftype">MacroType</code></dt>
+
+<dt><code class="api-fname">parameters</code><code class="api-ftype">string[]</code></dt>
+
+<dt><code class="api-fname">definition</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">comment</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">parameter_default_values</code><code class="api-ftype">/** @record-batch */ Uint8Array | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">arguments_schema</code><code class="api-ftype">/** @arrow-schema */ Uint8Array | null</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-member">
+
+<a id="MacroType"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">type</span> `MacroType`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L28" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export type MacroType = "SCALAR" | "TABLE";</code></pre>
+
+</div>
+
+<div class="api-class">
+
+<a id="ReadOnlyCatalogInterface"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `ReadOnlyCatalogInterface`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L33" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export class ReadOnlyCatalogInterface extends CatalogInterface</code></pre>
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.catalogs"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalogs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L58" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>catalogs(): string[]</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.attachOptionSpecs"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `attachOptionSpecs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L71" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>attachOptionSpecs(_name: string): AttachOptionSpec[]</code></pre>
+
+Attach-time options this catalog declares, for the named catalog.
+
+Empty by default — the declarative descriptor path carries no attach
+options. A subclass that advertises specs in `catalogsInfo()` should
+return the same specs here so `attach()` enforces the `required` ones it
+advertised. Takes the catalog name because one interface may serve
+several catalogs with different option sets.
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.catalogsInfo"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalogsInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L79" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>override catalogsInfo(): CatalogInfo[]</code></pre>
+
+List the catalogs this worker exposes with their version metadata. The
+`implementation_version` / `data_version_spec` come from the CatalogInfo
+returned by the read-only catalogs() signature below — a versioned worker
+overrides `catalogs()` / `catalogsInfo()` to advertise real values; the
+default derives them from the registered descriptor(s).
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.attach"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `attach`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L90" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`attach(
+    name: string,
+    options?: Record<string, unknown>,
+    dataVersionSpec?: string | null,
+    implementationVersion?: string | null,
+  ): CatalogAttachResult | Promise<CatalogAttachResult>`} />
+
+Attach this catalog. The framework already validates ATTACH options
+(name + type) against the specs the worker advertises in
+`catalogsInfo().attach_option_specs`, so `options` arrives as a
+validated, decoded `{name: value}` dict with typed column values.
+Use `{}` if no options were supplied.
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.detach"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `detach`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L153" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>detach(attachOpaqueData: AttachOpaqueData): void</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.version"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `version`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L163" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>version(attachOpaqueData: AttachOpaqueData, transactionOpaqueData?: TransactionOpaqueData): number | Promise&lt;number&gt;</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.schemas"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemas`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L167" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>schemas(attachOpaqueData: AttachOpaqueData, transactionOpaqueData?: TransactionOpaqueData): SchemaInfo[]</code></pre>
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.schemaGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L199" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override schemaGet(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): SchemaInfo | null`} />
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.schemaContentsTables"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsTables`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L215" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override async schemaContentsTables(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Promise<TableInfo[]>`} />
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.tableColumnStatisticsGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableColumnStatisticsGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L347" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override tableColumnStatisticsGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData,
+  ):`} />
+
+Return serialized column statistics for a table, or null if none are
+available. The result is the IPC bytes of a ColumnStatistics RecordBatch
+(see src/util/statistics.ts for the schema) wrapped with an optional
+cache TTL. Callers typically override this to pull stats from a
+descriptor. Returning null signals "no stats" so DuckDB falls back to
+the function-level `table_function_statistics` path.
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.schemaContentsViews"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsViews`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L365" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override schemaContentsViews(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): ViewInfo[]`} />
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.schemaContentsFunctions"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsFunctions`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L383" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override schemaContentsFunctions(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    type: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): FunctionInfo[]`} />
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.schemaContentsMacros"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsMacros`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L549" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override schemaContentsMacros(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    type: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): MacroInfo[]`} />
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.schemaContentsIndexes"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemaContentsIndexes`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L585" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override schemaContentsIndexes(
+    attachOpaqueData: AttachOpaqueData,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): IndexInfo[]`} />
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.indexGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `indexGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L605" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override indexGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): IndexInfo | null`} />
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.macroGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `macroGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L615" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override macroGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): MacroInfo | null`} />
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.tableScanFunctionGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableScanFunctionGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L627" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override tableScanFunctionGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    atUnit?: string,
+    atValue?: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): any`} />
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.tableGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `tableGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L667" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override async tableGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    atUnit?: string,
+    atValue?: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): Promise<TableInfo | null>`} />
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.viewGet"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `viewGet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L690" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override viewGet(
+    attachOpaqueData: AttachOpaqueData,
+    schemaName: string,
+    name: string,
+    transactionOpaqueData?: TransactionOpaqueData
+  ): ViewInfo | null`} />
+
+</div>
+<div class="api-member">
+
+<a id="ReadOnlyCatalogInterface.copyFromFormats"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `copyFromFormats`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/read-only.ts#L707" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`override copyFromFormats(
+    attachOpaqueData: AttachOpaqueData,
+    transactionOpaqueData?: TransactionOpaqueData,
+  ): CopyFromFormatInfo[]`} />
+
+List custom `COPY ... FROM` formats advertised by this catalog. Catalog-level
+(not schema-scoped). The default returns an empty list, so catalogs that
+don't define COPY formats are unaffected. The VGI extension treats an empty
+list (or a not-implemented method) as "no custom formats". Mirrors
+vgi-python's `CatalogInterface.copy_from_formats`.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="ScanBranchInput"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `ScanBranchInput`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L267" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface ScanBranchInput</code></pre>
+
+<p class="api-section">Description</p>
+
+One physical source backing a multi-branch scan, in the shape the
+`buildScanBranchesResult` helper consumes. Mirrors vgi-python's
+`ScanBranch` (catalog_interface.py).
+
+Each scalar argument carries an explicit Arrow `type` so the nested
+arguments batch is built with the wire type the C++ binder expects
+(e.g. utf8 for file paths, int64 for counts).
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">functionName</code><code class="api-ftype">string</code></dt>
+<dd>
+
+DuckDB function to call for this branch (e.g. "sequence", "read_parquet").
+
+</dd>
+
+<dt><code class="api-fname">positionalArguments</code><code class="api-ftype">&#123; value: unknown; type: VgiDataType &#125;[]</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Positional scalar arguments, each with its Arrow type.
+
+</dd>
+
+<dt><code class="api-fname">namedArguments</code><code class="api-ftype">Record&lt;string, &#123; value: unknown; type: VgiDataType &#125;&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Named scalar arguments, each with its Arrow type.
+
+</dd>
+
+<dt><code class="api-fname">branchFilter</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Optional SQL filter text AND'd into every scan of this branch.
+
+</dd>
+
+<dt><code class="api-fname">writable</code><code class="api-ftype">boolean</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Declares this branch as the INSERT target (at most one per table).
+
+</dd>
+
+<dt><code class="api-fname">sourceCatalog</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Catalog-table branch (lakehouse federation): leave `functionName` empty and
+set these to scan the base table
+`sourceCatalog.sourceSchema.sourceTable` in a companion catalog instead of
+calling a table function.
+
+</dd>
+
+<dt><code class="api-fname">sourceSchema</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">sourceTable</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="SchemaDescriptor"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `SchemaDescriptor`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/descriptors.ts#L139" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface SchemaDescriptor</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">tables</code><code class="api-ftype">TableDescriptor[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">views</code><code class="api-ftype">ViewDescriptor[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">macros</code><code class="api-ftype">MacroDescriptor[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">functions</code><code class="api-ftype">VgiFunction[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">indexes</code><code class="api-ftype">IndexDescriptor[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">comment</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="SchemaInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `SchemaInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L55" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface SchemaInfo</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code></dt>
+
+<dt><code class="api-fname">attach_opaque_data</code><code class="api-ftype">Uint8Array</code></dt>
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">comment</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">estimated_object_count</code><code class="api-ftype">Record&lt;string, number&gt; | null</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="SecretTypeDescriptor"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `SecretTypeDescriptor`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/descriptors.ts#L150" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface SecretTypeDescriptor</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">description</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">schema</code><code class="api-ftype">VgiSchema</code></dt>
+
+</dl>
+
+</div>
+
+<div class="api-member">
+
+<a id="serializeAttachOptionSpec"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `serializeAttachOptionSpec`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/attach-option.ts#L92" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export function serializeAttachOptionSpec(spec: AttachOptionSpec): Uint8Array</code></pre>
+
+<p class="api-section">Description</p>
+
+Serialize an AttachOptionSpec to the wire format the extension expects
+(one IPC-serialized RecordBatch with a single row).
+
+</div>
+
+<div class="api-member">
+
+<a id="serializeAttachOptionSpecs"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `serializeAttachOptionSpecs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/attach-option.ts#L138" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`export function serializeAttachOptionSpecs(
+  specs: Iterable<AttachOptionSpec>,
+): Uint8Array[]`} />
+
+<p class="api-section">Description</p>
+
+Convenience: serialize many specs at once for CatalogInfo.attach_option_specs.
+
+</div>
+
+<div class="api-class">
+
+<a id="SettingDescriptor"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `SettingDescriptor`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/descriptors.ts#L10" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface SettingDescriptor</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">description</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">type</code><code class="api-ftype">VgiDataType</code></dt>
+
+<dt><code class="api-fname">defaultValue</code><code class="api-ftype">string | number | bigint | boolean</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Must be a JS primitive compatible with `type` (string, number, bigint, boolean).
+
+</dd>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="TableDescriptor"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableDescriptor`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/descriptors.ts#L27" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface TableDescriptor</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">columns</code><code class="api-ftype">VgiSchema</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">function</code><code class="api-ftype">VgiFunction</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">arguments</code><code class="api-ftype">Arguments</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">notNull</code><code class="api-ftype">string[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">unique</code><code class="api-ftype">string[][]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">check</code><code class="api-ftype">string[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">primaryKey</code><code class="api-ftype">string[][]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">foreignKey</code><code class="api-ftype">ForeignKeyDef[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">defaults</code><code class="api-ftype">Record&lt;string, DefaultValue&gt;</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">columnComments</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Per-column comment strings, applied as field metadata `comment`.
+
+</dd>
+
+<dt><code class="api-fname">generatedColumns</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Generated (virtual) columns: map of column name → SQL expression computed
+from other physical columns. Applied as Arrow field metadata
+`generated_expression`, which the DuckDB VGI extension reads at table
+registration. The backing scan function should not return these columns —
+DuckDB evaluates the expressions client-side.
+
+</dd>
+
+<dt><code class="api-fname">statistics</code><code class="api-ftype">Record&lt;string, ColumnStatistics&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Per-column statistics for the optimizer. Keys are column names; values
+are ColumnStatistics records with typed min/max and Arrow type info.
+DuckDB uses these for plan-time filter elimination and join reordering
+via the `catalog_table_column_statistics_get` RPC.
+
+</dd>
+
+<dt><code class="api-fname">statisticsCacheMaxAgeSeconds</code><code class="api-ftype">number | null</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Cache TTL for this table's column statistics. DuckDB caches the result
+of `catalog_table_column_statistics_get` for up to this many seconds.
+`undefined`/null means cache indefinitely; `0` means never cache
+(always re-fetch).
+
+</dd>
+
+<dt><code class="api-fname">requiredFilters</code><code class="api-ftype">string[][]</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Required WHERE-filter groups in conjunctive normal form — an AND (outer
+list) of OR-groups (inner lists) of dotted-path column references that MUST
+appear in a WHERE expression for any scan of this table. A group is
+satisfied when any one of its paths has a filter; every group must be
+satisfied. So `[["accession_number"], ["ticker", "cik"]]` means
+"accession_number AND one of (ticker, cik)"; a single-path group
+`[["country"]]` is a plain mandatory filter. Paths are top-level names
+(`"country"`) or struct subfields (`"bbox.xmin"`, `"nested.outer.inner"`).
+Empty/undefined (default) means no enforcement — the zero-cost fast path
+for every existing table.
+
+Satisfaction is prefix-based: a present filter on a shorter path satisfies
+any required path it is a prefix of. So a whole-struct filter on `bbox`
+satisfies all of `bbox.xmin` / `.xmax` / `.ymin` / `.ymax`. The VGI DuckDB
+extension's optimizer pass consults this at bind time and throws a
+`BinderException` listing any unsatisfied groups.
+
+</dd>
+
+<dt><code class="api-fname">supportsTimeTravel</code><code class="api-ftype">boolean</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">inlinedCardinality</code><code class="api-ftype">&#123; estimate: bigint; max: bigint &#125;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Inline cardinality estimate/max surfaced through TableInfo. When set,
+the C++ extension uses these directly and skips the per-bind
+table_function_cardinality RPC. Only meaningful for function-backed
+tables; static-column tables don't have a function to call.
+
+</dd>
+
+<dt><code class="api-fname">comment</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="TableInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L63" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface TableInfo</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code></dt>
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">schema_name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">columns</code><code class="api-ftype">Uint8Array</code></dt>
+
+<dt><code class="api-fname">not_null_constraints</code><code class="api-ftype">number[]</code></dt>
+
+<dt><code class="api-fname">unique_constraints</code><code class="api-ftype">number[][]</code></dt>
+
+<dt><code class="api-fname">check_constraints</code><code class="api-ftype">string[]</code></dt>
+
+<dt><code class="api-fname">primary_key_constraints</code><code class="api-ftype">number[][]</code></dt>
+
+<dt><code class="api-fname">foreign_key_constraints</code><code class="api-ftype">Uint8Array[]</code></dt>
+
+<dt><code class="api-fname">supports_insert</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">supports_update</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">supports_delete</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">supports_returning</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">supports_column_statistics</code><code class="api-ftype">boolean</code></dt>
+
+<dt><code class="api-fname">required_filters</code><code class="api-ftype">string[][]</code></dt>
+
+<dt><code class="api-fname">comment</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">scan_function</code><code class="api-ftype">Uint8Array | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">insert_function</code><code class="api-ftype">Uint8Array | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">update_function</code><code class="api-ftype">Uint8Array | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">delete_function</code><code class="api-ftype">Uint8Array | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">cardinality_estimate</code><code class="api-ftype">number | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">cardinality_max</code><code class="api-ftype">number | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">column_statistics</code><code class="api-ftype">Uint8Array | null</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">bind_result</code><code class="api-ftype">Uint8Array | null</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-member">
+
+<a id="TransactionOpaqueData"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">type</span> `TransactionOpaqueData`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/interface.ts#L8" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export type TransactionOpaqueData = Uint8Array;</code></pre>
+
+</div>
+
+<div class="api-class">
+
+<a id="ViewDescriptor"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `ViewDescriptor`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/catalog/descriptors.ts#L93" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface ViewDescriptor</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">definition</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">comment</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">columnComments</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Per-column comments keyed by the view's output column name. Unlike tables
+(whose column comments ride along as Arrow field metadata), a view ships
+only its SQL `definition`, so column comments need their own channel. The
+C++ extension aligns these by name against the bound output columns and
+feeds them into `CreateViewInfo.column_comments_map`; names that don't
+match a bound column are ignored.
+
+</dd>
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="ViewInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `ViewInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/generated/vgi-client.ts#L90" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface ViewInfo</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code></dt>
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">schema_name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">definition</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">column_comments</code><code class="api-ftype">Record&lt;string, string&gt;</code></dt>
+
+<dt><code class="api-fname">comment</code><code class="api-ftype">string | null</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>

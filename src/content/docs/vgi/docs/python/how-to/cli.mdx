@@ -5,7 +5,10 @@ description: "Invoke VGI functions, manage catalogs, and serve workers from the 
 
 import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
 
-VGI ships two command-line tools so you can exercise a worker without writing any Python: `vgi-client` invokes functions and drives catalog operations against a worker, and `vgi-serve` runs any worker over stdio or HTTP. This page covers the everyday commands; for the full subcommand and flag surface see the [CLI reference](/vgi/docs/python/how-to/cli-reference/).
+VGI ships two command-line tools so you can exercise a worker without writing any Python:
+`vgi-client` invokes functions and drives catalog operations against a worker, and `vgi-serve` runs
+any worker over stdio or HTTP. This page covers the everyday commands; for the full subcommand and
+flag surface see the [CLI reference](/vgi/docs/python/how-to/cli-reference/).
 
 ## Install
 
@@ -16,11 +19,13 @@ Both commands install with the package:
 # For the bundled example worker (vgi-fixture-worker) used in the examples below:
 pip install vgi-python[fixtures]`} lang="bash" tryable={false} />
 
-`vgi-client` and `vgi-serve` are registered as console scripts. The examples here use `vgi-fixture-worker`, the built-in demo worker, as the target.
+`vgi-client` and `vgi-serve` are registered as console scripts. The examples here use
+`vgi-fixture-worker`, the built-in demo worker, as the target.
 
 ## Call a function
 
-Use `--function` to invoke a function on a worker. Table functions generate data and need no input; table-in-out and scalar functions read a Parquet file via `--input`.
+Use `--function` to invoke a function on a worker. Table functions generate data and need no input;
+table-in-out and scalar functions read a Parquet file via `--input`.
 
 <CodeBlock code={`# Table function: generate a sequence of 10 integers
 vgi-client --function sequence --args '[10]' --worker vgi-fixture-worker
@@ -31,11 +36,20 @@ vgi-client --input data.parquet --function echo --worker vgi-fixture-worker
 # Scalar function: per-row transform, single output column
 vgi-client --input data.parquet --function upper_case --type scalar --worker vgi-fixture-worker`} lang="bash" tryable={false} />
 
-Arguments are passed as a JSON array with `--args` (e.g. `'[100]'`, `'["price", 2]'`). Named arguments use `--named-arg key=value`. The default worker is `vgi-fixture-worker`, so `--worker` can be omitted when targeting it.
+Arguments are passed as a JSON array with `--args` (e.g. `'[100]'`, `'["price", 2]'`). Named
+arguments use `--named-arg key=value`. The default worker is `vgi-fixture-worker`, so `--worker` can
+be omitted when targeting it.
+
+`--schema` names the catalog schema that declares the function, defaulting to `main`. You only need
+it when a worker registers the same function name in more than one schema — since 0.18.0 resolution
+is keyed on `(schema, name)`, so the pair is what identifies an implementation:
+
+<CodeBlock code={`vgi-client --function transform --schema analytics --args '[10]'`} lang="bash" tryable={false} />
 
 ## Choose an output format
 
-`vgi-client` writes JSON Lines to stdout by default. Use `--format` for CSV, Parquet, or Arrow IPC, and `--output` / `-o` to write to a file (`-` means stdout).
+`vgi-client` writes JSON Lines to stdout by default. Use `--format` for CSV, Parquet, or Arrow IPC,
+and `--output` / `-o` to write to a file (`-` means stdout).
 
 <CodeBlock code={`# Default: JSON Lines on stdout
 vgi-client --function sequence --args '[3]'
@@ -46,11 +60,14 @@ vgi-client --function sequence --args '[3]' --format csv
 # Parquet to a file
 vgi-client --function sequence --args '[1000]' --format parquet --output data.parquet`} lang="bash" tryable={false} />
 
-See [Output formats](/vgi/docs/python/how-to/cli-reference/#output-formats) for the full list, including `arrow-ipc` for debugging.
+See [Output formats](/vgi/docs/python/how-to/cli-reference/#output-formats) for the full list,
+including `arrow-ipc` for debugging.
 
 ## Inspect a catalog
 
-Catalog operations live under the `catalog` subcommand. List catalogs, then attach to one to drive schema, table, view, and transaction commands. Stateless catalogs accept `--catalog <name>` for auto-attach; stateful catalogs should capture an attach ID.
+Catalog operations live under the `catalog` subcommand. List catalogs, then attach to one to drive
+schema, table, view, and transaction commands. Stateless catalogs accept `--catalog <name>` for
+auto-attach; stateful catalogs should capture an attach ID.
 
 <CodeBlock code={`# List catalogs exposed by a worker
 vgi-client catalog list --worker ./worker.py
@@ -63,24 +80,37 @@ ATTACH_ID=$(vgi-client catalog attach mydb --worker ./worker.py | jq -r '.attach
 vgi-client catalog schema list --attach-opaque-data $ATTACH_ID --worker ./worker.py
 vgi-client catalog detach $ATTACH_ID --worker ./worker.py`} lang="bash" tryable={false} />
 
-The full catalog, schema, table, column, view, and transaction subcommands are documented in the [CLI reference](/vgi/docs/python/how-to/cli-reference/#catalog-commands).
+The full catalog, schema, table, column, view, and transaction subcommands are documented in the
+[CLI reference](/vgi/docs/python/how-to/cli-reference/#catalog-commands).
 
 ## Serve a worker
 
-`vgi-serve` loads any worker by module reference or file path and serves it — stdio by default (for subprocess use by `vgi-client` or DuckDB), or `--http` for cloud deployment.
+`vgi-serve` loads any worker by module reference or file path and serves it — stdio by default (for
+subprocess use by `vgi-client` or DuckDB), or `--http` for cloud deployment.
 
 <CodeBlock code={`# Stdio (default) — pipe transport
 vgi-serve my_worker.py
 vgi-serve my_app.workers:ProductionWorker
 
 # HTTP
-vgi-serve my_worker.py --http --host 0.0.0.0 --port 8080`} lang="bash" tryable={false} />
+vgi-serve my_worker.py --http --host 0.0.0.0 --port 8080
 
-A worker reference can be `module:Class`, a bare `module` (auto-discovers the single `Worker` subclass), or a `./file.py` path with an optional `:ClassName` suffix.
+# HTTP on granian (Rust I/O, off the GIL) with four forked workers
+vgi-serve my_worker.py --http --server granian --http-workers 4
+
+# Raw Arrow IPC over TCP — no auth, no encryption: trusted networks only
+vgi-serve my_worker.py --tcp 127.0.0.1:9000`} lang="bash" tryable={false} />
+
+A worker reference can be `module:Class`, a bare `module` (auto-discovers the single `Worker`
+subclass), or a `./file.py` path with an optional `:ClassName` suffix. `--tcp` is mutually exclusive
+with `--http` and `--unix`, and `--http-workers` applies only to granian. Production flags —
+response-size caps, the shared signing key every multi-process deployment needs, proxy
+introspection — are covered in [Serve over HTTP](/vgi/docs/python/how-to/serve-http/#going-to-production).
 
 ## Control worker logging
 
-Every worker started with `vgi-serve` (and `vgi-fixture-worker`) accepts logging flags. Logs are written to stderr.
+Every worker started with `vgi-serve` (and `vgi-fixture-worker`) accepts logging flags. Logs are
+written to stderr.
 
 <CodeBlock code={`# Enable DEBUG logging on all vgi + vgi_rpc loggers
 vgi-serve my_worker.py --debug
@@ -94,7 +124,31 @@ vgi-serve my_worker.py --log-level DEBUG --log-logger vgi.worker
 # JSON-formatted logs for structured pipelines
 vgi-serve my_worker.py --log-format json`} lang="bash" tryable={false} />
 
-`--debug` overrides `--log-level` when both are set. For the list of named loggers, environment variables, and OpenTelemetry configuration, see [Worker logging](/vgi/docs/python/how-to/cli-reference/#worker-logging) in the reference.
+`--debug` overrides `--log-level` when both are set. For the list of named loggers, environment
+variables, and OpenTelemetry configuration, see [Worker
+logging](/vgi/docs/python/how-to/cli-reference/#worker-logging) in the reference.
+
+## Ask the engine what a worker offers
+
+Once a catalog is attached, the extension exposes table functions that report what it advertised.
+These answer "did my declaration actually land?" without reading any Python:
+
+<table>
+<thead>
+<tr><th>Function</th><th>Reports</th></tr>
+</thead>
+<tbody>
+<tr><td><code>vgi_function_arguments()</code></td><td>Every function's arguments — types, defaults, <code>doc</code> strings, and the declared <a href="/vgi/docs/python/how-to/generator-api/#declaring-value-constraints">constraints</a> (choices, ranges, patterns).</td></tr>
+<tr><td><code>vgi_copy_formats()</code></td><td>Custom <a href="/vgi/docs/python/how-to/copy-formats/">COPY formats</a>, each with its direction and option schema.</td></tr>
+<tr><td><code>vgi_global_functions()</code></td><td><a href="/vgi/docs/python/how-to/global-functions/">Global functions</a> currently published, who owns each name, and whether it is still live.</td></tr>
+</tbody>
+</table>
+
+<CodeBlock code={`SELECT * FROM vgi_copy_formats();
+SELECT * FROM vgi_function_arguments() WHERE function_name = 'geo_encode';`} lang="sql" tryable={false} />
+
+An HTTP worker also serves a browsable landing page at its root that reads the catalog over the
+protocol — schemas, functions, macros, and argument types. Disable it with `--no-describe`.
 
 ## Next steps
 

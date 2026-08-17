@@ -1,0 +1,1118 @@
+---
+title: "Worker & serving"
+description: "The Worker builder, the transports, and what a worker declares about itself."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+The Worker builder, the transports, and what a worker declares about itself.
+
+</div>
+
+<div class="api-member">
+
+<a id="AttachOptionSpec"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `AttachOptionSpec`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/AttachOptionSpec.java#L35" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record AttachOptionSpec( String name, String description, Field valueField, FieldVector defaultVector, boolean required)</code></pre>
+
+<p class="api-section">Description</p>
+
+Declares an ATTACH-time option this worker accepts. Users supply a value at
+ATTACH time (e.g. `ATTACH '…' AS x (TYPE vgi, opt_int 42)`); the
+resolved value flows to `catalog_attach` via
+`CatalogAttachRequest.options` as a one-row record batch keyed by
+option name. The wire format is identical to `SettingSpec`.
+
+`defaultVector` is a length-1 Arrow vector pre-materialised at
+registration time. Keeping the default in vector form lets the merge path
+(catalog_attach) copy it via `TransferPair` alongside user-supplied
+values — uniform, no type dispatch on the hot path. Allocate the spec once
+at worker startup; the vector is owned by the spec and freed when the
+process exits.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>AttachOptionSpec</code></pre>
+
+Rejects the contradictory required-plus-default combination.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>AttachOptionSpec of(String name, String description, ArrowType type, Object defaultValue)</code></pre>
+
+Convenience: scalar option with a Java-valued default.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>AttachOptionSpec required(String name, String description, ArrowType type)</code></pre>
+
+Convenience: an option the caller must supply at ATTACH time.
+
+A catalog that cannot be attached without this option advertises that
+at discovery, so a client can say so before attempting the attach rather
+than surfacing a failure that reads like an empty catalog.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>AttachOptionSpec of(String name, String description, ArrowType type, List&lt;Field&gt; children, Object defaultValue)</code></pre>
+
+Convenience: complex option (list/struct) with children + default.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ArrowType type()</code></pre>
+
+`the option's Arrow value type, read from {@link #valueField`\}
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;Field&gt; children()</code></pre>
+
+`the value field's child fields (empty for flat scalar options)`
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="CatalogDataVersionRelease"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `CatalogDataVersionRelease`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/CatalogDataVersionRelease.java#L20" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record CatalogDataVersionRelease( String version, Instant releasedAt, String summary, String notesUrl)</code></pre>
+
+<p class="api-section">Description</p>
+
+One published data version of a catalog, surfaced through
+`catalog_catalogs()` so clients can render a release timeline before
+attaching. Mirrors vgi-python `CatalogDataVersionRelease`.
+
+The `CatalogInfo.releases` list this belongs to is ordered
+newest-first, with at most one entry per `version`.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>CatalogDataVersionRelease</code></pre>
+
+Enforces the wire schema's nullability: `version` and
+`releasedAt` must be present, and a `null` summary is
+normalised to the empty string (`notesUrl` alone may stay null).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="ExtraCatalog"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `ExtraCatalog`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/Worker.java#L414" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record ExtraCatalog(String name, String implementationVersion, String dataVersion, String schemaComment, List&lt;AttachOptionSpec&gt; attachOptions)</code></pre>
+
+<p class="api-section">Description</p>
+
+An auxiliary catalog served by the same worker process next to the main
+catalog, MetaWorker-style: it appears as its own row in
+`catalog_catalogs()`, attaches by name with its own versions and a
+random per-ATTACH opaque id, and owns the functions registered into it
+through the `registerExtraCatalog*` methods (those functions are
+listed only under this catalog's attaches, and hidden from the main
+catalog's).
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>ExtraCatalog</code></pre>
+
+Defensive copy; a null option list reads as none declared.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>ExtraCatalog(String name, String implementationVersion, String dataVersion, String schemaComment)</code></pre>
+
+An auxiliary catalog declaring no attach options of its own.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerExtraCatalog(ExtraCatalog catalog)</code></pre>
+
+Register an auxiliary catalog served next to the main one.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Map&lt;String, ExtraCatalog&gt; extraCatalogs()</code></pre>
+
+The auxiliary catalogs registered via `#registerExtraCatalog`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerExtraCatalogTable(String catalogName, CatalogTable t)</code></pre>
+
+Register a catalog table owned by an auxiliary catalog. Such tables are
+enumerated only under that catalog's attaches (and never appear in the
+main catalog's listings). The scan functions they reference should be
+registered through `#registerExtraCatalogTableFunction` into the
+same catalog so they are likewise owned by it.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Map&lt;String, List&lt;CatalogTable&gt;&gt; extraCatalogTables()</code></pre>
+
+Catalog tables owned by auxiliary catalogs, keyed by catalog name.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String schemaOf(Object fn)</code></pre>
+
+The catalog schema `fn` is declared in — the schema DuckDB
+registers it into and therefore the one a bind request names. Every
+registered function has exactly one: a registration that names no schema
+resolves to `#defaultSchema()`, which is a real home, not a
+wildcard. Nothing is visible in more than one schema.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String catalogOf(Object fn)</code></pre>
+
+The auxiliary catalog `fn` is declared in, or `null` when it
+belongs to this worker's own catalog. Ownership is always explicit — a
+function is registered into exactly one catalog — so two auxiliary
+catalogs may declare the very same function name and still dispatch
+apart.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerScalar(ScalarFunction fn)</code></pre>
+
+Register a scalar function, callable from SQL and enumerated through
+`catalog_schema_contents_functions`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerScalar(String schemaName, ScalarFunction fn)</code></pre>
+
+Register a scalar function into a named schema of this worker's catalog
+(rather than `#defaultSchema()`). The same function name may be
+registered in more than one schema: DuckDB registers one entry per
+schema, and bind requests carry the schema so each call reaches the
+implementation the caller named.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerTable(String schemaName, TableFunction fn)</code></pre>
+
+Register a table function into a named schema of this worker's catalog
+(rather than `#defaultSchema()`). See
+`#registerScalar(String, ScalarFunction)`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerTableInOut(String schemaName, TableInOutFunction fn)</code></pre>
+
+Register a table-in-out function into a named schema of this worker's
+catalog (rather than `#defaultSchema()`). See
+`#registerScalar(String, ScalarFunction)`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerTableBuffering(String schemaName, farm.query.vgi.buffering.TableBufferingFunction fn)</code></pre>
+
+Register a table-buffering function into a named schema of this worker's
+catalog (rather than `#defaultSchema()`). See
+`#registerScalar(String, ScalarFunction)`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerAggregate(String schemaName, AggregateFunction&lt;?&gt; fn)</code></pre>
+
+Register an aggregate function into a named schema of this worker's
+catalog (rather than `#defaultSchema()`). See
+`#registerScalar(String, ScalarFunction)`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerExtraCatalogScalar(String catalogName, String schemaName, ScalarFunction fn)</code></pre>
+
+Register a scalar function owned by an auxiliary catalog, in a named
+schema of it. The function is listed only under that catalog's attaches
+and hidden from the main catalog's. Ownership is explicit per function,
+so two auxiliary catalogs can declare the SAME function name and still
+dispatch apart — the attach names the catalog.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerExtraCatalogTableFunction(String catalogName, String schemaName, TableFunction fn)</code></pre>
+
+Register a table function owned by an auxiliary catalog, in a named
+schema of it. See `#registerExtraCatalogScalar`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerExtraCatalogTableInOut(String catalogName, String schemaName, TableInOutFunction fn)</code></pre>
+
+Register a table-in-out function owned by an auxiliary catalog, in a
+named schema of it. See `#registerExtraCatalogScalar`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerExtraCatalogTableBuffering(String catalogName, String schemaName, farm.query.vgi.buffering.TableBufferingFunction fn)</code></pre>
+
+Register a table-buffering function owned by an auxiliary catalog, in a
+named schema of it. See `#registerExtraCatalogScalar`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerTable(TableFunction fn)</code></pre>
+
+Register a table function, callable from SQL and enumerated through
+`catalog_schema_contents_functions`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerAggregate(AggregateFunction&lt;?&gt; fn)</code></pre>
+
+Register an aggregate function, callable from SQL and enumerated
+through `catalog_schema_contents_functions`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerTableInOut(TableInOutFunction fn)</code></pre>
+
+Register a table-in-out function (consumes an input relation, streams
+an output relation), enumerated through
+`catalog_schema_contents_functions`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerScalars(Iterable&lt;? extends ScalarFunction&gt; fns)</code></pre>
+
+Register several scalar functions; equivalent to calling
+`#registerScalar(ScalarFunction)` for each.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerTables(Iterable&lt;? extends TableFunction&gt; fns)</code></pre>
+
+Register several table functions; equivalent to calling
+`#registerTable(TableFunction)` for each.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerUnlistedTable(TableFunction fn)</code></pre>
+
+Register a table function that is dispatchable but *not* advertised
+in the catalog's function listing, so DuckDB never registers it as a
+callable table function. Use this for the scan function behind a
+function-backed `farm.query.vgi.catalog.CatalogTable` that should
+surface only as a table (mirrors vgi-python, where a `Table(function=F)`
+does not imply `F` is in the catalog's `functions` list).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>java.util.Set&lt;String&gt; unlistedTables()</code></pre>
+
+Names registered via `#registerUnlistedTable`: dispatchable, but
+omitted from `catalog_schema_contents_functions`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerAggregates(Iterable&lt;? extends AggregateFunction&lt;?&gt;&gt; fns)</code></pre>
+
+Register several aggregate functions; equivalent to calling
+`#registerAggregate(AggregateFunction)` for each.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerTableBuffering(farm.query.vgi.buffering.TableBufferingFunction fn)</code></pre>
+
+Register a table-buffering (Sink+Source) function: DuckDB sinks the
+full input through `table_buffering_process`/`_combine`
+before the finalize stream sources results back out.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerTableBufferings(Iterable&lt;? extends farm.query.vgi.buffering.TableBufferingFunction&gt; fns)</code></pre>
+
+Register several table-buffering functions; equivalent to calling
+`#registerTableBuffering` for each.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;farm.query.vgi.buffering.TableBufferingFunction&gt; bufferingFunctions()</code></pre>
+
+Table-buffering functions registered via `#registerTableBuffering`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerTableInOuts(Iterable&lt;? extends TableInOutFunction&gt; fns)</code></pre>
+
+Register several table-in-out functions; equivalent to calling
+`#registerTableInOut(TableInOutFunction)` for each.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerGlobalFunctions(Iterable&lt;? extends farm.query.vgi.function.FunctionDescriptor&gt; fns)</code></pre>
+
+Ask the client to publish these already-registered functions into its
+*global* (non-catalog) function namespace, under
+`#globalFunctionPrefix(String)`. They are advertised on the
+`catalog_attach` result's `global_functions` field as
+serialized `FunctionInfo` records (protocol 1.3.0).
+
+Each argument must be the *same instance* passed to a
+`register*` method: the advertised `FunctionInfo` carries the
+schema the function is homed in, which is the bind-dispatch key, and
+instance identity is what `#schemaOf(Object)` resolves.
+Registration into the catalog is unchanged — publication is additive.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;farm.query.vgi.function.FunctionDescriptor&gt; globalFunctions()</code></pre>
+
+Functions advertised via `#registerGlobalFunctions`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker globalFunctionPrefix(String prefix)</code></pre>
+
+Prefix the client applies to every `#registerGlobalFunctions` entry
+to form its globally visible name — e.g. `"vgi_example"` publishes
+`global_scalar` as `vgi_example_global_scalar`. An empty
+prefix publishes bare names.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String globalFunctionPrefix()</code></pre>
+
+The prefix set by `#globalFunctionPrefix(String)`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker settings(SettingSpec... specs)</code></pre>
+
+Advertise custom session settings in the `catalog_attach` result.
+DuckDB registers each as a `SET`-able option whose current value
+is forwarded to the worker on every bind.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker secretTypes(SecretTypeSpec... specs)</code></pre>
+
+Advertise secret types in the `catalog_attach` result. DuckDB
+registers each so `CREATE SECRET` of that type resolves against
+this catalog, and matching secrets flow to the worker on bind.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;SecretTypeSpec&gt; secretTypeSpecs()</code></pre>
+
+Secret types advertised at attach time.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker attachCatalogs(farm.query.vgi.protocol.AttachCatalogInfo... catalogs)</code></pre>
+
+Advertise companion catalogs (lakehouse federation) that the client should
+ATTACH when this VGI catalog attaches. Surfaced via
+`catalog_attach.attach_catalogs`; the C++ extension attaches each at
+VGI-attach time so multi-branch catalog-table branches can resolve them.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;farm.query.vgi.protocol.AttachCatalogInfo&gt; attachCatalogInfos()</code></pre>
+
+Companion catalogs advertised at attach time.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker attachOptions(AttachOptionSpec... specs)</code></pre>
+
+Declare the options this worker accepts in DuckDB's
+`ATTACH ... (key value, ...)` clause. Unknown options are
+rejected client-side; accepted values arrive in the attach request.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="SecretTypeSpec"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `SecretTypeSpec`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/SecretTypeSpec.java#L20" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record SecretTypeSpec(String name, String description, Schema parametersSchema)</code></pre>
+
+<p class="api-section">Description</p>
+
+Declares a DuckDB secret type backed by this worker. Mirrors vgi-go
+`vgi.SecretTypeSpec`.
+
+Secret types are advertised at attach time via
+`CatalogAttachResult.secret_types`. Mark sensitive fields in
+`parametersSchema` with custom field metadata `"redact":"true"`
+so DuckDB can mask them in `duckdb_secrets()`.
+
+</div>
+
+<div class="api-member">
+
+<a id="Secrets"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `Secrets`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/Secrets.java#L33" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class Secrets</code></pre>
+
+<p class="api-section">Description</p>
+
+Resolved secrets passed to a worker, keyed by each secret's unique DuckDB
+secret name (not by type) so several secrets of the same type (e.g. one per S3
+bucket) coexist. Each secret carries its connector-serialized `type` (the
+DuckDB secret type) and `scope` (newline-joined scope prefixes) fields,
+plus type-specific fields like `key_id`.
+
+Mirrors `vgi::Secrets` in the Rust SDK. Parse the `byte[]` blob
+carried on the params with `#parse(byte[])`, then select by name, type,
+or scope.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>Secrets of(Map&lt;String, Map&lt;String, String&gt;&gt; byName)</code></pre>
+
+Build directly from a name -\> fields map (for tests / non-IPC callers).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Secrets parse(byte[] bytes)</code></pre>
+
+Parse the IPC secrets blob. Each column is a secret (named by its DuckDB
+secret name) holding a struct of its fields, including `type` and
+`scope`. Empty/null blob yields empty secrets.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Optional&lt;String&gt; field(String field)</code></pre>
+
+A field value from the first secret carrying it (any name).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Optional&lt;String&gt; namedField(String name, String field)</code></pre>
+
+A named secret's field.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Map&lt;String, Map&lt;String, String&gt;&gt; byName()</code></pre>
+
+Every resolved secret as (name -\> fields).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Optional&lt;String&gt; secretType(String name)</code></pre>
+
+The DuckDB secret type of the named secret (its `type` field).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;Map&lt;String, String&gt;&gt; ofType(String secretType)</code></pre>
+
+Every resolved secret whose `type` field matches `secretType`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Optional&lt;Map&lt;String, String&gt;&gt; forScope(String path)</code></pre>
+
+The fields of the secret whose `scope` is the longest prefix of
+`path`. The connector serializes each secret's scope as a
+newline-joined list of prefixes; a secret with no (or empty) scope matches
+as a last-resort fallback. Empty only when there are no candidate secrets.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Optional&lt;Map&lt;String, String&gt;&gt; forScopeOfType(String path, String secretType)</code></pre>
+
+Like `#forScope` but only over secrets of `secretType`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Optional&lt;String&gt; fieldFor(String path, String field)</code></pre>
+
+A field of the best scope-matching secret for `path`.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="SettingSpec"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `SettingSpec`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/SettingSpec.java#L23" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record SettingSpec( String name, String description, ArrowType type, List&lt;Field&gt; children, Object defaultValue)</code></pre>
+
+<p class="api-section">Description</p>
+
+Declares a custom DuckDB setting backed by this worker. Mirrors vgi-go
+`vgi.SettingSpec`.
+
+Settings are advertised at attach time via `CatalogAttachResult.settings`
+and delivered with each `bind` call so functions can read them.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>SettingSpec(String name, String description, ArrowType type)</code></pre>
+
+Scalar setting with no default.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>SettingSpec(String name, String description, ArrowType type, Object defaultValue)</code></pre>
+
+Scalar setting with a default value.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>SettingSpec(String name, String description, ArrowType type, List&lt;Field&gt; children)</code></pre>
+
+Complex (list/struct) setting with no default.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TcpAddr"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `TcpAddr`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/Worker.java#L1142" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record TcpAddr(String host, int port)</code></pre>
+
+<p class="api-section">Description</p>
+
+Parsed `[HOST:]PORT` TCP bind spec. Host defaults to loopback.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>TcpAddr parseTcpAddr(String spec)</code></pre>
+
+Parse a `[HOST:]PORT` TCP bind spec as accepted by `--tcp`.
+A bare `PORT` binds `127.0.0.1`; an empty host (leading
+`":"`) also defaults to loopback.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void runHttp(String host, int port) throws Exception</code></pre>
+
+Run as an HTTP server bound to `host`/`port`, blocking until shutdown.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void runFromArgs(String[] args, java.util.function.UnaryOperator&lt;HttpServer.Config.Builder&gt; httpCustomizer)</code></pre>
+
+Canonical CLI dispatcher used by worker `main` methods. Parses
+the four flags every VGI worker accepts and runs the matching transport:
+
+  
+- `--unix <path>`: AF_UNIX socket (launcher protocol)
+  
+- `--tcp [<host>:]<port>`: TCP socket (launcher protocol)
+  
+- `--http` with optional `--host`, `--port`: HTTP
+  
+- `--idle-timeout <seconds>`: passed to `runUnixSocket` / `runTcp`
+  
+- (default): stdio
+
+Also honours `VGI_WORKER_STDERR`: redirects `System#err` to
+the named file (in append mode) before any other work, so
+launcher-mode crashes — where the launcher dup2's `/dev/null`
+over fd 2 — remain inspectable.
+
+Unknown args exit with status 2; transport-run failures with 1.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void runFromArgs(String[] args)</code></pre>
+
+Convenience overload — equivalent to
+  `runFromArgs(args, b -> b)`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void runHttp(HttpServer.Config config) throws Exception</code></pre>
+
+HTTP variant that accepts a fully-built config (prefix, authenticator,
+  TLS, byte limits, …). Used by workers that wire OAuth/JWT or other
+  production knobs from environment variables.
+
+  
+
+On SIGTERM the shutdown hook fires, calling `HttpServer#stop()`.
+  Jetty awaits in-flight requests up to its configured stop timeout
+  (15 s by default; see `HttpServer`'s `setStopTimeout`) and
+  then forcibly closes any stragglers.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="VgiService"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `VgiService`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/VgiService.java#L57" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface VgiService</code></pre>
+
+<p class="api-section">Description</p>
+
+The VGI RPC surface served by a worker.
+
+Wire shape varies per method. Two flavours coexist:
+
+  
+- **Packed** — the params batch has a single `request: binary`
+  column carrying a serialised `farm.query.vgirpc.schema.ArrowSerializableRecord`
+  payload. Used by `bind`/`init`/`catalog_attach` and
+  any method whose request would contain maps/lists/structs.
+  
+- **Flat** — the params batch's columns map 1:1 to the method's
+  parameters by snake_case name. Used by simpler catalog reads/writes.
+
+Method and parameter / record-field names are the wire contract — they
+MUST match the canonical Python/Go `snake_case`.
+
+The `ProtocolVersion` is what a *client* of this interface
+stamps on every request. A VGI worker enforces it at its dispatch boundary
+(exact major+minor), so a client that sends nothing is refused outright — the
+annotation is what lets `connection.proxy(VgiService.class)` talk to
+vgi-python or vgi-go. It shares `Worker#VGI_PROTOCOL_VERSION` with the
+server side so the two cannot drift.
+
+</div>
+
+<div class="api-member">
+
+<a id="Worker"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `Worker`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/Worker.java#L33" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class Worker</code></pre>
+
+<p class="api-section">Description</p>
+
+Builder + run-loop façade for a VGI worker.
+
+Mirrors `vgi.Worker` in vgi-go: register functions, configure catalog
+metadata, then call `#runStdio()` or `#runHttp(String, int)`.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>String VGI_PROTOCOL_VERSION = "1.3.0"</code></pre>
+
+VGI protocol surface version. Mirrors vgi-python `protocol_version.txt`.
+  Emitted as the `vgi_rpc.protocol_version` per-request metadata key.
+
+  
+
+1.1.0 added the nullable `schema_name` field to the bind request:
+  a function name is not a unique key, because the same name may be
+  registered in more than one catalog schema, so dispatch resolves
+  `(schema_name, function_name)`.
+
+  
+
+1.3.0 added `global_functions` / `global_function_prefix`
+  to the `catalog_attach` result (positions 14/15, before
+  `resolved_data_version`): functions a worker asks the client to
+  publish into its global namespace — see `#registerGlobalFunctions`
+  and `#globalFunctionPrefix(String)`. A worker that opts out still
+  carries the fields (empty list, empty prefix): the extension matches the
+  response schema exactly.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerMacro(Macro m)</code></pre>
+
+Register a SQL macro.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerMacros(Iterable&lt;? extends Macro&gt; ms)</code></pre>
+
+Register several SQL macros.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;Macro&gt; macros()</code></pre>
+
+Macros enumerated through `catalog_schema_contents_macros`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerCatalogTable(CatalogTable t)</code></pre>
+
+Register a catalog table.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;CatalogTable&gt; catalogTables()</code></pre>
+
+Catalog tables enumerated through `catalog_schema_contents_tables` /
+`catalog_table_get`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerMultiBranchTable(CatalogTable stub, List&lt;farm.query.vgi.catalog.ScanBranch&gt; branches)</code></pre>
+
+Register a multi-branch table: a catalog table whose scan is the
+`UNION_ALL` of `branches`. The table is enumerated normally;
+its scan resolves through `catalog_table_scan_branches_get`. Pass
+an empty branch list to exercise the C++ loud-fail path. The stub's
+inline scan-function (if any) is dropped so the branches RPC drives.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker registerMultiBranchTable(CatalogTable stub, List&lt;farm.query.vgi.catalog.ScanBranch&gt; branches, List&lt;String&gt; requiredExtensions)</code></pre>
+
+Register a multi-branch table declaring the DuckDB extensions the C++
+rewriter must auto-load before binding any branch (e.g. `"iceberg"`
+for an `iceberg_scan` arm, `"parquet"` for `read_parquet`
+where it isn't autoloaded). Surfaced as the `required_extensions`
+field of the `catalog_table_scan_branches_get` response.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;farm.query.vgi.catalog.ScanBranch&gt; multiBranchTable(String schema, String name)</code></pre>
+
+Branches for a multi-branch table.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;String&gt; multiBranchRequiredExtensions(String schema, String name)</code></pre>
+
+DuckDB extensions the C++ rewriter must auto-load for a multi-branch
+table's branches, or an empty list when none were declared.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Map&lt;String, List&lt;farm.query.vgi.catalog.ScanBranch&gt;&gt; multiBranchTables()</code></pre>
+
+Every table registered via
+`#registerMultiBranchTable(CatalogTable, List)`, used by the
+service to answer `catalog_table_scan_branches_get`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker builder()</code></pre>
+
+Start building a worker. Defaults: catalog name `"vgi"`, default
+schema `"main"`, empty comment/tags, no versioning metadata.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker catalogName(String name)</code></pre>
+
+Name this worker's catalog. Surfaced as the catalog row in
+`catalog_catalogs()` and as the default database alias on ATTACH.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker catalogComment(String comment)</code></pre>
+
+Set the catalog-level comment, surfaced through `catalog_catalogs()`
+and DuckDB's `duckdb_databases()` comment column.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker catalogTags(Map&lt;String, String&gt; tags)</code></pre>
+
+Attach key/value tags to the catalog, surfaced through
+`catalog_catalogs()`. Merged into any previously set tags
+(later calls overwrite duplicate keys).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker implementationVersion(String v)</code></pre>
+
+Advertise the worker's implementation (code) version, reported through
+`catalog_version` alongside the resolved data version so clients
+can distinguish "what code is running" from "what data it serves".
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker dataVersionSpec(String v)</code></pre>
+
+Declare the range of data versions this worker can serve. ATTACH-time
+version requests are validated against this spec; requests outside the
+range are rejected.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String implementationVersion()</code></pre>
+
+Implementation version advertised through `catalog_version`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String dataVersionSpec()</code></pre>
+
+Data-version range this worker accepts at ATTACH time.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker opaqueDataKey(byte[] key)</code></pre>
+
+Provide a stable 32-byte key for sealing attach / transaction
+`opaque_data`. Required when running the same worker across
+multiple HTTP replicas: without it each replica generates its own
+random key, and a load balancer rotating across them will surface
+`AEADBadTagException` when one replica receives a blob another
+replica sealed.
+
+`null` (the default) restores the per-process random-key
+behaviour, which is correct for single-replica HTTP and irrelevant
+for stdio / AF_UNIX (where the sealer is disabled entirely).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker releases(CatalogDataVersionRelease... rs)</code></pre>
+
+Published data-version releases, surfaced through `catalog_catalogs()`.
+  Pass newest-first.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>List&lt;CatalogDataVersionRelease&gt; releases()</code></pre>
+
+Data-version releases surfaced through `catalog_catalogs()`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker sourceUrl(String url)</code></pre>
+
+Set the catalog's source URL (e.g. a homepage or repository link),
+surfaced through `catalog_catalogs()`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>String sourceUrl()</code></pre>
+
+Source URL surfaced through `catalog_catalogs()`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker defaultSchema(String schema)</code></pre>
+
+Name the schema DuckDB selects by default after ATTACH. Functions,
+tables and views without an explicit schema register here.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker schemaComment(String schema, String comment)</code></pre>
+
+Per-schema comment surfaced via `catalog_schemas` /
+  `catalog_schema_get`. Default comment for the default schema is
+  "Default schema"; any auxiliary schema without an entry gets an empty
+  comment.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Map&lt;String, String&gt; schemaComments()</code></pre>
+
+Comments registered via `#schemaComment(String, String)`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Worker schemaTags(String schema, Map&lt;String, String&gt; tags)</code></pre>
+
+Attach key/value metadata tags to a schema, surfaced via
+`catalog_schemas` / `catalog_schema_get` and reported through
+DuckDB's `duckdb_schemas().tags`. Typical keys are
+`vgi.description_llm` and `vgi.description_md`. Merged into any
+tags previously set for the schema (later calls overwrite duplicate keys).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>Map&lt;String, Map&lt;String, String&gt;&gt; schemaTags()</code></pre>
+
+Tags registered via `#schemaTags(String, Map)`.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="WorkerLandingInfo"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `WorkerLandingInfo`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/http/WorkerLandingInfo.java#L16" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public final class WorkerLandingInfo</code></pre>
+
+<p class="api-section">Description</p>
+
+Derives a `LandingInfo` from a `Worker`.
+
+The shared landing page reads catalog metadata over the VGI protocol
+through the client bundle the transport serves beside it, so the worker
+supplies only what the protocol has no method for: which worker this is,
+what it is called, and what version it runs.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>LandingInfo of(Worker worker)</code></pre>
+
+Build the landing identity for `worker`: name from the catalog
+name, doc from the catalog comment's first line, version from the VGI
+core package manifest.
+
+</div>
+</div>
+
+</div>

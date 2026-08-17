@@ -1,0 +1,148 @@
+---
+title: Serve over HTTP
+description: "Run a Go VGI worker as a network service — the four transports, the signing key every multi-process deployment needs, and what carries auth."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+Run a worker as a **network service** instead of a co-located subprocess — on another machine, in a
+container, or behind a shared endpoint.
+
+## Prerequisites
+
+- A working worker (see the [tutorial](/vgi/docs/go/tutorial/scalar/)).
+
+## The four transports
+
+The same worker serves all of them; only the `Run*` call at the bottom of `main` changes.
+
+<table>
+<thead>
+<tr><th>Call</th><th>Transport</th><th>Readiness marker</th><th>Authenticates?</th></tr>
+</thead>
+<tbody>
+<tr><td><code>RunStdio()</code></td><td>stdin/stdout — the default, and what <code>ATTACH … LOCATION './worker'</code> uses</td><td>—</td><td>Co-located, trusted</td></tr>
+<tr><td><code>RunUnix(path, idle)</code></td><td>AF_UNIX socket</td><td><code>UNIX:&lt;path&gt;</code></td><td>Co-located, trusted</td></tr>
+<tr><td><code>RunTcp(host, port, idle)</code></td><td>Raw Arrow IPC over TCP</td><td><code>TCP:&lt;host&gt;:&lt;port&gt;</code></td><td><strong>No — see below</strong></td></tr>
+<tr><td><code>RunHttp(addr)</code></td><td>HTTP</td><td><code>PORT:&lt;n&gt;</code></td><td>Only if you configure it</td></tr>
+</tbody>
+</table>
+
+The example workers in these docs all take an `--http` flag for exactly this reason:
+
+<CodeBlock code={`func main() {
+    httpMode := flag.Bool("http", false, "serve over HTTP instead of stdio")
+    flag.Parse()
+
+    w := vgi.NewWorker(vgi.WithCatalogName("calc"))
+    w.RegisterScalar(NewDouble())
+
+    if *httpMode {
+        if err := w.RunHttp("127.0.0.1:0"); err != nil {
+            log.Fatal(err)
+        }
+        return
+    }
+    w.RunStdio()
+}`} lang="go" tryable={false} />
+
+`RunHttp("127.0.0.1:0")` binds a free port and prints `PORT:<n>` to stdout so a supervisor can
+discover it. Pin the port by passing it explicitly.
+
+## Attach it from DuckDB
+
+DuckDB attaches an HTTP worker the same way as a subprocess one — point `LOCATION` at the URL:
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION 'http://localhost:8080');
+SELECT calc.double(21);`} lang="sql" tryable={false} />
+
+<InfoTip label="Readiness markers" title="Why the marker matters">
+`RunUnix` and `RunTcp` print their marker once the listener is up and then write **nothing further**
+to stdout. That is deliberate: a supervisor can block on one line of output to know the worker is
+ready, without the stream being polluted afterwards. `RunStdio` prints nothing at all — stdout *is*
+the protocol there.
+</InfoTip>
+
+## Set a signing key before running more than one process
+
+The HTTP transport seals two things with an HMAC key: the state tokens that carry a scan's cursor
+between requests, and the catalog opaque data returned by `ATTACH`. `WithHttpSigningKey` sets it.
+
+If you don't, `RunHttp` mints an **ephemeral key per process**.
+
+<Callout type="warning" title="An ephemeral key is correct for one process and silently wrong for more">
+A client whose connection stays pinned to one process never notices. One that reconnects mid-stream —
+a load balancer, a respawned worker, a resumed scan — presents a token sealed under a key the
+receiving process does not have, and gets an intermittent failure that reads as flakiness rather than
+as misconfiguration.
+
+Set the key explicitly for any load-balanced or multi-instance deployment. Nothing in the process can
+reach a peer it did not start, so it cannot detect the problem for you.
+</Callout>
+
+<CodeBlock code={`key, err := hex.DecodeString(os.Getenv("VGI_SIGNING_KEY"))
+if err != nil || len(key) == 0 {
+    log.Fatal("VGI_SIGNING_KEY must be set for a multi-process deployment")
+}
+
+w := vgi.NewWorker(
+    vgi.WithCatalogName("calc"),
+    vgi.WithHttpSigningKey(key),
+)`} lang="go" tryable={false} />
+
+A restart with an ephemeral key invalidates every sealed value, so clients must re-`ATTACH`. With a
+configured key they survive it.
+
+<Callout type="warning" title="A bare RunHttp is not authenticated, and not encrypted">
+HTTP is the only transport that *can* authenticate, but it does not by default: auth is wired only
+when you call `w.SetAuthenticate(...)`, and without it every request is anonymous. `RunHttp` also
+serves plain HTTP — there is no TLS unless you put a terminating proxy in front. So an unconfigured
+HTTP worker is exactly as open as the TCP one below; the difference is that HTTP gives you somewhere
+to attach identity. See [Authenticate callers](/vgi/docs/go/how-to/authentication/).
+</Callout>
+
+## TCP, for trusted networks
+
+`RunTcp` serves raw Arrow IPC with no HTTP framing in the path — lower overhead, and useful for a
+co-located sidecar.
+
+<CodeBlock code={`if err := w.RunTcp("127.0.0.1", 9000, 5*time.Minute); err != nil {
+    log.Fatal(err)
+}`} lang="go" tryable={false} />
+
+<Callout type="warning" title="TCP carries no auth and no encryption">
+Anyone who can reach the port can call every function. Bind loopback or a trusted network, and use
+HTTP the moment the network isn't one. This is the same trade the
+[Python SDK makes](/vgi/docs/python/how-to/serve-http/#tcp-for-trusted-networks) — it's a property of
+the transport, not of the language.
+</Callout>
+
+`host: ""` defaults to `127.0.0.1` and `port: 0` picks a free one. The `idleTimeout` shuts the worker
+down after that long with no active connections; pass `<= 0` to disable it.
+
+## Logging
+
+Every example worker wires up the SDK's logging flags, which is what makes a deployed worker
+debuggable without a rebuild:
+
+<CodeBlock code={`logFlags := vgi.RegisterLoggingFlags(flag.CommandLine)
+flag.Parse()
+if err := logFlags.Apply(); err != nil {
+    log.Fatalf("logging flags: %v", err)
+}`} lang="go" tryable={false} />
+
+Logs go to **stderr** — they must, because on the stdio transport stdout is the protocol. The flags
+are `--log-level`, `--log-format` (`text` or `json`), `--log-logger`, and `--debug`.
+
+One level applies to every logger; `--log-logger` *selects which* of the named loggers (`vgi.Log`,
+`vgi.LogWorker`, `vgi.LogCatalog`, `vgi.LogRPC`, …) emit at all, rather than giving each its own
+level. See [Errors & logging](/vgi/docs/go/api/observability/).
+
+## Next steps
+
+- **Lock it down** → [Authenticate callers](/vgi/docs/go/how-to/authentication/).
+- **What a worker exposes** → [Expose a catalog](/vgi/docs/go/how-to/catalogs/).
+- **The transport underneath** → [vgi-rpc](https://vgi-rpc.query.farm/).
+- **Exact signatures** → [Worker & serving](/vgi/docs/go/api/worker/).

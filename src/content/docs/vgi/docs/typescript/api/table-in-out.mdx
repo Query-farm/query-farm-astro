@@ -1,0 +1,403 @@
+---
+title: "Table-in-out functions"
+description: "Streaming a relation through, batch by batch."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Streaming a relation through, batch by batch.
+
+</div>
+
+<div class="api-member">
+
+<a id="defineRowTransformFunction"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `defineRowTransformFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/table-in-out.ts#L666" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`export function defineRowTransformFunction<
+  TArgs = Record<string, any>,
+>(config: RowTransformConfig<TArgs>): VgiFunction`} />
+
+<p class="api-section">Description</p>
+
+Define a blended ("UNNEST-style") table-in-out function: its positional args
+ARE its per-row input columns, so ONE registration serves every call shape —
+`f(52, 13)` (literal -\> one input row), `FROM t, f(t.x, t.y)` (columns -\>
+streaming), and `LATERAL f(t.x, t.y)`. Mirrors vgi-python's
+`RowTransformFunction` (Phase B).
+
+Registers as a TABLE function with `FunctionInfo.input_from_args = true`;
+the worker's overload resolution matches blended overloads by INPUT-COLUMN
+count (the positional args are not on the wire). Map-shaped, no finalize.
+
+</div>
+
+<div class="api-member">
+
+<a id="defineTableInOutFunction"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `defineTableInOutFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/table-in-out.ts#L132" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`export function defineTableInOutFunction<
+  TArgs = Record<string, any>,
+  TState = null,
+>(config: TableInOutConfig<TArgs, TState>): VgiFunction`} />
+
+</div>
+
+<div class="api-member">
+
+<a id="PARENT_ROW_METADATA_KEY"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">const</span> `PARENT_ROW_METADATA_KEY`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/table-in-out.ts#L533" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>const PARENT_ROW_METADATA_KEY = "vgi_rpc.parent_row#b64"</code></pre>
+
+<p class="api-section">Description</p>
+
+Metadata key carrying per-output-row provenance: base64 of a raw
+little-endian int32[] mapping each output row to the input row that
+produced it. Shared by string with the C++ extension and vgi-python.
+
+</div>
+
+<div class="api-member">
+
+<a id="parentRowsMetadata"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `parentRowsMetadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/table-in-out.ts#L556" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`export function parentRowsMetadata(
+  parentRows: number[],
+  outputRows: number,
+  extra?: Map<string, string>,
+): Map<string, string>`} />
+
+<p class="api-section">Description</p>
+
+Fold per-output-row provenance into an emit metadata map.
+
+Used by the **batched correlated LATERAL** operator (blended
+RowTransformFunction under `FROM t, f(t.x)` / `LATERAL`): the C++ extension
+ships a whole input chunk to the worker in ONE exchange and reads ONE
+output batch, then maps each output row back to the input row that produced
+it via this array — so a 1-\>N fan-out or 1-\>0 filter can be batched instead
+of driven row-by-row.
+
+`parentRows[i]` is the 0-based index (into the input batch) of the row that
+produced output row `i`. Encoded as a raw little-endian `int32` array (NOT
+Arrow IPC), base64-encoded, under `vgi_rpc.parent_row#b64`. Absent metadata
+means an identity 1-\>1 map (the common case: the extension assumes it, and
+requires output rows == input rows).
+
+Contract: `parentRows.length` MUST equal the emitted batch's row count (a
+mismatch is a worker bug that would corrupt the stamping). Values are
+range-checked against the input width on the C++ side. Mirrors vgi-python's
+`_merge_parent_rows` / `out.emit(..., parent_rows=[...])`.
+
+</div>
+
+<div class="api-class">
+
+<a id="RowTransformConfig"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `RowTransformConfig`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/table-in-out.ts#L603" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface RowTransformConfig&lt;TArgs = Record&lt;string, any&gt;&gt;</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">onBind</code><code class="api-ftype">(params: TableInOutBindParams&lt;TArgs&gt;) =&gt; | &#123; outputSchema: VgiSchema; opaqueData?: Uint8Array &#125; | Promise&lt;&#123; outputSchema: VgiSchema; opaqueData?: Uint8Array &#125;&gt;</code></dt>
+<dd>
+
+Bind: return the output schema. The input schema (the declared per-row
+columns, typed by the C++ bind) is on `params.bindCall.input_schema`.
+
+</dd>
+
+<dt><code class="api-fname">process</code><code class="api-ftype">( params: RowTransformProcessParams&lt;TArgs&gt;, batch: VgiBatch, out: OutputCollector, ) =&gt; void | Promise&lt;void&gt;</code></dt>
+<dd>
+
+Per-row map: transform one input batch, emit exactly one output batch via
+`out`. 1-\>1, 1-\>N (with \{@link parentRowsMetadata\} provenance), and 1-\>0
+(a 0-row emit) all work. There is NO finalize — a blended function is a
+per-row map (DuckDB forbids FinalExecute under correlated LATERAL, one of
+the call shapes blended must serve). Accumulating functions use a classic
+TableInput table-in-out or a TableBufferingFunction.
+
+</dd>
+
+<dt><code class="api-fname">description</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">args</code><code class="api-ftype">Record&lt;string, VgiDataType&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Positional args = the per-row INPUT COLUMNS (real typed args on the wire,
+no synthetic TABLE placeholder). Read from `batch` by declared name in
+process(); NOT surfaced on `params.args`.
+
+</dd>
+
+<dt><code class="api-fname">varargs</code><code class="api-ftype">&#123; name: string; type: VgiDataType; doc?: string &#125;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Trailing VARARGS input columns: the per-row input is N columns of the
+declared type. A varargs blended function has no per-column declared
+names (the C++ bind names them col0..colN-1), so process() reads the
+columns POSITIONALLY off `batch`.
+
+</dd>
+
+<dt><code class="api-fname">namedArgs</code><code class="api-ftype">Record&lt;string, VgiDataType&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Named (string-position) args stay bind-time scalars on `params.args`.
+
+</dd>
+
+<dt><code class="api-fname">argDefaults</code><code class="api-ftype">Record&lt;string, any&gt;</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">argDocs</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Per-argument descriptions keyed by arg name (surfaced as `vgi_doc`).
+
+</dd>
+
+<dt><code class="api-fname">projectionPushdown</code><code class="api-ftype">boolean</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">filterPushdown</code><code class="api-ftype">boolean</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">autoApplyFilters</code><code class="api-ftype">boolean</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">stability</code><code class="api-ftype">FunctionStability</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">examples</code><code class="api-ftype">FunctionExample[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">categories</code><code class="api-ftype">string[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">maxWorkers</code><code class="api-ftype">number</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">requiredSettings</code><code class="api-ftype">string[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">requiredSecrets</code><code class="api-ftype">string[]</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-member">
+
+<a id="RowTransformProcessParams"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">type</span> `RowTransformProcessParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/table-in-out.ts#L600" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`export type RowTransformProcessParams<TArgs = Record<string, any>> =
+  TableInOutProcessParams<TArgs>;`} />
+
+<p class="api-section">Description</p>
+
+Process params for a blended row-transform function. `args` carries only the
+NAMED (bind-time scalar) options — the positional args are the per-row input
+columns, read from `batch` in process() (by declared name for fixed args,
+positionally for varargs).
+
+</div>
+
+<div class="api-class">
+
+<a id="TableInOutBindParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableInOutBindParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/table-in-out.ts#L39" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface TableInOutBindParams&lt;TArgs = Record&lt;string, any&gt;&gt;</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">args</code><code class="api-ftype">TArgs</code></dt>
+
+<dt><code class="api-fname">bindCall</code><code class="api-ftype">BindRequest</code></dt>
+
+<dt><code class="api-fname">settings</code><code class="api-ftype">Record&lt;string, any&gt;</code></dt>
+
+<dt><code class="api-fname">secrets</code><code class="api-ftype">Record&lt;string, Record&lt;string, any&gt;&gt;</code></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="TableInOutConfig"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableInOutConfig`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/table-in-out.ts#L84" target="_blank" rel="noopener">source</a>
+
+<Code lang="ts" code={`export interface TableInOutConfig<
+  TArgs = Record<string, any>,
+  TState = null,
+>`} />
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">name</code><code class="api-ftype">string</code></dt>
+
+<dt><code class="api-fname">description</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">args</code><code class="api-ftype">Record&lt;string, VgiDataType&gt;</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">namedArgs</code><code class="api-ftype">Record&lt;string, VgiDataType&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Named arguments (optional, DuckDB passes by name)
+
+</dd>
+
+<dt><code class="api-fname">argDefaults</code><code class="api-ftype">Record&lt;string, any&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Argument defaults
+
+</dd>
+
+<dt><code class="api-fname">onBind</code><code class="api-ftype">(params: TableInOutBindParams&lt;TArgs&gt;) =&gt; | &#123; outputSchema: VgiSchema; opaqueData?: Uint8Array &#125; | Promise&lt;&#123; outputSchema: VgiSchema; opaqueData?: Uint8Array &#125;&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Bind: default passes through input schema. May be async.
+
+</dd>
+
+<dt><code class="api-fname">onInit</code><code class="api-ftype">(params: &#123; args: TArgs; initCall: InitRequest; outputSchema: VgiSchema; executionId: Uint8Array; &#125;) =&gt; GlobalInitResponse | Promise&lt;GlobalInitResponse&gt;</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">initialState</code><code class="api-ftype">(params: TableInOutProcessParams&lt;TArgs&gt;) =&gt; TState</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">process</code><code class="api-ftype">( params: TableInOutProcessParams&lt;TArgs&gt;, state: TState, batch: VgiBatch, out: OutputCollector ) =&gt; void | Promise&lt;void&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Process: transform input batch, emit output via out
+
+</dd>
+
+<dt><code class="api-fname">finalize</code><code class="api-ftype">( params: TableInOutProcessParams&lt;TArgs&gt;, states: TState[] ) =&gt; VgiBatch[] | Promise&lt;VgiBatch[]&gt;</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Finalize: emit final batches after all input processed.
+Receives all worker states collected from storage (matches Python's finish(params, states)).
+
+</dd>
+
+<dt><code class="api-fname">projectionPushdown</code><code class="api-ftype">boolean</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">filterPushdown</code><code class="api-ftype">boolean</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">autoApplyFilters</code><code class="api-ftype">boolean</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">stability</code><code class="api-ftype">FunctionStability</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">examples</code><code class="api-ftype">FunctionExample[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">categories</code><code class="api-ftype">string[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">tags</code><code class="api-ftype">Record&lt;string, string&gt;</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">maxWorkers</code><code class="api-ftype">number</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">requiredSettings</code><code class="api-ftype">string[]</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">requiredSecrets</code><code class="api-ftype">string[]</code><span class="api-fopt">optional</span></dt>
+
+</dl>
+
+</div>
+
+<div class="api-class">
+
+<a id="TableInOutProcessParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableInOutProcessParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-typescript/blob/main/src/functions/table-in-out.ts#L46" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export interface TableInOutProcessParams&lt;TArgs = Record&lt;string, any&gt;&gt;</code></pre>
+
+<p class="api-section">Fields</p>
+
+<dl class="api-fields">
+
+<dt><code class="api-fname">args</code><code class="api-ftype">TArgs</code></dt>
+
+<dt><code class="api-fname">initCall</code><code class="api-ftype">InitRequest</code></dt>
+
+<dt><code class="api-fname">initResponse</code><code class="api-ftype">GlobalInitResponse</code></dt>
+
+<dt><code class="api-fname">outputSchema</code><code class="api-ftype">VgiSchema</code></dt>
+
+<dt><code class="api-fname">settings</code><code class="api-ftype">Record&lt;string, any&gt;</code></dt>
+
+<dt><code class="api-fname">secrets</code><code class="api-ftype">Record&lt;string, Record&lt;string, any&gt;&gt;</code></dt>
+
+<dt><code class="api-fname">storage</code><code class="api-ftype">BoundStorage</code></dt>
+<dd>
+
+Shared storage for cross-phase and cross-worker data (SQLite-backed).
+
+</dd>
+
+<dt><code class="api-fname">pushdownFilters</code><code class="api-ftype">PushdownFilters</code><span class="api-fopt">optional</span></dt>
+
+<dt><code class="api-fname">substreamId</code><code class="api-ftype">Uint8Array | null</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Stable client-minted id for this streaming table-in-out substream.
+Present (identical across init / every process() / finalize) when the
+client fanned this function out across per-substream workers; use it to
+key per-substream accumulated state in shared storage so a finalize()
+that lands on a different HTTP backend than the process() calls still
+finds it. `null`/`undefined` for the serial path or an old client.
+Mirrors vgi-python's `ProcessParams.substream_id`.
+
+</dd>
+
+<dt><code class="api-fname">ifNoneMatch</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+Conditional-revalidation validator (exchange-mode result cache): the
+client holds a stale cached result for THIS input unit and asks the
+worker to confirm freshness cheaply. When set, process() may answer with
+a 0-row `cacheControlMetadata({ notModified: true, ... })` batch instead
+of recomputing. Rides the input batch's custom metadata (attached by the
+C++ WriteInputBatch). Undefined on a normal call.
+
+</dd>
+
+<dt><code class="api-fname">ifModifiedSince</code><code class="api-ftype">string</code><span class="api-fopt">optional</span></dt>
+<dd>
+
+RFC 3339 Last-Modified validator for conditional revalidation.
+Companion to \{@link ifNoneMatch\}. Undefined on a normal call.
+
+</dd>
+
+</dl>
+
+</div>

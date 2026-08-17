@@ -1,0 +1,156 @@
+---
+title: Persist state across workers
+description: "Cross-process state for Go VGI workers — the execution and attach scopes, the storage primitives, and how to pick a backend."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+How functions that span **multiple worker processes** — buffering functions, distributed aggregates,
+COPY writers — share state across them.
+
+## Prerequisites
+
+- A [buffering function](/vgi/docs/go/how-to/function-patterns/#buffering) or aggregate.
+
+<InfoTip label="DuckDB storage?" title="Not table storage">
+This is worker state storage, not DuckDB table storage. DuckDB still owns query execution; VGI uses
+this store for bytes that must survive across worker processes or lifecycle phases — partial
+aggregate state, buffered batches, COPY shards.
+</InfoTip>
+
+## Three kinds of state — don't confuse them
+
+Go's SDK draws the line more sharply than the concept does, because each kind lives somewhere
+different:
+
+<table>
+<thead>
+<tr><th>Kind</th><th>Where it lives</th><th>Lifetime</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Scan state</strong> — a generator's cursor</td><td>The <code>S</code> type parameter of <code>TypedTableFunc[S]</code>, gob-encoded into the stream token</td><td>One scan</td></tr>
+<tr><td><strong>Execution storage</strong> — <code>params.Storage</code></td><td><code>ExecutionStorage</code>, scoped by <code>execution_id</code></td><td>One query</td></tr>
+<tr><td><strong>Attach storage</strong> — <code>params.Storage.AttachStore(scope)</code></td><td><code>AttachStore</code>, scoped by the attached catalog</td><td>Across queries, until <code>DETACH</code></td></tr>
+</tbody>
+</table>
+
+Picking the wrong scope is a quiet bug: attach-scoped state shared between two concurrent queries
+will interleave, and execution-scoped state vanishes before the next query can read it.
+
+## Execution storage
+
+`params.Storage` is what a buffering function's phases share. Its primitives are an **append-log** and
+a **queue**:
+
+<table>
+<thead>
+<tr><th>Method</th><th>Use it for</th></tr>
+</thead>
+<tbody>
+<tr><td><code>StateAppend(key, value)</code></td><td>Append one entry; returns its index. The sink's tool.</td></tr>
+<tr><td><code>StateLogScan(key, afterID, limit)</code></td><td>Read the log back in order. <code>-1, 0</code> means "from the beginning, no limit".</td></tr>
+<tr><td><code>StateLogClear()</code></td><td>Drop everything under this execution.</td></tr>
+<tr><td><code>QueuePush</code> / <code>QueuePop</code></td><td>Hand work items between worker processes.</td></tr>
+<tr><td><code>QueuePushBatches</code> / <code>QueuePopBatch</code></td><td>The same, for Arrow batches.</td></tr>
+</tbody>
+</table>
+
+<CodeBlock code={`// Sink: append a partial. Runs per batch, in parallel across DuckDB threads.
+if _, err := params.Storage.StateAppend(countsKey, buf[:]); err != nil {
+    return nil, err
+}
+
+// Source: read every partial back and reduce.
+entries, err := params.Storage.StateLogScan(countsKey, -1, 0)`} lang="go" tryable={false} />
+
+<Callout type="warning" title="Append, don't read-modify-write">
+The sink runs in parallel. `StateAppend` is a log, so concurrent appends cannot lose each other the
+way a get-then-put would. Reduce in `Combine` or `Finalize`, where you are alone.
+</Callout>
+
+## Attach storage
+
+`AttachStore` is a key–value store scoped to the attached catalog, so it outlives a query. Reach it
+through `params.Storage.AttachStore(scope)`:
+
+<CodeBlock code={`// In Process, open it from the scan's attach scope:
+store, err := params.Storage.AttachStore(params.AttachScope)
+if err != nil {
+    return err
+}
+if err := store.Put([]byte("cursor"), []byte("page"), []byte("42")); err != nil {
+    return err
+}`} lang="go" tryable={false} />
+
+`BindParams` carries a shorthand — `params.AttachStore()` — so bind-time code that only needs the
+current catalog's scope can skip the argument. `ProcessParams` has no such method; pass
+`params.AttachScope` explicitly there.
+
+It offers `Put` / `Get` / `Scan` / `Drain`, range and namespace deletes, and **atomic counters**
+(`CounterAdd`, `CounterGet`, `CounterSet`, `CounterDelete`).
+
+<Callout type="note" title="Counters are attach-scoped, not execution-scoped">
+`CounterAdd` is genuinely atomic and looks like the obvious tool for a parallel sink — but it lives on
+`AttachStore`, so two concurrent scans of the same catalog would share one counter and corrupt each
+other's totals. For per-query accumulation use the execution-scoped append-log instead; that is what
+the [buffering example](/vgi/docs/go/how-to/function-patterns/#buffering) does.
+</Callout>
+
+## Values are bytes
+
+Everything stored is `[]byte`, so serialize first. For Arrow payloads the SDK provides
+`vgi.SerializeRecordBatch` and `vgi.DeserializeRecordBatch`; for small scalars, pack them yourself:
+
+<CodeBlock code={`var buf [8]byte
+binary.LittleEndian.PutUint64(buf[:], uint64(batch.NumRows()))`} lang="go" tryable={false} />
+
+The sink and the source may run in different processes, so a mismatch between how you write and how
+you read is invisible until a query returns a wrong answer. Keep the encoding in one place.
+
+## Choosing a backend
+
+By default a worker always uses **local SQLite**, at the per-user state path, with no configuration —
+every worker in the deployment shares one WAL-mode database. That is the whole story unless you ask
+for something else.
+
+<Callout type="warning" title="Env-driven selection is opt-in, and costs one line">
+`vgi.NewWorker` does **not** read `VGI_WORKER_SHARED_STORAGE`. Setting that variable against a worker
+built the obvious way changes nothing — it is honoured only by the `resolve` sub-package, which you
+wire in yourself:
+
+<CodeBlock code={`import "github.com/Query-farm/vgi-go/vgi/storage/resolve"
+
+storage, err := resolve.FromEnv()
+if err != nil {
+    log.Fatalf("resolve storage backend: %v", err)
+}
+w := vgi.NewWorker(
+    vgi.WithFunctionStorage(storage),
+    vgi.WithCatalogName("acme"),
+)`} lang="go" tryable={false} />
+
+`resolve` lives in its own sub-package deliberately: it imports every backend, and a worker that
+doesn't need env-driven selection shouldn't pay for those imports.
+</Callout>
+
+With `resolve` wired in, `VGI_WORKER_SHARED_STORAGE` accepts:
+
+<table>
+<thead>
+<tr><th>Value</th><th>Backend</th></tr>
+</thead>
+<tbody>
+<tr><td><code>sqlite</code> (default, or unset)</td><td>Local SQLite at the per-user state path.</td></tr>
+<tr><td><code>memory</code></td><td>In-process SQLite at <code>:memory:</code>. Process-local with no cross-process coordination — single-process only, so <strong>not</strong> usable for a buffering function spanning workers.</td></tr>
+<tr><td><code>cloudflare-do</code></td><td>Cloudflare Worker + Durable Object. Requires <code>VGI_CF_DO_URL</code>, optionally <code>VGI_CF_DO_TOKEN</code>.</td></tr>
+</tbody>
+</table>
+
+You can also skip the env var entirely and pass a backend directly with `vgi.WithFunctionStorage`.
+
+## Next steps
+
+- **The shape that needs this most** → [Function patterns → Buffering](/vgi/docs/go/how-to/function-patterns/#buffering).
+- **Exact methods** → [State storage](/vgi/docs/go/api/storage/).

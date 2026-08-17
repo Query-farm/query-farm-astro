@@ -1,0 +1,291 @@
+---
+title: Function patterns
+description: "The five VGI function shapes in Go — scalar, table, table-in-out, aggregate, buffering — each with a complete, runnable worker."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryIO from '../../../../../../components/docs/QueryIO.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import scalarSrc from '../../../../../../examples/vgi-go/calcscalar.go?raw';
+import calcSrc from '../../../../../../examples/vgi-go/calc.go?raw';
+import filterSrc from '../../../../../../examples/vgi-go/filter.go?raw';
+import sumSrc from '../../../../../../examples/vgi-go/sum.go?raw';
+import rowCountSrc from '../../../../../../examples/vgi-go/rowcount.go?raw';
+
+Each of the five VGI function shapes in Go, with a complete, runnable worker for each — so you can
+find the shape that fits your problem. (Do the [tutorial](/vgi/docs/go/tutorial/scalar/) first.)
+
+<InfoTip label="Before you run these" title="Session setup">
+Each section assumes you're in a **[Haybarn](/haybarn)** shell that has loaded the extension once
+with `INSTALL vgi FROM community;` then `LOAD vgi;`, and that you've built the worker into the binary
+its `ATTACH` names:
+
+<CodeBlock code={`go mod tidy
+go build -o calcscalar .      # scalar
+go build -o calc .            # table (and the scalar again)
+go build -o filterworker .    # table-in-out
+go build -o sumworker .       # aggregate
+go build -o rowcountworker .  # buffering`} lang="bash" tryable={false} />
+
+Each worker is its own `main` package, so build them from their own directories. `LOCATION` is
+resolved relative to the directory the engine was started in.
+</InfoTip>
+
+## Which shape do I need?
+
+<div class="kind-gallery">
+<a class="kind-gallery__card kind-gallery--scalar" href="#scalar"><img src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><span class="kind-gallery__name">Scalar</span><code class="kind-gallery__formula">1 row → 1 value</code></a>
+<a class="kind-gallery__card kind-gallery--table" href="#table"><img src="/vgi/docs/assets/kinds/table.svg" alt="table shape" /><span class="kind-gallery__name">Table</span><code class="kind-gallery__formula">args → N rows</code></a>
+<a class="kind-gallery__card kind-gallery--table-in-out" href="#table-in-out"><img src="/vgi/docs/assets/kinds/table-in-out.svg" alt="table-in-out shape" /><span class="kind-gallery__name">Table-in-out</span><code class="kind-gallery__formula">N rows → M rows</code></a>
+<a class="kind-gallery__card kind-gallery--aggregate" href="#aggregate"><img src="/vgi/docs/assets/kinds/aggregate.svg" alt="aggregate shape" /><span class="kind-gallery__name">Aggregate</span><code class="kind-gallery__formula">N rows → 1 value</code></a>
+<a class="kind-gallery__card kind-gallery--buffering" href="#buffering"><img src="/vgi/docs/assets/kinds/buffering.svg" alt="buffering shape" /><span class="kind-gallery__name">Buffering</span><code class="kind-gallery__formula">stream → [state] → stream</code></a>
+</div>
+
+<table>
+<thead>
+<tr><th>Pattern</th><th>Go interface</th><th>Use it when…</th><th>SQL</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Scalar</strong></td><td><code>ScalarFunction</code></td><td>you transform each row independently</td><td><code>SELECT f(col) FROM t</code></td></tr>
+<tr><td><strong>Table</strong></td><td><code>TableFunction</code></td><td>you generate rows from arguments</td><td><code>SELECT * FROM f(args)</code></td></tr>
+<tr><td><strong>Table-in-out</strong></td><td><code>TableInOutFunction</code></td><td>you reshape or filter a streamed relation</td><td><code>SELECT * FROM f((SELECT …))</code></td></tr>
+<tr><td><strong>Aggregate</strong></td><td><code>AggregateFunction</code></td><td>you accumulate per <code>GROUP BY</code> group</td><td><code>SELECT f(col) FROM t GROUP BY k</code></td></tr>
+<tr><td><strong>Buffering</strong></td><td><code>TableBufferingFunction</code></td><td>you must see <em>every</em> row first (sort, top-k, full reduction)</td><td><code>SELECT * FROM f((SELECT …))</code></td></tr>
+</tbody>
+</table>
+
+<Callout type="note" title="Your function value is shared across calls">
+A function is registered once and used for every call, so treat the receiver as immutable — the
+examples all use an empty struct for that reason. Anything mutable belongs in the per-scan state
+(`NewState`) or in `params.Storage`, not in a field on your type. Under the Unix, TCP and HTTP
+transports the worker serves concurrent connections; stdio is serial, which is exactly why a data
+race here can survive local testing and appear only in deployment.
+</Callout>
+
+<Callout type="note" title="Typed adapters vs. raw interfaces">
+Three shapes ship a `Typed*` variant — `TypedScalarFunc`, `TypedTableFunc`, `TypedTableInOutFunc` —
+adapted by `AsScalarFunction` / `AsTableFunction` / `AsTableInOutFunction`. Note what each is
+parameterised by: `TypedScalarFunc[A]` takes your **arguments** struct (a scalar has no state at all),
+while `TypedTableFunc[S]` and `TypedTableInOutFunc[S]` take your **state**. Both state-carrying
+adapters gob-register it for you; only `AsTableFunction` additionally *validates* that it is
+encodable at registration. Aggregates and buffering functions implement their interface directly.
+</Callout>
+
+## Scalar
+
+<div class="kind-banner kind-banner--scalar"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/scalar.svg" alt="scalar shape" /><div class="kind-banner__text"><code class="kind-banner__formula">1 row → 1 value</code><p class="kind-banner__desc">Runs on each row independently and returns a single value — a pure per-row transform.</p></div></div>
+
+One row in, one row out. `MapColumn` walks the input column and builds the output, propagating nulls;
+the row count out must equal the row count in.
+
+<Collapsible summary="calcscalar/main.go">
+<CodeBlock code={scalarSrc} lang="go" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION './calcscalar');
+SELECT calc.double(n) FROM (VALUES (1), (2), (3)) AS t(n);`} lang="sql" tryable={false} />
+
+<QueryIO inColumns={["n"]} inRows={[[1], [2], [3]]} outColumns={["double(n)"]} outRows={[[2], [4], [6]]} />
+
+## Table
+
+<div class="kind-banner kind-banner--table"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table.svg" alt="table shape" /><div class="kind-banner__text"><code class="kind-banner__formula">args → N rows</code><p class="kind-banner__desc">A table-valued source: scalar arguments in, a whole set of rows out.</p></div></div>
+
+Generate rows from arguments, with no input relation. Arguments are read once in `NewState`;
+`Process` is then called repeatedly until the state reports nothing remains.
+
+<Collapsible summary="calc/main.go">
+<CodeBlock code={calcSrc} lang="go" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION './calc');
+SELECT * FROM calc.series(3);`} lang="sql" tryable={false} />
+
+<QueryIO inColumns={["count"]} inRows={[[3]]} outColumns={["n"]} outRows={[[0], [1], [2]]} />
+
+## Table-in-out
+
+<div class="kind-banner kind-banner--table-in-out"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table-in-out.svg" alt="table-in-out shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → M rows</code><p class="kind-banner__desc">Consumes a relation and streams a transformed relation back, batch by batch.</p></div></div>
+
+Stream an input relation through, emitting per batch. Memory stays flat however large the scan is,
+because nothing is held back.
+
+<Collapsible summary="filter/main.go">
+<CodeBlock code={filterSrc} lang="go" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'filters' (TYPE vgi, LOCATION './filterworker');
+SELECT * FROM filters.filter_positive((SELECT * FROM (VALUES (-2), (5), (0), (9), (-1)) AS t(value)));`} lang="sql" tryable={false} />
+
+<QueryIO inColumns={["value"]} inRows={[[-2], [5], [0], [9], [-1]]} outColumns={["value"]} outRows={[[5], [9]]} />
+
+<Callout type="warning" title="A TABLE argument needs an explicit ArgSpec">
+`vgi:"..."` struct tags bind **scalar** values into fields, and a relation is not a value — it
+arrives as the stream of batches `Process` is called with. So a table argument is written out
+longhand:
+
+<CodeBlock code={`func (*FilterPositiveFn) ArgumentSpecs() []vgi.ArgSpec {
+    return []vgi.ArgSpec{
+        {Name: "data", Position: 0, ArrowType: "table", Doc: "Rows to filter"},
+    }
+}`} lang="go" tryable={false} />
+
+Miss this and the function is un-callable rather than subtly wrong, which at least fails loudly.
+</Callout>
+
+## Aggregate
+
+<div class="kind-banner kind-banner--aggregate"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/aggregate.svg" alt="aggregate shape" /><div class="kind-banner__text"><code class="kind-banner__formula">N rows → 1 value</code><p class="kind-banner__desc">Folds many rows down into a single value per group.</p></div></div>
+
+Accumulate rows into per-group state, then emit one row per group. The four-phase split —
+`NewState`, `Update`, `Combine`, `Finalize` — is what lets DuckDB run the accumulation in parallel
+and merge the partials afterwards.
+
+<Collapsible summary="sum/main.go">
+<CodeBlock code={sumSrc} lang="go" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'agg' (TYPE vgi, LOCATION './sumworker');
+SELECT category, agg.vgi_sum(value) AS total
+FROM (VALUES (0, 10), (0, 5), (1, 1), (1, 2), (1, 3)) AS t(category, value)
+GROUP BY category ORDER BY category;`} lang="sql" tryable={false} />
+
+<QueryIO inColumns={["category", "value"]} inRows={[[0, 10], [0, 5], [1, 1], [1, 2], [1, 3]]} outColumns={["category", "total"]} outRows={[[0, 15], [1, 6]]} />
+
+<Callout type="note" title="State is gob-encoded between phases">
+`Update`, `Combine` and `Finalize` may run in different processes, so per-group state round-trips
+through gob. Since **v0.22.0** `RegisterAggregate` registers the concrete type for you, by asking
+`NewState` for one — so keep state a plain struct of **exported** fields and it works.
+
+Two cases still need the explicit line the example carries:
+
+- **v0.21.0 and earlier**, where nothing registered it and an unregistered state failed on the first
+  `GROUP BY` with `gob: type not registered for interface`.
+- A `NewState` that dereferences its params, which the SDK cannot call speculatively.
+
+`gob.Register(&MyState{})` in an `init()` covers both and is a no-op otherwise, so it is safe to keep
+regardless of the version you target.
+</Callout>
+
+<Callout type="note" title="Create a group only when a row contributes">
+`Update` calls `vgi.EnsureState` **after** the NULL check, not before. That is what makes `SUM` over
+an all-NULL group return `NULL` rather than `0`: the group is never created, never reaches storage,
+and `Finalize` emits a null for it. Creating it eagerly quietly changes the SQL semantics.
+</Callout>
+
+## Buffering
+
+<div class="kind-banner kind-banner--buffering"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/buffering.svg" alt="buffering shape" /><div class="kind-banner__text"><code class="kind-banner__formula">stream → [state] → stream</code><p class="kind-banner__desc">Holds every input row in state before emitting — the basis for sorts, top-k, and full-stream reductions.</p></div></div>
+
+When output depends on the **whole** input — a global sort, top-k, a full reduction — use a buffering
+function. It runs in three phases: `Process` (the **sink**, per batch and parallel), `Combine` (once,
+on the coordinator), and `Finalize` (the **source**). Because the phases can run in different worker
+processes, state lives in `params.Storage`, scoped to the execution.
+
+<Collapsible summary="rowcount/main.go">
+<CodeBlock code={rowCountSrc} lang="go" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'buffers' (TYPE vgi, LOCATION './rowcountworker');
+SELECT * FROM buffers.row_count((SELECT * FROM (VALUES (1), (2), (3), (4), (5)) AS t(x)));`} lang="sql" tryable={false} />
+
+<QueryIO inColumns={["x"]} inRows={[[1], [2], [3], [4], [5]]} outColumns={["count"]} outRows={[[5]]} />
+
+<Callout type="note" title="Append, don't read-modify-write">
+The sink runs in parallel across DuckDB threads. `StateAppend` is a log, so concurrent appends can't
+lose each other the way a get-then-put would; `Finalize` sums the log. Counters exist too, but on
+`AttachStore` — they are scoped to the *attach*, not to one execution, so they are the wrong tool for
+per-query accumulation.
+</Callout>
+
+<Callout type="info" title="Buffering vs. table-in-out">
+Both consume a relation, but a **table-in-out** function emits *per input batch* and never holds the
+whole input — use it for streaming transforms. Reach for **buffering** only when output genuinely
+depends on every row. One observable difference: an empty input yields **no rows** from a buffering
+function rather than a zero — with nothing to sink, the source phase never runs.
+</Callout>
+
+## Parallelism and `OnInit`
+
+`AsTableFunction` and `AsTableInOutFunction` give your function a default `OnInit` that returns
+`MaxWorkers: 1`. That is why every example above is correct as written: DuckDB runs one scan thread,
+so one `NewState` and one `Process` loop.
+
+To go parallel, implement the optional `OnIniter` interface — the adapter detects it with a type
+assertion and uses it instead of the default:
+
+<CodeBlock code={`func (*SeriesFn) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
+    return &vgi.GlobalInitResponse{MaxWorkers: 4}, nil
+}`} lang="go" tryable={false} />
+
+<Callout type="warning" title="Raising MaxWorkers without partitioning multiplies your output">
+Each parallel scan thread gets its **own** `NewState` and its own `Process` loop. `series` builds its
+cursor from an argument, so four workers each generate the whole range:
+
+<CodeBlock code={`SELECT count(*) AS rows, sum(n) AS total FROM calc.series(10);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["rows", "total"]} rows={[[40, 180]]} />
+
+Forty rows, not ten. Nothing errors — the query just quadruples. `MaxWorkers: 1` is a safe default
+precisely because it is the only setting that needs no coordination.
+</Callout>
+
+The fix is to hand out work rather than let every worker derive it. `params.Storage` is scoped to the
+**execution** and shared by all of its workers, and `QueuePush`/`QueuePop` are the primitive for
+exactly this: `OnInit` runs once and pushes the shards, then each worker pops until the queue is
+empty.
+
+<CodeBlock code={`func (*SeriesFn) OnInit(params *vgi.InitParams) (*vgi.GlobalInitResponse, error) {
+    var args seriesArgs
+    if err := vgi.BindArgs(params.Args, &args); err != nil {
+        return nil, err
+    }
+    var items [][]byte
+    for start := int64(0); start < args.Count; start += shardSize {
+        items = append(items, encodeShard(start, min(start+shardSize, args.Count)))
+    }
+    if err := params.Storage.QueuePush(items); err != nil {
+        return nil, err
+    }
+    return &vgi.GlobalInitResponse{MaxWorkers: 4}, nil
+}
+
+func (*SeriesFn) Process(_ context.Context, params *vgi.ProcessParams,
+    state *seriesState, out *vgirpc.OutputCollector,
+) error {
+    if state.exhausted() {
+        item, err := params.Storage.QueuePop()
+        if err != nil {
+            return err
+        }
+        if item == nil {
+            return out.Finish()   // no shards left — this worker is done
+        }
+        state.load(item)
+    }
+    ...
+}`} lang="go" tryable={false} />
+
+<QueryResult columns={["rows", "total"]} rows={[[10, 45]]} />
+
+Ten rows again, now produced by four workers. `QueuePop` returning `nil` is how a worker learns the
+scan is finished, which is why the pop lives in `Process` rather than `NewState` — a worker that
+claimed one shard up front would drop the rest if DuckDB started fewer threads than there are shards.
+
+<InfoTip label="Also on InitParams" title="What else OnInit sees">
+`InitParams` carries the optimizer's hints — `OrderByHint` (ORDER BY + LIMIT pushdown) and
+`TableSampleHint` — plus `Storage` and the `ExecutionID`. Returning `MaxWorkers: 0` means "you pick":
+the framework uses 4 for a table function and 1 for a table-in-out. Secondary inits skip `OnInit`
+entirely and reuse the primary's execution ID, so anything the workers need must go through `Storage`
+or the response's `OpaqueData`.
+</InfoTip>
+
+## Next steps
+
+- **The guided build** → [1. Scalar function](/vgi/docs/go/tutorial/scalar/) ·
+  [2. Table function](/vgi/docs/go/tutorial/table/).
+- **When each callback fires** → [Function lifecycle](/vgi/docs/concepts/lifecycle/).
+- **Exact contracts** → [Package overview](/vgi/docs/go/api/).

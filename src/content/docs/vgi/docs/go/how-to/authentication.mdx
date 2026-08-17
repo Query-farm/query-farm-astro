@@ -1,0 +1,146 @@
+---
+title: Authenticate callers
+description: "Require authentication for a Go VGI worker served over HTTP — bearer tokens, mTLS, JWT/OAuth — and read the caller's identity inside your functions."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+Require authentication for a worker served over HTTP, and read the caller's identity inside your
+functions.
+
+<Callout type="warning" title="Authentication is an HTTP-only concern">
+Auth applies **only to the HTTP transport**. A stdio or Unix-socket worker is launched by the engine
+and runs co-located and trusted — there is no remote caller to authenticate — so it always sees
+`vgirpc.Anonymous()`. Reach for this page once you
+[serve over HTTP](/vgi/docs/go/how-to/serve-http/).
+</Callout>
+
+<table>
+<thead>
+<tr><th>Transport</th><th>Auth behaviour</th></tr>
+</thead>
+<tbody>
+<tr><td>HTTP, with <code>SetAuthenticate</code></td><td>Validated per request; the caller's <code>*vgirpc.AuthContext</code> reaches your functions</td></tr>
+<tr><td>HTTP, without it</td><td>Every request anonymous</td></tr>
+<tr><td>stdio / Unix socket</td><td>Always anonymous (co-located, trusted)</td></tr>
+<tr><td>TCP</td><td>Always anonymous — <strong>and not trusted.</strong> Raw Arrow IPC carries no auth and no encryption.</td></tr>
+</tbody>
+</table>
+
+## Wire it up
+
+One method, taking a `vgirpc.AuthenticateFunc` — a plain
+`func(*http.Request) (*vgirpc.AuthContext, error)`:
+
+<CodeBlock code={`w := vgi.NewWorker(vgi.WithCatalogName("acme"))
+w.RegisterScalar(NewDouble())
+
+w.SetAuthenticate(vgirpc.BearerAuthenticateStatic(map[string]*vgirpc.AuthContext{
+    os.Getenv("ACME_TOKEN"): {Domain: "bearer", Authenticated: true, Principal: "alice"},
+}))
+
+if err := w.RunHttp("127.0.0.1:8080"); err != nil {
+    log.Fatal(err)
+}`} lang="go" tryable={false} />
+
+`BearerAuthenticateStatic` compares tokens with `subtle.ConstantTimeCompare` against every entry and
+deliberately does not short-circuit on a match, so response timing does not leak which bytes of a
+guessed token were right. Prefer it to a map lookup of your own.
+
+For anything else, `BearerAuthenticate(validate)` hands you the raw token and leaves validation to
+you — a database lookup, an introspection call, whatever your scheme needs:
+
+<CodeBlock code={`w.SetAuthenticate(vgirpc.BearerAuthenticate(func(token string) (*vgirpc.AuthContext, error) {
+    principal, err := lookUpToken(token)
+    if err != nil {
+        return nil, &vgirpc.RpcError{Type: "ValueError", Message: "Unknown bearer token"}
+    }
+    return &vgirpc.AuthContext{Domain: "bearer", Authenticated: true, Principal: principal}, nil
+}))`} lang="go" tryable={false} />
+
+<InfoTip label="Error type decides the status code" title="How a rejection becomes a 401">
+Return an `*vgirpc.RpcError` with `Type` `"ValueError"` or `"PermissionError"` and the request gets
+**HTTP 401**. Any other error is a **500**. So reach for `RpcError` when the *caller* is wrong, and a
+plain error when *you* are — a JWKS endpoint that won't answer is a 500, not a 401.
+</InfoTip>
+
+`ChainAuthenticate(a, b, …)` tries each in order. A `ValueError` falls through to the next; a
+`PermissionError` or a non-`RpcError` stops the chain immediately. That asymmetry is the useful part:
+"this isn't my scheme" keeps going, "this is my scheme and you failed it" does not.
+
+## Read the caller in your functions
+
+The resolved context is on both `BindParams.Auth` and `ProcessParams.Auth`:
+
+<CodeBlock code={`func (*WhoAmIFn) Process(_ context.Context, params *vgi.ProcessParams,
+    state *whoState, out *vgirpc.OutputCollector,
+) error {
+    if err := params.Auth.RequireAuthenticated(); err != nil {
+        return err        // already a PermissionError — return it unwrapped
+    }
+    ...
+}`} lang="go" tryable={false} />
+
+`RequireAuthenticated` returns a `PermissionError` `RpcError` when the caller is anonymous. Return it
+as-is — [wrapping it with `%w` loses the type](/vgi/docs/go/how-to/errors/#typed-errors).
+
+`AuthContext` carries `Domain` (the scheme), `Authenticated`, `Principal`, and a `Claims`
+`map[string]any` for anything your validator extracted from the token.
+
+<Callout type="note" title="Check at bind, not just at process">
+`BindParams.Auth` means you can reject an unauthorised call once, before any data moves, rather than
+per batch. Bind is also where a claims-based check belongs — deciding *which rows* a principal may
+see is a filter you apply while scanning, but deciding whether they may call the function at all is a
+bind-time question.
+</Callout>
+
+## mTLS
+
+For client-certificate auth, `vgirpc` builds the `AuthenticateFunc` for you — pick the variant that
+matches how the certificate reaches the process:
+
+<table>
+<thead>
+<tr><th>Constructor</th><th>Use when</th></tr>
+</thead>
+<tbody>
+<tr><td><code>MtlsAuthenticate</code></td><td>The worker terminates TLS itself</td></tr>
+<tr><td><code>MtlsAuthenticateXfcc</code></td><td>A proxy terminates TLS and forwards the <code>x-forwarded-client-cert</code> header</td></tr>
+<tr><td><code>MtlsAuthenticateFingerprint</code></td><td>Identity is a pinned certificate fingerprint</td></tr>
+<tr><td><code>MtlsAuthenticateSubject</code></td><td>Identity is the certificate subject</td></tr>
+</tbody>
+</table>
+
+Each returns `(AuthenticateFunc, error)` — the error is configuration validation, so check it at
+startup rather than at request time.
+
+## OAuth and browser login
+
+Two more setters, both HTTP-only:
+
+- **`SetOAuthResourceMetadata`** publishes RFC 9728 Protected Resource Metadata at a well-known
+  endpoint and adds a `WWW-Authenticate` header to 401 responses, so a client can discover which
+  authorization server to talk to. Set `Resource`, `AuthorizationServers`, and — for clients that
+  need it — the `ClientID` extension.
+- **`SetOAuthPkce`** enables the browser-based PKCE login flow: the worker serves
+  `/_oauth/callback`, `/_oauth/logout` and a token-exchange proxy, and redirects unauthenticated
+  browser `GET`s to the authorization server.
+
+<Callout type="note" title="PKCE needs the other two, and says so">
+`RunHttp` refuses to start unless `SetAuthenticate` is set, `SetOAuthResourceMetadata` is set, and
+that metadata carries both a `ClientID` and at least one `AuthorizationServers` entry — you get
+`oauth pkce: vgirpc: SetOAuthPkce requires …` naming the missing piece. The order you call the three
+setters in doesn't matter; the worker applies them in dependency order at startup.
+</Callout>
+
+`CookieAuthenticate(inner, cookieName)` wraps an authenticator so a browser session cookie is
+accepted alongside the `Authorization` header — that is what makes the PKCE flow usable from a
+browser and from a CLI at the same time.
+
+## Next steps
+
+- **Stand up the HTTP service first** → [Serve over HTTP](/vgi/docs/go/how-to/serve-http/).
+- **Returning the rejection correctly** → [Report errors well](/vgi/docs/go/how-to/errors/).
+- **The transport's own auth model** → [vgi-rpc](https://vgi-rpc.query.farm/).

@@ -1,0 +1,185 @@
+---
+title: Add a custom COPY format
+description: "Implement COPY ... FROM and COPY ... TO in a Go VGI worker — a remote format reader and a remote sink."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+How a Go worker registers its own `COPY` formats, so users can `COPY … FROM` a source your worker
+knows how to parse and `COPY … TO` a destination it knows how to write — a proprietary format, a
+remote API, or a custom sink.
+
+## Prerequisites
+
+- A catalog (see [Expose a catalog](/vgi/docs/go/how-to/catalogs/)) — COPY formats are catalog-level,
+  so they need an `ATTACH`.
+
+## The two interfaces
+
+Unlike the function shapes, COPY handlers are small enough to implement directly — there is no
+`Typed*` adapter.
+
+<table>
+<thead>
+<tr><th></th><th><code>CopyFromFunction</code></th><th><code>CopyToFunction</code></th></tr>
+</thead>
+<tbody>
+<tr><td>Always required</td><td colspan="2"><code>Name()</code>, <code>Metadata()</code>, <code>ArgumentSpecs()</code> — same as any function</td></tr>
+<tr><td>Names the format</td><td><code>CopyFromFormat() string</code></td><td><code>CopyToFormat() string</code></td></tr>
+<tr><td>Does the work</td><td><code>Read(ctx, params, path, expectedSchema, out)</code></td><td><code>Write(ctx, params, batch)</code> per batch, then <code>Close(ctx, params)</code> once</td></tr>
+<tr><td>Registered with</td><td><code>w.RegisterCopyFrom(f)</code></td><td><code>w.RegisterCopyTo(f)</code></td></tr>
+</tbody>
+</table>
+
+The COPY statement's **path is not an option** — it is handed to `Read` directly, and reached from
+the bind context for a writer. Everything else you declare as ordinary `vgi:"..."`-tagged options.
+
+## Reading: `COPY … FROM`
+
+<CodeBlock code={`// COPY options are named, so the tags carry no pos=. The source path is
+// supplied by the COPY statement, never as an option.
+type widgetOpts struct {
+    NullString string \`vgi:"doc=Token parsed as SQL NULL"\`
+    Delimiter  string \`vgi:"default=',',doc=Field separator"\`
+    SkipRows   int64  \`vgi:"default=0,doc=Leading lines to skip"\`
+}
+
+type ReadWidgets struct{}
+
+var _ vgi.CopyFromFunction = (*ReadWidgets)(nil)
+
+func (*ReadWidgets) Name() string           { return "read_widgets" }
+func (*ReadWidgets) CopyFromFormat() string { return "widgets" }
+
+func (*ReadWidgets) Metadata() vgi.FunctionMetadata {
+    return vgi.FunctionMetadata{Description: "Read the Acme widget format"}
+}
+
+func (*ReadWidgets) ArgumentSpecs() []vgi.ArgSpec {
+    return vgi.DeriveArgSpecs(widgetOpts{})
+}
+
+func (*ReadWidgets) Read(ctx context.Context, params *vgi.ProcessParams,
+    path string, expectedSchema *arrow.Schema, out *vgirpc.OutputCollector,
+) error {
+    batch, err := parseWidgets(path, expectedSchema, options)  // your parser
+    if err != nil {
+        return err
+    }
+    defer batch.Release()
+    return vgi.Emit(out, batch)
+}`} lang="go" tryable={false} />
+
+<CodeBlock code={`ATTACH 'acme' (TYPE vgi, LOCATION './acmeworker');
+CREATE TABLE targets (name VARCHAR, qty BIGINT);
+COPY targets FROM 'widgets://inventory' (FORMAT 'acme.widgets', skip_rows 1);`} lang="sql" tryable={false} />
+
+<Callout type="warning" title="Emit expectedSchema exactly">
+DuckDB inserts **no cast** between the scan and the INSERT. Your batches must match `expectedSchema`
+in both type and arity — the target table's schema is what defines it, which is why `Read` is handed
+the schema rather than choosing one.
+</Callout>
+
+<Callout type="warning" title="The FORMAT name is qualified by the attach alias">
+`CopyFromFormat()` returning `"widgets"` is *not* what users type. The extension namespaces formats
+per attach, so the SQL name is `'<attach-alias>.<format>'`. The bare name raises
+`Catalog Error: Copy Function with name widgets does not exist!`, helpfully suggesting the qualified
+one. Two workers may therefore both call their format `widgets` without colliding.
+</Callout>
+
+## Writing: `COPY … TO`
+
+A writer has two methods: `Write` runs once per input batch, fanned out across DuckDB's sink threads;
+`Close` runs **exactly once** and is where the destination is finished.
+
+`shardKey` below is any byte slice you choose — it names the append-log inside this execution's
+storage scope, which is already isolated per query.
+
+<CodeBlock code={`var shardKey = []byte("widget_shards")
+
+type WriteWidgets struct{}
+
+var _ vgi.CopyToFunction = (*WriteWidgets)(nil)
+
+func (*WriteWidgets) Name() string         { return "write_widgets" }
+func (*WriteWidgets) CopyToFormat() string { return "widgets_out" }
+
+func (*WriteWidgets) Metadata() vgi.FunctionMetadata {
+    return vgi.FunctionMetadata{Description: "Write the Acme widget format"}
+}
+
+func (*WriteWidgets) ArgumentSpecs() []vgi.ArgSpec {
+    return vgi.DeriveArgSpecs(writeOpts{})
+}
+
+func (*WriteWidgets) Write(ctx context.Context, params *vgi.ProcessParams, batch arrow.RecordBatch) error {
+    // Per batch, possibly parallel, possibly on another process.
+    data, err := vgi.SerializeRecordBatch(batch)
+    if err != nil {
+        return err
+    }
+    _, err = params.Storage.StateAppend(shardKey, data)
+    return err
+}
+
+func (*WriteWidgets) Close(ctx context.Context, params *vgi.ProcessParams) error {
+    // Once. Read the shards back and finish the destination.
+    entries, err := params.Storage.StateLogScan(shardKey, -1, 0)
+    if err != nil {
+        return err
+    }
+    // ... write and close the destination ...
+    return nil
+}`} lang="go" tryable={false} />
+
+<Callout type="note" title="Give each direction its own format name">
+The extension registers COPY functions **by name alone** — its registry has no direction component,
+and on a hit it silently skips the entry. Since **v0.22.0** the SDK catches that at registration
+rather than letting one handler vanish:
+
+<CodeBlock code={`vgi: COPY format "widgets" is registered by handler "read_widgets" (from) and
+handler "write_widgets" (to). The extension keys COPY functions by name alone and
+would silently drop one of them. Give each direction its own format name
+(e.g. "widgets" and "widgets_out"), or serve both from one handler`} lang="text" tryable={false} />
+
+Name them apart, as the SDK's own fixtures do: `example_lines` and `example_lines_out`. One name
+*can* serve both directions when a **single handler** does both — a format record carries one handler
+and one option schema — and the SDK merges that case to `direction="both"` automatically.
+
+On v0.21.0 and earlier there was no warning: the format appeared only in the `from` direction and
+`COPY … TO` failed later with *"Not implemented Error: COPY TO is not supported for FORMAT …"*.
+</Callout>
+
+<Callout type="warning" title="Write and Close may run in different processes">
+The destination must be **fully written and closed inside `Close`** — a writer that forgets leaves a
+silent partial file. And because the two can run in different worker processes (pool rotation, HTTP),
+any shard state `Close` needs must live in `params.Storage`, scoped by execution, or go to a
+destination that tolerates concurrent writers. Buffering on the receiver breaks silently under
+rotation, exactly as it does for a
+[buffering function](/vgi/docs/go/how-to/function-patterns/#buffering).
+</Callout>
+
+<InfoTip label="Optional interfaces" title="CopyFromCommenter">
+Implement `vgi.CopyFromCommenter` to attach free text to the format, surfaced alongside the option
+schema in `vgi_copy_formats()`.
+</InfoTip>
+
+## Discovery
+
+`vgi_copy_formats()` lists everything the attached catalogs advertise — both directions, each tagged
+with its `direction` — with the option schema, types, defaults and `doc` descriptions taken from your
+struct tags:
+
+<CodeBlock code={`SELECT catalog_name, format_name, direction, option_name, option_type
+FROM vgi_copy_formats();`} lang="sql" tryable={false} />
+
+This is also the fastest way to confirm a writer registered: if the `to` row is missing, the format
+name almost certainly collides with a reader's.
+
+## Next steps
+
+- **Where formats are advertised from** → [Expose a catalog](/vgi/docs/go/how-to/catalogs/).
+- **The storage `Close` reads its shards from** → [State storage](/vgi/docs/go/api/storage/).
+- **Exact contracts** → [COPY formats](/vgi/docs/go/api/copy/).

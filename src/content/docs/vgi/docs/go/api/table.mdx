@@ -1,0 +1,902 @@
+---
+title: "Table functions"
+description: "Row generators: arguments in, a whole relation out."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Row generators: arguments in, a whole relation out.
+
+</div>
+
+<div class="api-class">
+
+<a id="BatchState"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `BatchState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L20" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type BatchState struct {
+	Remaining	int64
+	BatchSize	int64
+	Index		int64
+}`} />
+
+<p class="api-section">Description</p>
+
+BatchState tracks the remaining/batchSize/index bookkeeping for table functions
+that generate a fixed number of rows in batches. Embed this in your state struct
+to use with GenerateBatch.
+
+Index is a public field so callbacks can read the current row offset.
+All fields are managed by GenerateBatch — do not modify them directly.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="NewBatchState"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `NewBatchState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L27" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func NewBatchState(count, batchSize int64) BatchState</code></pre>
+
+NewBatchState creates a BatchState with the given total count and batch size.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="CardinalityEstimator"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `CardinalityEstimator`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L50" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type CardinalityEstimator interface {
+	// Cardinality estimates the function's output row count for the optimizer.
+	Cardinality(params *BindParams) (*TableCardinality, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+CardinalityEstimator is an optional interface for TypedTableFunc
+implementations that can estimate their output row count for query optimization.
+
+</div>
+
+<div class="api-class">
+
+<a id="ColumnSet"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">type</span> `ColumnSet`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_helpers.go#L89" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>type ColumnSet map[string]struct&#123;&#125;</code></pre>
+
+<p class="api-section">Description</p>
+
+ColumnSet is a set of column names, typically used for projection pushdown.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="ColumnSet.Contains"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Contains`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_helpers.go#L92" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (cs ColumnSet) Contains(name string) bool</code></pre>
+
+Contains returns true if the named column is in the set.
+
+</div>
+<div class="api-member">
+
+<a id="ProjectedColumns"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `ProjectedColumns`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_helpers.go#L100" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func ProjectedColumns(projectionIDs []int32, fullSchema *arrow.Schema) ColumnSet</code></pre>
+
+ProjectedColumns returns the set of column names that should be generated,
+given projection IDs and the full (unprojected) schema. If projectionIDs
+is nil, all columns are included.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="OnIniter"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `OnIniter`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L43" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type OnIniter interface {
+	// OnInit performs global initialization (e.g. worker count, partitioning).
+	OnInit(params *InitParams) (*GlobalInitResponse, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+OnIniter is an optional interface for TypedTableFunc implementations that
+need custom OnInit behavior (e.g., multi-worker partitioning with work queues).
+If not implemented, the adapter defaults to DefaultInit() (MaxWorkers: 1).
+
+</div>
+
+<div class="api-class">
+
+<a id="StatisticsProvider"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `StatisticsProvider`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L58" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type StatisticsProvider interface {
+	// Statistics reports per-column output statistics to the optimizer.
+	Statistics(params *BindParams) ([]ColumnStatistics, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+StatisticsProvider is an optional interface for TypedTableFunc
+implementations that can report per-column output statistics to the
+optimizer (min/max, null-ness, distinct count, string length).
+
+</div>
+
+<div class="api-class">
+
+<a id="TableCardinality"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `TableCardinality`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/cardinality.go#L6" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TableCardinality struct {
+	// Estimate is the estimated number of rows.
+	Estimate	int64	\`vgirpc:"estimate,nullable"\`
+	// Max is the maximum number of rows (-1 = unknown).
+	Max	int64	\`vgirpc:"max,nullable"\`
+}`} />
+
+<p class="api-section">Description</p>
+
+TableCardinality represents the estimated cardinality of a table function's output.
+
+</div>
+
+<div class="api-class">
+
+<a id="TableFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table.go#L13" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TableFunction interface {
+	// Name returns the function name used in SQL.
+	Name() string
+	// Metadata returns descriptive metadata.
+	Metadata() FunctionMetadata
+	// ArgumentSpecs returns the function's argument specifications.
+	ArgumentSpecs() []ArgSpec
+	// OnBind resolves the output schema given the bind parameters.
+	OnBind(params *BindParams) (*BindResponse, error)
+	// OnInit performs one-time initialization and returns execution parameters.
+	OnInit(params *InitParams) (*GlobalInitResponse, error)
+	// NewState creates the initial mutable state for this function execution.
+	NewState(params *ProcessParams) (interface{}, error)
+	// Process generates the next output batch. It must either emit data via
+	// out.Emit/EmitArrays or call out.Finish() to signal end-of-stream.
+	Process(ctx context.Context, params *ProcessParams, state interface{}, out *vgirpc.OutputCollector) error
+}`} />
+
+<p class="api-section">Description</p>
+
+TableFunction is the interface for table VGI functions.
+Table functions generate output without receiving input (Producer mode).
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="AsTableFunction"></a>
+#### <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `AsTableFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L151" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func AsTableFunction[S any](f TypedTableFunc[S]) TableFunction</code></pre>
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="TableFunctionWithCardinality"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableFunctionWithCardinality`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table.go#L32" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TableFunctionWithCardinality interface {
+	TableFunction
+	// Cardinality returns an estimated row count for query optimization.
+	Cardinality(params *BindParams) (*TableCardinality, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+TableFunctionWithCardinality extends TableFunction with cardinality estimation.
+
+</div>
+
+<div class="api-class">
+
+<a id="TableFunctionWithStatistics"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableFunctionWithStatistics`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table.go#L40" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TableFunctionWithStatistics interface {
+	TableFunction
+	// Statistics returns per-output-column stats (empty slice or nil = unknown).
+	Statistics(params *BindParams) ([]ColumnStatistics, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+TableFunctionWithStatistics extends TableFunction with per-column statistics
+that help the optimizer fold or skip filters before running the scan.
+
+</div>
+
+<div class="api-class">
+
+<a id="TypedTableFunc"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TypedTableFunc`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L25" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TypedTableFunc[S any] interface {
+	// Name returns the function name used to invoke it in SQL.
+	Name() string
+	// Metadata returns descriptive metadata for the function.
+	Metadata() FunctionMetadata
+	// ArgumentSpecs returns the function's argument specifications.
+	ArgumentSpecs() []ArgSpec
+	// OnBind resolves the output schema and bind state from the bind parameters.
+	OnBind(params *BindParams) (*BindResponse, error)
+	// NewState creates a fresh, typed per-scan state value.
+	NewState(params *ProcessParams) (*S, error)
+	// Process generates output rows for one scan step, emitting them via out.
+	Process(ctx context.Context, params *ProcessParams, state *S, out *vgirpc.OutputCollector) error
+}`} />
+
+<p class="api-section">Description</p>
+
+TypedTableFunc is the recommended interface for table functions.
+It provides compile-time type safety for state management, eliminating
+the unsafe state.(*myType) assertions required by the lower-level
+TableFunction interface.
+
+Use the lower-level TableFunction interface only for advanced use cases
+that need non-standard state patterns.
+
+Implementations may also satisfy OnIniter (custom OnInit) and/or
+CardinalityEstimator (cardinality estimation). These are detected
+automatically by AsTableFunction.
+
+</div>
+
+<div class="api-class">
+
+<a id="typedTableAdapter"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `typedTableAdapter`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L173" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type typedTableAdapter[S any] struct {
+	inner		TypedTableFunc[S]
+	onInit		func(*InitParams) (*GlobalInitResponse, error)
+	statsProvider	StatisticsProvider
+}`} />
+
+<p class="api-section">Description</p>
+
+typedTableAdapter implements TableFunction by delegating to a TypedTableFunc[S].
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="typedTableAdapter[S].ArgumentSpecs"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ArgumentSpecs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L206" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableAdapter[S]) ArgumentSpecs() []ArgSpec</code></pre>
+
+ArgumentSpecs forwards to the wrapped typed function's ArgumentSpecs.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapter[S].DynamicToString"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `DynamicToString`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L183" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableAdapter[S]) DynamicToString(ctx context.Context, params *DynamicToStringParams) ([]string, []string, error)</code></pre>
+
+DynamicToString forwards to the inner typed function when it implements the
+hook. The framework's RPC handler does the interface check on the
+adapter (the user-facing TableFunction); without this forwarder a typed
+function's hook would be invisible.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapter[S].Metadata"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L203" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableAdapter[S]) Metadata() FunctionMetadata</code></pre>
+
+Metadata forwards to the wrapped typed function's Metadata.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapter[S].Name"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Name`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L200" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableAdapter[S]) Name() string</code></pre>
+
+Name forwards to the wrapped typed function's Name.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapter[S].NewState"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `NewState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L223" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableAdapter[S]) NewState(params *ProcessParams) (interface&#123;&#125;, error)</code></pre>
+
+NewState forwards to the wrapped typed function's NewState, returning the
+typed state as an untyped interface&#123;&#125;.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapter[S].OnBind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnBind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L209" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableAdapter[S]) OnBind(params *BindParams) (*BindResponse, error)</code></pre>
+
+OnBind forwards to the wrapped typed function's OnBind.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapter[S].OnInit"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnInit`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L214" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableAdapter[S]) OnInit(params *InitParams) (*GlobalInitResponse, error)</code></pre>
+
+OnInit invokes the optional OnIniter hook if present, otherwise returns DefaultInit.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapter[S].Process"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Process`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L229" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableAdapter[S]) Process(ctx context.Context, params *ProcessParams, state interface&#123;&#125;, out *vgirpc.OutputCollector) error</code></pre>
+
+Process type-asserts the untyped state to *S and forwards to the wrapped
+typed function's Process, returning an error on a state type mismatch.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapter[S].Statistics"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Statistics`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L192" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableAdapter[S]) Statistics(params *BindParams) ([]ColumnStatistics, error)</code></pre>
+
+Statistics delegates to the wrapped function's StatisticsProvider if it
+implements one, returning nil otherwise.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="typedTableAdapterWithCard"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `typedTableAdapterWithCard`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L240" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type typedTableAdapterWithCard[S any] struct {
+	*typedTableAdapter[S]
+	card	CardinalityEstimator
+}`} />
+
+<p class="api-section">Description</p>
+
+typedTableAdapterWithCard embeds typedTableAdapter and additionally
+implements TableFunctionWithCardinality, so the type assertion in
+protocol.go (fn.(TableFunctionWithCardinality)) succeeds.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="typedTableAdapterWithCard.ArgumentSpecs"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `ArgumentSpecs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L206" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a typedTableAdapterWithCard) ArgumentSpecs() []ArgSpec</code></pre>
+
+ArgumentSpecs forwards to the wrapped typed function's ArgumentSpecs.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapterWithCard[S].Cardinality"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Cardinality`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L246" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a *typedTableAdapterWithCard[S]) Cardinality(params *BindParams) (*TableCardinality, error)</code></pre>
+
+Cardinality forwards to the wrapped CardinalityEstimator's Cardinality.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapterWithCard.DynamicToString"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `DynamicToString`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L183" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a typedTableAdapterWithCard) DynamicToString(ctx context.Context, params *DynamicToStringParams) ([]string, []string, error)</code></pre>
+
+DynamicToString forwards to the inner typed function when it implements the
+hook. The framework's RPC handler does the interface check on the
+adapter (the user-facing TableFunction); without this forwarder a typed
+function's hook would be invisible.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapterWithCard.Metadata"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L203" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a typedTableAdapterWithCard) Metadata() FunctionMetadata</code></pre>
+
+Metadata forwards to the wrapped typed function's Metadata.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapterWithCard.Name"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Name`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L200" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a typedTableAdapterWithCard) Name() string</code></pre>
+
+Name forwards to the wrapped typed function's Name.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapterWithCard.NewState"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `NewState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L223" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a typedTableAdapterWithCard) NewState(params *ProcessParams) (interface&#123;&#125;, error)</code></pre>
+
+NewState forwards to the wrapped typed function's NewState, returning the
+typed state as an untyped interface&#123;&#125;.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapterWithCard.OnBind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnBind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L209" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a typedTableAdapterWithCard) OnBind(params *BindParams) (*BindResponse, error)</code></pre>
+
+OnBind forwards to the wrapped typed function's OnBind.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapterWithCard.OnInit"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `OnInit`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L214" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a typedTableAdapterWithCard) OnInit(params *InitParams) (*GlobalInitResponse, error)</code></pre>
+
+OnInit invokes the optional OnIniter hook if present, otherwise returns DefaultInit.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapterWithCard.Process"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Process`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L229" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a typedTableAdapterWithCard) Process(ctx context.Context, params *ProcessParams, state interface&#123;&#125;, out *vgirpc.OutputCollector) error</code></pre>
+
+Process type-asserts the untyped state to *S and forwards to the wrapped
+typed function's Process, returning an error on a state type mismatch.
+
+</div>
+<div class="api-member">
+
+<a id="typedTableAdapterWithCard.Statistics"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `Statistics`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L192" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func (a typedTableAdapterWithCard) Statistics(params *BindParams) ([]ColumnStatistics, error)</code></pre>
+
+Statistics delegates to the wrapped function's StatisticsProvider if it
+implements one, returning nil otherwise.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="BatchFromMap"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `BatchFromMap`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L93" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func BatchFromMap(schema *arrow.Schema, columns map[string]arrow.Array, numRows int64) (arrow.RecordBatch, error)</code></pre>
+
+BatchFromMap reorders columns from a name-keyed map to match schema field order
+and creates a RecordBatch. It consumes all arrays in the map — every array
+(both schema-matched and extra) is released on success and on error, matching
+GenerateBatch's ownership model. Returns an error if a schema field is missing
+from the map. Extra map keys are silently ignored but their arrays are still released.
+
+</div>
+<div class="api-member">
+
+<a id="BuildAllNullArray"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `BuildAllNullArray`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L224" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func BuildAllNullArray(dt arrow.DataType, n int64) arrow.Array</code></pre>
+
+BuildAllNullArray creates an n-row all-NULL array of the given type. The
+type is created via NewBuilder so any Arrow primitive / nested type works.
+
+</div>
+<div class="api-member">
+
+<a id="BuildArray"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `BuildArray`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L236" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func BuildArray[T any, B ArrayBuilder[T]](n int64, newBuilder func(memory.Allocator) B, fn func(i int64) T) arrow.Array</code></pre>
+
+BuildArray creates an array of any type using the ArrayBuilder generic constraint.
+Use this for types not covered by BuildInt64Array, BuildFloat64Array, etc.
+
+</div>
+<div class="api-member">
+
+<a id="BuildBinaryArray"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `BuildBinaryArray`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L201" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func BuildBinaryArray(n int64, fn func(i int64) []byte) arrow.Array</code></pre>
+
+BuildBinaryArray creates a binary array by calling fn for each row index.
+
+</div>
+<div class="api-member">
+
+<a id="BuildBooleanArray"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `BuildBooleanArray`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L190" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func BuildBooleanArray(n int64, fn func(i int64) bool) arrow.Array</code></pre>
+
+BuildBooleanArray creates a boolean array by calling fn for each row index.
+
+</div>
+<div class="api-member">
+
+<a id="BuildFloat64Array"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `BuildFloat64Array`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L157" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func BuildFloat64Array(n int64, fn func(i int64) float64) arrow.Array</code></pre>
+
+BuildFloat64Array creates a float64 array by calling fn for each row index.
+
+</div>
+<div class="api-member">
+
+<a id="BuildInt32Array"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `BuildInt32Array`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L212" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func BuildInt32Array(n int64, fn func(i int64) int32) arrow.Array</code></pre>
+
+BuildInt32Array creates an int32 array by calling fn for each row index.
+
+</div>
+<div class="api-member">
+
+<a id="BuildInt64Array"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `BuildInt64Array`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L146" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func BuildInt64Array(n int64, fn func(i int64) int64) arrow.Array</code></pre>
+
+BuildInt64Array creates an int64 array by calling fn for each row index.
+The caller is responsible for releasing the returned array, unless using
+GenerateBatch which handles release automatically.
+
+</div>
+<div class="api-member">
+
+<a id="BuildStringArray"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `BuildStringArray`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L179" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func BuildStringArray(n int64, fn func(i int64) string) arrow.Array</code></pre>
+
+BuildStringArray creates a string array by calling fn for each row index.
+
+</div>
+<div class="api-member">
+
+<a id="BuildUint64Array"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `BuildUint64Array`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L168" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func BuildUint64Array(n int64, fn func(i int64) uint64) arrow.Array</code></pre>
+
+BuildUint64Array creates a uint64 array by calling fn for each row index.
+
+</div>
+<div class="api-member">
+
+<a id="FindColumn"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `FindColumn`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_helpers.go#L79" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func FindColumn(batch arrow.RecordBatch, name string) arrow.Array</code></pre>
+
+FindColumn returns the column array from a RecordBatch by field name,
+or nil if not found.
+
+</div>
+<div class="api-member">
+
+<a id="GenerateBatch"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `GenerateBatch`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L61" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func GenerateBatch(bs *BatchState, out *vgirpc.OutputCollector, generateFn func(size int64) ([]arrow.Array, error)) error</code></pre>
+
+GenerateBatch handles one batch of a batch-splitting table function.
+Call this from Process — it handles the complete remaining-work pattern:
+
+ 1. If Remaining &lt;= 0, calls out.Finish() and returns
+ 2. Computes size = min(Remaining, BatchSize)
+ 3. Calls generateFn(size) to produce arrays
+ 4. Emits the arrays via out.EmitArrays
+ 5. Releases all returned arrays
+ 6. Updates Remaining and Index
+
+VGI's Process is called once per batch by the framework. This function
+processes exactly one batch per call — it does NOT loop.
+
+The generateFn closure should capture bs.Index at the start to know the
+current row offset before GenerateBatch advances it.
+
+</div>
+<div class="api-member">
+
+<a id="GenerateBatchMap"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `GenerateBatchMap`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_generate.go#L117" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func GenerateBatchMap(bs *BatchState, out *vgirpc.OutputCollector, schema *arrow.Schema, generateFn func(size int64) (map[string]arrow.Array, error)) error</code></pre>
+
+GenerateBatchMap handles one batch of a batch-splitting table function using
+name-keyed columns. Same lifecycle as GenerateBatch (check remaining, compute
+size, call callback, update state) but the callback returns map[string]arrow.Array.
+Uses BatchFromMap internally and emits via out.Emit.
+
+</div>
+<div class="api-member">
+
+<a id="OptionalBool"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `OptionalBool`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_helpers.go#L59" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func OptionalBool(args *Arguments, name string, defaultVal bool) bool</code></pre>
+
+OptionalBool extracts a named bool argument, returning defaultVal if the
+argument is null, not present, or cannot be converted to bool.
+
+</div>
+<div class="api-member">
+
+<a id="OptionalFloat64"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `OptionalFloat64`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_helpers.go#L35" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func OptionalFloat64(args *Arguments, name string, defaultVal float64) float64</code></pre>
+
+OptionalFloat64 extracts a named float64 argument, returning defaultVal if
+the argument is null, not present, or cannot be converted to float64.
+
+</div>
+<div class="api-member">
+
+<a id="OptionalInt64"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `OptionalInt64`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_helpers.go#L23" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func OptionalInt64(args *Arguments, name string, defaultVal int64) int64</code></pre>
+
+OptionalInt64 extracts a named int64 argument, returning defaultVal if the
+argument is null, not present, or cannot be converted to int64.
+This is a convenience helper that never returns an error — type mismatches
+silently return the default value.
+
+</div>
+<div class="api-member">
+
+<a id="OptionalString"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `OptionalString`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_helpers.go#L47" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func OptionalString(args *Arguments, name string, defaultVal string) string</code></pre>
+
+OptionalString extracts a named string argument, returning defaultVal if
+the argument is null, not present, or cannot be converted to string.
+
+</div>
+<div class="api-member">
+
+<a id="assertGobEncodable"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `assertGobEncodable`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L105" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func assertGobEncodable(t reflect.Type, path string, seen map[reflect.Type]bool)</code></pre>
+
+assertGobEncodable panics if t — reachable from a state field via path — holds
+a value gob cannot encode. seen guards against self-referential types.
+
+</div>
+<div class="api-member">
+
+<a id="implementsGobEncoder"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `implementsGobEncoder`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L77" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func implementsGobEncoder(t reflect.Type) bool</code></pre>
+
+AsTableFunction wraps a TypedTableFunc into a TableFunction for registration
+with Worker.RegisterTable. The adapter:
+  - Provides type-safe state casting (returns error instead of panic)
+  - Defaults OnInit to DefaultInit() (MaxWorkers: 1) unless OnIniter is implemented
+  - Delegates Cardinality if CardinalityEstimator is implemented
+
+Usage:
+
+<Code lang="go" code={`func NewSequenceFunction() vgi.TableFunction {
+return vgi.AsTableFunction[sequenceState](&SequenceFunction{})
+}
+`} />
+
+implementsGobEncoder reports whether t (or *t) defines its own gob encoding,
+in which case it manages its own serialization and is exempt from inspection.
+
+</div>
+<div class="api-member">
+
+<a id="validateGobState"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `validateGobState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_typed.go#L98" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func validateGobState[S any]()</code></pre>
+
+validateGobState fails fast (at registration) when the per-scan state type S
+cannot be gob-encoded for HTTP rehydration. gob otherwise surfaces these only
+mid-query, on the first HTTP continuation, with a cryptic message. Two pitfalls
+are caught by walking S's exported, gob-reachable fields:
+
+  - a struct whose fields are all unexported (e.g. `struct{ done bool }`): gob
+<Code lang="go" code={`encodes nothing and reports "type ... has no exported fields".`} />
+
+  - an exported field of a kind gob cannot encode — an interface (the common
+<Code lang="go" code={`case being an Arrow \`arrow.Record\`/\`arrow.Array\` stashed in state to emit
+later), a chan, a func, or an unsafe.Pointer. The fix is to store plain
+serializable Go values (slices, scalars) in state and rebuild the Arrow
+batch in Process, mirroring the SDK's static_data.go example.
+`} />
+
+A truly empty `struct{}` is fine, and any type providing its own
+gob.GobEncoder is exempt (at the top level or as a nested field). Mirrors
+vgi-python enforcing serializable state at class-definition time.
+
+</div>

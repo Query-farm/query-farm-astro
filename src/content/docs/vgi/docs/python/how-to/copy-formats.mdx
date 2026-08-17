@@ -1,0 +1,176 @@
+---
+title: Add a custom COPY format
+description: "Implement COPY ... FROM and COPY ... TO in a VGI worker: a remote format reader and a remote sink, with credentials."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import copySrc from '../../../../../../examples/vgi-python/copy_format_worker.py?raw';
+
+How a VGI catalog registers its own `COPY` formats, so users can `COPY … FROM` a source your worker
+knows how to parse and `COPY … TO` a destination it knows how to write — a proprietary format, a
+remote API, or a custom sink.
+
+## Prerequisites
+
+- A catalog (see [Expose a catalog](/vgi/docs/python/how-to/catalogs/)) — COPY formats are
+  catalog-level, so they need an `ATTACH`.
+- vgi-python **0.8.8+** for `COPY … FROM` and `COPY … TO`, **0.9.0+** for credential forwarding
+  (`on_secrets`).
+
+## The model
+
+Both directions reuse machinery you already have, which is why they impose so few new rules:
+
+- A **`CopyFromFunction`** is an ordinary producer-mode table function. It reuses the whole table
+  function bind/init/scan path.
+- A **`CopyToFunction`** is a buffered (Sink + Combine) function with **no Source phase**. It reuses
+  the whole `table_buffering_process` / `table_buffering_combine` machinery.
+
+What makes either one a *COPY format* is that it names a SQL `FORMAT` identifier and the catalog
+advertises it. Register the class in the catalog's function list like any other function; the
+declarative `Catalog` introspects the list for both base classes and advertises what it finds, so
+there is normally nothing else to wire. The extension registers one DuckDB `CopyFunction` per entry
+at `ATTACH` time.
+
+The COPY statement's **path is not an option** — it arrives on the bind context. Everything else you
+declare as ordinary `Arg`-annotated arguments, and their `doc` strings become the option descriptions
+surfaced by `vgi_copy_formats()`.
+
+## Reading: `COPY … FROM`
+
+Set `COPY_FROM_FORMAT`, declare your options, and implement `read`:
+
+<CodeBlock code={`from vgi.copy_from_function import CopyFromFunction
+
+class ReadTsvLite(CopyFromFunction[ReadOptions]):
+    COPY_FROM_FORMAT = "tsvlite"
+    COPY_FROM_COMMENT = "Tab-separated, one record per line, no quoting"
+
+    @classmethod
+    def read(cls, *, path, options, expected_schema, params, out) -> None:
+        ...              # parse \`path\`, build batches matching \`expected_schema\`
+        out.emit(batch)
+        out.finish()`} lang="python" tryable={false} />
+
+Here is the whole worker — a TSV reader and writer in one catalog:
+
+<Collapsible summary="copy_format_worker.py">
+<CodeBlock code={copySrc} lang="python" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`ATTACH 'tsv' (TYPE vgi, LOCATION 'uv run copy_format_worker.py');
+CREATE TABLE people (name VARCHAR, age BIGINT);
+COPY people FROM 'people.tsv' (FORMAT 'tsv.tsvlite', skip_rows 1);`} lang="sql" tryable={false} />
+
+<Callout type="warning" title="The FORMAT name is qualified by the attach alias">
+`COPY_FROM_FORMAT = "tsvlite"` is *not* what users type. The extension namespaces formats per attach,
+so the SQL name is `'<attach-alias>.<format>'` — here `'tsv.tsvlite'`, because the catalog was
+attached as `tsv`. The bare name raises `Catalog Error: Copy Function with name tsvlite does not
+exist!`, helpfully suggesting the qualified one. Two workers may therefore both call their format
+`tsvlite` without colliding.
+</Callout>
+
+<Callout type="warning" title="Emit expected_schema exactly">
+DuckDB inserts **no cast** between the scan and the INSERT. Your batches must match
+`expected_schema` exactly in both type and arity — the extension rejects a mismatch at COPY bind. The
+target table's schema is what defines it; you don't get to choose the output schema, which is why
+`on_bind` is `@final` here.
+</Callout>
+
+The file path and target schema arrive through `CopyFromContext` on the bind
+(`params.bind_call.copy_from`, or `params.init_call.bind_call.copy_from` after init).
+
+## Writing: `COPY … TO`
+
+Set `COPY_TO_FORMAT` and implement two methods:
+
+- **`write`** — called once per input batch, fanned out across DuckDB's sink threads and per-thread
+  workers.
+- **`close`** — called **exactly once**, on the coordinator worker, driven by DuckDB's once-only
+  `copy_to_finalize`. This is where the terminal write, flush and close happen.
+
+<CodeBlock code={`from vgi.copy_to_function import CopyToFunction
+
+class WriteTsvLite(CopyToFunction[WriteOptions]):
+    COPY_TO_FORMAT = "tsvlite_out"   # NOT "tsvlite" — see the warning below
+
+    @classmethod
+    def write(cls, *, batch, options, file_path, params) -> None:
+        # Per batch, possibly parallel, possibly on another process.
+        params.storage.state_append(b"shards", b"", serialize(batch))
+
+    @classmethod
+    def close(cls, *, options, file_path, params) -> int:
+        # Once, on the coordinator. Read the shards back and finish the destination.
+        with open(file_path, "w") as dest:
+            for _key, shard in params.storage.state_log_scan(b"shards", b""):
+                dest.write(deserialize(shard))
+        return rows_written        # informational; DuckDB reports its own count`} lang="python" tryable={false} />
+
+<CodeBlock code={`COPY (SELECT * FROM people) TO 'out.tsv' (FORMAT 'tsv.tsvlite_out', header true);`} lang="sql" tryable={false} />
+
+<Callout type="warning" title="Give each direction its own format name">
+A reader and a writer that share one `COPY_*_FORMAT` string look fine from Python — the catalog
+advertises both, keyed by (direction, format), and the source even notes that sharing should be
+allowed. The **extension registers COPY functions by name alone**, so the writer is silently dropped:
+`vgi_copy_formats()` shows only the `from` row, and `COPY … TO` fails with *"Not implemented Error:
+COPY TO is not supported for FORMAT …"*. There is no warning at attach time.
+
+Name them apart — `tsvlite` and `tsvlite_out`, as the worker above does, matching the upstream
+fixtures' `example_lines` / `example_lines_out`.
+</Callout>
+
+`close()` returns the row count and is called **even for an empty COPY**, so a header-only or
+zero-byte file still gets created rather than silently skipped.
+
+<Callout type="warning" title="There is no finalize — and write/close may be different processes">
+The destination must be **fully written and closed inside `close()`**; a writer that forgets leaves a
+silent partial file. And because `write()` and `close()` can run in different worker processes (pool
+rotation, HTTP), any shard state `close()` needs must live in cross-process storage scoped by
+`params.execution_id` — `params.storage` is the canonical choice — or go to a destination that
+tolerates concurrent writers (object-store multipart, an append API). Buffering on `self` or a module
+global breaks silently under rotation, exactly as it does for a
+[buffering function](/vgi/docs/python/how-to/function-patterns/#buffering).
+</Callout>
+
+Reach the destination path with `copy_to_path(params)` at write/close time. The source schema is the
+input schema (`params.init_call.bind_call.input_schema`).
+
+## Credentials for cloud destinations
+
+A writer usually can't reach `s3://` without credentials, but `on_bind` is `@final` on a
+`CopyToFunction` — there's no output schema for you to compute. The seam is **`on_secrets`**, called
+from `on_bind` for exactly this purpose:
+
+<CodeBlock code={`@classmethod
+def on_secrets(cls, params) -> None:
+    # Scope by the destination path so DuckDB resolves the longest-prefix-matching secret.
+    params.secrets.get("s3", scope=params.bind_call.copy_to.file_path, required=True)`} lang="python" tryable={false} />
+
+The framework issues a **two-phase bind retry** to resolve every requested secret from the caller's
+secret store, then surfaces the resolved values on `params.secrets` (a `ResolvedSecrets`) at
+`write` / `close` time. A requested secret that doesn't exist resolves to "not found" rather than an
+error — pass `required=True` to make a missing secret fail the bind instead.
+
+<InfoTip label="Why here" title="The path is available at on_secrets time">
+`on_secrets` runs during bind, where there is no `init_call` yet — so read the destination from
+`params.bind_call.copy_to.file_path`, not `copy_to_path()` (which is a write/close-time helper). The
+default `on_secrets` requests nothing, so writers that never touched credentials are unaffected.
+</InfoTip>
+
+## Discovery
+
+`vgi_copy_formats()` lists everything the attached catalogs advertise — both directions, each tagged
+with its `direction` — with the option schema, types, defaults and `doc` descriptions taken from your
+`Arg` annotations. `COPY_FROM_COMMENT` / `COPY_TO_COMMENT` add free text alongside.
+
+## Next steps
+
+- **[API Reference — copy_from_function](/vgi/docs/python/api/vgi-copy_from_function/)** and
+  **[copy_to_function](/vgi/docs/python/api/vgi-copy_to_function/)** — the exact method contracts.
+- **[Expose a catalog](/vgi/docs/python/how-to/catalogs/)** — where formats get advertised from.
+- **[Persist state across workers](/vgi/docs/python/how-to/state-storage/)** — the storage `close()`
+  reads its shards back from.

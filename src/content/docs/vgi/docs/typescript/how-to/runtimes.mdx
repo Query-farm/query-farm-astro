@@ -1,0 +1,172 @@
+---
+title: Runtimes & entry points
+description: "Where a TypeScript VGI worker can run — Node, Bun, Cloudflare Workers, the browser — and which of the four subpath exports each one wants."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+The TypeScript SDK is the only VGI SDK that runs **inside** the same places the engine can run: a
+server, a Cloudflare Worker, or a browser tab. That reach costs one piece of ceremony — picking the
+right subpath export — and this page is about which one.
+
+## The four entry points
+
+<table>
+<thead>
+<tr><th>Import</th><th>For</th><th>Contains</th></tr>
+</thead>
+<tbody>
+<tr><td><code>@query-farm/vgi</code></td><td>Node / Bun workers</td><td>Everything: the function factories, <code>Worker</code>, catalogs, the client.</td></tr>
+<tr><td><code>@query-farm/vgi/serve</code></td><td>An HTTP worker on Bun</td><td><code>serveVgiWorker</code>, <code>createVgiWorkerFetch</code>.</td></tr>
+<tr><td><code>@query-farm/vgi/worker-cf</code></td><td>Cloudflare Workers</td><td><code>createVgiFetch</code> plus the factories, on the flechette backend.</td></tr>
+<tr><td><code>@query-farm/vgi/client</code></td><td>Calling a worker from a browser</td><td>Client only — no server-side code in the bundle.</td></tr>
+</tbody>
+</table>
+
+<Callout type="warning" title="On Cloudflare Workers, import from `/worker-cf` — not the package root">
+This is not a stylistic preference. The root entry includes `Worker`, whose AF_UNIX transport pulls
+in `node:net`; the `worker-cf` entry omits it so that never enters the bundle. The subpath is also
+what selects the right Arrow backend through the package's conditional exports — import the root on
+workerd and you get a bundle that either fails to build or links the wrong Arrow.
+</Callout>
+
+## Two Arrow backends, chosen for you
+
+The SDK ships a backend-agnostic Arrow facade and resolves an implementation at **build** time, per
+runtime:
+
+<table>
+<thead>
+<tr><th>Runtime</th><th>Arrow backend</th><th>Why</th></tr>
+</thead>
+<tbody>
+<tr><td>Node.js / Bun</td><td><code>@query-farm/apache-arrow</code> (arrow-js)</td><td>The peer dependency you already installed.</td></tr>
+<tr><td>Cloudflare Workers (<code>workerd</code>)</td><td><code>@query-farm/flechette</code></td><td>A worker exercises much of the Arrow API and cannot take a peer dep.</td></tr>
+<tr><td>Browser</td><td><code>@query-farm/apache-arrow</code> (arrow-js)</td><td>It tree-shakes to the subset the client touches — measurably smaller.</td></tr>
+</tbody>
+</table>
+
+The browser row is the surprising one, and it is a measurement rather than a guess: on the client
+surface a minified browser bundle is **84 KB gzip via arrow-js against 116 KB via flechette**,
+because arrow-js shakes down to what the client uses while flechette links as a unit. Flechette still
+wins for `worker-cf`, which touches far more of the API.
+
+<InfoTip label="Why this matters to you" title="The facade is the reason your code is portable">
+Because the backend is chosen at build time, your function bodies never name an Arrow implementation
+— which is exactly why they run unchanged on a server and on workerd. The cost is the erased column
+type: `VgiColumn.get()` returns `unknown` because the two backends disagree on what it would
+otherwise be. See
+[Value representations](/vgi/docs/typescript/how-to/value-representations/).
+</InfoTip>
+
+## A Cloudflare Worker
+
+`createVgiFetch` returns the `fetch` handler the Workers runtime expects:
+
+<CodeBlock code={`// src/index.ts
+import { createVgiFetch, defineScalarFunction, FunctionRegistry, ReadOnlyCatalogInterface, int64 } from "@query-farm/vgi/worker-cf";
+
+const double = defineScalarFunction({
+  name: "double",
+  params: { n: int64() },
+  returns: int64(),
+  compute: (batch) => {
+    const ns = batch.getChildAt(0)! as Iterable<bigint | null>;
+    return Array.from(ns, (v) => (v == null ? null : v * 2n));
+  },
+});
+
+const registry = new FunctionRegistry();
+const catalogInterface = new ReadOnlyCatalogInterface(
+  { name: "calc", schemas: [{ name: "main", functions: [double] }] },
+  registry,
+);
+
+export default {
+  fetch: createVgiFetch({
+    registry,
+    catalogInterface,
+    landingInfo: { name: "calc", doc: "Doubling, at the edge.", version: "0.1.0" },
+  }),
+};`} lang="typescript" tryable={false} />
+
+<Callout type="note" title="`landingInfo` is required here, and only here">
+`createVgiFetch` demands `landingInfo: { name, doc, version }` — the identity the landing page and
+its JSON status document display. `serveVgiWorker` builds it from its own required `name`/`doc`/
+`version`, which is why only the Cloudflare entry passes it explicitly. Omit it and there is no
+landing page and no `/vgi-client.js`.
+</Callout>
+
+<Callout type="warning" title="`int` means different things on the two entry points">
+Note `int64()` above rather than the bare `int` the tutorial uses. The two entries resolve that name
+differently:
+
+<table>
+<thead>
+<tr><th>Import from</th><th><code>int</code> is</th></tr>
+</thead>
+<tbody>
+<tr><td><code>@query-farm/vgi</code></td><td>an <code>Int64</code> <strong>instance</strong> (re-exported from vgi-rpc) — use it bare: <code>&#123; n: int &#125;</code></td></tr>
+<tr><td><code>@query-farm/vgi/worker-cf</code></td><td>the typed <strong>factory</strong> <code>int(bitWidth?, signed?)</code> — must be called: <code>&#123; n: int() &#125;</code></td></tr>
+</tbody>
+</table>
+
+The same collision applies to `int32`, `float32` and `bool`. So a function that works on a server
+can register a nonsense argument type after nothing more than a changed import line.
+
+**`int64()` is the portable spelling** — a factory on both entries, so it means the same thing
+everywhere. Prefer it, along with `utf8()`, `float64()` and the rest of the explicit factory set, in
+any code you intend to move between runtimes.
+
+On **0.28.0** the mistake is silent: the argument registers with a `Function` as its type and the
+failure surfaces later, at bind. From **0.29.0** it is rejected when the function is defined:
+
+<CodeBlock code={`defineScalarFunction("double"): params.n is a type factory, not an Arrow type — call it: int64().`} lang="text" tryable={false} />
+</Callout>
+
+Deployed, it attaches like any other HTTP worker:
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION 'https://calc.your-account.workers.dev');`} lang="sql" tryable={false} />
+
+<Callout type="warning" title="Set the signing key as a Workers secret">
+A Cloudflare Worker is many isolates by construction, so the ephemeral-key failure mode described in
+[Serve over HTTP](/vgi/docs/typescript/how-to/serve-http/#configuration) is not a maybe — it is the
+default outcome. Set `VGI_SIGNING_KEY` with `wrangler secret put` before the first real query.
+</Callout>
+
+### Durable Object storage
+
+A worker that needs state across requests — a buffering function, a work queue — has no filesystem
+on workerd. `FunctionStorageCfDo` implements the storage interface over a Durable Object, so the
+same functions work there. See [State storage](/vgi/docs/typescript/api/storage/).
+
+## In the browser
+
+Two different things can happen in a browser, and it is worth keeping them apart:
+
+- **Calling a remote worker** — import `@query-farm/vgi/client` and talk to an HTTP worker over
+  `fetch`. This is what the landing page's own `/vgi-client.js` does.
+- **Running the engine itself** — `@haybarn/haybarn-wasm` is DuckDB compiled to Wasm with the `vgi`
+  extension available, so a page can run queries locally that attach a remote worker.
+
+The SDK's `browser` export condition serves the first. The second is Haybarn's job.
+
+## Node vs Bun
+
+Node.js **22.15+** or Bun. The difference that shows up in practice is the tutorial's `LOCATION`:
+Bun runs TypeScript directly, so `LOCATION 'bun run ./worker.ts'` needs no build. On Node you either
+run a compiled `.js`, or use Node's own type stripping:
+
+<CodeBlock code={`ATTACH 'calc' (TYPE vgi, LOCATION 'node --experimental-strip-types ./worker.ts');`} lang="sql" tryable={false} />
+
+`serveVgiWorker` is Bun-only because it calls `Bun.serve`. On Node, use `createVgiWorkerFetch` and
+bind the port with whatever HTTP server you already run.
+
+## Next steps
+
+- **Standing up the HTTP service** → [Serve over HTTP](/vgi/docs/typescript/how-to/serve-http/).
+- **Why the column type is erased** →
+  [Value representations](/vgi/docs/typescript/how-to/value-representations/).
+- **Exact signatures** → [Worker & serving](/vgi/docs/typescript/api/worker/).

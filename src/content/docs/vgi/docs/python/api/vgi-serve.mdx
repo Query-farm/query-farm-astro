@@ -1,0 +1,182 @@
+---
+title: vgi.serve
+description: API reference for vgi.serve
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">Module overview</p>
+
+Zero-boilerplate CLI for serving VGI workers.
+
+Loads any [`Worker`](/vgi/docs/python/api/vgi-worker/#vgi.worker.Worker) by module reference and serves it — stdio by default
+(matching vgi-rpc's ``run_server()``), ``--http`` for cloud deployment.
+
+Usage:
+
+
+<Code lang="python" code={`# Stdio (default) — for subprocess/pipe use by vgi-client or DuckDB
+vgi-serve my_worker.py
+vgi-serve my_app.workers:ProductionWorker
+
+# HTTP — for cloud deployment
+vgi-serve my_worker.py --http
+vgi-serve my_worker.py --http --host 0.0.0.0 --port 8080`} />
+
+Programmatic API:
+
+
+<Code lang="python" code={`from vgi.serve import create_app, load_worker_class
+
+app = create_app(load_worker_class("my_app:MyWorker"))
+# Use with gunicorn: gunicorn app -w 4 -b 0.0.0.0:8080`} />
+
+
+
+</div>
+
+<a id="vgi.serve.create_app"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `create_app`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/serve.py#L199" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>create_app(
+    worker_cls: type[<a href="/vgi/docs/python/api/vgi-worker/#vgi.worker.Worker">Worker</a>],
+    *,
+    prefix: str = '',
+    cors_origins: str = '*',
+    describe: bool = True,
+    signing_key: bytes | None = None,
+    log_level: int = logging.INFO,
+    authenticate: Callable[[falcon.Request], <a href="https://vgi-rpc-python.query.farm/" class="api-ext" target="_blank" rel="noopener">AuthContext</a>] | None = None,
+    proxy_proof_required: bool | None = None,
+    oauth_resource_metadata: Any = None,
+    otel_config: <a href="https://vgi-rpc-python.query.farm/" class="api-ext" target="_blank" rel="noopener">OtelConfig</a> | None = None,
+    max_stream_response_bytes: int | None = None,
+    max_externalized_response_bytes: int | None = None,
+    introspect_principals: Iterable[str] | None = None,
+    introspect_rate_limit: int | None = None,
+) -&gt; falcon.App[Any, Any]</code></pre>
+
+Create a WSGI app for a VGI worker.
+
+Returns a standard WSGI app usable with gunicorn, uwsgi, waitress, or
+any WSGI server.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">worker_cls</code></dt><dd>The <a href="/vgi/docs/python/api/vgi-worker/#vgi.worker.Worker"><code>Worker</code></a> subclass to serve.</dd><dt><code class="api-pname">prefix</code></dt><dd>URL prefix for RPC endpoints.</dd><dt><code class="api-pname">cors_origins</code></dt><dd>Allowed CORS origins.</dd><dt><code class="api-pname">describe</code></dt><dd>Enable worker + API description pages.</dd><dt><code class="api-pname">signing_key</code></dt><dd>Shared signing key for state tokens.  When <code>None</code>, a random per-process key is generated (tokens are invalid across workers).  Set via <code>VGI_SIGNING_KEY</code> env var or pass explicitly for multi-process deployments.</dd><dt><code class="api-pname">log_level</code></dt><dd>Logging level for the worker instance.</dd><dt><code class="api-pname">authenticate</code></dt><dd>Optional callback that validates each HTTP request and returns an <code>AuthContext</code>. When <code>None</code>, all requests are anonymous.</dd><dt><code class="api-pname">proxy_proof_required</code></dt><dd>Whether to advertise <code>VGI-Proxy-Proof-Required</code> so a proxy can confirm this worker actually enforces the proof it mints. <code>None</code> (the default) derives it from <code>VGI_PROXY_PROOF_MODE</code>, which is also where the gate itself comes from — so the advertisement cannot drift from the posture. Pass a bool only when supplying a hand-built gate via <code>authenticate</code>.</dd><dt><code class="api-pname">oauth_resource_metadata</code></dt><dd>Optional <code>OAuthResourceMetadata</code> for RFC 9728 discovery endpoint.</dd><dt><code class="api-pname">otel_config</code></dt><dd>Optional OpenTelemetry configuration.  When provided, instruments the RPC server with tracing and/or metrics.</dd><dt><code class="api-pname">max_stream_response_bytes</code></dt><dd>HTTP-only.  When set, producer stream responses may pack multiple Arrow batches into a single HTTP response up to this byte budget before emitting a continuation token.  Default <code>None</code> keeps the current one-batch-per-response behaviour.</dd><dt><code class="api-pname">max_externalized_response_bytes</code></dt><dd>HTTP-only.  Cap on a single *externalized* response — the payload uploaded to blob storage and replaced on the wire by a pointer.  Set it to whatever a load balancer, API gateway or object-store policy in front of this worker will actually carry.  Unlike <code>max_stream_response_bytes</code> this is a hard cap on every method type with no continuation escape, because bytes already uploaded cannot be un-uploaded. <code>None</code> (the default) means no cap.</dd><dt><code class="api-pname">introspect_principals</code></dt><dd>Principals permitted to call <code>__introspect_token__</code>.  Only consulted when the worker class overrides <code>resolve_token</code>.  <code>None</code> reads <code>VGI_INTROSPECT_PRINCIPALS</code>.</dd><dt><code class="api-pname">introspect_rate_limit</code></dt><dd>Introspection requests allowed per caller per second.  <code>None</code> reads <code>VGI_INTROSPECT_RATE_LIMIT</code>, defaulting to 20.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>A Falcon WSGI application.</dd></dl></div>
+
+
+<a id="vgi.serve.export_serve_config"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `export_serve_config`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/serve.py#L1103" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>export_serve_config(
+    *,
+    worker_ref: str,
+    prefix: str,
+    cors_origins: str,
+    describe: bool,
+    log_level: int,
+    max_stream_response_bytes: int | None,
+    max_externalized_response_bytes: int | None,
+) -&gt; None</code></pre>
+
+Publish the parent's serve configuration for worker processes to read.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">worker_ref</code></dt><dd>The worker reference string the parent was given (<code>module:Class</code>, <code>module</code>, or <code>./file.py</code>). Passed rather than the resolved class because a child has to import it itself.</dd><dt><code class="api-pname">prefix</code></dt><dd>URL prefix for RPC endpoints.</dd><dt><code class="api-pname">cors_origins</code></dt><dd>Allowed CORS origins.</dd><dt><code class="api-pname">describe</code></dt><dd>Whether to enable the worker + API description pages.</dd><dt><code class="api-pname">log_level</code></dt><dd>Logging level for the worker instance.</dd><dt><code class="api-pname">max_stream_response_bytes</code></dt><dd>Producer-stream response budget, or None.</dd><dt><code class="api-pname">max_externalized_response_bytes</code></dt><dd>Externalized-response cap, or None.</dd></dl></div>
+
+
+<a id="vgi.serve.load_worker_class"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `load_worker_class`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/serve.py#L58" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>load_worker_class(reference: str) -&gt; type[<a href="/vgi/docs/python/api/vgi-worker/#vgi.worker.Worker">Worker</a>]</code></pre>
+
+Load a [`Worker`](/vgi/docs/python/api/vgi-worker/#vgi.worker.Worker) subclass from a module reference string.
+
+Accepts several reference formats:
+
+- ``module:ClassName`` — import *module* and return *ClassName*
+- ``module`` — import *module* and auto-discover the single [`Worker`](/vgi/docs/python/api/vgi-worker/#vgi.worker.Worker) subclass
+- ``./path/to/file.py`` or ``path.py`` — load from file path
+- ``./path/to/file.py:ClassName`` — load from file path, return *ClassName*
+
+Auto-discovery finds [`Worker`](/vgi/docs/python/api/vgi-worker/#vgi.worker.Worker) subclasses **defined** in the module (ignores
+imported ones by checking ``__module__``).
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">reference</code></dt><dd>Module reference string.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>The <a href="/vgi/docs/python/api/vgi-worker/#vgi.worker.Worker"><code>Worker</code></a> subclass.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><code class="api-ptype">SystemExit</code></dt><dd>If the reference is invalid, module can't be loaded, no <a href="/vgi/docs/python/api/vgi-worker/#vgi.worker.Worker"><code>Worker</code></a> subclass is found, or multiple are found.</dd></dl></div>
+
+
+<a id="vgi.serve.main"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `main`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/serve.py#L350" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>main() -&gt; None</code></pre>
+
+CLI entry point for ``vgi-serve``.
+
+
+<a id="vgi.serve.resolve_shared_signing_key"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `resolve_shared_signing_key`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/serve.py#L549" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>resolve_shared_signing_key(
+    *,
+    propagate_to_children: bool,
+) -&gt; tuple[bytes, bool]</code></pre>
+
+Resolve the signing key every process in this deployment must agree on.
+
+The key seals HTTP state tokens and catalog opaque data. Every process
+that might serve a continuation for a stream has to hold the *same* one:
+a token sealed by one key fails the AEAD check under another, and the
+failure is load-dependent rather than deterministic. A client whose
+connection stays pinned to one process never notices; one that reconnects
+mid-stream -- ``seek_to_token``, a load balancer, a respawned worker --
+hits an intermittent 400 that looks like flakiness.
+
+Resolution:
+
+- ``VGI_SIGNING_KEY`` set: use it. Tokens survive restarts and are valid
+  across every process configured with the same value. This is the only
+  correct setting for a load-balanced or multi-instance deployment,
+  because nothing here can reach a peer we did not start.
+- Unset: mint a random key for this deployment. Tokens are then valid for
+  the life of these processes and clients re-ATTACH after a restart.
+
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">propagate_to_children</code></dt><dd>True when this process will start worker processes that import the app themselves (a pre-fork server). A minted key is then exported to the environment so those children inherit it instead of each minting its own -- which is the bug this function exists to prevent.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd><code>(key, is_ephemeral)</code>. <code>is_ephemeral</code> is True when the key was minted here rather than configured, so callers can say so out loud.</dd></dl></div>
+
+
+<a id="vgi.serve.wsgi_app_factory"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `wsgi_app_factory`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/serve.py#L1140" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>wsgi_app_factory() -&gt; Any</code></pre>
+
+Build the WSGI app from the environment — the pre-fork worker entry point.
+
+Granian is pointed at ``vgi.serve:wsgi_app_factory`` and calls this once
+per worker process. Everything it needs was published by
+:func:`export_serve_config` in the parent, plus ``VGI_SIGNING_KEY``, which
+the parent minted and exported so every worker seals state tokens with the
+same key.
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>The Falcon WSGI application.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><code class="api-ptype">RuntimeError</code></dt><dd>Called without a parent having exported the config, which means this was invoked directly rather than by <code>vgi-serve</code>.</dd></dl></div>
+

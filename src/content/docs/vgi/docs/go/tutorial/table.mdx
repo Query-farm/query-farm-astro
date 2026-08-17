@@ -1,0 +1,114 @@
+---
+title: 2. Add a table function
+description: Grow the Go worker with a table function that generates rows from an argument.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import QueryResult from '../../../../../../components/docs/QueryResult.astro';
+import workerSrc from '../../../../../../examples/vgi-go/calc.go?raw';
+
+The second tutorial step: add a **table** function that *generates* rows, so one worker serves both a
+scalar and a table function — about **10 minutes**, picking up from
+[step 1](/vgi/docs/go/tutorial/scalar/).
+
+<div class="kind-banner kind-banner--table"><img class="kind-banner__glyph" src="/vgi/docs/assets/kinds/table.svg" alt="table shape" /><div class="kind-banner__text"><code class="kind-banner__formula">args → N rows</code><p class="kind-banner__desc">A table-valued source: scalar arguments in, a whole set of rows out.</p></div></div>
+
+`series(3)` → a three-row table `0, 1, 2`. Unlike a scalar, a table function is **pulled**: DuckDB
+calls `Process` repeatedly until the generator reports it has nothing left.
+
+<Callout type="tip" title="Why this is powerful">
+`series` just counts, but `Process` can emit rows from **anything** — a file format DuckDB can't
+read, a paginated HTTP API, a hardware device — and the rows stream straight into a SQL `FROM` clause.
+</Callout>
+
+## Step 1 — Grow the worker
+
+Add a `SeriesFn` alongside the `DoubleFn` from step 1. Save the whole file as `main.go`:
+
+<CodeBlock code={workerSrc} lang="go" title="main.go" tryable={false} />
+
+Five things to notice about the new `series` code:
+
+- **State is a separate type.** `TypedTableFunc[S]` is parameterised by its **state**, not its
+  arguments — a table function's arguments are fixed for the whole scan, while its state changes
+  between calls.
+- **Arguments are read once, in `NewState`.** They can't change mid-scan, so decoding them per batch
+  would be waste. `vgi.BindArgs` fills the struct from `params.Args`.
+- **`ge=0` is enforced.** The constraint travels into the registered spec, so `series(-1)` fails at
+  bind rather than looping or silently returning nothing.
+- **`GenerateBatch` does the chunking.** `BatchState` tracks how many rows remain and how big a batch
+  should be; your callback only fills `size` rows. Signalling completion is handled for you.
+- **The compile-time assertion earns its line.** `var _ vgi.TypedTableFunc[seriesState] = (*SeriesFn)(nil)`
+  turns a missing or mis-typed method into a build error instead of a registration-time surprise.
+
+<InfoTip label="Why “generator” and not just “function”?" title="Why a generator?" width="32rem">
+A table function is pulled, not called: the engine asks the worker for output until it signals
+completion. `Process` is the pull handler. Because `series` knows up front how many rows it owes,
+`BatchState` can answer "am I done?" without the function tracking it — but a generator reading a
+paginated API would keep its cursor in the same state struct and decide for itself.
+</InfoTip>
+
+## Step 2 — Build and attach
+
+<CodeBlock code={`go build -o calc .`} lang="bash" tryable={false} />
+
+Start a **fresh** Haybarn shell (fresh, so the `calc` name is still free), then:
+
+<CodeBlock code={`INSTALL vgi FROM community;
+LOAD vgi;
+
+ATTACH 'calc' (TYPE vgi, LOCATION './calc');`} lang="sql" tryable={false} />
+
+Continuing in the same shell from step 1? Its `calc` is still the scalar-only worker, so `series`
+won't exist yet — run `DETACH calc;` first.
+
+## Step 3 — Call it
+
+Table functions are called in the `FROM` clause:
+
+<CodeBlock code={`SELECT * FROM calc.series(3);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["n"]} rows={[[0], [1], [2]]} />
+
+The scalar function is still there — one worker, both functions, composed in one query:
+
+<CodeBlock code={`SELECT calc.double(n) AS doubled FROM calc.series(3);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["doubled"]} rows={[[0], [2], [4]]} />
+
+Ask for more rows than fit in one batch and the chunking is invisible from SQL:
+
+<CodeBlock code={`SELECT count(*), sum(n) FROM calc.series(5000);`} lang="sql" tryable={false} />
+
+<QueryResult columns={["count_star()", "sum(n)"]} rows={[[5000, 12497500]]} />
+
+And the constraint does its job:
+
+<CodeBlock code={`SELECT * FROM calc.series(-1);`} lang="sql" tryable={false} />
+
+<CodeBlock code={`Invalid Input Error: VGI Worker Exception: argument "count" (position 0): must be >= 0`} lang="text" tryable={false} />
+
+**What just happened:** one `calc` worker now serves two functions. `series` ran in the `FROM` clause
+— DuckDB pulled batches from `Process` until `BatchState` reported none remaining — and `double`
+transformed them, all in the same Go process.
+
+You've grown the worker into a two-function catalog. 🎉
+
+<InfoTip label="It didn't work?" title="Troubleshooting" width="34rem" up>
+- **`Binder Error: Failed to attach database: database with name "calc" already exists`** — `calc` is
+  still attached. Run `DETACH calc;` or open a fresh shell.
+- **`Function "series" is a table function but it was used as a scalar function`** — table functions
+  go in `FROM`, not `SELECT`.
+- **Empty result** — `series(0)` is legitimately zero rows. Try `series(5)`.
+- **The scan never ends** — a generator that never decrements its remaining count is an infinite
+  stream. `GenerateBatch` handles that for you; a hand-rolled `Process` must signal completion itself.
+</InfoTip>
+
+## Next steps
+
+- **The other three shapes** → [Function patterns](/vgi/docs/go/how-to/function-patterns/) — a
+  runnable worker for table-in-out, aggregate, and buffering.
+- **When each callback fires** → [Function lifecycle](/vgi/docs/concepts/lifecycle/).
+- **Exact contracts** → [Table functions](/vgi/docs/go/api/table/).

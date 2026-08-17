@@ -1,0 +1,568 @@
+---
+title: "Scalar functions"
+description: "One row in, one value out — the simplest function shape."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+One row in, one value out — the simplest function shape.
+
+</div>
+
+<div class="api-member">
+
+<a id="ScalarFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">trait</span> `ScalarFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L639" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub trait ScalarFunction: Send + Sync {
+    fn name(&self) -> &str;
+
+    fn metadata(&self) -> FunctionMetadata;
+
+    fn argument_specs(&self) -> Vec<ArgSpec>;
+    fn secret_lookups(&self, _params: &BindParams) -> Vec<crate::secrets::SecretLookup> {
+        Vec::new()
+    }
+    fn on_bind(&self, params: &BindParams) -> Result<BindResponse> {
+        if let Some(ty) = self.metadata().return_type {
+            return Ok(BindResponse::result(ty));
+        }
+        let ty = params
+            .input_schema
+            .as_ref()
+            .and_then(|s| s.fields().first().map(|f| f.data_type().clone()))
+            .unwrap_or(DataType::Int64);
+        Ok(BindResponse::result(ty))
+    }
+    fn process(
+        &self,
+        params: &ProcessParams,
+        batch: &arrow_array::RecordBatch,
+    ) -> Result<arrow_array::RecordBatch>;
+
+    fn cache_control(&self) -> Option<crate::cache_control::CacheControl> {
+        None
+    }
+}`} />
+
+<p class="api-section">Description</p>
+
+A scalar VGI function: one output row per input row.
+
+A scalar function receives a [`RecordBatch`](arrow_array::RecordBatch) of its
+argument columns and returns a single-column batch (the column is named
+`result`) with the same number of rows. Implement [`name`](Self::name),
+[`metadata`](Self::metadata), [`argument_specs`](Self::argument_specs), and
+[`process`](Self::process); [`on_bind`](Self::on_bind) has a sensible default
+and is only overridden when the return type is computed from the argument
+types. Register the function with
+[`Worker::register_scalar`](crate::Worker::register_scalar).
+
+# Examples
+
+<Code lang="rust" code={`use std::sync::Arc;
+
+use arrow_array::{cast::AsArray, ArrayRef, RecordBatch, StringArray};
+use arrow_schema::DataType;
+use vgi::{ArgSpec, FunctionMetadata, ProcessParams, ScalarFunction};
+use vgi_rpc::{Result, RpcError};
+
+struct UpperCase;
+
+impl ScalarFunction for UpperCase {
+    fn name(&self) -> &str {
+        "upper_case"
+    }
+
+    fn metadata(&self) -> FunctionMetadata {
+        FunctionMetadata {
+            description: "Uppercase a string".into(),
+            return_type: Some(DataType::Utf8),
+            ..Default::default()
+        }
+    }
+
+    fn argument_specs(&self) -> Vec<ArgSpec> {
+        vec![ArgSpec::column("value", 0, "varchar", "String to uppercase")]
+    }
+
+    fn process(&self, params: &ProcessParams, batch: &RecordBatch) -> Result<RecordBatch> {
+        let col = batch.column(0).as_string::<i32>();
+        let out: ArrayRef = Arc::new(
+            col.iter().map(|v| v.map(str::to_uppercase)).collect::<StringArray>(),
+        );
+        RecordBatch::try_new(params.output_schema.clone(), vec![out])
+            .map_err(|e| RpcError::runtime_error(e.to_string()))
+    }
+}`} />
+
+</div>
+
+<div class="api-member">
+
+<a id="ADDABLE"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">constant</span> `ADDABLE`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L31" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub const ADDABLE: TypeBound = TypeBound {
+    name: "_is_addable_type",
+    pred: is_addable,
+};`} />
+
+<p class="api-section">Description</p>
+
+`_is_addable_type`: integer | floating | decimal | temporal.
+
+</div>
+
+<div class="api-member">
+
+<a id="ArgSpec"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ArgSpec`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L71" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct ArgSpec {
+    pub name: String,
+    pub position: i32,
+    pub arrow_type: String,
+    pub doc: String,
+    pub is_const: bool,
+    pub is_varargs: bool,
+    pub arrow_data_type: Option<DataType>,
+    pub type_bound: Option<TypeBound>,
+    pub choices: Option<Vec<serde_json::Value>>,
+    pub ge: Option<f64>,
+    pub le: Option<f64>,
+    pub gt: Option<f64>,
+    pub lt: Option<f64>,
+    pub pattern: Option<String>,
+    pub default: Option<serde_json::Value>,
+}`} />
+
+<p class="api-section">Description</p>
+
+Per-argument specification, used to build the function's wire arg schema
+(`FunctionInfo.arguments`) and validate type bounds at bind time.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="ArgSpec.any_column"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `any_column`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L130" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn any_column(name: &amp;str, position: i32, doc: &amp;str) -&gt; Self</code></pre>
+
+A positional, non-const ANY-typed column argument.
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.as_const"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `as_const`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L169" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn as_const(mut self) -&gt; Self</code></pre>
+
+Mark this spec const.
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.column"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `column`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L136" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn column(name: &amp;str, position: i32, arrow_type: &amp;str, doc: &amp;str) -&gt; Self</code></pre>
+
+A positional, non-const column argument of a concrete VGI type string
+(e.g. `"int32"`, `"varchar"`, `"binary"`).
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.column_typed"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `column_typed`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L141" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn column_typed(name: &amp;str, position: i32, ty: DataType, doc: &amp;str) -&gt; Self</code></pre>
+
+A positional column argument with an explicit Arrow type.
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.const_arg"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `const_arg`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L148" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn const_arg(name: &amp;str, position: i32, arrow_type: &amp;str, doc: &amp;str) -&gt; Self</code></pre>
+
+A positional const (bind-time scalar) argument of a concrete VGI type.
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.const_typed"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `const_typed`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L155" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn const_typed(name: &amp;str, position: i32, ty: DataType, doc: &amp;str) -&gt; Self</code></pre>
+
+A positional const argument with an explicit Arrow type.
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.varargs"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `varargs`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L163" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn varargs(mut self) -&gt; Self</code></pre>
+
+Mark this spec variadic (consumes all remaining columns).
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.with_bound"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `with_bound`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L175" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn with_bound(mut self, bound: TypeBound) -&gt; Self</code></pre>
+
+Attach a type bound.
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.with_choices"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `with_choices`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L181" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn with_choices<I, V>(mut self, choices: I) -> Self
+where
+    I: IntoIterator<Item = V>,
+    V: Into<serde_json::Value>,`} />
+
+Declare the closed set of allowed values (`vgi_choices`).
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.with_default"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `with_default`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L221" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn with_default&lt;V: Into&lt;serde_json::Value&gt;&gt;(mut self, default: V) -&gt; Self</code></pre>
+
+Default value for the argument (`vgi_default`).
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.with_ge"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `with_ge`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L191" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn with_ge(mut self, v: f64) -&gt; Self</code></pre>
+
+Inclusive lower bound (value \>= `v`), surfaced in `vgi_range`.
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.with_gt"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `with_gt`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L203" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn with_gt(mut self, v: f64) -&gt; Self</code></pre>
+
+Exclusive lower bound (value \> `v`), surfaced in `vgi_range`.
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.with_le"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `with_le`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L197" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn with_le(mut self, v: f64) -&gt; Self</code></pre>
+
+Inclusive upper bound (value \<= `v`), surfaced in `vgi_range`.
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.with_lt"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `with_lt`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L209" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn with_lt(mut self, v: f64) -&gt; Self</code></pre>
+
+Exclusive upper bound (value \< `v`), surfaced in `vgi_range`.
+
+</div>
+<div class="api-member">
+
+<a id="ArgSpec.with_pattern"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `with_pattern`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L215" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn with_pattern(mut self, pattern: &amp;str) -&gt; Self</code></pre>
+
+Regex the value must match (`vgi_pattern`).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="BindParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `BindParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L476" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct BindParams {
+    pub input_schema: Option<SchemaRef>,
+    pub arguments: crate::arguments::Arguments,
+    pub settings: crate::settings::Settings,
+    pub secrets: crate::secrets::Secrets,
+    pub resolved_secrets_provided: bool,
+    pub auth_principal: Option<String>,
+    pub attach_opaque_data: Option<Vec<u8>>,
+    pub transaction_opaque_data: Option<Vec<u8>>,
+    pub storage: Option<crate::storage::SharedStorage>,
+    pub copy_from: Option<crate::protocol::dtos::CopyFromContext>,
+    pub copy_to: Option<crate::protocol::dtos::CopyToContext>,
+}`} />
+
+<p class="api-section">Description</p>
+
+Parameters delivered to `on_bind`.
+
+</div>
+
+<div class="api-member">
+
+<a id="BindResponse"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `BindResponse`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L506" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct BindResponse {
+    pub output_schema: SchemaRef,
+    pub opaque_data: Vec<u8>,
+}`} />
+
+<p class="api-section">Description</p>
+
+Result of `on_bind`.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="BindResponse.result"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `result`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L513" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn result(ty: DataType) -&gt; Self</code></pre>
+
+A single `result` column of `ty` (the canonical scalar bind result).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="FunctionMetadata"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `FunctionMetadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L386" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct FunctionMetadata {
+    pub description: String,
+    pub stability: Option<String>,
+    pub null_handling: Option<String>,
+    pub categories: Vec<String>,
+    pub examples: Vec<FunctionExample>,
+    pub tags: Vec<(String, String)>,
+    pub return_type: Option<DataType>,
+    pub projection_pushdown: bool,
+    pub filter_pushdown: bool,
+    pub sampling_pushdown: bool,
+    pub auto_apply_filters: bool,
+    pub supports_batch_index: bool,
+    pub partition_kind: Option<String>,
+    pub order_preservation: Option<String>,
+    pub sink_order_dependent: bool,
+    pub source_order_dependent: bool,
+    pub requires_input_batch_index: bool,
+    pub supports_window: bool,
+    pub streaming_partitioned: bool,
+    pub late_materialization: bool,
+    pub required_settings: Vec<String>,
+    pub required_secrets: Vec<crate::secrets::SecretLookup>,
+    pub max_workers: i32,
+    pub input_from_args: bool,
+}`} />
+
+<p class="api-section">Description</p>
+
+Optimizer- and discovery-facing function metadata (`FunctionInfo`).
+
+</div>
+
+<div class="api-member">
+
+<a id="MULTIPLIABLE"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">constant</span> `MULTIPLIABLE`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L36" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub const MULTIPLIABLE: TypeBound = TypeBound {
+    name: "_is_multipliable_type",
+    pred: is_multipliable,
+};`} />
+
+<p class="api-section">Description</p>
+
+`_is_multipliable_type`: integer | floating | decimal (no temporal).
+
+</div>
+
+<div class="api-member">
+
+<a id="ProcessParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ProcessParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L525" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct ProcessParams {
+    pub output_schema: SchemaRef,
+    pub input_schema: Option<SchemaRef>,
+    pub execution_id: Vec<u8>,
+    pub substream_id: Option<Vec<u8>>,
+    pub init_opaque_data: Vec<u8>,
+    pub arguments: crate::arguments::Arguments,
+    pub settings: crate::settings::Settings,
+    pub secrets: crate::secrets::Secrets,
+    pub auth_principal: Option<String>,
+    pub projection_ids: Option<Vec<i64>>,
+    pub pushdown_filters: Option<Vec<u8>>,
+    pub join_keys: Vec<Vec<u8>>,
+    pub storage: Option<crate::storage::SharedStorage>,
+    pub order_by_column: Option<String>,
+    pub order_by_direction: Option<String>,
+    pub order_by_null_order: Option<String>,
+    pub order_by_limit: Option<i64>,
+    pub tablesample_percentage: Option<f64>,
+    pub tablesample_seed: Option<i64>,
+    pub attach_opaque_data: Option<Vec<u8>>,
+    pub at_unit: Option<String>,
+    pub at_value: Option<String>,
+    pub copy_from: Option<crate::protocol::dtos::CopyFromContext>,
+    pub if_none_match: Option<String>,
+    pub if_modified_since: Option<String>,
+}`} />
+
+<p class="api-section">Description</p>
+
+Parameters delivered to `process`.
+
+</div>
+
+<div class="api-member">
+
+<a id="TypeBound"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `TypeBound`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L19" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct TypeBound {
+    pub name: &'static str,
+    pub pred: fn(&DataType) -> bool,
+}`} />
+
+<p class="api-section">Description</p>
+
+A named type-bound predicate for ANY-typed arguments. Checked at bind:
+the input field type must satisfy the predicate or bind errors with the
+bound's `name` (mirrors Python's `type_bound=<predicate>`).
+
+</div>
+
+<div class="api-member">
+
+<a id="validate_arg_constraints"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `validate_arg_constraints`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L264" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn validate_arg_constraints(
+    specs: &[ArgSpec],
+    args: &crate::arguments::Arguments,
+) -> Result<()>`} />
+
+<p class="api-section">Description</p>
+
+Enforce a function's const-argument value constraints at bind time.
+
+Const arguments are bind-time scalars, so their declared `choices`, numeric
+range (`ge`/`le`/`gt`/`lt`), and `pattern` constraints are validated once
+here — mirroring the Python SDK, so a discovered constraint (surfaced via
+`vgi_function_arguments()`) is actually binding. A violating value returns an
+`RpcError::value_error`; a null const value skips its value constraints, and
+column (non-const) arguments are not enforced here (type bounds are
+[`validate_type_bounds`]'s job).
+
+</div>
+
+<div class="api-member">
+
+<a id="validate_type_bounds"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `validate_type_bounds`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/function.rs#L229" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn validate_type_bounds(specs: &amp;[ArgSpec], input_schema: Option&lt;&amp;SchemaRef&gt;) -&gt; Result&lt;()&gt;</code></pre>
+
+<p class="api-section">Description</p>
+
+Validate each spec's type bound against the input schema. Errors (value
+error) naming the failed bound, matching Python's `SchemaValidationError`.
+
+</div>

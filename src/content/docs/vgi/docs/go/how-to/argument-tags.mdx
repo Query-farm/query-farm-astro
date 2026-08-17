@@ -1,0 +1,159 @@
+---
+title: Argument tags
+description: "The complete vgi:\"...\" struct-tag grammar — every key, the Go-type inference table, and the constraints DuckDB enforces."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+A `vgi:"..."` tag is how a Go worker declares a function's signature. One declaration drives two
+things that would otherwise drift apart: the `ArgSpec` list the catalog advertises to DuckDB, and the
+binding of runtime values back into your struct.
+
+<CodeBlock code={`type geoArgs struct {
+    Latitude  float64 \`vgi:"pos=0,const=false,doc=Latitude column"\`
+    Longitude float64 \`vgi:"pos=1,const=false,doc=Longitude column"\`
+    Precision int64   \`vgi:"name=precision,default=4,ge=0,le=10,doc=Rounding precision"\`
+}`} lang="go" tryable={false} />
+
+`vgi.DeriveArgSpecs(geoArgs{})` turns that into specs; `vgi.BindArgs(params.Args, &args)` fills the
+struct at runtime. The `Typed*` interfaces do both for you.
+
+<Callout type="warning" title="A malformed tag panics at startup">
+`DeriveArgSpecs` panics rather than returning an error — a bad tag is a programming mistake, and
+failing at registration beats failing at query time. Expect to see it the first time you run the
+worker, not on first use of the function.
+</Callout>
+
+## Tag keys
+
+Keys are case-insensitive and comma-separated. Put `doc=` **last**, since its value may itself
+contain commas.
+
+<table>
+<thead>
+<tr><th>Key</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>pos=N</code></td><td>Positional index. Default <code>-1</code>, meaning named-only.</td></tr>
+<tr><td><code>name=X</code></td><td>Argument name. Defaults to the snake_case of the field name.</td></tr>
+<tr><td><code>const</code></td><td><code>IsConst</code>, and it defaults to <strong>true</strong>. Write <code>const=false</code> for a column argument — the one default most likely to surprise you.</td></tr>
+<tr><td><code>default=V</code></td><td>Gives the argument a default; <code>V</code> is its string form, parsed at bind against the declared type.</td></tr>
+<tr><td><code>doc=…</code></td><td>Description, surfaced by <code>vgi_function_arguments()</code>. Single-quote it if it contains commas.</td></tr>
+<tr><td><code>type=X</code></td><td>Override the inferred Arrow type. See the warning below.</td></tr>
+<tr><td><code>varargs</code></td><td>A slice field consumes <code>Positional[pos:]</code>. The spec advertises the <em>element</em> type, not the slice.</td></tr>
+<tr><td><code>bound=a+b</code></td><td>Type-bound predicates, OR-ed with <code>+</code>. Pair with an <code>any</code> field.</td></tr>
+<tr><td><code>-</code></td><td>Skip this field entirely.</td></tr>
+</tbody>
+</table>
+
+### Constraints
+
+These are encoded into the argument's Arrow field metadata, so `vgi_function_arguments()` and any
+agent introspecting the catalog can describe the argument — and on a **const** argument they are
+enforced at bind.
+
+<table>
+<thead>
+<tr><th>Key</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ge=</code>, <code>le=</code>, <code>gt=</code>, <code>lt=</code></td><td>Numeric bounds, inclusive and exclusive.</td></tr>
+<tr><td><code>choices=a,b,c</code></td><td>A closed set. Quote it (<code>choices='a,b,c'</code>) to keep the commas. Values are parsed against the declared type.</td></tr>
+<tr><td><code>pattern=</code></td><td>A regex the value must match.</td></tr>
+</tbody>
+</table>
+
+A violated constraint on a const argument produces a bind error naming the argument, its position and
+the rule — the `series(-1)` failure in the [table tutorial](/vgi/docs/go/tutorial/table/#step-3--call-it)
+is exactly this.
+
+## Go type → Arrow type
+
+Inference means you rarely need `type=` at all.
+
+<table>
+<thead>
+<tr><th>Go field type</th><th>Arrow type</th></tr>
+</thead>
+<tbody>
+<tr><td><code>string</code></td><td><code>varchar</code></td></tr>
+<tr><td><code>int</code>, <code>int64</code></td><td><code>int64</code></td></tr>
+<tr><td><code>int32</code>, <code>int16</code>, <code>int8</code></td><td>matching int width</td></tr>
+<tr><td><code>uint64</code>, <code>uint32</code>, …</td><td>matching uint width</td></tr>
+<tr><td><code>float64</code></td><td><code>double</code></td></tr>
+<tr><td><code>float32</code></td><td><code>float</code></td></tr>
+<tr><td><code>bool</code></td><td><code>bool</code></td></tr>
+<tr><td><code>[]byte</code></td><td><code>blob</code></td></tr>
+<tr><td><code>[]T</code></td><td>list of inferred <code>T</code></td></tr>
+<tr><td><code>[N]T</code> (N&gt;0, T≠byte)</td><td>fixed-size list of N inferred <code>T</code></td></tr>
+<tr><td><code>struct&#123;…&#125;</code></td><td>struct, field names preserved</td></tr>
+<tr><td><code>time.Time</code></td><td><code>timestamp[us, UTC]</code></td></tr>
+<tr><td><code>interface&#123;&#125;</code> / <code>any</code></td><td><code>any</code> — pair with <code>bound=</code></td></tr>
+</tbody>
+</table>
+
+<Callout type="warning" title="`type=` takes Arrow names, not SQL names">
+The tag wants `int64`, not `bigint`; `timestamp_us`, not `timestamp`. Several SQL spellings *are*
+valid — `varchar`, `double`, `boolean`, `blob` — which is exactly what makes the others look
+plausible.
+
+Since **v0.22.0** an unrecognised name is rejected at registration with the right name suggested. On
+**v0.21.0 and earlier it silently became `VARCHAR`**, and you found out much later from a bind error
+naming the call site. Prefer omitting `type=` on either version.
+</Callout>
+
+## Accepting several types with `bound=`
+
+An `any` field accepts whatever DuckDB passes. `bound=` narrows that to a family, so overload
+resolution can pick your function and the error is good when it can't:
+
+<CodeBlock code={`type doubleArgs struct {
+    Value any \`vgi:"pos=0,const=false,bound=multipliable,doc=Numeric value to double"\`
+}`} lang="go" tryable={false} />
+
+Available predicates: `numeric`, `integer`, `floating`, `decimal`, `temporal`, `addable`,
+`multipliable`. Join with `+` for OR — `bound=integer+floating`.
+
+<InfoTip label="Reading the value" title="A bound argument arrives untyped">
+The column comes through as an `arrow.Array` you must switch on. `vgi.NumericDispatch` handles the
+common int64/float64 split for you; `vgi.AsTyped[T]` asserts a concrete array type.
+</InfoTip>
+
+## Const vs column arguments
+
+The distinction decides *when* your function sees the value, and `const` defaulting to true is the
+single most common tag mistake.
+
+<table>
+<thead>
+<tr><th></th><th><code>const</code> (default)</th><th><code>const=false</code></th></tr>
+</thead>
+<tbody>
+<tr><td>Value is</td><td>A literal, fixed for the whole scan</td><td>A column, one value per row</td></tr>
+<tr><td>Available at</td><td>Bind — read it in <code>OnBind</code> / <code>NewState</code></td><td>Process — read it off the batch</td></tr>
+<tr><td>Constraints</td><td>Enforced at bind</td><td>Advisory; describe the argument for discovery</td></tr>
+<tr><td>Bound into your struct?</td><td>Yes, by <code>BindArgs</code></td><td>No — the column is on the <code>RecordBatch</code></td></tr>
+</tbody>
+</table>
+
+Leave `const` at its default for options like a precision or a mode; write `const=false` for the data
+the function actually transforms.
+
+## What tags cannot declare
+
+A **TABLE** argument — a whole relation streamed in — is not a value, so it cannot be bound into a
+field. Write it as an explicit `ArgSpec` instead:
+
+<CodeBlock code={`func (*FilterPositiveFn) ArgumentSpecs() []vgi.ArgSpec {
+    return []vgi.ArgSpec{
+        {Name: "data", Position: 0, ArrowType: "table", Doc: "Rows to filter"},
+    }
+}`} lang="go" tryable={false} />
+
+## Next steps
+
+- **See them in use** → [Function patterns](/vgi/docs/go/how-to/function-patterns/).
+- **The wire format they produce** → [Argument serialization](/vgi/docs/concepts/argument-serialization/).
+- **Exact types** → [Arguments](/vgi/docs/go/api/arguments/).

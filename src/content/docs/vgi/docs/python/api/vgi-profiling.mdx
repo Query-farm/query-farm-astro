@@ -1,0 +1,59 @@
+---
+title: vgi.profiling
+description: API reference for vgi.profiling
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">Module overview</p>
+
+Opt-in CPU profiling for VGI worker processes.
+
+A worker is normally a subprocess someone else launched — a container, a test
+harness, a DuckDB client spawning it over stdio — so the usual ways of profiling
+Python (``python -m cProfile``, an interactive session) are not available to
+whoever needs the answer. Setting one environment variable is.
+
+Shared by every worker entry point rather than living in one CLI, so that
+``vgi-serve`` and the fixture servers profile identically.
+
+
+</div>
+
+<a id="vgi.profiling.maybe_start_profile"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `maybe_start_profile`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/profiling.py#L23" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>maybe_start_profile() -&gt; None</code></pre>
+
+Start a ``cProfile`` profiler when ``VGI_WORKER_PROFILE`` names a path.
+
+Set ``VGI_WORKER_PROFILE`` to a directory (or a file path) and the worker
+writes ``pstats`` data on exit, readable with :mod:`pstats`, snakeviz, or
+``python -m pstats``. A directory gets one file per process
+(``worker-<pid>.prof``), which is what you want when the thing under
+investigation spawns more than one worker.
+
+**All threads are covered by the single profiler.** That matters because
+under ``--http`` a worker runs on waitress, which serves every request on a
+pool thread — a main-thread-only profile would faithfully report time spent
+in ``select()`` and nothing about the work being measured. Since Python 3.12
+``cProfile`` is built on :mod:`sys.monitoring`, whose tool registration is
+process-global rather than per-thread, so one profiler observes the pool
+threads too.
+
+The corollary is that there can be only **one** active profiler in the
+process: ``sys.monitoring`` allows a given tool id to be claimed once, so a
+profiler-per-thread raises ``ValueError: Another profiling tool is already
+active`` in every waitress thread — and because that happens as the thread
+starts, the server never accepts a connection at all.
+
+``atexit`` alone would not be enough: a worker is normally stopped with
+``SIGTERM``, whose default action terminates without unwinding, so the
+profile would be lost on every normal shutdown. A handler turns it into an
+ordinary exit — but only if nothing else has claimed ``SIGTERM``, since
+stealing another component's shutdown path would be a worse bug than a
+missing profile.
+

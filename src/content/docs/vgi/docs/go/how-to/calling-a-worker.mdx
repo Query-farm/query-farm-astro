@@ -1,0 +1,154 @@
+---
+title: Call a Go worker from code
+description: "Drive a Go VGI worker from a program: through DuckDB with the haybarn engine, or directly with the Python vgi client."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+
+How to drive a worker from a program rather than a SQL shell — for tests, scripts, or an application
+that embeds DuckDB.
+
+<Callout type="note" title="vgi-go builds workers, not clients">
+The Go SDK ships no client — a worker's job is to be called by an engine, and the engine is DuckDB.
+So there are three ways to exercise one, in rough order of how often you'll want them: **Go unit
+tests** against the function values directly, **DuckDB** against the built binary, and the **Python
+client** when you want to call a single function with no engine in the loop.
+</Callout>
+
+## Testing in Go
+
+Most of a worker is testable without any of this. A function is an ordinary Go value: build a
+`RecordBatch`, call the method, assert on what comes back.
+
+<CodeBlock code={`func TestDoubleDoublesAndPreservesNulls(t *testing.T) {
+    mem := memory.NewGoAllocator()
+    b := array.NewInt64Builder(mem)
+    b.AppendValues([]int64{1, 2, 0}, []bool{true, true, false})
+    col := b.NewArray()
+    defer col.Release()
+
+    in := array.NewRecordBatch(
+        arrow.NewSchema([]arrow.Field{{Name: "n", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil),
+        []arrow.Array{col}, 3)
+    defer in.Release()
+
+    params := &vgi.ProcessParams{OutputSchema: arrow.NewSchema(
+        []arrow.Field{{Name: "result", Type: arrow.PrimitiveTypes.Int64, Nullable: true}}, nil)}
+
+    out, err := (&DoubleFn{}).ProcessTyped(context.Background(), &doubleArgs{}, params, in)
+    if err != nil {
+        t.Fatalf("ProcessTyped: %v", err)
+    }
+    defer out.Release()
+
+    if out.NumRows() != in.NumRows() {
+        t.Fatalf("a scalar must not change the row count")
+    }
+}`} lang="go" tryable={false} />
+
+Two things are worth asserting that aren't obvious:
+
+- **The registered signature.** `fn.ArgumentSpecs()[0].ArrowType` is what DuckDB binds against, and
+  getting it wrong fails at the *call site* rather than in your code. A one-line assertion catches a
+  bad `type=` tag at `go test` time instead of at query time.
+- **Phase composition for aggregates.** An aggregate has no client entry point, so drive
+  `Update` → `Combine` → `Finalize` directly. That is the only way to check the properties that
+  matter: that `Combine` is order-independent, and that an all-NULL group is never created (so `SUM`
+  returns `NULL`, not `0`).
+
+Every worker in these docs ships with tests of exactly this shape — see `examples/docs/*/main_test.go`
+in the [vgi-go repository](https://github.com/Query-farm/vgi-go/tree/main/examples/docs).
+
+<Callout type="note" title="What a Go test can't reach">
+Argument binding through the extension, parallel `Update` across DuckDB threads, multi-batch chunking,
+and the SQL-level NULL semantics all live on the other side of the boundary. For those, drive the
+built binary through DuckDB — which is the next section, and is how every example here was verified
+before publication.
+</Callout>
+
+## Through DuckDB (the production path)
+
+This is how a worker is actually consumed, so it is also the most faithful thing to test against. Any
+DuckDB client works as long as the engine carries the `vgi` extension — **[Haybarn](/haybarn)** is the
+supported one.
+
+<CodeBlock code={`import haybarn
+
+con = haybarn.connect()                       # same API as duckdb.connect()
+con.execute("INSTALL vgi FROM community; LOAD vgi;")
+con.execute("ATTACH 'calc' (TYPE vgi, LOCATION './calc')")
+
+con.execute("SELECT calc.double(21)").fetchone()        # (42,)
+con.execute("SELECT * FROM calc.series(3)").fetchall()  # [(0,), (1,), (2,)]`} lang="python" tryable={false} />
+
+`LOCATION` is the command the engine runs, so it can be a built binary, `go run ./cmd/worker`, or an
+HTTP URL if the worker is already serving.
+
+<InfoTip label="Why Haybarn?" title="The extension is distributed through Haybarn">
+The `vgi` extension isn't in DuckDB's public community repository, so a plain `import duckdb` can't
+`INSTALL vgi` today. `haybarn` is DuckDB-compatible (`import haybarn as duckdb` works) and carries
+the extension.
+</InfoTip>
+
+### Testing a worker this way
+
+Every Go example in these docs was verified exactly like this before being published — build the
+binary, attach it, assert on real query results:
+
+<CodeBlock code={`con.execute("ATTACH 'agg' (TYPE vgi, LOCATION './sumworker')")
+rows = con.execute(
+    "SELECT category, agg.vgi_sum(value) AS total "
+    "FROM (VALUES (0,10),(0,5),(1,1),(1,2),(1,3)) AS t(category,value) "
+    "GROUP BY category ORDER BY category"
+).fetchall()
+assert rows == [(0, 15), (1, 6)]`} lang="python" tryable={false} />
+
+It exercises the paths a Go unit test cannot reach: argument binding through the extension, parallel
+`Update` across DuckDB threads, `Combine` merging partials, NULL semantics, and multi-batch chunking.
+Several bugs in these examples were caught this way and by nothing else.
+
+## Directly, with the Python client
+
+When you want to call one function without an engine in the loop — a fast test, a debugging session —
+use the Python SDK's `Client`. It speaks the same protocol a Go worker serves.
+
+<CodeBlock code={`from vgi.client import Client
+from vgi.arguments import Arguments
+import pyarrow as pa
+
+with Client(server_path=["./calc"], pool=None) as client:
+    batches = client.table_function(
+        function_name="series",
+        schema_name="main",             # required since vgi-python 0.18.0
+        arguments=Arguments(positional=[pa.scalar(3, pa.int64())]),
+    )
+    print([b.to_pydict() for b in batches])`} lang="python" tryable={false} />
+
+`server_path` takes an **argv sequence**, which matters when an argument contains spaces — splitting a
+command string is ambiguous on Windows. `pool=None` gives this client sole ownership of the process,
+which is what makes `client.stop(force=True)` able to kill a wedged worker.
+
+<Callout type="note" title="Transports">
+`Client(transport="http", base_url=...)` and `Client.from_tcp(host, port)` reach a worker you started
+yourself with `RunHttp` or `RunTcp`. See [Serve over HTTP](/vgi/docs/go/how-to/serve-http/) for the Go
+side of each.
+</Callout>
+
+## The CLI
+
+`vgi-client`, installed with the Python SDK, does the same thing without writing any code — useful for
+poking at a worker you just built:
+
+<CodeBlock code={`pip install vgi-python
+
+vgi-client --function series --args '[3]' --worker ./calc
+vgi-client catalog list --worker ./catalogworker`} lang="bash" tryable={false} />
+
+Full flag surface: [CLI reference](/vgi/docs/python/how-to/cli-reference/).
+
+## Next steps
+
+- **Serve it as a network service** → [Serve over HTTP](/vgi/docs/go/how-to/serve-http/).
+- **The client's own docs** → [Use VGI from a Python app](/vgi/docs/python/how-to/python-app/).

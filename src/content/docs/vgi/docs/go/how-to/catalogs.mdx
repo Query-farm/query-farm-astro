@@ -1,0 +1,171 @@
+---
+title: Expose a catalog
+description: "How a Go worker presents itself to DuckDB as a catalog: schemas, function-backed tables, views, and ATTACH."
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import Collapsible from '../../../../../../components/docs/Collapsible.astro';
+import InfoTip from '../../../../../../components/docs/InfoTip.astro';
+import catalogSrc from '../../../../../../examples/vgi-go/catalog.go?raw';
+
+How a worker presents itself to DuckDB as a **catalog** — a named namespace of schemas, functions,
+tables and views you reach with `ATTACH`. Read this once you've done the
+[tutorial](/vgi/docs/go/tutorial/scalar/) and want to expose *data*, not just functions.
+
+## Prerequisites
+
+- A worker you can build and run (see the [tutorial](/vgi/docs/go/tutorial/scalar/)).
+- Familiarity with the [function patterns](/vgi/docs/go/how-to/function-patterns/).
+
+## The model
+
+Every worker already has a catalog — `vgi.WithCatalogName("calc")` in the tutorial named it. What
+this guide adds is *contents*: schemas holding tables and views, addressed by qualified name.
+
+<CodeBlock code={`ATTACH 'cat' (TYPE vgi, LOCATION './catalogworker');
+
+-- catalog.schema.object
+SELECT * FROM cat.data.cities;
+
+-- functions land in the catalog's default schema
+SELECT cat.main.some_function(1);`} lang="sql" tryable={false} />
+
+Here is a worker that exposes one table and one view:
+
+<Collapsible summary="catalog/main.go">
+<CodeBlock code={catalogSrc} lang="go" tryable={false} />
+</Collapsible>
+
+<CodeBlock code={`SELECT * FROM cat.data.cities ORDER BY name;`} lang="sql" tryable={false} />
+
+<CodeBlock code={`┌─────────────────┬────────────┐
+│      name       │ population │
+├─────────────────┼────────────┤
+│ Charlottesville │      51000 │
+│ Richmond        │     230000 │
+│ Virginia Beach  │     457000 │
+└─────────────────┴────────────┘`} lang="text" tryable={false} />
+
+## Function-backed tables
+
+A `CatalogTable` with a `Function` and `FuncArgs` is *function-backed*: DuckDB scans it by calling
+that table function with those arguments already bound. The user writes `SELECT * FROM cat.data.cities`
+and never passes an argument, never sees the function.
+
+<CodeBlock code={`w.RegisterCatalogTable("data", vgi.CatalogTable{
+    Name:     "cities",
+    Comment:  "Every city the worker knows about",
+    Columns:  citiesSchema,
+    Function: NewCitiesScan(),
+    FuncArgs: []vgi.CatalogTableArg{
+        {Position: 0, Value: int64(0), Type: arrow.PrimitiveTypes.Int64},
+    },
+    NotNull:        []string{"name"},
+    ColumnComments: map[string]string{"population": "Most recent estimate"},
+})`} lang="go" tryable={false} />
+
+Declaring `Columns` explicitly means DuckDB can describe the table without calling the worker at all.
+Leave it nil and the columns are derived from the function's `OnBind` response instead — one fewer
+place to keep in sync, at the cost of a round trip to describe.
+
+Registering the table also registers its backing function in the catalog's **default** schema, not
+the table's. That is where the extension resolves a function-backed table's scan.
+
+<InfoTip label="Same as DuckDB?" title="How this differs from native DuckDB tables">
+VGI tables live in DuckDB's catalog model, so you query them with ordinary qualified names. The
+difference is where the rows come from: a native table is stored and managed by DuckDB, while a VGI
+table delegates its scan to your worker.
+</InfoTip>
+
+## Views
+
+A view is pure SQL. Once the definition has been advertised at attach time, DuckDB evaluates it
+itself — there is no worker round trip for the view as such, only for whatever tables it reads.
+
+<CodeBlock code={`w.RegisterCatalogView("data", vgi.CatalogView{
+    Name:       "big_cities",
+    Comment:    "Cities with a population of at least 100,000",
+    Definition: "SELECT * FROM cat.data.cities WHERE population >= 100000",
+})`} lang="go" tryable={false} />
+
+<Callout type="note" title="Qualifying the definition with the catalog name is safe">
+`cat` is hardcoded there, which normally would be fragile — but the name in `ATTACH` is not a free
+alias. It must match `WithCatalogName`, and attaching under any other name fails at once with
+*"No worker handles catalog 'mydb'"*. So the catalog name your worker declares is the name the view
+will always be read under, and qualifying with it is correct rather than a latent bug.
+</Callout>
+
+<Callout type="warning" title="Scan state must be gob-encodable, and the SDK checks at registration">
+A table function's per-scan state has to survive an HTTP continuation, so it is gob-encoded. Two
+things gob cannot handle, both caught by `AsTableFunction` **at registration** rather than mid-query:
+
+- a struct whose fields are all **unexported** — gob encodes nothing and reports
+  *"type … has no exported fields"*;
+- an exported field of a kind gob can't encode: an interface (commonly an `arrow.Record` stashed to
+  emit later), a chan, a func, or an `unsafe.Pointer`.
+
+That is why `city` in the example exports `Name` and `Pop`. Store plain serializable Go values in
+state and rebuild Arrow batches in `Process`.
+</Callout>
+
+<Callout type="warning" title="Keep a cursor in state, not the result set">
+The example puts the whole filtered slice in `citiesState.Rows`, which is honest for three rows and
+the wrong shape for three million: state is carried between `Process` calls and gob-encoded across an
+HTTP continuation, so whatever you hold there is paid for repeatedly. A real scan stores a **cursor**
+— an offset, a page token, an iterator id — and fetches each batch inside `Process`.
+</Callout>
+
+## What else a table can declare
+
+`CatalogTable` carries considerably more than the example uses. The full list is on
+[Catalogs](/vgi/docs/go/api/catalog/#CatalogTable); the ones worth knowing about early:
+
+<table>
+<thead>
+<tr><th>Field</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>NotNull</code>, <code>Unique</code>, <code>PrimaryKey</code>, <code>Check</code>, <code>ForeignKey</code></td><td>Constraints, surfaced to DuckDB's planner and to <code>duckdb_constraints()</code>.</td></tr>
+<tr><td><code>Defaults</code>, <code>Generated</code></td><td>Column defaults and generated (virtual) column expressions.</td></tr>
+<tr><td><code>ColumnComments</code>, <code>Tags</code></td><td>Documentation that shows up in <code>duckdb_columns()</code> and <code>duckdb_tables()</code>.</td></tr>
+<tr><td><code>Statistics</code>, <code>CardinalityEstimate</code></td><td>Optimizer hints — see <a href="/vgi/docs/go/how-to/pushdown-and-statistics/">Integrate with the optimizer</a>.</td></tr>
+<tr><td><code>RequiredFilters</code></td><td>Refuse an unbounded scan. AND-of-ORs of column paths; the extension throws a <code>BinderException</code> naming any unsatisfied group.</td></tr>
+<tr><td><code>SupportsTimeTravel</code></td><td>The table answers <code>AT (VERSION …)</code> / <code>AT (TIMESTAMP …)</code> queries.</td></tr>
+</tbody>
+</table>
+
+### Requiring a filter
+
+A table fronting a remote API often cannot be scanned wholesale — the upstream needs a key. Declaring
+`RequiredFilters` makes the extension reject such a scan at bind rather than issuing an unbounded
+request:
+
+<CodeBlock code={`// "accession_number AND one of (ticker, cik)"
+RequiredFilters: [][]string{{"accession_number"}, {"ticker", "cik"}},`} lang="go" tryable={false} />
+
+The outer list is an **AND** of groups, each inner group an **OR** of dotted-path column references.
+Satisfaction is prefix-based, so a filter on a shorter path satisfies every path it prefixes. Empty
+(the default) means no enforcement.
+
+## Worker-level options
+
+Some capabilities are declared on the worker rather than a table:
+
+<table>
+<thead>
+<tr><th>Option</th><th>What it does</th></tr>
+</thead>
+<tbody>
+<tr><td><code>vgi.WithCatalogName</code>, <code>vgi.WithCatalogComment</code></td><td>Name and describe the catalog itself.</td></tr>
+<tr><td><code>vgi.WithGlobalFunctions</code>, <code>vgi.WithGlobalFunctionPrefix</code></td><td>Publish selected functions into DuckDB's global namespace, so they are callable without naming the catalog. Best-effort and advisory — treat it as an alias for the qualified name.</td></tr>
+<tr><td><code>vgi.WithAttachCatalogs</code></td><td>Ask the client to <code>ATTACH</code> companion catalogs (a lakehouse, a Postgres) alongside yours. Namespace the alias by your own catalog identity; collisions are rejected, never merged.</td></tr>
+</tbody>
+</table>
+
+## Next steps
+
+- **Make scans cheaper** → [Integrate with the optimizer](/vgi/docs/go/how-to/pushdown-and-statistics/).
+- **Skip the scan entirely** → [Cache results on the client](/vgi/docs/go/how-to/result-caching/).
+- **Read and write your own formats** → [Add a custom COPY format](/vgi/docs/go/how-to/copy-formats/).
+- **Exact types** → [Catalogs API reference](/vgi/docs/go/api/catalog/).

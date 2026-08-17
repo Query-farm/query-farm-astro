@@ -1,0 +1,486 @@
+---
+title: "Pushdown & statistics"
+description: "Receiving the predicates DuckDB pushed toward the scan, and reporting what you know."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Receiving the predicates DuckDB pushed toward the scan, and reporting what you know.
+
+</div>
+
+<div class="api-member">
+
+<a id="CatColStat"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `CatColStat`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/statistics.rs#L50" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct CatColStat {
+    pub column_name: String,
+    pub min: StatValue,
+    pub max: StatValue,
+    pub has_null: bool,
+    pub has_not_null: bool,
+    pub distinct_count: Option<i64>,
+    pub contains_unicode: Option<bool>,
+    pub max_string_length: Option<u64>,
+}`} />
+
+<p class="api-section">Description</p>
+
+Optimizer statistics for one column.
+
+</div>
+
+<div class="api-member">
+
+<a id="ColumnBounds"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `ColumnBounds`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L96" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct ColumnBounds {
+    pub min: Option<i64>,
+    pub max: Option<i64>,
+}`} />
+
+<p class="api-section">Description</p>
+
+Numeric `[min, max]` bounds on a column implied by pushed-down comparison
+filters (integer-coerced). Returned by
+[`PushdownFilters::get_column_bounds`]; mirrors the Python/Go `ColumnBounds`.
+
+</div>
+
+<div class="api-member">
+
+<a id="Filter"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">enum</span> `Filter`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L105" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub enum Filter {
+    Constant { column_name: String, op: String },
+    In { column_name: String },
+    JoinKeys { column_name: String },
+    IsNull { column_name: String },
+    IsNotNull { column_name: String },
+    And(Vec<Filter>),
+    Or(Vec<Filter>),
+    Struct {
+        column_name: String,
+        child_name: String,
+        child: Box<Filter>,
+    },
+    Other { kind: String, column_name: String },
+}`} />
+
+<p class="api-section">Description</p>
+
+A read-only view of one pushed-down filter — a structural projection of the
+internal filter AST, mirroring the Python/Go filter objects. Returned by
+[`PushdownFilters::get_column_filters`] / [`PushdownFilters::filters`].
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="Filter.column_name"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `column_name`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L172" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn column_name(&amp;self) -&gt; &amp;str</code></pre>
+
+The column this filter references (empty string for `And`/`Or`).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="PARTITION_COLUMN_KEY"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">constant</span> `PARTITION_COLUMN_KEY`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/partition.rs#L18" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub const PARTITION_COLUMN_KEY: &amp;str = "vgi.partition_column";</code></pre>
+
+<p class="api-section">Description</p>
+
+Field-metadata key marking a column as a VGI partition column.
+
+</div>
+
+<div class="api-member">
+
+<a id="PARTITION_VALUES_META"></a>
+## <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">constant</span> `PARTITION_VALUES_META`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/partition.rs#L20" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub const PARTITION_VALUES_META: &amp;str = "vgi_partition_values#b64";</code></pre>
+
+<p class="api-section">Description</p>
+
+Per-batch wire-metadata key carrying base64 partition (min,max) values.
+
+</div>
+
+<div class="api-member">
+
+<a id="PushdownFilters"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `PushdownFilters`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L85" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub struct PushdownFilters {
+    specs: Vec<FilterSpec>,
+    values: Vec<ArrayRef>, // value_ref N → values[N]
+    join_keys: std::collections::HashMap<String, ArrayRef>,
+}`} />
+
+<p class="api-section">Description</p>
+
+A parsed, evaluable set of pushdown filters.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="PushdownFilters.apply"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `apply`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L300" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn apply(&amp;self, batch: &amp;RecordBatch) -&gt; Result&lt;RecordBatch&gt;</code></pre>
+
+Filter `batch` to the rows that satisfy all top-level filters.
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.column_summary"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `column_summary`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L251" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn column_summary(&amp;self, column: &amp;str) -&gt; (usize, Option&lt;i64&gt;, Option&lt;i64&gt;)</code></pre>
+
+Summarize the filters on integer `column`: the total `IN`-list / join-key
+value count, and the min/max range bounds (from `>`/`<`/`=` constants).
+Used by late-materialization witnesses to report the pushed rowid filter.
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.evaluate"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `evaluate`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L307" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn evaluate(&amp;self, batch: &amp;RecordBatch) -&gt; Result&lt;BooleanArray&gt;</code></pre>
+
+Evaluate to a boolean mask (AND of all top-level filters).
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.filtered_columns"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `filtered_columns`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L503" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn filtered_columns(&amp;self) -&gt; std::collections::HashSet&lt;String&gt;</code></pre>
+
+The set of column names referenced by the top-level filters (and their
+AND/OR/struct children). Mirrors Python `{f.column_name for f in pf}` and
+the Go `FilteredColumns()`. Lets a worker discover which columns a query
+constrains (e.g. to enforce a required-column rule).
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.filters"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `filters`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L604" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn filters(&amp;self) -&gt; Vec&lt;Filter&gt;</code></pre>
+
+All top-level filters as read-only [`Filter`] views (the conjunction
+DuckDB pushed down). Mirrors Python iterating a `PushdownFilters`.
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.format_pushed"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `format_pushed`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L342" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn format_pushed(&amp;self) -&gt; String</code></pre>
+
+Format the pushed-down filters as a human-readable SQL-like string,
+matching the Python fixtures' `_format_pushed_filters`. Returns
+`"(none)"` when there are no filters.
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.format_repr"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `format_repr`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L361" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn format_repr(&amp;self) -&gt; String</code></pre>
+
+Format the filters as the Python `repr(PushdownFilters)`:
+`PushdownFilters([ConstantFilter(n < X), …])`. Returns `"(none)"` when
+empty (matching the dynamic-filter witness fixtures).
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.get_column_bounds"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `get_column_bounds`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L584" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn get_column_bounds(&amp;self, column: &amp;str) -&gt; Option&lt;ColumnBounds&gt;</code></pre>
+
+The numeric `[min, max]` bounds implied by comparison filters on
+`column` (from `=`/`<`/`<=`/`>`/`>=`/`IN`), or `None` if the column is not
+constrained. Mirrors Python `get_column_bounds` and the Go
+`GetColumnBounds`. Bounds are integer-coerced (see [`ColumnBounds`]).
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.get_column_constant"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `get_column_constant`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L552" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn get_column_constant(&amp;self, column: &amp;str) -&gt; Option&lt;ArrayRef&gt;</code></pre>
+
+The single `=` constant for `column` as a length-1 Arrow array, or `None`
+if there is no equality filter on it. Mirrors Python
+`get_column_constant` and the Go `GetColumnConstant`. Descends one level
+into a top-level `AND`.
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.get_column_filters"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `get_column_filters`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L594" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn get_column_filters(&amp;self, column: &amp;str) -&gt; Vec&lt;Filter&gt;</code></pre>
+
+The top-level filters that reference `column`, as read-only [`Filter`]
+views. Mirrors Python `get_column_filters` and the Go `GetColumnFilters`.
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.get_column_in_values"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `get_column_in_values`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L568" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn get_column_in_values(&amp;self, column: &amp;str) -&gt; Option&lt;ArrayRef&gt;</code></pre>
+
+The `IN (...)` value set for `column` as a typed Arrow array, or `None` if
+there is no `IN` filter on it. Mirrors Python `get_column_in_values` and
+the Go `GetColumnInValues`. Descends one level into a top-level `AND`.
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.get_column_values"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `get_column_values`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L524" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn get_column_values(&amp;self, column: &amp;str) -&gt; Option&lt;ArrayRef&gt;</code></pre>
+
+Resolve the discrete `=`/`IN` value set for `column` as a *typed* Arrow
+array (preserving the column's native type, so string columns like `path`
+are usable). Descends one level into a top-level `AND`. Mirrors Python
+`PushdownFilters.get_column_values` and the Go `GetColumnValues`. Returns
+`None` when the predicate is not a simple enumerable equality/IN on
+`column`. For an integer-coerced `Vec<i64>`, use
+[`PushdownFilters::get_column_values_i64`].
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.get_column_values_i64"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `get_column_values_i64`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L486" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn get_column_values_i64(&amp;self, column: &amp;str) -&gt; Option&lt;Vec&lt;i64&gt;&gt;</code></pre>
+
+Resolve the discrete value set for a column as `i64`s (the
+partition-pruning idiom; values coerced to integer). Returns `None` when
+the predicate is not enumerable (no filter, bare range, OR with a
+non-discrete branch). For string columns or to preserve the native type,
+use [`PushdownFilters::get_column_values`].
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.has_filter_for_column"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `has_filter_for_column`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L513" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn has_filter_for_column(&amp;self, column: &amp;str) -&gt; bool</code></pre>
+
+Whether any pushed-down filter references `column`. Mirrors Python
+`column in pf` and the Go `HasFilterForColumn`.
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.parse"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `parse`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L188" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn parse(bytes: &amp;[u8]) -&gt; Result&lt;PushdownFilters&gt;</code></pre>
+
+Parse the `pushdown_filters` IPC blob (no join keys).
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.parse_b64"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `parse_b64`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L194" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn parse_b64(encoded: &amp;str, join_keys: &amp;[Vec&lt;u8&gt;]) -&gt; Option&lt;PushdownFilters&gt;</code></pre>
+
+Parse a per-tick dynamic filter from the base64-encoded IPC carried in
+the `vgi_pushdown_filters` request metadata. `None` for empty/invalid.
+
+</div>
+<div class="api-member">
+
+<a id="PushdownFilters.parse_with_join_keys"></a>
+### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `parse_with_join_keys`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/pushdown.rs#L204" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn parse_with_join_keys(bytes: &amp;[u8], join_keys: &amp;[Vec&lt;u8&gt;]) -&gt; Result&lt;PushdownFilters&gt;</code></pre>
+
+Parse the filter blob, resolving `join_keys` filters against the
+supplied side join-keys IPC batches (one column each).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="StatValue"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">enum</span> `StatValue`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/statistics.rs#L21" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub enum StatValue {
+    Int64(i64),
+    Float64(f64),
+    Utf8(String),
+    Binary(Vec<u8>),
+}`} />
+
+<p class="api-section">Description</p>
+
+A typed min/max statistic value.
+
+</div>
+
+<div class="api-member">
+
+<a id="partition_field"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `partition_field`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/partition.rs#L23" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn partition_field(name: &amp;str, ty: DataType) -&gt; Field</code></pre>
+
+<p class="api-section">Description</p>
+
+Build a field marked as a VGI partition column.
+
+</div>
+
+<div class="api-member">
+
+<a id="partition_metadata"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `partition_metadata`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/partition.rs#L79" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn partition_metadata(
+    full_schema: &SchemaRef,
+    batch: &RecordBatch,
+) -> Result<Option<HashMap<String, String>>>`} />
+
+<p class="api-section">Description</p>
+
+Build the per-batch metadata map for a partition-aware emit.
+
+</div>
+
+<div class="api-member">
+
+<a id="partition_values_b64"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `partition_values_b64`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/partition.rs#L41" target="_blank" rel="noopener">source</a>
+
+<Code lang="rust" code={`pub fn partition_values_b64(
+    full_schema: &SchemaRef,
+    batch: &RecordBatch,
+) -> Result<Option<String>>`} />
+
+<p class="api-section">Description</p>
+
+Compute the `vgi_partition_values#b64` metadata value for a batch, or
+`None` if the (full) schema declares no partition columns or the batch is
+empty. The value is base64(IPC of a 2-row batch holding [min, max] for each
+partition column).
+
+</div>
+
+<div class="api-member">
+
+<a id="serialize_column_statistics"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `serialize_column_statistics`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-rust/blob/main/vgi/src/statistics.rs#L144" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>pub fn serialize_column_statistics(stats: &amp;[CatColStat]) -&gt; Result&lt;Vec&lt;u8&gt;&gt;</code></pre>
+
+<p class="api-section">Description</p>
+
+Serialize per-column statistics to the IPC batch the extension expects.
+
+</div>

@@ -1,0 +1,247 @@
+---
+title: "Table-in-out functions"
+description: "Streaming a relation through, batch by batch."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Streaming a relation through, batch by batch.
+
+</div>
+
+<div class="api-member">
+
+<a id="PassthroughTIOFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `PassthroughTIOFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/tableinout/PassthroughTIOFunction.java#L21" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public abstract class PassthroughTIOFunction implements TableInOutFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+Base for table-in-out functions whose output schema equals their input
+schema (echo, filter, repeat, exception-finalize, etc.). Mirrors the
+vgi-python `TableInOutGenerator` default-bind shape.
+
+Subclasses inherit a default `#onBind` that returns the input
+schema (with an empty-schema fallback for catalog enumeration). They still
+provide `name()`, `metadata()`, `argumentSpecs()`, and
+`createExchange()` as usual.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>BindResponse onBind(TableInOutBindParams params)</code></pre>
+
+Returns the input schema as the output schema, falling back to an empty
+schema when no input is present (catalog enumeration).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="RowTransformFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `RowTransformFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/tableinout/RowTransformFunction.java#L53" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface RowTransformFunction extends TableInOutFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+Blended ("UNNEST-style") table-in-out: positional args ARE per-row input columns.
+
+A `RowTransformFunction` collapses the classic either/or between a
+standard table function (literal args only) and a table-in-out function (an
+explicit `TABLE` subquery arg). Its **positional**
+`farm.query.vgi.function.ArgSpec`s declare its per-row input columns —
+real typed args, NO synthetic `TABLE` placeholder — so ONE registration
+serves every call shape:
+
+```java
+f(52, 13)                       -- literal   -&gt; one input row
+  FROM t, f(t.x, t.y)             -- columns   -&gt; streaming input
+  SELECT ... FROM t, LATERAL f(t.x, t.y)
+```
+
+**Contract.**
+
+  
+- Positional args are the input columns; they arrive on the exchange's
+  input batch (by declared name for fixed args, `col0..colN-1` for
+  varargs — read them positionally). They are NOT on the wire arguments.
+  
+- Named args stay bind-time scalars on `params.arguments().named()`.
+  
+- Map-shaped, per-row: 1-&gt;1, 1-&gt;N, 1-&gt;0 all work. There is
+  *no finalize* — `#hasFinalize()` is final-false here
+  (DuckDB forbids `FinalExecute` under correlated LATERAL, one of
+  the call shapes blended must serve). Accumulating functions use a
+  classic `TABLE`-input table-in-out or a
+  `farm.query.vgi.buffering.TableBufferingFunction`.
+  
+- A positional const arg must not be declared (in the column form DuckDB
+  sweeps a constant into the input subquery; in the literal form it is
+  indistinguishable from an input column). Use a named arg for optional
+  config.
+
+Implementing this interface (not a metadata flag) IS the blended signal —
+a per-arg or metadata flag could be forgotten on one of N same-named
+overloads; the type cannot. The wire `FunctionInfo.input_from_args` is
+derived from it, and the C++ extension reads that to enter the in-out
+registration branch with real-typed args and drive the literal single-row
+scan-mode. Mirrors vgi-python's `RowTransformFunction`.
+
+</div>
+
+<div class="api-member">
+
+<a id="TableInOutBindParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `TableInOutBindParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/tableinout/TableInOutBindParams.java#L34" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record TableInOutBindParams( String functionName, Arguments arguments, Schema inputSchema, Map&lt;String, Object&gt; settings, byte[] secrets, boolean resolvedSecretsProvided, byte[] attachOpaqueData, farm.query.vgi.storage.BoundStorage attachStorage, farm.query.vgi.protocol.CopyToContext copyTo)</code></pre>
+
+<p class="api-section">Description</p>
+
+Bind-time inputs for a `TableInOutFunction`: the resolved arguments and
+the schema of the incoming stream, from which the function derives its output
+schema.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>TableInOutBindParams(String functionName, Arguments arguments, Schema inputSchema, Map&lt;String, Object&gt; settings)</code></pre>
+
+Convenience constructor with no attach context (catalog enumeration).
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>TableInOutBindParams(String functionName, Arguments arguments, Schema inputSchema, Map&lt;String, Object&gt; settings, byte[] secrets, boolean resolvedSecretsProvided, byte[] attachOpaqueData, farm.query.vgi.storage.BoundStorage attachStorage)</code></pre>
+
+Convenience constructor without the `copyTo` context (non-COPY binds).
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableInOutExchangeState"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableInOutExchangeState`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/tableinout/TableInOutExchangeState.java#L16" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public abstract class TableInOutExchangeState extends ExchangeState</code></pre>
+
+<p class="api-section">Description</p>
+
+Base for table-in-out exchange states: each input batch produces zero or
+one output batch via `#process`. Subclasses override
+`#onInputBatch` which receives the `AnnotatedBatch` input root
+and the `OutputCollector` to emit on.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>void exchange(AnnotatedBatch input, OutputCollector out, CallContext ctx)</code></pre>
+
+Final dispatch hook from the RPC layer; forwards each input batch to
+`#onInputBatch`.
+
+</div>
+<div class="api-member">
+
+<pre class="api-sig"><code>void onInputBatch(AnnotatedBatch input, OutputCollector out, CallContext ctx)</code></pre>
+
+Processes a single input batch, emitting zero or one output batch.
+
+</div>
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableInOutFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableInOutFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/tableinout/TableInOutFunction.java#L36" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface TableInOutFunction extends FunctionDescriptor</code></pre>
+
+<p class="api-section">Description</p>
+
+A VGI table-in-out function: receives input batches and emits output batches,
+one output batch per input batch (echo, filter, transform). State may
+accumulate across exchange ticks and round-trips with the stream, so it works
+on both the launcher and HTTP transports.
+
+A streaming table-in-out may additionally declare a *per-substream*
+finalize (`#hasFinalize()` + `#finish`): under per-substream
+worker fan-out, DuckDB runs one substream per PipelineExecutor and issues a
+`FINALIZE`-phase init (same `execution_id` as the substream's
+INPUT phase) after input EOS. The finalize sees only *this*
+substream's accumulated state — coordinate it through
+`params.storage()` (execution-scoped), never a global cross-substream
+merge.
+
+Functions that need a *global* Sink+Combine+Source shape — buffer
+the whole input across every substream, then emit a summary at the end
+(sums, distributed aggregation, full buffering) — use
+`farm.query.vgi.buffering.TableBufferingFunction` instead, whose
+worker-side storage (keyed by `execution_id`) survives the stateless
+HTTP process→combine→finalize round-trip.
+
+Mirrors `vgi.TableInOutFunction` in vgi-go.
+
+</div>
+
+<div class="api-member">
+
+<a id="TableInOutInitParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">record</span> `TableInOutInitParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-java/blob/main/vgi/src/main/java/farm/query/vgi/tableinout/TableInOutInitParams.java#L35" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public record TableInOutInitParams( String functionName, Arguments arguments, Schema inputSchema, Schema outputSchema, Map&lt;String, Object&gt; settings, BufferAllocator allocator, farm.query.vgi.storage.BoundStorage storage, byte[] secrets, byte[] substreamId)</code></pre>
+
+<p class="api-section">Description</p>
+
+Per-execution inputs handed to `TableInOutFunction#createExchange` when
+a stream begins: the bound arguments, the negotiated input and (possibly
+projection-narrowed) output schemas, and the allocator the exchange must use.
+
+<p class="api-section">Members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>TableInOutInitParams( String functionName, Arguments arguments, Schema inputSchema, Schema outputSchema, Map&lt;String, Object&gt; settings, BufferAllocator allocator, farm.query.vgi.storage.BoundStorage storage, byte[] secrets)</code></pre>
+
+Compatibility constructor without a substream id (serial path).
+
+</div>
+</div>
+
+</div>

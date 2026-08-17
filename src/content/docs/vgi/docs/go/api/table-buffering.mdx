@@ -1,0 +1,116 @@
+---
+title: "Buffering functions"
+description: "Sink every row, combine, then stream the result back."
+---
+import { Code } from '@astrojs/starlight/components';
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Sink every row, combine, then stream the result back.
+
+</div>
+
+<div class="api-class">
+
+<a id="TableBufferingFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableBufferingFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_buffering.go#L26" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TableBufferingFunction interface {
+	// Name returns the function name used in SQL.
+	Name() string
+	// Metadata returns descriptive metadata (PartitionKind, ordering flags...).
+	Metadata() FunctionMetadata
+	// ArgumentSpecs returns the function's argument specifications.
+	ArgumentSpecs() []ArgSpec
+	// OnBind resolves the output schema given the bind parameters.
+	OnBind(params *BindParams) (*BindResponse, error)
+	// Process buffers one input batch and returns an opaque state_id naming
+	// where it was stored.
+	Process(ctx context.Context, params *ProcessParams, batch arrow.RecordBatch) ([]byte, error)
+	// Combine receives every state_id from every Process call (unordered) and
+	// returns the finalize_state_ids the source phase will iterate.
+	Combine(ctx context.Context, params *ProcessParams, stateIDs [][]byte) ([][]byte, error)
+	// Finalize returns the batches to emit for one finalize_state_id.
+	Finalize(ctx context.Context, params *ProcessParams, finalizeStateID []byte) ([]arrow.RecordBatch, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+TableBufferingFunction is a sink→source ("table-buffering") VGI function.
+It buffers all input during a sink phase, reshapes it once at end-of-input,
+then streams results during a source phase. Mirrors vgi-python's
+TableBufferingFunction.
+
+Lifecycle (all keyed by the execution_id assigned at sink init):
+  - Process: called once per input batch; persists the batch to
+<Code lang="go" code={`execution-scoped storage and returns an opaque state_id.`} />
+
+  - Combine: called once after all Process calls with every returned
+<Code lang="go" code={`state_id; returns the finalize_state_ids that drive the source phase.`} />
+
+  - Finalize: called once per finalize_state_id; returns the batches to emit
+<Code lang="go" code={`for that partition.
+`} />
+
+Cross-process state MUST live in params.Storage (the sqlite-backed state
+log) — Process and Finalize may run in different worker processes.
+
+</div>
+
+<div class="api-class">
+
+<a id="TableBufferingFunctionWithCardinality"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `TableBufferingFunctionWithCardinality`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_buffering.go#L47" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type TableBufferingFunctionWithCardinality interface {
+	TableBufferingFunction
+	// Cardinality estimates the function's output row count for the optimizer.
+	Cardinality(params *BindParams) (*TableCardinality, error)
+}`} />
+
+<p class="api-section">Description</p>
+
+TableBufferingFunctionWithCardinality lets a buffering function declare a
+cardinality estimate (e.g. a reducer that always emits one row).
+
+</div>
+
+<div class="api-class">
+
+<a id="bufferingParamsEntry"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">struct</span> `bufferingParamsEntry`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_buffering_rpc.go#L97" target="_blank" rel="noopener">source</a>
+
+<Code lang="go" code={`type bufferingParamsEntry struct {
+	fn	TableBufferingFunction
+	params	ProcessParams	// template — copied per call
+}`} />
+
+<p class="api-section">Description</p>
+
+bufferingParamsEntry caches the decoded (function, ProcessParams template)
+for one buffering execution. The InitRecipe is written once at sink init and
+never changes, so the decode + rebuild is invariant across the execution's
+process/combine RPCs. Each call gets a shallow copy of params so the per-call
+fields (Auth/AttachScope/clientLog/BatchIndex) never race; the shared maps and
+Storage are read-only during Process.
+
+</div>
+
+<div class="api-member">
+
+<a id="encodeInitRecipe"></a>
+## <span class="api-icon api-icon--function"></span><span class="api-kind-tag api-kind-tag--function">function</span> `encodeInitRecipe`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-go/blob/main/vgi/table_buffering_rpc.go#L269" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>func encodeInitRecipe(r *InitRecipe) ([]byte, error)</code></pre>
+
+</div>
