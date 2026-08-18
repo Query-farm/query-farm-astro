@@ -1,6 +1,6 @@
 /**
  * Terminal table rendering for DuckDB query results.
- * Box-mode (cli-table3) and line-mode output matching DuckDB CLI style.
+ * Box-mode and line-mode output matching DuckDB CLI style.
  */
 import type { Table, Field } from "apache-arrow";
 import { formatCellValue, safeGetArrowValue } from "./format";
@@ -17,14 +17,12 @@ const SGR_NAME = "\x1b[1;34m";
 const SGR_NUM = "\x1b[93m";
 const SGR_OFF = "\x1b[0m";
 
-/** Unicode Box Drawing block (U+2500–U+257F) — every rule cli-table3 emits. */
+/** Unicode Box Drawing block (U+2500–U+257F). */
 const BOX_DRAWING = /[─-╿]+/g;
 
 /**
- * Drop the box rules back to chrome after layout. Colouring them before layout
- * is not an option: with `wrapOnWordBoundary:false` cli-table3 measures raw
- * string length, so escapes inside a cell inflate the width and get sliced
- * mid-sequence. Rewriting the finished line is width-neutral.
+ * Drop the box rules back to chrome after layout. Rewriting the finished line
+ * is width-neutral and keeps cell-width calculations independent of ANSI.
  */
 function dimBorders(line: string): string {
   return line.replace(BOX_DRAWING, (run) => `${SGR_CHROME}${run}${SGR_OFF}`);
@@ -63,9 +61,8 @@ function formatVal(val: unknown, field: Field): string {
 }
 
 /**
- * Per-codepoint terminal display width, mirroring `string-width` (which
- * cli-table3 uses to lay out the box) and used as xterm's width provider too,
- * so column sizing, the box border, and the rendered glyphs all agree. Wide
+ * Per-codepoint terminal display width, also used as xterm's width provider,
+ * so column sizing, the box border, and the rendered glyphs agree. Wide
  * ranges follow `is-fullwidth-code-point`; emoji ranges cover the common
  * blocks. Variation selectors / combining marks are 0, so base-emoji (2) +
  * VS16 (0) totals 2. NOTE: JS String.length counts UTF-16 units and is wrong
@@ -205,7 +202,7 @@ function buildGrid(table: Table, fields: Field[], displayIndices: number[]): str
 }
 
 // ---------------------------------------------------------------------------
-// Box-mode rendering (cli-table3)
+// Box-mode rendering
 // ---------------------------------------------------------------------------
 
 const MAX_COL_WIDTH = 20;
@@ -302,8 +299,8 @@ function distributeSlack(
 }
 
 /**
- * Render an Arrow table in DuckDB box-drawing style using cli-table3.
- * Falls back to pipe-separated output if cli-table3 fails to load.
+ * Render an Arrow table in DuckDB box-drawing style without Node-oriented
+ * formatting dependencies in the browser bundle.
  */
 export async function printBoxTable(table: Table, out: TerminalOutput, maxDisplayRows: number, elapsedMs?: number): Promise<void> {
   const fields = table.schema.fields;
@@ -322,128 +319,71 @@ export async function printBoxTable(table: Table, out: TerminalOutput, maxDispla
 
   const { visibleIndices, ellipsisPos } = pruneColumns(idealWidths, out.cols);
   const shownCount = visibleIndices.length;
-  const hiddenCount = totalCols - shownCount;
-
   distributeSlack(idealWidths, visibleIndices, ellipsisPos, out.cols, names, grid);
 
-  try {
-    const Table = (await import("cli-table3")).default;
-
-    type CellContent =
-      | string
-      | { content: string; hAlign: "left" | "right" | "center"; wordWrap?: boolean };
-    const colWidths: number[] = [];
-    const colAligns: ("left" | "right" | "center")[] = [];
-    const headerRow: CellContent[] = [];
-    const typeRow: CellContent[] = [];
-
-    for (let vi = 0; vi < shownCount; vi++) {
-      if (ellipsisPos === vi) {
-        colWidths.push(3);
-        colAligns.push("center");
-        headerRow.push({ content: "…", hAlign: "center" as const });
-        typeRow.push({ content: " ", hAlign: "center" as const });
-      }
-      const ci = visibleIndices[vi];
-      colWidths.push(idealWidths[ci] + 2);
-      colAligns.push(isNumeric[ci] ? "right" : "left");
-      // Column names are identifiers, so they take the identifier blue (bold);
-      // the type row underneath is chrome. Names keep their real casing — this
-      // is a REPL and the header has to match what you'd type in a query.
-      headerRow.push({ content: `${SGR_NAME}${truncStr(names[ci], idealWidths[ci])}${SGR_OFF}`, hAlign: "center" as const });
-      typeRow.push({ content: `${SGR_CHROME}${truncStr(types[ci], idealWidths[ci])}${SGR_OFF}`, hAlign: "center" as const });
-    }
-    if (ellipsisPos === shownCount) {
-      colWidths.push(3);
-      colAligns.push("center");
-      headerRow.push({ content: "…", hAlign: "center" as const });
-      typeRow.push({ content: " ", hAlign: "center" as const });
-    }
-
-    const tableOpts = {
-      colWidths,
-      colAligns,
-      // Wrap long cell values across lines (DuckDB duckbox style) instead of
-      // truncating with an ellipsis. wrapOnWordBoundary:false lets it break
-      // inside long tokens like JSON blobs that have no spaces.
-      wordWrap: true,
-      wrapOnWordBoundary: false,
-      chars: { "mid": "", "left-mid": "", "mid-mid": "", "right-mid": "" },
-      style: { head: [], border: [], "padding-left": 1, "padding-right": 1, compact: true },
-    };
-
-    // Header table. wordWrap is disabled here: header/type cells carry ANSI
-    // styling (bold/gray), and cli-table3's word-wrap counts those escape
-    // characters toward the width and breaks mid-sequence — mangling short
-    // headers like "host". They're already sized to fit, so no wrap is needed.
-    const hdrBottomChars = displayRows === 0
-      ? { "bottom": "─", "bottom-mid": "┴", "bottom-left": "└", "bottom-right": "┘" }
-      : { "bottom": "─", "bottom-mid": "┼", "bottom-left": "├", "bottom-right": "┤" };
-    const hdrTbl = new Table({ ...tableOpts, wordWrap: false, chars: { ...tableOpts.chars, ...hdrBottomChars } });
-    hdrTbl.push(headerRow);
-    hdrTbl.push(typeRow);
-    for (const line of hdrTbl.toString().split("\n")) out.println(dimBorders(line));
-
-    // Data table
-    const dataTbl = new Table({
-      ...tableOpts,
-      chars: { ...tableOpts.chars, "top": "", "top-mid": "", "top-left": "", "top-right": "" },
-    });
-    for (let r = 0; r < displayRows; r++) {
-      if (truncated && r === half) {
-        for (let g = 0; g < 3; g++) {
-          const gapRow: CellContent[] = [];
-          for (let vi = 0; vi < shownCount; vi++) {
-            if (ellipsisPos === vi) gapRow.push({ content: "·", hAlign: "center" as const });
-            gapRow.push({ content: "·", hAlign: "center" as const });
-          }
-          if (ellipsisPos === shownCount) gapRow.push({ content: "·", hAlign: "center" as const });
-          dataTbl.push(gapRow);
-        }
-      }
-      const row: CellContent[] = [];
-      for (let vi = 0; vi < shownCount; vi++) {
-        if (ellipsisPos === vi) row.push({ content: "…", hAlign: "center" as const });
-        const ci = visibleIndices[vi];
-        const val = grid[r][ci];
-        // No manual truncation: cli-table3 wordWrap renders the full value
-        // across as many lines as the column width needs (duckbox style).
-        //
-        // Colouring a cell means opting it out of wrapping: with
-        // `wrapOnWordBoundary:false` the wrapper measures raw string length, so
-        // the escapes would count toward the width and get cut mid-sequence.
-        // Numerics and NULL are short and their columns are sized to fit them,
-        // so nothing that gets colour here needed to wrap in the first place.
-        if (val === "NULL") {
-          row.push({
-            content: `${SGR_CHROME}NULL${SGR_OFF}`,
-            hAlign: isNumeric[ci] ? ("right" as const) : ("left" as const),
-            wordWrap: false,
-          });
-        } else if (isNumeric[ci]) {
-          // Right-aligned + monospace = tabular figures by construction, and
-          // the numeric amber matches `constant.numeric` in the Shiki theme.
-          const fits = displayWidth(val) <= idealWidths[ci];
-          row.push({
-            content: fits ? `${SGR_NUM}${val}${SGR_OFF}` : val,
-            hAlign: "right" as const,
-            ...(fits ? { wordWrap: false } : {}),
-          });
-        } else {
-          row.push(val);
-        }
-      }
-      if (ellipsisPos === shownCount) row.push({ content: "…", hAlign: "center" as const });
-      dataTbl.push(row);
-    }
-    for (const line of dataTbl.toString().split("\n")) out.println(dimBorders(line));
-
-    out.println(formatFooter(numRows, displayRows, truncated, totalCols, shownCount, elapsedMs));
-  } catch {
-    // Fallback: simple pipe-separated
-    for (const row of grid) out.println(row.join(" | "));
-    out.println(`(${numRows} row${numRows !== 1 ? "s" : ""})`);
+  type Align = "left" | "right" | "center";
+  type Cell = { text: string; width: number; align: Align; color?: string };
+  const columns: { source: number | null; width: number; align: Align }[] = [];
+  for (let vi = 0; vi < shownCount; vi++) {
+    if (ellipsisPos === vi) columns.push({ source: null, width: 1, align: "center" });
+    const ci = visibleIndices[vi];
+    columns.push({ source: ci, width: idealWidths[ci], align: isNumeric[ci] ? "right" : "left" });
   }
+  if (ellipsisPos === shownCount) columns.push({ source: null, width: 1, align: "center" });
+
+  const split = (text: string, width: number): string[] => {
+    if (!text) return [""];
+    const lines: string[] = [];
+    let line = "";
+    let used = 0;
+    for (const ch of text) {
+      const w = cellWidth(ch.codePointAt(0) as number);
+      if (used + w > width && line) { lines.push(line); line = ""; used = 0; }
+      line += ch;
+      used += w;
+    }
+    if (line || !lines.length) lines.push(line);
+    return lines;
+  };
+  const pad = (text: string, width: number, align: Align): string => {
+    const gap = Math.max(0, width - displayWidth(text));
+    const left = align === "right" ? gap : align === "center" ? Math.floor(gap / 2) : 0;
+    return `${" ".repeat(left)}${text}${" ".repeat(gap - left)}`;
+  };
+  const rule = (left: string, join: string, right: string) =>
+    dimBorders(left + columns.map((c) => "─".repeat(c.width + 2)).join(join) + right);
+  const render = (cells: Cell[]) => {
+    const parts = cells.map((cell) => split(cell.text, cell.width));
+    const height = Math.max(...parts.map((p) => p.length));
+    for (let line = 0; line < height; line++) {
+      const body = cells.map((cell, i) => {
+        const raw = parts[i][line] ?? "";
+        const value = pad(raw, cell.width, cell.align);
+        return ` ${cell.color && raw ? cell.color : ""}${value}${cell.color && raw ? SGR_OFF : ""} `;
+      }).join("│");
+      out.println(dimBorders(`│${body}│`));
+    }
+  };
+  const makeRow = (values: string[], header: "name" | "type" | null = null): Cell[] => columns.map((column) => {
+    if (column.source === null) return { text: header === "type" ? "" : "…", width: column.width, align: "center" };
+    const text = values[column.source];
+    const color = header === "name" ? SGR_NAME : header === "type" || text === "NULL"
+      ? SGR_CHROME : isNumeric[column.source] && displayWidth(text) <= column.width ? SGR_NUM : undefined;
+    return { text, width: column.width, align: header ? "center" : column.align, color };
+  });
+
+  out.println(rule("┌", "┬", "┐"));
+  render(makeRow(names.map((name, i) => truncStr(name, idealWidths[i])), "name"));
+  render(makeRow(types.map((type, i) => truncStr(type, idealWidths[i])), "type"));
+  out.println(rule(displayRows ? "├" : "└", displayRows ? "┼" : "┴", displayRows ? "┤" : "┘"));
+  for (let r = 0; r < displayRows; r++) {
+    if (truncated && r === half) {
+      for (let g = 0; g < 3; g++) render(columns.map((c) => ({ text: "·", width: c.width, align: "center" })));
+    }
+    render(makeRow(grid[r]));
+  }
+  if (displayRows) out.println(rule("└", "┴", "┘"));
+  out.println(formatFooter(numRows, displayRows, truncated, totalCols, shownCount, elapsedMs));
 }
 
 /**

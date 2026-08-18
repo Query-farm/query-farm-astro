@@ -11,14 +11,17 @@ The query.farm website: an Astro 6 static site (`output: 'static'`) serving as a
 ```sh
 npm run dev              # dev server at localhost:4321
 npm run build            # static build to ./dist/
+npm run check            # Astro + TypeScript diagnostics
+npm run validate         # current CI gate: deterministic production build
 npm run preview          # serve the built dist/ locally
 npm run check:examples   # validate all SQL examples actually parse & execute
 npm run snapshot:usage   # refresh extension load numbers from Cloudflare AE
+npm run refresh:snapshots # explicitly refresh all committed remote snapshots
 ```
 
-`snapshot:usage` wraps `extension-diff-tools/usage-snapshot.py` (`scripts/snapshot-usage.sh`, 90-day window): it sources `.env` for `CF_API_TOKEN`/`CF_ACCOUNT_ID` and rewrites every `generated/usage.json` plus `src/data/generated/usage-summary.json`. The committed JSON is the fallback; `prebuild` runs it with `--soft` (warn, exit 0) so a build refreshes numbers when AE creds are present but never breaks offline or in CI. Commit the refreshed JSON to publish new numbers. The card/detail labels render the snapshot's own period string (e.g. "last 90 days"), so changing `--days` updates the displayed window automatically.
+`snapshot:usage` wraps `extension-diff-tools/usage-snapshot.py` (`scripts/snapshot-usage.sh`, 90-day window): it sources `.env` for `CF_API_TOKEN`/`CF_ACCOUNT_ID` and rewrites every `generated/usage.json` plus `src/data/generated/usage-summary.json`. Production builds consume committed snapshots and never refresh them implicitly. Run `refresh:snapshots` explicitly, review the resulting diff, and commit it to publish new data. The card/detail labels render the snapshot's own period string (e.g. "last 90 days"), so changing `--days` updates the displayed window automatically.
 
-There is no test suite or linter. `check:examples` (extension-diff-tools/check-examples.py) is the main validation: it executes every SQL snippet in extension quickStarts, function examples, `cookbook.mdx`, and `technical-details.mdx`, reporting PARSE-FAIL/EXEC-FAIL. Per-extension test fixtures live in `src/data/extensions/<slug>/augment/check-fixtures.sql`.
+`npm run validate` is the standard local and CI gate. `npm run check` is available for the existing Astro/TypeScript diagnostics backlog but is not yet required in CI. `check:examples` (extension-diff-tools/check-examples.py) is the deeper content validation: it executes every SQL snippet in extension quickStarts, function examples, `cookbook.mdx`, and `technical-details.mdx`, reporting PARSE-FAIL/EXEC-FAIL. Per-extension test fixtures live in `src/data/extensions/<slug>/augment/check-fixtures.sql`.
 
 Other tools in `extension-diff-tools/` (run against an extension repo, not this one): `extension-diff.py` regenerates an extension's `generated/*.json` by diffing a baseline DuckDB build against one with the extension loaded; `bake-examples.py` executes example SQL and bakes real output tables into `augment/functions.json`; `coverage.py` reports documented vs undocumented functions.
 
