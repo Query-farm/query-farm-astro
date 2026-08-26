@@ -174,10 +174,18 @@ function luminanceOf(color: string): number | null {
  *  Dark is the default: code always sits on rock-900 (brief §3), so a toolbar
  *  attached to a code block is dark unless it measurably isn't. A gradient
  *  ground can't be sampled from a computed style, and around code it is always
- *  a dark one, so it counts as dark too. */
+ *  a dark one, so it counts as dark too.
+ *
+ *  The walk goes 20 levels up, not 6: every ancestor between an Expressive
+ *  Code block's run bar and the real page background is transparent (the
+ *  .expressive-code wrapper, .prose, the doc section, the two-column grid,
+ *  <main> itself) — the actual bg-soil-50 doesn't land until <body>, 7 levels
+ *  up from the block. The old 6-deep cap hit its limit first and fell through
+ *  to the dark default, so this button read as dark-ground styled even after
+ *  moving outside the code frame onto the page's own paper background. */
 function isOnDarkGround(el: HTMLElement): boolean {
   let node: HTMLElement | null = el;
-  for (let depth = 0; node && depth < 6; depth++) {
+  for (let depth = 0; node && depth < 20; depth++) {
     const cs = getComputedStyle(node);
     if (cs.backgroundImage && cs.backgroundImage.includes("gradient")) return true;
     const lum = luminanceOf(cs.backgroundColor);
@@ -335,7 +343,19 @@ export default function ExampleShellMounter({ extensionName, installSource, fixt
         const { bar, cleanup: restoreToolbar } = findOrCreateToolbar(pre);
         const stopAdopting = adoptProseCopyButton(pre, bar);
         const id = ++counter;
-        const blockRoot = (pre.closest(".code-block-wrapper") as HTMLElement | null) ?? pre;
+        // The run bar goes immediately after whichever element is the whole
+        // visual block, not just after <pre> itself. For CodeBlock.astro
+        // blocks that's .code-block-wrapper; for Expressive Code blocks
+        // (MDX/Markdown fences) <pre> only reaches its toolbar-and-code
+        // portion — its actual parent is <figure class="frame">, which draws
+        // its own box-shadow around that whole figure. Landing the run bar as
+        // a plain sibling of <pre> left it inside that figure, still inside
+        // the shadowed frame the code sits in, floating in unstyled space
+        // below it rather than clearly being its own control on the page.
+        const blockRoot =
+          (pre.closest(".code-block-wrapper") as HTMLElement | null) ??
+          (pre.closest("figure.frame") as HTMLElement | null) ??
+          pre;
 
         // Try now gets its own bar directly under the block — a full-width,
         // unmissable button rather than a toolbar pill.
@@ -345,7 +365,14 @@ export default function ExampleShellMounter({ extensionName, installSource, fixt
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "example-try-button";
-        if (isOnDarkGround(blockRoot)) btn.classList.add("is-on-dark");
+        // Ground check starts from blockRoot's *parent*, not blockRoot
+        // itself: the run bar lands as blockRoot's sibling (same parent),
+        // beside it rather than inside it, so that's the background the
+        // button actually sits on. blockRoot itself is always dark by
+        // design — CodeBlock.astro's own bg-rock-900, or an Expressive Code
+        // <figure> — so checking it directly always says "dark" regardless
+        // of what the surrounding page background actually is.
+        if (isOnDarkGround(blockRoot.parentElement ?? blockRoot)) btn.classList.add("is-on-dark");
         btn.setAttribute("aria-label", "Run this example in an in-browser shell");
         btn.innerHTML = TRY_LABEL;
         runBar.appendChild(btn);
