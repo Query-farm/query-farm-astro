@@ -24,26 +24,38 @@
  * which are light-only.
  */
 import SearchWidget from '../layout/SearchWidget.astro';
+import { platformComponents } from '../../data/products';
 import StrataSun from '../ui/StrataSun.astro';
 import ThemeSelect from './ThemeSelect.astro';
 import DocsSubNav from './DocsSubNav.astro';
 
 const path = Astro.url.pathname;
 
-const links = [
-  { name: 'Extensions', href: '/products/extensions' },
-  { name: 'Orchard', href: '/products/orchard' },
-  { name: 'VGI', href: '/vgi' },
-  { name: 'Cupola', href: '/products/cupola' },
-  { name: 'Haybarn', href: '/haybarn' },
+// The SAME three items, in the same order, as layout/Header.astro — because a
+// reader crossing from /vgi into /vgi/docs/rust should not find the site's
+// top-level navigation rearranged under them. This bar used to carry a flat
+// row of seven product links, which is what the marketing header looked like
+// before those were consolidated into one Products dropdown; the marketing bar
+// moved on and this copy didn't, so the docs advertised an information
+// architecture the rest of the site had retired.
+//
+// The dropdown's contents come from `platformComponents`, the same list
+// /products and layout/Header.astro render, so a new product appears in all
+// three from one edit.
+const links: { name: string; href: string; panel?: boolean }[] = [
+  { name: 'Products', href: '/products', panel: true },
   { name: 'Consulting', href: '/consulting' },
   { name: 'Blog', href: '/blog' },
 ];
 
-// Longest-prefix match, so /vgi/docs/python/* marks VGI (not Extensions).
+// Longest-prefix match, so /vgi/docs/python/* marks Products (not Blog).
 const active = links
   .filter((l) => path === l.href || path.startsWith(l.href + '/'))
   .sort((a, b) => b.href.length - a.href.length)[0];
+
+// A docs page under a product (e.g. /vgi/docs/rust/) is "Products" as far as
+// the bar is concerned, even though its path shares no prefix with /products.
+const inProduct = platformComponents.some((pc) => path === pc.href || path.startsWith(pc.href + '/'));
 ---
 
 <div class="qf-docs-nav" data-pagefind-ignore>
@@ -55,11 +67,47 @@ const active = links
 
     <nav class="qf-links" aria-label="Site">
       {
-        links.map((l) => (
-          <a href={l.href} aria-current={active && active.href === l.href ? 'page' : undefined}>
-            {l.name}
-          </a>
-        ))
+        links.map((l) => {
+          const current = (active && active.href === l.href) || (l.panel && inProduct);
+          return (
+            <div class="qf-link-wrap">
+              <a href={l.href} aria-current={current ? 'page' : undefined}>
+                {l.name}
+              </a>
+              {l.panel && (
+                <div class="qf-panel-anchor">
+                  <div class="qf-panel">
+                    <p class="qf-panel__label">The data farm</p>
+                    <ul class="qf-panel__grid">
+                      {platformComponents.map((pc) => (
+                        <li>
+                          <a class="qf-panel__item" href={pc.href}>
+                            <span class="qf-panel__icon">
+                              {pc.img && <img src={pc.img} alt="" width="16" height="16" />}
+                              {pc.emoji && <span aria-hidden="true">{pc.emoji}</span>}
+                            </span>
+                            <span class="qf-panel__text">
+                              <span class="qf-panel__name">
+                                {pc.title}
+                                {pc.status !== 'available' && (
+                                  <span class={`qf-panel__pill qf-panel__pill--${pc.status}`}>
+                                    {pc.status === 'preview' ? 'Preview' : 'In development'}
+                                  </span>
+                                )}
+                              </span>
+                              <span class="qf-panel__outcome">{pc.outcome}</span>
+                            </span>
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                    <a class="qf-panel__more" href="/products">See how it all fits together →</a>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })
       }
     </nav>
 
@@ -76,6 +124,12 @@ const active = links
 <style>
   .qf-docs-nav {
     height: var(--qf-nav-h, 58px);
+    /* The Products panel hangs out of this bar and over the subnav below it.
+       DocsSubNav is a LATER sibling inside Starlight's fixed header, so without
+       a stacking context here it paints on top of the open dropdown — the
+       breadcrumb's language mark showed through the panel. */
+    position: relative;
+    z-index: 60;
     /* Opaque, NOT blurred: `backdrop-filter` would make this bar a containing
        block for fixed-position descendants, which traps SearchWidget's modal
        inside the 58px header. */
@@ -133,6 +187,130 @@ const active = links
   }
   .qf-wordmark-text .dot {
     color: var(--qf-accent);
+  }
+
+
+  /* ── Products dropdown ──────────────────────────────────────────────────
+     Same shape and same data as layout/Header.astro's panel, restated on the
+     --qf-* bridge vars: that one is authored in light-only Tailwind utilities
+     (bg-white, soil-*), which is precisely why this bar was a fork in the
+     first place. On the bridge vars it is correct in both docs themes. */
+  .qf-link-wrap {
+    position: relative;
+  }
+  .qf-panel-anchor {
+    position: absolute;
+    left: 50%;
+    top: 100%;
+    width: 560px;
+    transform: translateX(-50%);
+    padding-top: 1rem;
+    z-index: 60;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.15s, visibility 0.15s;
+  }
+  .qf-link-wrap:hover .qf-panel-anchor,
+  .qf-link-wrap:focus-within .qf-panel-anchor {
+    visibility: visible;
+    opacity: 1;
+  }
+  .qf-panel {
+    border: 1px solid var(--qf-rule);
+    border-radius: 12px;
+    background: var(--qf-surface);
+    padding: 1rem;
+    box-shadow: 0 20px 40px -18px var(--qf-shadow);
+  }
+  .qf-panel__label {
+    margin: 0 0.5rem 0.35rem;
+    font-family: var(--__sl-font-mono, ui-monospace, monospace);
+    font-size: 0.62rem;
+    font-weight: 500;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--qf-ink-3);
+  }
+  .qf-panel__grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .qf-panel__item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.5rem;
+    border-radius: 6px;
+    text-decoration: none;
+    color: inherit;
+    transition: background-color 0.15s;
+  }
+  .qf-panel__item:hover {
+    background: var(--qf-accent-tint-soft);
+  }
+  .qf-panel__icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 1.5rem;
+    height: 1.5rem;
+    margin-top: 0.1rem;
+    overflow: hidden;
+    border: 1px solid var(--qf-rule);
+    border-radius: 6px;
+    background: var(--qf-surface-2);
+    font-size: 13px;
+  }
+  .qf-panel__icon img {
+    width: 1rem;
+    height: 1rem;
+    object-fit: contain;
+  }
+  .qf-panel__text {
+    min-width: 0;
+  }
+  .qf-panel__name {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-weight: 500;
+    color: var(--qf-ink);
+  }
+  .qf-panel__outcome {
+    display: block;
+    font-size: 12.5px;
+    line-height: 1.35;
+    color: var(--qf-ink-2);
+  }
+  .qf-panel__pill {
+    border-radius: 999px;
+    border: 1px solid var(--qf-rule);
+    padding: 0 0.35rem;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--qf-ink-3);
+  }
+  .qf-panel__pill--preview {
+    border-color: var(--qf-accent);
+    color: var(--qf-accent);
+  }
+  .qf-panel__more {
+    display: block;
+    margin-top: 0.5rem;
+    padding: 0.6rem 0.5rem 0;
+    border-top: 1px solid var(--qf-rule);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-link);
+    text-decoration: none;
+  }
+  :global([data-theme='dark']) .qf-panel__more {
+    color: var(--color-link-dark);
   }
 
   /* ── links ── */

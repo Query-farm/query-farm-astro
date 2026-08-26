@@ -1,0 +1,181 @@
+---
+/**
+ * What DuckDB's planner actually does with a query spanning two workers.
+ *
+ * The claim it carries: attaching two workers doesn't hand you two result sets
+ * to reconcile yourself — DuckDB plans *across* them, and the parts it can push
+ * to the far side it does push. The operator names and the pushed-down filter
+ * and projection list are lifted from a real `EXPLAIN` of the query on
+ * /vgi/getting-started (VGI_TABLE_SCAN on the earthquake worker carrying
+ * `Filters: mag>=6.0`; VGI_LATERAL_BATCH calling forecast_current per row), not
+ * invented for the picture.
+ *
+ * It deliberately does NOT reproduce the plan tree. The real one has a
+ * LEFT_DELIM_JOIN over a HASH_JOIN, a DELIM_SCAN and a HASH_GROUP_BY — the
+ * standard correlated-lateral rewrite, which is DuckDB's business and not the
+ * point being made here. Drawing that would turn a one-glance argument into a
+ * study, and the page tells the reader to run EXPLAIN if they want it.
+ */
+interface Props {
+  ariaLabel?: string;
+}
+const {
+  ariaLabel =
+    'One SQL query spanning two VGI workers. DuckDB joins the two results itself. On the left branch a VGI_TABLE_SCAN reads the earthquake worker, pushing the mag filter and the column list down to it; on the right a VGI_LATERAL_BATCH calls the weather worker per row. Each branch ends at a separate hosted worker.',
+} = Astro.props;
+
+const VB_W = 1000;
+const VB_H = 476;
+
+const ENGINE = { x: 300, y: 100, w: 400, h: 108 };
+const engineCx = ENGINE.x + ENGINE.w / 2;
+
+// The official DuckDB lockup (mark + wordmark) rather than the word set in our
+// own display face — it is their brand in our diagram, so it should be theirs.
+// duckdb-inline.svg is 500 × 144.194, and the height here is derived from the
+// width so the aspect can't drift if either number is edited.
+const LOGO = { w: 156, src: '/vgi/duckdb-inline.svg' };
+const LOGO_H = (LOGO.w * 144.194458) / 500;
+
+const OP = { y: 250, w: 400, h: 108 };
+const WORKER = { y: 398, w: 268, h: 62 };
+
+const branches = [
+  {
+    opX: 20,
+    workerX: 86,
+    op: 'VGI_TABLE_SCAN',
+    lines: ['Filters: mag >= 6.0', 'Projections: mag, place, latitude, longitude'],
+    note: 'filter + columns pushed down',
+    worker: 'earthquakes worker',
+    workerSub: 'wraps the USGS feed',
+  },
+  {
+    opX: 580,
+    workerX: 646,
+    op: 'VGI_LATERAL_BATCH',
+    lines: ['Function: forecast_current', 'Projected: 2'],
+    note: 'called per row, batched',
+    worker: 'open-meteo worker',
+    workerSub: 'wraps the forecast API',
+  },
+];
+
+const opCx = (x: number) => x + OP.w / 2;
+---
+
+<div class="rounded-xl border border-soil-300 bg-[#fffdf7] p-4 md:p-6">
+  <svg
+    class="h-auto w-full"
+    viewBox={`0 0 ${VB_W} ${VB_H}`}
+    xmlns="http://www.w3.org/2000/svg"
+    role="img"
+    aria-label={ariaLabel}
+  >
+    <!-- The one query the reader wrote -->
+    <rect x="210" y="12" width="580" height="46" rx="12" class="fill-rock-900" />
+    <text
+      x="500"
+      y="41"
+      text-anchor="middle"
+      fill="#e9e1d3"
+      font-size="16"
+      font-family="'JetBrains Mono', monospace">one SELECT, two catalogs</text>
+    <path d={`M500 58 L500 ${ENGINE.y}`} class="stroke-soil-400" stroke-width="2.5" />
+
+    <!-- Wires: engine → each branch. Drawn before the boxes so they tuck under. -->
+    {
+      branches.map((b) => (
+        <path
+          d={`M${engineCx} ${ENGINE.y + ENGINE.h} C ${engineCx} ${ENGINE.y + ENGINE.h + 40} ${opCx(b.opX)} ${OP.y - 42} ${opCx(b.opX)} ${OP.y}`}
+          fill="none"
+          class="stroke-soil-400"
+          stroke-width="3"
+          stroke-linecap="round"
+        />
+      ))
+    }
+
+    <!-- The engine: it holds the join, which is the whole point -->
+    <rect
+      x={ENGINE.x}
+      y={ENGINE.y}
+      width={ENGINE.w}
+      height={ENGINE.h}
+      rx="16"
+      class="fill-soil-100 stroke-soil-900"
+      stroke-width="3"
+    />
+    <image
+      href={LOGO.src}
+      x={engineCx - LOGO.w / 2}
+      y={ENGINE.y + 12}
+      width={LOGO.w}
+      height={LOGO_H}
+      preserveAspectRatio="xMidYMid meet"
+    />
+    <text x={engineCx} y={ENGINE.y + 76} text-anchor="middle" class="fill-soil-700" font-size="15">plans across both, joins the results</text>
+    <text
+      x={engineCx}
+      y={ENGINE.y + 96}
+      text-anchor="middle"
+      class="fill-sun-700"
+      font-size="13"
+      font-family="'JetBrains Mono', monospace">DELIM_JOIN</text>
+
+    {
+      branches.map((b) => (
+        <g>
+          {/* the VGI operator — where pushdown is visible */}
+          <rect
+            x={b.opX}
+            y={OP.y}
+            width={OP.w}
+            height={OP.h}
+            rx="14"
+            class="fill-[#fffdf7] stroke-sun-600"
+            stroke-width="2.5"
+          />
+          <text
+            x={opCx(b.opX)}
+            y={OP.y + 30}
+            text-anchor="middle"
+            class="fill-sun-700"
+            font-size="16"
+            font-family="'JetBrains Mono', monospace">{b.op}</text>
+          {b.lines.map((line, i) => (
+            <text
+              x={opCx(b.opX)}
+              y={OP.y + 56 + i * 21}
+              text-anchor="middle"
+              class="fill-soil-700"
+              font-size="13.5"
+              font-family="'JetBrains Mono', monospace">{line}</text>
+          ))}
+          <text x={opCx(b.opX)} y={OP.y + 99} text-anchor="middle" class="fill-soil-500" font-size="13" font-style="italic">{b.note}</text>
+
+          {/* operator → its worker */}
+          <path
+            d={`M${opCx(b.opX)} ${OP.y + OP.h} L${opCx(b.opX)} ${WORKER.y}`}
+            class="stroke-field-600"
+            stroke-width="3"
+            stroke-linecap="round"
+          />
+
+          {/* the worker itself — a separate process, somewhere else */}
+          <rect
+            x={b.workerX}
+            y={WORKER.y}
+            width={WORKER.w}
+            height={WORKER.h}
+            rx="14"
+            class="fill-soil-100 stroke-field-600"
+            stroke-width="2.5"
+          />
+          <text x={opCx(b.opX)} y={WORKER.y + 26} text-anchor="middle" class="fill-soil-900 font-bold" font-size="16">{b.worker}</text>
+          <text x={opCx(b.opX)} y={WORKER.y + 47} text-anchor="middle" class="fill-soil-700" font-size="13.5">{b.workerSub}</text>
+        </g>
+      ))
+    }
+  </svg>
+</div>

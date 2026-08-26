@@ -1,0 +1,801 @@
+---
+import PageLayout from '../../layouts/PageLayout.astro';
+import Button from '../../components/ui/Button.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import HaybarnSubNav from '../../components/sections/HaybarnSubNav.astro';
+import PageHead from '../../components/ui/PageHead.astro';
+import {
+  LATEST_DUCKDB_VERSION,
+  LATEST_PKG_SUFFIX,
+  LATEST_STATUS_URL,
+} from '../../data/haybarn-versions';
+
+const V = LATEST_DUCKDB_VERSION;
+const HAYBARN_REPO = 'https://github.com/Query-farm-haybarn/haybarn';
+const HTTPFS_REPO = 'https://github.com/Query-farm-haybarn/haybarn-httpfs';
+const WASM_REPO = 'https://github.com/Query-farm-haybarn/haybarn-wasm';
+const CI_REPO = 'https://github.com/Query-farm-haybarn/haybarn-extension-ci-tools';
+
+const SITE_ORIGIN = 'https://query.farm';
+const description = `What Haybarn gives you over upstream DuckDB v${V}: single-connection remote scans, extension pins that stick, a pg_catalog PostgreSQL clients can read, wasm extensions that don't crash, interactive OAuth from the browser, and reproducible builds.`;
+const jsonLd = [
+  {
+    '@context': 'https://schema.org',
+    '@type': 'TechArticle',
+    headline: 'What Haybarn gives you',
+    description,
+    url: `${SITE_ORIGIN}/haybarn/differences`,
+    author: { '@type': 'Organization', name: 'Query.Farm', url: SITE_ORIGIN },
+  },
+  {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: [
+      { '@type': 'ListItem', position: 1, name: 'Home', item: SITE_ORIGIN + '/' },
+      { '@type': 'ListItem', position: 2, name: 'Haybarn', item: SITE_ORIGIN + '/haybarn' },
+      { '@type': 'ListItem', position: 3, name: "What's different", item: SITE_ORIGIN + '/haybarn/differences' },
+    ],
+  },
+];
+
+// ── Shared shape vocabulary (family C: docs / reference — no bands) ──
+const WRAP_WIDE = 'mx-auto w-full max-w-[1360px] px-6 sm:px-7';
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+const EYEBROW = 'qf-eyebrow text-sun-700';
+const H2_FIRST = 'scroll-mt-32 text-2xl md:text-3xl text-soil-900';
+const H2 = 'mt-14 scroll-mt-32 border-t border-soil-300 pt-6 text-2xl md:text-3xl text-soil-900';
+const H3 = 'scroll-mt-32 text-lg text-soil-900';
+const BODY = 'text-soil-700 leading-relaxed';
+const SMALL = 'text-sm leading-relaxed text-soil-700';
+const CODE = 'rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900';
+const LINK = 'text-link underline decoration-link/40 underline-offset-2 hover:decoration-link';
+const NAV_LINK = 'block border-l-2 border-soil-200 px-2.5 py-1 text-sm text-soil-700 no-underline transition hover:border-soil-300 hover:text-soil-900';
+const NAV_LINK_ON = 'block border-l-2 border-link bg-link/8 px-2.5 py-1 text-sm text-link no-underline transition';
+const TOC_LINK = 'block border-l-2 border-soil-200 px-2.5 py-1 text-[13px] text-soil-700 no-underline transition hover:border-soil-300 hover:text-soil-900';
+const PILL = 'inline-block rounded-full border border-soil-300 bg-soil-100 px-2.5 py-0.5 text-[12px] font-medium text-soil-700';
+const STRONG = 'font-semibold text-soil-900';
+
+const sectionNav: [string, string][] = [
+  ['Overview', '/haybarn'],
+  ['Install', '/haybarn/install'],
+  ['Security', '/haybarn/security'],
+  ['Extensions', '/haybarn/extensions'],
+  ['Build status', LATEST_STATUS_URL],
+  ['Contribute', '/haybarn/community-extensions'],
+  ["What's different", '/haybarn/differences'],
+  ['Compatibility & FAQ', '/haybarn/compatibility'],
+];
+const CURRENT = '/haybarn/differences';
+
+const toc: [string, string][] = [
+  ['At a glance', '#at-a-glance'],
+  ['Remote data', '#faster'],
+  ['Reproducible installs', '#reproducible'],
+  ['Your existing tools', '#clients'],
+  ['In the browser', '#browser'],
+  ['How it is built', '#builds'],
+  ["What doesn't change", '#unchanged'],
+  ['Filing a bug', '#bugs'],
+];
+
+// At-a-glance: benefit → the one-line reason → where the detail lives.
+const glance: [string, string, string][] = [
+  ['Reading remote data', 'Parallel range reads share one HTTP/2 connection; a mutated file costs zero wasted bytes; API responses compress.', '#faster'],
+  ['Reproducible installs', 'Extension version pins the engine records and honours, and extensions loadable from your package manager with no network at query time.', '#reproducible'],
+  ['Your existing tools', 'PostgreSQL wire clients connect and introspect; named arguments work in every function form; extensions can detect the engine.', '#clients'],
+  ['DuckDB in the browser', "Wasm extensions built with the engine's own exception ABI, plus an API for real interactive OAuth from inside a Worker.", '#browser'],
+  ['How it is built', 'One pinned container per platform, a much newer toolchain, and a compiler cache that actually hits.', '#builds'],
+  ['Everything else', 'Signed artifacts, build provenance, immutable hosting, and five language channels — around an engine whose SQL and file format are untouched.', '#unchanged'],
+];
+
+const unchanged = [
+  'SQL dialect and execution semantics',
+  'On-disk database format',
+  'C/C++ API and the <code>duckdb::</code> namespace',
+  'Public headers (<code>duckdb.h</code> / <code>.hpp</code>) and the <code>DUCKDB_VERSION</code> macro',
+  'Extension platform string and the <code>.duckdb_extension</code> suffix',
+  'The duckdb-wasm public TypeScript API surface',
+];
+
+const differs = [
+  'Artifact names (<code>haybarn</code>, <code>libhaybarn.*</code>)',
+  'Extension trust root — a single Haybarn RSA key',
+  'Extension cache (<code>~/.haybarn/extensions/</code>)',
+  'Default extension repositories and the autoloadable list',
+  'Release, signing, and distribution pipeline',
+  'The engine and tooling changes on this page',
+];
+
+const pinSql = `-- Pin an extension to an exact build and have the engine remember it.
+INSTALL a5 FROM community VERSION '23ca175c';
+LOAD a5;
+
+SELECT extension_name, installed_version, pinned_version
+FROM duckdb_extensions()
+WHERE extension_name = 'a5';
+
+-- A conflicting INSTALL now errors instead of silently no-op'ing.
+INSTALL a5 FROM community VERSION 'c64c68da95';
+-- Error: a5 is pinned to version '23ca175c'. Use FORCE INSTALL to change it.
+
+-- FORCE INSTALL is the single way off a pin (or, with no VERSION, clears it).
+FORCE INSTALL a5 FROM community VERSION 'c64c68da95';`;
+
+const npmShell = `# Declare the extension as a normal project dependency.
+npm install @haybarn/ext-avro-${LATEST_PKG_SUFFIX}`;
+
+const npmSql = `-- No INSTALL, no network, no custom repository setting.
+LOAD avro;
+SELECT * FROM read_avro('events.avro');`;
+
+// Deliberately not JSX: the runtime Prism loader in CodeBlock.astro fetches
+// prism-<lang>.min.js with no dependency resolution, and prism-tsx needs
+// prism-jsx, which is not in the core bundle — it throws on load. `typescript`
+// only needs clike/javascript, both of which core ships.
+const oauthTs = `import {
+  composeWorkerBridges,
+  installVgiOAuthBridge,
+  installVgiWebWorkerBridge,
+} from '@haybarn/haybarn-wasm';
+
+// The page-side half. The extension drives OIDC discovery, PKCE, and the
+// token exchange in C++; this opens the popup and relays the code back.
+const onWorkerCreated = composeWorkerBridges(
+  installVgiOAuthBridge,
+  installVgiWebWorkerBridge({
+    // Gate which worker URLs SQL may spawn. Default: same-origin only.
+    resolveWorkerUrl: (loc) =>
+      new URL(loc).origin === location.origin ? loc : null,
+  }),
+);
+
+// Then hand it to the provider:
+//   <DuckDBProvider onWorkerCreated={onWorkerCreated}>`;
+
+const httpSettings: [string, string, string][] = [
+  ['http_version', "'auto'", "Wire protocol. 'auto' offers h2 via ALPN over TLS and falls back to 1.1; '1.1' and '2.0' force one."],
+  ['http2_multiplex', 'true', 'Route transfers through the shared curl_multi dispatcher so parallel range reads ride one connection.'],
+  ['httpfs_curl_verbose', 'false', 'Surface ALPN negotiation and stream activity without reaching for tcpdump. Noisy.'],
+];
+
+const encodings: [string, string, string][] = [
+  ['identity (upstream — no negotiation)', '12,038', '1.00×'],
+  ['gzip (-6)', '461', '26×'],
+  ['zstd (-3)', '347', '35×'],
+  ['brotli (-q 11)', '310', '39×'],
+];
+
+const oauthSymbols: [string, string][] = [
+  ['duckdb_wasm_open_auth_url(url, timeout_ms)', 'Opens the authorization URL as a popup on the main thread and blocks the calling Worker until a code arrives. Returns the code, or 0 on timeout, error, or a closed popup.'],
+  ['duckdb_wasm_get_auth_error()', 'The error string from the most recent failed authorization attempt.'],
+  ['duckdb_wasm_get_page_origin()', "The page's origin, for constructing a redirect_uri that matches what the provider has registered."],
+  ['duckdb_wasm_crypto_random(buf, len)', 'Web Crypto randomness — enough entropy for a PKCE code_verifier.'],
+  ['duckdb_wasm_sha256(data, len, out)', 'SHA-256 via MbedTLS, for the PKCE code_challenge.'],
+  ['duckdb_web_get_query_progress(conn)', 'Progress for a running query, so a UI can show something during a long scan.'],
+];
+
+const toolchain: [string, string, string][] = [
+  ['Emscripten', '3.1.71', '5.0.7'],
+  ['Rust (wasm, threaded)', 'not built', 'pinned nightly + rust-src'],
+  ['ccache', '3.7.7 (EPEL) / 4.9.1 (Ubuntu)', '4.13.6, HTTP backend'],
+  ['Toolchain location', 'per-run random path', 'stable path in a pinned image'],
+];
+
+const channels: [string, string, string][] = [
+  ['CLI', 'haybarn', 'npm, PyPI, GitHub Releases'],
+  ['Python library', 'haybarn', 'PyPI'],
+  ['Node bindings', '@haybarn/node-api', 'npm'],
+  ['JDBC driver', 'farm.query.haybarn:haybarn_jdbc', 'Maven Central'],
+  ['Rust crate', 'haybarn', 'crates.io'],
+  ['WebAssembly', '@haybarn/haybarn-wasm', 'npm'],
+  ['Test runner', 'haybarn-unittest', 'npm, PyPI'],
+  ['Extensions', 'core + community, Haybarn-signed', 'R2, npm, PyPI'],
+];
+---
+
+<PageLayout title="What Haybarn gives you" description={description} jsonLd={jsonLd}>
+  <HaybarnSubNav />
+
+  <PageHead
+    variant="section"
+    eyebrow="What's different"
+    title="What Haybarn gives you"
+    icon={{ src: '/haybarn/haybarn-mark.svg' }}
+    lede="Haybarn is a derived distribution, not a dialect — the same SQL, the same files, the same API. This page is the honest inventory of what it adds on top, organised by what it does for you rather than by which repository it lives in."
+  >
+    <Fragment slot="aside">
+      <div class="qf-figure text-4xl leading-none text-sun-700">v{V}</div>
+      <div class="mt-1.5 text-[12.5px] font-medium text-soil-700">DuckDB version tracked</div>
+    </Fragment>
+  </PageHead>
+
+  <!-- ── Docs grid: section nav / content / page TOC ── -->
+  <div class={`${WRAP_WIDE} grid gap-10 py-10 lg:grid-cols-[220px_minmax(0,1fr)_200px] lg:gap-11`}>
+    <aside class="hidden lg:block lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto">
+      <nav aria-label="Haybarn documentation">
+        <h2 class="mb-2.5 text-[12.5px] font-semibold text-soil-500">In this section</h2>
+        <ul class="flex flex-col gap-0.5">
+          {sectionNav.map(([name, href]) => (
+            <li>
+              <a
+                href={href}
+                class={href === CURRENT ? NAV_LINK_ON : NAV_LINK}
+                aria-current={href === CURRENT ? 'page' : undefined}
+              >{name}</a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    </aside>
+
+    <div class="min-w-0">
+      <!-- ── At a glance ────────────────────────────────────── -->
+      <h2 id="at-a-glance" class={H2_FIRST}>At a glance</h2>
+      <p class={`mt-3 max-w-[68ch] ${BODY}`}>
+        Six areas. Nothing here changes what a query returns or what a database file looks like —
+        every one of them is about getting the same answer faster, more reproducibly, or in a
+        place DuckDB couldn't reach before.
+      </p>
+      <div class="mt-6 flex flex-col gap-2.5">
+        {glance.map(([title, body, href]) => (
+          <a href={href} class={`${CARD} group block p-5 no-underline transition duration-200 hover:-translate-y-0.5 hover:border-sun-400 sm:flex sm:items-baseline sm:gap-6`}>
+            <span class="block text-[15px] font-semibold text-soil-900 group-hover:text-link sm:w-[30%] sm:flex-none">{title}</span>
+            <span class="mt-1.5 block text-sm leading-relaxed text-soil-700 sm:mt-0">{body}</span>
+          </a>
+        ))}
+      </div>
+
+      <!-- ── 1. Remote data ─────────────────────────────────── -->
+      <h2 id="faster" class={H2}>Reading remote data</h2>
+      <p class={`mt-3 max-w-[68ch] ${BODY}`}>
+        Most real DuckDB work is a scan over parquet in object storage, and most of that time is
+        spent in HTTP. The largest single body of Haybarn-only work lives in
+        <a href={HTTPFS_REPO} class={LINK}>haybarn-httpfs</a>, the build-fork of
+        <code class={CODE}>duckdb/duckdb-httpfs</code>. Upstream has none of the following.
+      </p>
+
+      <div class="mt-8 flex flex-col gap-11">
+        <section id="http2" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>N connections become one</h3>
+            <span class={PILL}>http/2</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            Upstream issues every range read over an independent HTTP/1.1 connection: a
+            multi-threaded scan making N range reads opens N TCP+TLS connections to the same peer,
+            and pays a handshake for each. Haybarn negotiates h2 via ALPN and carries those reads as
+            N concurrent streams on <strong class={STRONG}>one</strong> connection. Measured: 4 connections down
+            to 1 on a single-file CloudFront parquet scan, and 16 streams over 1 connection on a
+            three-file scan. HPACK is the second win — AWS SigV4 requests carry 1–2 KB of signed
+            headers each, and follow-up requests on the same connection compress to roughly 100
+            bytes, which shows up on wide scans that issue many small reads.
+          </p>
+          <div class={`mt-4 overflow-x-auto ${CARD}`}>
+            <table class="w-full min-w-[560px] border-collapse text-sm">
+              <thead>
+                <tr class="border-b border-soil-300 text-left">
+                  <th class="px-4 py-2.5 text-[12.5px] font-semibold text-soil-500">Setting</th>
+                  <th class="px-4 py-2.5 text-[12.5px] font-semibold text-soil-500">Default</th>
+                  <th class="px-4 py-2.5 text-[12.5px] font-semibold text-soil-500">Effect</th>
+                </tr>
+              </thead>
+              <tbody>
+                {httpSettings.map(([name, def, effect]) => (
+                  <tr class="border-b border-soil-200 align-top last:border-0">
+                    <td class="px-4 py-3"><code class={CODE}>{name}</code></td>
+                    <td class="px-4 py-3"><code class={CODE}>{def}</code></td>
+                    <td class="px-4 py-3 leading-relaxed text-soil-700">{effect}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p class={`mt-3 max-w-[68ch] ${SMALL}`}>
+            Negotiation alone doesn't buy multiplexing: <code class={CODE}>CURLOPT_PIPEWAIT</code>, the option
+            that makes a transfer wait for an existing h2 connection, is a no-op inside
+            <code class={CODE}>curl_easy_perform</code>. Real multiplexing only happens under
+            <code class={CODE}>curl_multi</code>, which is not thread-safe — so Haybarn runs a process-global
+            dispatcher thread that owns the multi handle, and worker threads submit to it and block
+            on a condition variable. Caller-visible behaviour is identical to a plain synchronous
+            perform.
+          </p>
+        </section>
+
+        <section id="conditional-reads" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>A file that changes under you costs zero bytes</h3>
+            <span class={PILL}>correctness</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            When a remote file changes underneath a running read, upstream finds out
+            <em>afterwards</em>: it transfers the entire requested range, then string-compares the
+            ETag and throws. Haybarn sends the cached validator as an
+            <code class={CODE}>If-Match</code> / <code class={CODE}>If-Unmodified-Since</code> precondition, so the
+            server arbitrates and a mutated object comes back <code class={CODE}>412 Precondition Failed</code>
+            with zero body bytes. The round-trip count is identical; what you save is the whole
+            range — 16 MiB of wasted transfer on a mutated parquet column chunk versus none.
+          </p>
+          <p class={`mt-3 max-w-[68ch] ${SMALL}`}>
+            It also removes a false positive. Upstream strips the quotes from an ETag but not the
+            <code class={CODE}>W/</code> weak prefix, so a server that legally alternates between
+            <code class={CODE}>W/"abc"</code> and <code class={CODE}>"abc"</code> for the same resource — GitHub Raw does
+            this — throws <em>"the remote file has changed"</em> on a file that never changed. With
+            the comparison delegated to the server per RFC 9110 §13.1.1, strong validators are used
+            for <code class={CODE}>If-Match</code> and weak ones fall back to
+            <code class={CODE}>If-Unmodified-Since</code>.
+          </p>
+        </section>
+
+        <section id="compression" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>Compression where it's safe, identity where it isn't</h3>
+            <span class={PILL}>throughput</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            Upstream disables content negotiation globally — every request goes out
+            <code class={CODE}>Accept-Encoding: identity</code>. That is the right call for range reads, where
+            representation flux would break byte-exact semantics, and the wrong one for everything
+            else. Haybarn makes the policy per-method: range GET and HEAD stay identity, and every
+            other method negotiates gzip, deflate, brotli, or zstd. Since S3 LIST responses are XML,
+            the effect on listing-heavy workloads over a high-latency link is large.
+          </p>
+          <div class={`mt-4 overflow-x-auto ${CARD}`}>
+            <table class="w-full min-w-[480px] border-collapse text-sm">
+              <caption class="px-4 pt-3 text-left text-[12.5px] text-soil-500">
+                A 120-entry ListObjectsV2-shaped XML response
+              </caption>
+              <thead>
+                <tr class="border-b border-soil-300 text-left">
+                  <th class="px-4 py-2.5 text-[12.5px] font-semibold text-soil-500">Encoding</th>
+                  <th class="px-4 py-2.5 text-right text-[12.5px] font-semibold text-soil-500" data-numeric>Bytes on wire</th>
+                  <th class="px-4 py-2.5 text-right text-[12.5px] font-semibold text-soil-500" data-numeric>Ratio</th>
+                </tr>
+              </thead>
+              <tbody>
+                {encodings.map(([enc, bytes, ratio]) => (
+                  <tr class="border-b border-soil-200 last:border-0">
+                    <td class="px-4 py-2.5 text-soil-700">{enc}</td>
+                    <td class="px-4 py-2.5 text-right text-soil-900" data-numeric>{bytes}</td>
+                    <td class="px-4 py-2.5 text-right text-soil-900" data-numeric>{ratio}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p class={`mt-3 max-w-[68ch] ${SMALL}`}>
+            Caller-injected <code class={CODE}>Accept-Encoding</code> headers are stripped, which closes a
+            silent-corruption class rather than a performance one. Separately, response header names
+            are normalized to lowercase in both HTTP clients: that is what h2 puts on the wire
+            (RFC 9113 §8.2.1) and what AWS uses for <code class={CODE}>x-amz-*</code>, so case-sensitive
+            consumers — the S3 region-redirect retry, and
+            <code class={CODE}>response.headers['x-amz-version-id']</code> in
+            <code class={CODE}>duckdb_logs_parsed('HTTP')</code> — behave the same on either protocol version.
+          </p>
+        </section>
+
+        <section id="retry-after" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>Throttling and cancellation are respected</h3>
+            <span class={PILL}>http</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            The retry loop already retried the transient statuses — 408, 429, 500, 503, 504 — but
+            slept a fixed exponential backoff and ignored the server's own
+            <code class={CODE}>Retry-After</code> header, which is the standard rate-limit signal from reverse
+            proxies and from S3/GCS throttling. Haybarn reads it and uses it as a <em>floor</em> on the
+            computed backoff, clamped to 60 seconds so a hostile or absurd value can't stall a
+            request. Both header forms are parsed, delta-seconds and HTTP-date; with no header,
+            behaviour is unchanged (RFC 9110 §10.2.3).
+          </p>
+          <p class={`mt-3 max-w-[68ch] ${SMALL}`} id="cancellation">
+            The cancellation flag also moved from the POST request info up to the base request, so
+            an interrupted query can abort in-flight range GETs and HEADs — the requests a scan over
+            remote parquet actually spends its time in — and not only POSTs.
+          </p>
+        </section>
+      </div>
+
+      <!-- ── 2. Reproducible installs ───────────────────────── -->
+      <h2 id="reproducible" class={H2}>Installs you can reproduce</h2>
+      <p class={`mt-3 max-w-[68ch] ${BODY}`}>
+        The version of an extension you tested against should be the version that runs six months
+        later, on a machine with no network. Two engine changes and one distribution decision make
+        that true.
+      </p>
+
+      <div class="mt-8 flex flex-col gap-11">
+        <section id="pinning" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>Version pins the engine remembers</h3>
+            <span class={PILL}>extensions</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            Upstream uses the version in <code class={CODE}>INSTALL … VERSION '…'</code> to build the
+            download URL and then discards it, so the pin is obeyed exactly once. Worse, the
+            "file exists, so install is a no-op" early-out returns success while leaving the old
+            binary in place — the pin is believed but never applied. Haybarn records the requested
+            version as <code class={CODE}>pinned_version</code> in the install's info file and acts on it: a
+            conflicting <code class={CODE}>INSTALL</code> errors, re-requesting the pin in effect stays
+            idempotent, and <code class={CODE}>FORCE INSTALL</code> is the one way off. The pin is visible from
+            SQL as a column on <code class={CODE}>duckdb_extensions()</code>.
+          </p>
+          <div class="mt-4">
+            <CodeBlock code={pinSql} lang="sql" title="version-pinning.sql" tryable={false} />
+          </div>
+          <p class={`mt-3 max-w-[68ch] ${SMALL}`}>
+            <code class={CODE}>pinned_version</code> is deliberately separate from
+            <code class={CODE}>installed_version</code>: one is what you asked for, the other is what the
+            fetched binary reports about itself. Version strings containing path separators,
+            whitespace, or <code class={CODE}>..</code> are now rejected at bind time — the clause is
+            interpolated into a download URL unescaped.
+          </p>
+        </section>
+
+        <section id="node-modules" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>Extensions from your package manager</h3>
+            <span class={PILL}>extensions</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            An extension installed as an npm package loads in place, with no
+            <code class={CODE}>INSTALL</code> step and no network access at query time. Nothing is copied into
+            the extension cache, so <code class={CODE}>npm update</code> and <code class={CODE}>npm uninstall</code>
+            take effect immediately — and it works in read-only or containerised environments with
+            no writable extension directory. Your lockfile becomes the record of what runs.
+          </p>
+          <div class="mt-4 grid gap-3">
+            <CodeBlock code={npmShell} lang="bash" title="shell" tryable={false} />
+            <CodeBlock code={npmSql} lang="sql" title="load.sql" tryable={false} />
+          </div>
+          <p class={`mt-3 max-w-[68ch] ${SMALL}`}>
+            Resolution order is local extension directories, then <code class={CODE}>node_modules</code>, then
+            network autoinstall — so an npm-declared extension never reaches the network. The scan
+            walks upward from two anchors: the process working directory, and the directory of the
+            loaded Haybarn library itself, which is what makes it work for apps that embed the
+            engine, for monorepos, and for pnpm's non-hoisted store. The binary's RSA signature is
+            still verified at load exactly as it would be from the cache:
+            <strong class={STRONG}>the registry is a transport, not a new trust boundary</strong>.
+            PyPI wheels are rolling out on the same model.
+          </p>
+        </section>
+
+        <section id="distribution" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>Artifacts you can check before you run them</h3>
+            <span class={PILL}>supply chain</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            Everything Haybarn ships is built from the same engine commit, signed with the Haybarn
+            key, and published on GitHub Releases with checksums, a detached GPG signature, and SLSA
+            build provenance you can verify with <code class={CODE}>gh attestation verify</code>. Extensions are
+            hosted per-asset at immutable URLs keyed by version and git sha, so a URL that worked
+            once keeps returning the same bytes.
+          </p>
+          <div class={`mt-4 overflow-x-auto ${CARD}`}>
+            <table class="w-full min-w-[560px] border-collapse text-sm">
+              <thead>
+                <tr class="border-b border-soil-300 text-left">
+                  <th class="px-4 py-2.5 text-[12.5px] font-semibold text-soil-500">Artifact</th>
+                  <th class="px-4 py-2.5 text-[12.5px] font-semibold text-soil-500">Name</th>
+                  <th class="px-4 py-2.5 text-[12.5px] font-semibold text-soil-500">Channel</th>
+                </tr>
+              </thead>
+              <tbody>
+                {channels.map(([kind, name, where]) => (
+                  <tr class="border-b border-soil-200 last:border-0">
+                    <td class="px-4 py-2.5 text-soil-700">{kind}</td>
+                    <td class="px-4 py-2.5"><code class={CODE}>{name}</code></td>
+                    <td class="px-4 py-2.5 text-soil-700">{where}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p class={`mt-3 max-w-[68ch] ${SMALL}`}>
+            <code class={CODE}>haybarn-unittest</code> is worth calling out: it packages DuckDB's own
+            SQL-logic test runner for npm and PyPI, so an extension developer can run
+            <code class={CODE}>.test</code> files against a pinned engine build without recompiling the engine.
+            It needed one load-bearing fix — the stock binary <code class={CODE}>chdir</code>s to a compile-time
+            path and aborts on any other machine, even for <code class={CODE}>--help</code>.
+          </p>
+        </section>
+      </div>
+
+      <!-- ── 3. Existing tools ──────────────────────────────── -->
+      <h2 id="clients" class={H2}>The tools you already have</h2>
+      <p class={`mt-3 max-w-[68ch] ${BODY}`}>
+        Three changes whose whole purpose is that something you already own stops failing.
+      </p>
+
+      <div class="mt-8 flex flex-col gap-11">
+        <section id="pg-catalog" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>PostgreSQL clients connect and introspect</h3>
+            <span class={PILL}>compatibility</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            The compatibility views stored DuckDB's internal <code class={CODE}>LogicalTypeId</code> where
+            PostgreSQL clients expect real PG type OIDs, which broke the universal
+            <code class={CODE}>pg_attribute.atttypid = pg_type.oid</code> join — and did it silently, because
+            some internal IDs collide with real PG OIDs (<code class={CODE}>DOUBLE</code> is 23, and so is PG
+            <code class={CODE}>int4</code>; <code class={CODE}>DECIMAL</code> is 21, and so is <code class={CODE}>int2</code>), so the
+            join matched the wrong row instead of no row. Haybarn maps
+            <code class={CODE}>atttypid</code> through the same function <code class={CODE}>pg_type.oid</code> already
+            used, so the two agree by construction.
+          </p>
+          <p class={`mt-3 max-w-[68ch] ${SMALL}`}>
+            Two more categories came with it. <strong class={STRONG}>NOT NULL and schema compliance</strong> on
+            <code class={CODE}>pg_type</code> / <code class={CODE}>pg_namespace</code> — Npgsql's type loader reads every
+            column as a non-nullable string and crashed on connect against the hardcoded NULLs. And
+            <strong class={STRONG}>twelve standard catalog tables</strong> that were simply absent
+            (<code class={CODE}>pg_roles</code>, <code class={CODE}>pg_extension</code>, <code class={CODE}>pg_aggregate</code>,
+            <code class={CODE}>pg_trigger</code>, <code class={CODE}>pg_rewrite</code>, <code class={CODE}>pg_inherits</code>,
+            <code class={CODE}>pg_language</code>, <code class={CODE}>pg_range</code>, and others), mostly empty but
+            present. Between them these fix connect-time failures for Npgsql (PowerBI and .NET) and
+            introspection for pgjdbc, DBeaver, DataGrip, pgAdmin, Grafana, and QGIS.
+          </p>
+        </section>
+
+        <section id="binder" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>Named arguments work in every function form</h3>
+            <span class={PILL}>sql</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            <code class={CODE}>FROM t, f(t.x, t.y, opt := 5)</code> failed to bind. Named-parameter
+            extraction only ran on the all-literal form, so in the column and LATERAL forms a named
+            argument was swept into the synthesized input subquery as a phantom input column and no
+            overload matched. Haybarn partitions the expression list first, pulling inline named
+            parameters out before the sweep — so named arguments work in every form, not just one.
+          </p>
+        </section>
+
+        <section id="build-identity" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>Extensions can tell which engine they're on</h3>
+            <span class={PILL}>api</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            <code class={CODE}>duckdb/haybarn.h</code> defines <code class={CODE}>HAYBARN</code> as a presence flag and
+            <code class={CODE}>HAYBARN_ABI_VERSION</code> as a monotonic counter, so extensions and language
+            bindings can detect a Haybarn engine and gate on a divergence level in a
+            <code class={CODE}>#if</code>. Both are wired into the C++ and C public headers. Source-level only —
+            no struct or signature change, which is why the extension platform string is
+            deliberately left alone.
+          </p>
+        </section>
+      </div>
+
+      <!-- ── 4. Browser ─────────────────────────────────────── -->
+      <h2 id="browser" class={H2}>DuckDB in the browser</h2>
+      <p class={`mt-3 max-w-[68ch] ${BODY}`}>
+        <a href={WASM_REPO} class={LINK}>haybarn-wasm</a> keeps the duckdb-wasm public TypeScript API
+        unchanged — porting is a single import rewrite. What it adds is underneath that API: wasm
+        extensions that survive their first exception, and a way for an extension to run a real
+        browser sign-in.
+      </p>
+
+      <div class="mt-8 flex flex-col gap-11">
+        <section id="wasm-eh" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>Extensions that don't crash on their first exception</h3>
+            <span class={PILL}>wasm</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            The engine is built with native wasm exception handling and provides no legacy
+            <code class={CODE}>invoke_*</code> JS trampolines to side modules. Upstream's Rust wasm extensions
+            link the stock precompiled std for <code class={CODE}>wasm32-unknown-emscripten</code>, which carries
+            legacy emscripten EH and imports <code class={CODE}>invoke_*</code>, <code class={CODE}>__resumeException</code>,
+            <code class={CODE}>__cxa_find_matching_catch</code> and <code class={CODE}>getTempRet0</code>. The first call down
+            an exception path resolves one of those to <code class={CODE}>undefined</code> and the query dies
+            with an opaque <code class={CODE}>TypeError: c is not a function</code>. Install and load succeed,
+            and simple queries succeed, because they never reach the exception path — which is what
+            makes it so hard to diagnose.
+          </p>
+          <p class={`mt-3 max-w-[68ch] ${SMALL}`}>
+            Confirmed with <code class={CODE}>wasm-objdump</code>: the published <code class={CODE}>wasm_eh</code> binaries
+            import 81 legacy-EH symbols for <code class={CODE}>evalexpr_rhai</code> and 15 for
+            <code class={CODE}>lindel</code>; the threaded builds import zero. Haybarn rebuilds Rust std with
+            native wasm EH on every variant, and the same bug class on the C++ side — vcpkg
+            dependencies compiled without <code class={CODE}>-fwasm-exceptions</code>, so a guarded
+            <code class={CODE}>std::stoi</code> inside PROJ throws fatally on the non-numeric
+            <code class={CODE}>OGC:CRS84</code> code when <code class={CODE}>spatial</code> reads Overture GeoParquet — is fixed
+            with dedicated triplets and chainload wrapper toolchains that push the flag into every
+            dependency.
+          </p>
+        </section>
+
+        <section id="oauth" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>Interactive OAuth from inside a Worker</h3>
+            <span class={PILL}>haybarn only</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            An extension that needs to reach an authenticated API has a problem in the browser: it
+            runs in a Worker, and an OAuth flow needs a popup on the main thread. Upstream
+            duckdb-wasm has no way to cross that boundary. Haybarn adds six exported symbols an
+            extension can call, plus the page-side bridges that service them.
+          </p>
+          <div class={`mt-4 overflow-x-auto ${CARD}`}>
+            <table class="w-full min-w-[560px] border-collapse text-sm">
+              <thead>
+                <tr class="border-b border-soil-300 text-left">
+                  <th class="px-4 py-2.5 text-[12.5px] font-semibold text-soil-500">Symbol</th>
+                  <th class="px-4 py-2.5 text-[12.5px] font-semibold text-soil-500">What it does</th>
+                </tr>
+              </thead>
+              <tbody>
+                {oauthSymbols.map(([sym, what]) => (
+                  <tr class="border-b border-soil-200 align-top last:border-0">
+                    <td class="px-4 py-3"><code class={CODE}>{sym}</code></td>
+                    <td class="px-4 py-3 leading-relaxed text-soil-700">{what}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p class={`mt-4 max-w-[68ch] ${SMALL}`}>
+            The Worker blocks on <code class={CODE}>Atomics.wait</code> over a shared buffer while the page opens
+            the popup and relays the authorization code back — polled on an interval so a closed
+            popup is noticed even when no message ever arrives. Two pieces of supporting work made
+            it possible: an <code class={CODE}>_emscripten_yield</code> override so Workers genuinely block instead
+            of busy-spinning, and an HTTP layer rewritten to return the response body on non-2xx
+            status, which an OAuth flow has to read to handle a 401 or a 302 at all.
+          </p>
+          <div class="mt-4">
+            <CodeBlock code={oauthTs} lang="typescript" title="page.tsx" tryable={false} />
+          </div>
+          <p class={`mt-3 max-w-[68ch] ${SMALL}`}>
+            The same bridge mechanism carries a second transport: a catalog attached with
+            <code class={CODE}>LOCATION 'worker:&lt;url&gt;'</code> runs its worker client-side, exchanging Arrow
+            batches with the extension over a duplex ring inside DuckDB's own shared linear memory.
+            Because that means SQL can ask the page to spawn code, <code class={CODE}>resolveWorkerUrl</code>
+            gates which URLs are allowed and defaults to same-origin only — a rejected location
+            fails the <code class={CODE}>ATTACH</code> with a clear error rather than launching anything. Both
+            bridges need cross-origin isolation for <code class={CODE}>SharedArrayBuffer</code>; without it they
+            warn and no-op.
+          </p>
+        </section>
+      </div>
+
+      <!-- ── 5. Builds ──────────────────────────────────────── -->
+      <h2 id="builds" class={H2}>How it is built</h2>
+      <p class={`mt-3 max-w-[68ch] ${BODY}`}>
+        <a href={CI_REPO} class={LINK}>haybarn-extension-ci-tools</a> is the build system behind every
+        extension in the catalog. Upstream installs a toolchain onto each runner at build time;
+        Haybarn bakes one into a pinned container per platform. That single decision is what makes
+        the rest of these possible.
+      </p>
+
+      <div class="mt-8 flex flex-col gap-11">
+        <section id="containers" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>One container per platform, pinned to the engine version</h3>
+            <span class={PILL}>ci</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            Images for <code class={CODE}>linux_amd64</code>, <code class={CODE}>linux_arm64</code>, both musl variants,
+            and wasm are published to GHCR and tagged in lockstep with the engine release, with
+            emscripten, vcpkg, ccache and sccache baked in at fixed absolute paths. The payoff is
+            the compiler cache: upstream's <code class={CODE}>setup-emsdk</code> action installs to
+            <code class={CODE}>/home/runner/work/_temp/&lt;random UUID&gt;/emsdk-main/</code>, so <code class={CODE}>emcc</code>'s
+            path is different on every run and <strong class={STRONG}>nothing ever cache-hits</strong>. With
+            <code class={CODE}>emcc</code> at <code class={CODE}>/emsdk</code> and <code class={CODE}>CCACHE_BASEDIR</code> at a stable
+            in-container path, hashes repeat — and the roughly 300 MB emsdk download per build leg
+            disappears with them.
+          </p>
+          <div class={`mt-4 overflow-x-auto ${CARD}`}>
+            <table class="w-full min-w-[560px] border-collapse text-sm">
+              <thead>
+                <tr class="border-b border-soil-300 text-left">
+                  <th class="px-4 py-2.5 text-[12.5px] font-semibold text-soil-500">Component</th>
+                  <th class="px-4 py-2.5 text-[12.5px] font-semibold text-soil-500">Upstream</th>
+                  <th class="px-4 py-2.5 text-[12.5px] font-semibold text-soil-500">Haybarn</th>
+                </tr>
+              </thead>
+              <tbody>
+                {toolchain.map(([what, up, hb]) => (
+                  <tr class="border-b border-soil-200 last:border-0">
+                    <td class="px-4 py-2.5 text-soil-700">{what}</td>
+                    <td class="px-4 py-2.5 text-soil-700">{up}</td>
+                    <td class="px-4 py-2.5 text-soil-900">{hb}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p class={`mt-3 max-w-[68ch] ${SMALL}`}>
+            The ccache version matters more than it sounds: EPEL still ships 3.7.7, from 2019, which
+            predates the HTTP storage backend entirely, and Ubuntu 24.04's 4.9.1 has a broken bearer
+            auth that silently dropped cache writes. 4.13.6 is a statically linked musl build, so
+            the same binary runs on every image. Rust builds get sccache against the same shared
+            store.
+          </p>
+        </section>
+
+        <section id="rust-nightly" class="scroll-mt-32">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <h3 class={H3}>A newer toolchain, and a nightly variant where it's required</h3>
+            <span class={PILL}>ci</span>
+          </div>
+          <p class={`mt-2.5 max-w-[68ch] ${BODY}`}>
+            Emscripten moves from upstream's 3.1.71 to 5.0.7 — several years of wasm codegen,
+            <code class={CODE}>wasm-opt</code>, and exception-handling work, and the reason Haybarn can build
+            everything with native wasm EH in the first place. Alongside the base and
+            <code class={CODE}>rust</code> images there is a third, <code class={CODE}>rust-nightly</code>, pinned to a specific
+            nightly with the <code class={CODE}>rust-src</code> component.
+          </p>
+          <p class={`mt-3 max-w-[68ch] ${SMALL}`}>
+            That variant exists because a Rust extension for the threaded (cross-origin isolated)
+            wasm platform needs std rebuilt with
+            <code class={CODE}>+atomics,+bulk-memory,+mutable-globals</code> via <code class={CODE}>-Z build-std</code>, which
+            is nightly-only. The nightly is pinned to a date rather than tracking the channel,
+            precisely because <code class={CODE}>build-std</code> recompiles std from that toolchain's source —
+            a floating channel would make those rebuilds irreproducible. The flags are scoped to the
+            wasm target so host build-scripts and proc-macros are not compiled with wasm atomics.
+          </p>
+        </section>
+      </div>
+
+      <!-- ── 6. Unchanged ───────────────────────────────────── -->
+      <h2 id="unchanged" class={H2}>What doesn't change</h2>
+      <p class={`mt-3 max-w-[68ch] ${BODY}`}>
+        Haybarn is maintained as a hard fork of <code class={CODE}>duckdb/duckdb</code>, kept as a curated
+        commit stack on top of an upstream release tag. That shape is deliberate: the delta is
+        auditable in git and forward-ports cleanly when upstream cuts a release. Anything not on
+        this page is upstream DuckDB, unmodified — adopting Haybarn is not a migration.
+      </p>
+      <div class="mt-6 grid gap-3.5 md:grid-cols-2">
+        <div class={`${CARD} p-6`}>
+          <h3 class="text-lg text-soil-900">Untouched</h3>
+          <ul class="mt-3 flex flex-col gap-2 text-sm leading-relaxed text-soil-700">
+            {unchanged.map(item => (
+              <li class="[&_code]:rounded [&_code]:bg-soil-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.88em] [&_code]:text-soil-900">• <Fragment set:html={item} /></li>
+            ))}
+          </ul>
+        </div>
+        <div class={`${CARD} p-6`}>
+          <h3 class="text-lg text-soil-900">Changed</h3>
+          <ul class="mt-3 flex flex-col gap-2 text-sm leading-relaxed text-soil-700">
+            {differs.map(item => (
+              <li class="[&_code]:rounded [&_code]:bg-soil-100 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.88em] [&_code]:text-soil-900">• <Fragment set:html={item} /></li>
+            ))}
+          </ul>
+        </div>
+      </div>
+      <p class={`mt-5 max-w-[68ch] ${SMALL}`}>
+        This inventory is the delta against the upstream release Haybarn currently tracks
+        (v{V}). Where a change is a plain bug fix we offer it upstream, and when upstream takes
+        it we drop our patch — so this page gets shorter as often as it gets longer.
+      </p>
+
+      <!-- ── 7. Bugs ────────────────────────────────────────── -->
+      <h2 id="bugs" class={H2}>Filing a bug</h2>
+      <div class={`mt-6 ${CARD} px-6 py-6`}>
+        <span class={EYEBROW}>A rule that helps everyone</span>
+        <p class={`mt-3 max-w-[66ch] ${BODY}`}>
+          If you can reproduce it on upstream DuckDB, please file it with the DuckDB project — that
+          is where engine bugs get the best attention and the fix reaches the whole ecosystem. If it
+          only reproduces on Haybarn — one of our patches, the signing pipeline, the
+          community-extensions catalog, our wasm build — open an issue on the relevant
+          Query-farm-haybarn repo and we'll take it from there.
+        </p>
+        <div class="mt-5 flex flex-wrap gap-3">
+          <Button href={HAYBARN_REPO} variant="primary" size="md" external>Haybarn on GitHub ↗</Button>
+          <Button href="/haybarn/compatibility" variant="secondary" size="md">Compatibility & FAQ</Button>
+        </div>
+      </div>
+    </div>
+
+    <aside class="hidden xl:block xl:sticky xl:top-24 xl:self-start">
+      <nav aria-label="On this page">
+        <h2 class="mb-2.5 text-[12.5px] font-semibold text-soil-500">On this page</h2>
+        <ul class="flex flex-col gap-0.5">
+          {toc.map(([name, href]) => (
+            <li><a href={href} class={TOC_LINK}>{name}</a></li>
+          ))}
+        </ul>
+      </nav>
+    </aside>
+  </div>
+</PageLayout>

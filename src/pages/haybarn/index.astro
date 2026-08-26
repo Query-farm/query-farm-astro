@@ -3,13 +3,16 @@ import PageLayout from '../../layouts/PageLayout.astro';
 import Button from '../../components/ui/Button.astro';
 import HaybarnSubNav from '../../components/sections/HaybarnSubNav.astro';
 import PageHead from '../../components/ui/PageHead.astro';
-import { LATEST_STATUS_URL, LATEST_RC, LATEST_RC_PYPI, LATEST_DUCKDB_VERSION } from '../../data/haybarn-versions';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import ExampleShellMounter from '../../components/repl/ExampleShellMounter.tsx';
+import HaybarnInstall from '../../components/sections/HaybarnInstall.astro';
+import { LATEST_STATUS_URL, LATEST_RC, LATEST_DUCKDB_VERSION } from '../../data/haybarn-versions';
 
 const HAYBARN_RC = LATEST_RC;
 const HAYBARN_REPO = 'https://github.com/Query-farm-haybarn/haybarn';
 
 const SITE_ORIGIN = 'https://query.farm';
-const haybarnDescription = 'Haybarn is the production distribution layer for DuckDB: same SQL and files, with signed releases, rebuilt extensions, package channels, and supply-chain review built in.';
+const haybarnDescription = 'Haybarn is a DuckDB distribution for everyone: same SQL and database files, with signed releases, rebuilt extensions, engine improvements, package channels, and supply-chain review built in.';
 const jsonLd = [
   {
     '@context': 'https://schema.org',
@@ -52,17 +55,49 @@ const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
 const EYEBROW = 'qf-eyebrow text-sun-700';
 const LEDE = 'text-[17.5px] leading-relaxed text-soil-700';
 
+// One sample, two audiences: it pastes into the CLI installed above, and the
+// REPL island runs it verbatim. The INSTALL/LOAD lines stay in — a CLI user
+// needs them, and in the shell they are a no-op because the mounter has already
+// installed a5 from Haybarn's community channel.
+const demoSql = `INSTALL a5 FROM community;
+LOAD a5;
+
+SELECT version()                                   AS engine,
+       a5_lonlat_to_cell(-122.4194, 37.7749, 10)   AS san_francisco;`;
+
 const guarantees = [
   ['Drop-in compatibility', 'Same SQL, same APIs, same database files, same extension names. Adopting the distribution is not a migration.'],
   ['Verified artifacts', 'Engine and extensions carry checksums, a detached GPG signature, and SLSA build provenance — checkable before anything runs.'],
-  ['Concrete install paths', 'npm, PyPI, and GitHub Releases. Pick the channel that already fits your supply chain.'],
+  ['Concrete install paths', 'npm, PyPI, crates.io, Maven Central, and GitHub Releases. Pick the channel you already use.'],
   ['Safer defaults', 'The default catalog is the set DuckDB CI builds, minus third-party vendor code. Nothing autoloads that you did not ask for.'],
 ];
 
-const posture = [
-  ['Approve it', 'Signatures, checksums, and build history give a security team something concrete to review.'],
-  ['Mirror it', 'Artifacts and extensions publish through channels that fit internal registries and controlled environments.'],
-  ['Ship it', 'Familiar DuckDB SQL and extension commands, with Haybarn handling the production release layer.'],
+// Four reasons to switch, one sentence each. This is the landing page: it makes
+// the claim and names the one number that makes it credible. The evidence — the
+// benchmarks, the settings, what upstream does instead — lives on
+// /haybarn/differences, which every card links into. Resist growing this list;
+// the first version enumerated all nine changes and read like a changelog.
+const reasons: [string, string, string][] = [
+  [
+    'Remote data arrives faster',
+    'Parallel range reads share one HTTP/2 connection instead of opening one each, and a file that changes mid-read costs you nothing instead of a wasted 16 MiB.',
+    '#faster',
+  ],
+  [
+    'Installs stop drifting',
+    'Pin an extension version and the engine actually remembers it — or declare it in your lockfile and load it with no network at all.',
+    '#reproducible',
+  ],
+  [
+    'Your tools connect',
+    'Power BI, DBeaver, Grafana and anything else speaking the PostgreSQL wire protocol connect and introspect instead of failing on a broken catalog join.',
+    '#clients',
+  ],
+  [
+    'It works in the browser',
+    'Wasm extensions survive their first exception rather than dying on it, and can run a real sign-in flow from inside a Worker.',
+    '#browser',
+  ],
 ];
 
 const sameness = [
@@ -87,7 +122,7 @@ const stats: [string, string][] = [
 ---
 
 <PageLayout
-  title="Haybarn — DuckDB, cultivated"
+  title="Haybarn — a DuckDB distribution for everyone"
   description={haybarnDescription}
   jsonLd={jsonLd}
 >
@@ -96,15 +131,18 @@ const stats: [string, string][] = [
   <!-- ── Page header ─────────────────────────────────────────── -->
   <PageHead
     variant="section"
-    eyebrow="Production distribution"
-    title="DuckDB your team can ship."
-    icon={{ src: '/haybarn/haybarn-logo.png' }}
-    lede="Same SQL and database files, plus reviewable releases, rebuilt extensions, and artifacts your team can verify. The part nobody thinks about until a version drifts in production."
+    eyebrow="DuckDB distribution"
+    title="A DuckDB Distribution for Everyone."
+    icon={{ src: '/haybarn/haybarn-mark.svg' }}
+    lede="Same SQL, same database files, same extension names — with signed builds, rebuilt extensions, and a faster object-store client on top. Free to use on a laptop, and reviewable enough to put in production."
     hairband
   >
     <div class="mt-6 flex flex-wrap items-center gap-3">
       <Button href="/haybarn/install" variant="primary" size="md">Install Haybarn</Button>
-      <Button href={LATEST_STATUS_URL} variant="secondary" size="md">See build status</Button>
+      {/* The differences page is no longer a subnav tab (the row was overflowing),
+          so the overview carries it: here, in the section nav on every docs page,
+          and in the "full inventory" callout below. */}
+      <Button href="/haybarn/differences" variant="secondary" size="md">What's different</Button>
       <Button href={HAYBARN_REPO} variant="secondary" size="md" external>GitHub ↗</Button>
     </div>
 
@@ -120,9 +158,18 @@ const stats: [string, string][] = [
       <span class={EYEBROW}>What you get</span>
       <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">Four guarantees</h2>
       <div class="mt-8 grid gap-3.5 sm:grid-cols-2">
-        {guarantees.map(([title, body]) => (
+        {guarantees.map(([title, body], i) => (
           <div class={`${CARD} p-6 transition duration-200 hover:-translate-y-1 hover:border-sun-400`}>
-            <h3 class="text-xl text-soil-900">{title}</h3>
+            {/* Index numeral + hairline. Figures are tabular Commissioner via
+                .qf-figure, never Fraunces (DESIGN_BRIEF §2), and sun-700 is the
+                only gold that may carry text on a light ground (§3). */}
+            <div class="flex items-center gap-3">
+              <span class="qf-figure text-[15px] font-semibold leading-none tracking-[0.04em] text-sun-700">
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              <span class="h-px flex-1 bg-soil-200"></span>
+            </div>
+            <h3 class="mt-4 text-xl text-soil-900">{title}</h3>
             <p class="mt-2.5 text-sm leading-relaxed text-soil-700">{body}</p>
           </div>
         ))}
@@ -133,36 +180,43 @@ const stats: [string, string][] = [
   <!-- ── The one dark slab: install / the key moment ──────────── -->
   <section class="bg-pipe-6 py-16 text-cream">
     <div class={WRAP}>
-      <span class="qf-eyebrow text-sun-400">Try it</span>
-      <h2 class="mt-3 text-3xl md:text-4xl text-cream">One command, then it's deterministic</h2>
-      <p class="mt-3 max-w-[58ch] text-[17.5px] leading-relaxed text-cream-2">
-        A familiar extension command with a verified artifact behind it. The CLI resolves from
-        Haybarn's channel and checks the signature before anything lands on disk.
+      <span class="qf-eyebrow text-sun-400">Get it</span>
+      <h2 class="mt-3 text-3xl md:text-4xl text-cream">Install it, then it's deterministic</h2>
+      <p class="mt-3 max-w-[62ch] text-[17.5px] leading-relaxed text-cream-2">
+        Pick the client you already use. Every artifact below is checksummed, GPG-signed, and
+        carries SLSA build provenance, and the CLI checks the signature before anything lands
+        on disk.
       </p>
 
-      <div class="mt-6 overflow-hidden rounded-xl border border-white/15 bg-rock-950">
-        <div class="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
-          <span class="text-[12.5px] font-medium text-cream-2">Terminal</span>
-          <button
-            type="button"
-            class="qf-copy rounded-md border border-rock-800 px-2.5 py-1 text-[13px] font-medium text-cream-2 transition-colors hover:border-sun-400 hover:text-sun-400"
-          >Copy</button>
+      <div class="mt-7">
+        <HaybarnInstall />
+      </div>
+
+      <!-- ── Then the SQL — one block, two ways to run it ─────── -->
+      <!-- This used to be two blocks: a static sample and a separate runnable
+           one, which showed near-identical SQL and left the reader deciding
+           which was the real one. It is now a single CodeBlock, which
+           ExampleShellMounter (at the foot of this page) finds by its
+           data-language="sql" and hangs a Try button under. Opening the shell
+           boots @haybarn/haybarn-wasm and resolves a5 from Haybarn's own
+           community channel — so the demo exercises the real signed
+           distribution, and the same text pastes into the CLI above. -->
+      <div class="mt-12">
+        <span class="qf-eyebrow text-sun-400">Then</span>
+        <h3 class="mt-2.5 text-2xl text-cream">The same SQL you already write</h3>
+        <p class="mt-2.5 max-w-[64ch] text-[15px] leading-relaxed text-cream-2">
+          Nothing here is Haybarn-specific.
+          <code class="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.88em] text-cream">a5</code>
+          is an ordinary DuckDB community extension — Haybarn rebuilds it, signs it with the
+          Haybarn key, and tracks its readiness for every release. Paste it into the CLI you
+          just installed, or press <strong class="font-semibold text-cream">Try it in your
+          browser</strong>: that boots the Haybarn engine compiled to WebAssembly, right in this
+          tab, and resolves <code class="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[0.88em] text-cream">a5</code>
+          from the same signed channel the CLI uses.
+        </p>
+        <div class="mt-4">
+          <CodeBlock code={demoSql} lang="sql" title="Haybarn shell" />
         </div>
-        <pre class="overflow-x-auto p-5 font-mono text-[12.8px] leading-[1.9] text-[#e9e1d3]"><code><span class="text-[#6d6357]"># uvx fetches and runs the Haybarn CLI temporarily</span>
-<span class="text-sun-400">uvx</span> haybarn-cli=={LATEST_RC_PYPI}
-
-<span class="text-[#6d6357]"># or through npm</span>
-<span class="text-sun-400">npx</span> haybarn@rc
-
-<span class="text-[#6d6357]"># same engine, same SQL</span>
-memory H <span class="text-sun-400">SELECT</span> version();
-
-<span class="text-[#6d6357]"># h3 is a normal DuckDB community extension — Haybarn rebuilds</span>
-<span class="text-[#6d6357]"># it, signs it with the Haybarn key, and tracks its readiness</span>
-memory H <span class="text-sun-400">INSTALL</span> h3 <span class="text-sun-400">FROM</span> community;
-memory H <span class="text-sun-400">LOAD</span> h3;
-
-memory H <span class="text-sun-400">SELECT</span> h3_latlng_to_cell(37.7887, -122.3931, 9);</code></pre>
       </div>
 
       <div class="mt-8 grid overflow-hidden rounded-xl border border-white/15 sm:grid-cols-2 lg:grid-cols-4">
@@ -179,20 +233,76 @@ memory H <span class="text-sun-400">SELECT</span> h3_latlng_to_cell(37.7887, -12
   <!-- ── Why Haybarn ─────────────────────────────────────────── -->
   <section class="py-16 lg:py-[70px]">
     <div class={WRAP}>
-      <span class={EYEBROW}>Why Haybarn</span>
-      <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">The production layer around DuckDB</h2>
-      <p class={`mt-3 max-w-[64ch] ${LEDE}`}>
-        DuckDB is an excellent engine. Haybarn adds the distribution, signing, extension, and
-        release controls teams need when DuckDB becomes part of an app, service, agent, or
-        regulated workflow.
+      <span class={EYEBROW}>Why switch</span>
+      <h2 class="mt-3 max-w-[20ch] text-3xl md:text-4xl text-soil-900">Nothing changes in your SQL. Four things stop being your problem.</h2>
+      <p class={`mt-4 max-w-[62ch] ${LEDE}`}>
+        Haybarn is the same engine, so switching costs you nothing. What you get back are the
+        rough edges around it, already filed off.
       </p>
-      <div class="mt-8 grid gap-3.5 md:grid-cols-3">
-        {posture.map(([title, body]) => (
-          <div class={`${CARD} p-6`}>
-            <h3 class="text-xl text-soil-900">{title}</h3>
-            <p class="mt-2.5 text-sm leading-relaxed text-soil-700">{body}</p>
-          </div>
+
+      <div class="mt-9 grid gap-3.5 md:grid-cols-2">
+        {reasons.map(([title, body, anchor]) => (
+          <a
+            href={`/haybarn/differences${anchor}`}
+            class={`${CARD} group flex h-full flex-col p-7 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}
+          >
+            <h3 class="text-2xl leading-snug text-soil-900 group-hover:text-link">{title}</h3>
+            <p class="mt-3 text-[15px] leading-relaxed text-soil-700">{body}</p>
+            {/* mt-auto pins the affordance to the card floor so it lines up
+                across a row of uneven-length claims. */}
+            <span class="mt-auto pt-4 text-[13px] font-medium text-sun-700">How it works &rarr;</span>
+          </a>
         ))}
+      </div>
+
+      <div class="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <Button href="/haybarn/differences" variant="primary" size="md">See everything that's different</Button>
+        <p class="text-sm leading-relaxed text-soil-700">
+          Measurements, settings, and what upstream does instead.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Who decides ─────────────────────────────────────────── -->
+  <section class="py-16 lg:py-[70px]">
+    <div class={WRAP}>
+      <div class="grid gap-10 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)] lg:gap-16">
+        <div>
+          <span class={EYEBROW}>Who decides</span>
+          <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">Opinionated, on purpose</h2>
+          <p class={`mt-4 ${LEDE}`}>
+            Haybarn is built and controlled by Query.Farm, and that independence is the whole
+            point. We can reach a different conclusion than the DuckDB project does, on our own
+            timeline, when our experience and our clients' work tell us to.
+          </p>
+          <p class={`mt-4 ${LEDE}`}>
+            Every change we ship started there. Moving object-store reads onto HTTP/2, widening
+            the WebAssembly API surface until an extension could run a real sign-in, extending
+            engine APIs so a pin actually holds — none of these are things upstream got wrong.
+            They are places we had a firm opinion, someone depending on it, and the freedom to act.
+          </p>
+        </div>
+
+        <div class={`${CARD} self-start p-7`}>
+          <h3 class="text-xl text-soil-900">Which cuts both ways</h3>
+          <p class="mt-3 text-[15px] leading-relaxed text-soil-700">
+            Some of this is judgement about where DuckDB workloads are heading, and judgement can
+            be wrong. We would rather say that plainly than pretend every call is settled fact.
+          </p>
+          <p class="mt-3 text-[15px] leading-relaxed text-soil-700">
+            When one of ours turns out badly, we change it. And where a change belongs to
+            everyone we offer it upstream — when it lands, we drop our patch and carry one
+            less thing.
+          </p>
+          <p class="mt-3 text-[15px] leading-relaxed text-soil-700">
+            When it doesn't land, that is just as good an outcome. DuckDB answers to a far wider
+            audience than we do, and a change that is right for the people running Haybarn does
+            not need anyone else's agreement to be worth shipping. It stays here, and we maintain
+            it. What you are choosing is a distribution with a point of view, and people who will
+            keep exercising it.
+          </p>
+        </div>
       </div>
     </div>
   </section>
@@ -252,10 +362,11 @@ memory H <span class="text-sun-400">SELECT</span> h3_latlng_to_cell(37.7887, -12
     <div class={WRAP}>
       <div class={`${CARD} flex flex-wrap items-center justify-between gap-6 px-8 py-9`}>
         <div class="max-w-[52ch]">
-          <h2 class="text-2xl md:text-3xl text-soil-900">Evaluating Haybarn for production?</h2>
+          <h2 class="text-2xl md:text-3xl text-soil-900">Try it, or talk it through</h2>
           <p class="mt-3 text-[17.5px] leading-relaxed text-soil-700">
-            We'll walk your team through pinning, signing, internal mirrors, and the upgrade
-            path — and tell you honestly if you don't need it yet.
+            Haybarn is MIT-licensed and free to use — start with one command above. If you're
+            weighing it for a team, we'll walk through pinning, signing, internal mirrors, and
+            the upgrade path — and tell you honestly if you don't need it yet.
           </p>
         </div>
         <div class="flex flex-wrap gap-3">
@@ -276,27 +387,8 @@ memory H <span class="text-sun-400">SELECT</span> h3_latlng_to_cell(37.7887, -12
       </p>
     </div>
   </section>
-</PageLayout>
 
-<script>
-  // Copy button for hand-rolled rock-900/950 code blocks (brief §3: code never
-  // sits on a coloured band, so slab code blocks are built here rather than
-  // reusing the shared CodeBlock component).
-  function wireCopyButtons() {
-    document.querySelectorAll<HTMLButtonElement>('button.qf-copy').forEach((btn) => {
-      if (btn.dataset.wired) return;
-      btn.dataset.wired = '1';
-      btn.addEventListener('click', async () => {
-        const pre = btn.closest('div')?.parentElement?.querySelector('pre');
-        if (!pre) return;
-        try {
-          await navigator.clipboard.writeText(pre.textContent ?? '');
-          btn.textContent = 'Copied';
-          setTimeout(() => { btn.textContent = 'Copy'; }, 1600);
-        } catch { /* clipboard unavailable */ }
-      });
-    });
-  }
-  wireCopyButtons();
-  document.addEventListener('astro:after-swap', wireCopyButtons);
-</script>
+  <!-- Wires the Try button onto the SQL block in the slab above. a5 installs
+       once, engine-wide, from Haybarn's community channel. -->
+  <ExampleShellMounter client:load extensionName="a5" installSource="community" fixtures={null} />
+</PageLayout>

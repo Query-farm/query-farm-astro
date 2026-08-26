@@ -4,10 +4,14 @@ import VGISubNav from '../../components/sections/VGISubNav.astro';
 import PageHead from '../../components/ui/PageHead.astro';
 import Button from '../../components/ui/Button.astro';
 import CodeBlock from '../../components/ui/CodeBlock.astro';
-import VGISectionNav from '../../components/sections/VGISectionNav.astro';
+import ResultTable from '../../components/ui/ResultTable.astro';
+import PageToc from '../../components/vgi/PageToc.astro';
+import { GRID, HEAD_CONTAINER } from '../../lib/vgi-layout';
+import JoinPlanDiagram from '../../components/vgi/JoinPlanDiagram.astro';
+import ExampleShellMounter from '../../components/repl/ExampleShellMounter.tsx';
+import { cupolaLaunchUrl } from '../../data/cupola';
 
 // ── Shared shape vocabulary (brief §10) ──
-const WRAP_WIDE = 'mx-auto w-full max-w-[1360px] px-6 sm:px-7';
 const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
 const EYEBROW = 'qf-eyebrow text-sun-700';
 const LEDE = 'text-[17.5px] leading-relaxed text-soil-700';
@@ -16,477 +20,383 @@ const H3 = 'mt-9 scroll-mt-32 text-xl text-soil-900';
 const P = 'mt-4 leading-relaxed text-soil-700';
 const CODE = 'rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900';
 const LINK = 'text-link underline decoration-link/40 underline-offset-2 hover:decoration-link';
-const NAV_LINK = 'block border-l-2 px-2.5 py-1 text-sm no-underline transition';
 
 const CURRENT = '/vgi/getting-started';
 
+// This page is deliberately consumer-first and short. Nearly everyone meets VGI
+// by attaching a worker somebody else runs, not by writing one — so the whole
+// page is that path, and "build your own" is a signpost to
+// /vgi/building-a-worker rather than a second walkthrough inline. It used to
+// carry both, and the build half (clone the repo, prompt an agent, deploy to
+// Fly.io, query an NYC dataset) now lives on that page as "Ship one with an
+// agent".
+//
+// The workers below are two of the three the homepage's 10-second tour uses,
+// and they need no auth — which is why they replaced the volcanos worker this
+// page used to lead with: that one still answers `ATTACH` with an
+// authentication round trip, which is a poor first sixty seconds.
+//
+// Every sql/result pair is VERIFIED, not illustrative: each query was run
+// against the live worker in one session on 2026-08-17 via the local build at
+// ~/Development/vgi/build/release/haybarn (loading the matching
+// build/release/extension/vgi/vgi.duckdb_extension — stock Homebrew DuckDB is
+// ABI-pinned to a different core commit and won't load it), and the tables
+// below are that run's actual stdout. Both are live feeds, so a reader's
+// numbers will differ; they are a sample of the shape, not a promise of values.
 const toc: { id: string; label: string; sub?: boolean }[] = [
-  { id: 'hosted-worker', label: 'Attach a hosted worker' },
+  { id: 'attach', label: 'Attach your first worker' },
   { id: 'run-haybarn', label: 'Run Haybarn', sub: true },
-  { id: 'install-vgi', label: 'Install and load VGI', sub: true },
-  { id: 'attach-worker', label: 'Attach the worker', sub: true },
-  { id: 'query-sql', label: 'Query it with SQL', sub: true },
-  { id: 'python-script', label: 'From a Python script', sub: true },
-  { id: 'make-worker', label: 'Make your own worker' },
-  { id: 'clone-repo', label: 'Clone the VGI Python repo', sub: true },
-  { id: 'agent-build', label: 'Build and deploy it', sub: true },
-  { id: 'attach-deployed', label: 'Attach the deployed worker', sub: true },
-  { id: 'useful-question', label: 'Ask a useful question', sub: true },
-  { id: 'join-workers', label: 'Join another worker', sub: true },
+  { id: 'install-vgi', label: 'Load VGI', sub: true },
+  { id: 'first-query', label: 'Attach and query', sub: true },
+  { id: 'examples', label: 'More to query' },
+  { id: 'compose', label: 'Workers compose' },
+  { id: 'functions', label: 'Not just data' },
+  { id: 'build', label: 'Build a worker' },
   { id: 'next-steps', label: 'Where to from here' },
 ];
 
-const runHaybarn = `# Fastest path: run the latest Haybarn with npm / npx.
+const runHaybarn = `# Haybarn is Query.Farm's DuckDB-compatible distribution.
 npx haybarn@latest
 
-# Or run Haybarn with uvx / pipx.
+# Or with uvx / pipx:
 uvx haybarn-cli
 pipx run haybarn-cli`;
 
-const installExtension = `-- Install VGI from the community extension repository.
-INSTALL vgi FROM community;
+const installVgi = `INSTALL vgi FROM community;
+LOAD vgi;`;
 
--- If you need to refresh an existing install, use:
--- FORCE INSTALL vgi FROM community;
-
--- Load VGI into this Haybarn session.
-LOAD vgi;
-
--- Verify it is ready. installed and loaded should both be true.
-SELECT extension_name, installed, loaded
-FROM duckdb_extensions()
-WHERE extension_name = 'vgi';`;
-
-const verifyVgiOutput = `┌────────────────┬───────────┬─────────┐
-│ extension_name │ installed │ loaded  │
-│    varchar     │  boolean  │ boolean │
-├────────────────┼───────────┼─────────┤
-│ vgi            │ true      │ true    │
-└────────────────┴───────────┴─────────┘`;
-
-const attachHostedWorker = `-- Attach a hosted VGI worker.
-ATTACH 'volcanos' AS volcanos (
+// `strftime` rather than the bare timestamp: the raw column is
+// `timestamp with time zone`, which prints as `2026-08-14 21:58:21.564+00` under
+// a `timestamp with time zone` type header — sub-second precision and a UTC
+// offset nobody reads, in the widest column of the table. Formatting it to the
+// minute and moving it last takes the result from 90 columns to 72, which is the
+// difference between fitting the page and scrolling sideways on the first
+// example a reader ever sees.
+const attachEarthquakes = `ATTACH 'earthquakes' AS eq (
   TYPE vgi,
-  LOCATION 'https://vgi-volcanos.fly.dev/'
-);`;
-
-const queryHostedWorker = `-- See the schemas exposed by the worker.
-SELECT catalog_name, schema_name
-FROM information_schema.schemata
-WHERE catalog_name = 'volcanos';
-
--- See the tables and views exposed by the worker.
-SELECT table_schema, table_name, table_type
-FROM information_schema.tables
-WHERE table_catalog = 'volcanos'
-ORDER BY table_schema, table_name;
-
--- Query the hosted worker like any other SQL catalog.
-SELECT *
-FROM volcanos.smithsonian.pleistocene_volcanoes
-LIMIT 10;`;
-
-const installHaybarnPython = `# This will work once the Haybarn Python package is public.
-pip install haybarn`;
-
-const scriptHostedWorker = `import haybarn
-
-con = haybarn.connect()
-
-con.sql("INSTALL vgi FROM community")
-con.sql("LOAD vgi")
-
-con.sql("""
-  ATTACH 'volcanos' AS volcanos (
-    TYPE vgi,
-    LOCATION 'https://vgi-volcanos.fly.dev/'
-  )
-  """)
-
-rows = con.sql("""
-SELECT *
-FROM volcanos.smithsonian.pleistocene_volcanoes
-LIMIT 10
-""").fetchall()
-
-for row in rows:
-    print(row)`;
-
-const cloneVgiPython = `git clone https://github.com/Query-farm/vgi-python.git
-cd vgi-python`;
-
-const agentPrompt = `Look at this vgi-python repository and make me a new VGI worker that exposes
-the NYC Department of Finance "Summary of Neighborhood Sales by Neighborhood"
-dataset to DuckDB consumers:
-
-https://data.cityofnewyork.us/City-Government/DOF-Summary-of-Neighborhood-Sales-by-Neighborhood-/5ebm-myj7/about_data
-
-Follow the examples and test fixtures in vgi-python.
-
-Requirements:
-- Expose the data as a SQL table named nyc_dof_sales.main.neighborhood_sales.
-- Add useful column names and types for neighborhood housing analysis.
-- Include comments in the SQL/catalog metadata so a future agent understands the dataset.
-- Add tests that prove Haybarn/DuckDB consumers can query the worker.
-- Deploy the worker to Fly.io and give me the hosted VGI URL and ATTACH statement.
-- Configure Fly Machines to scale to zero when idle.`;
-
-const localAgentPrompt = `Change this worker so I can run it locally with uv run instead of deploying it.
-Give me the Haybarn ATTACH statement for the local process.`;
-
-const attachNycWorker = `-- Replace the LOCATION with the Fly.io URL your agent gives you.
-ATTACH 'nyc_dof_sales' AS nyc_dof_sales (
-  TYPE vgi,
-  LOCATION 'https://your-nyc-dof-sales-worker.fly.dev/'
+  LOCATION 'https://vgi-earthquakes.rusty-bb6.workers.dev'
 );
 
--- Confirm the worker exposes the expected table.
-SELECT table_schema, table_name, table_type
-FROM information_schema.tables
-WHERE table_catalog = 'nyc_dof_sales'
-ORDER BY table_schema, table_name;`;
+-- eq is now an ordinary catalog. Query it with ordinary SQL.
+SELECT round(mag, 1) AS mag,
+       place,
+       strftime(time, '%Y-%m-%d %H:%M') AS utc
+FROM eq.main.recent
+WHERE mag >= 6
+ORDER BY mag DESC
+LIMIT 6;`;
 
-const nycGrowthQuery = `-- Find neighborhoods that are still relatively cheap but growing fast.
--- In other words: candidates for the next "Williamsburg" style growth story.
-WITH recent_growth AS (
-  SELECT
-    borough_name,
-    neighborhood,
-    type_of_home,
-    year,
-    median_sale_price,
-    LAG(median_sale_price, 5) OVER (
-      PARTITION BY borough_name, neighborhood, type_of_home
-      ORDER BY year
-    ) AS price_5y_ago
-  FROM nyc_dof_sales.main.neighborhood_sales
-)
+// Same worker, no terminal. The tour workers all send
+// `access-control-allow-origin: *`, which is what makes a browser-side engine
+// able to reach them at all.
+const cupolaEarthquakes = cupolaLaunchUrl('https://vgi-earthquakes.rusty-bb6.workers.dev');
 
-SELECT
-  borough_name,
-  neighborhood,
-  type_of_home,
-  median_sale_price,
-  ROUND(
-    100.0 * (median_sale_price - price_5y_ago)
-    / NULLIF(price_5y_ago, 0),
-    1
-  ) AS growth_5y_pct
-FROM recent_growth
-WHERE price_5y_ago IS NOT NULL
-  AND median_sale_price < 1000000
-ORDER BY growth_5y_pct DESC
-LIMIT 3;`;
-
-const nycGrowthResult = `┌──────────────┬───────────────┬───────────────────────────┬───────────────────┬───────────────┐
-│ borough_name │ neighborhood  │       type_of_home        │ median_sale_price │ growth_5y_pct │
-│   varchar    │    varchar    │          varchar          │       int64       │    double     │
-├──────────────┼───────────────┼───────────────────────────┼───────────────────┼───────────────┤
-│ Queens       │ Kew Gardens   │ 03 THREE FAMILY DWELLINGS │            915000 │         357.5 │
-│ Queens       │ Rockaway Park │ 03 THREE FAMILY DWELLINGS │            929000 │         298.3 │
-│ Queens       │ Holliswood    │ 02 TWO FAMILY DWELLINGS   │            879400 │         265.0 │
-└──────────────┴───────────────┴───────────────────────────┴───────────────────┴───────────────┘`;
-
-const attachSecondWorker = `-- Attach another hosted VGI worker in the same Haybarn session.
-ATTACH 'volcanos' AS volcanos (
+const weatherSql = `ATTACH 'open_meteo' AS m (
   TYPE vgi,
-  LOCATION 'https://vgi-volcanos.fly.dev/'
-);`;
+  LOCATION 'https://vgi-open-meteo.rusty-bb6.workers.dev'
+);
 
-const crossCatalogQuery = `-- Black Swan Years vs. NYC housing:
--- Did NYC home prices behave differently in years with unusually large volcanic activity?
-WITH eruption_years AS (
-  SELECT
-    last_eruption_year AS year,
-    COUNT(*) AS volcano_count
-  FROM volcanos.smithsonian.holocene_volcanoes
-  WHERE last_eruption_year BETWEEN 2010 AND 2024
-  GROUP BY 1
-),
+-- Geocode the place, then LATERAL-join its coordinates straight into the
+-- forecast call — one round trip per row, no separate lookup step.
+SELECT strftime(w.time, '%a %H:%M')              AS hour,
+       round(w.temperature_2m, 1)                AS temp_f,
+       m.main.weather_code_emoji(w.weather_code) AS icon,
+       m.main.weather_code_text(w.weather_code)  AS conditions
+FROM m.main.geocoding('Glen Allen, VA', count := 1, country_code := 'US') AS g,
+     LATERAL m.main.forecast_hourly(g.latitude, g.longitude,
+                                    forecast_days := 2,
+                                    temperature_unit := 'fahrenheit') AS w
+WHERE w.time >= now()
+ORDER BY w.time
+LIMIT 5;`;
 
-nyc_growth AS (
-  SELECT
-    borough_name,
-    neighborhood,
-    type_of_home,
-    year,
-    median_sale_price,
-    LAG(median_sale_price) OVER (
-      PARTITION BY borough_name, neighborhood, type_of_home
-      ORDER BY year
-    ) AS prev_price
-  FROM nyc_dof_sales.main.neighborhood_sales
-  WHERE median_sale_price > 0
-)
+const joinSql = `ATTACH 'earthquakes' AS eq (TYPE vgi, LOCATION 'https://vgi-earthquakes.rusty-bb6.workers.dev');
+ATTACH 'open_meteo'  AS m  (TYPE vgi, LOCATION 'https://vgi-open-meteo.rusty-bb6.workers.dev');
 
-SELECT
-  n.year,
-  n.borough_name,
-  n.neighborhood,
-  n.type_of_home,
-  n.median_sale_price,
-  ROUND(100.0 * (n.median_sale_price - n.prev_price) / NULLIF(n.prev_price, 0), 1) AS yoy_growth_pct,
-  COALESCE(e.volcano_count, 0) AS volcano_count
-FROM nyc_growth n
-LEFT JOIN eruption_years e USING (year)
-WHERE n.prev_price IS NOT NULL
-ORDER BY volcano_count DESC, yoy_growth_pct DESC
-LIMIT 3;`;
+-- Two workers in one session: one wrapping the USGS feed, one the forecast
+-- API. DuckDB plans across them.
+SELECT round(q.mag, 1) AS mag,
+       q.place,
+       round(w.temperature_2m, 1) AS temp_c,
+       m.main.weather_code_text(w.weather_code) AS conditions
+FROM (SELECT * FROM eq.main.recent WHERE mag >= 6 ORDER BY mag DESC LIMIT 5) AS q,
+     LATERAL m.main.forecast_current(q.latitude, q.longitude) AS w;`;
 
-const crossCatalogResult = `┌───────┬───────────────┬──────────────────────────┬───────────────────────────┬───────────────────┬────────────────┬───────────────┐
-│ year  │ borough_name  │       neighborhood       │       type_of_home        │ median_sale_price │ yoy_growth_pct │ volcano_count │
-│ int64 │    varchar    │         varchar          │          varchar          │       int64       │     double     │     int64     │
-├───────┼───────────────┼──────────────────────────┼───────────────────────────┼───────────────────┼────────────────┼───────────────┤
-│  2023 │ Manhattan     │ Kips Bay                 │ 01 ONE FAMILY DWELLINGS   │           6850000 │          930.1 │            14 │
-│  2023 │ Manhattan     │ Tribeca                  │ 01 ONE FAMILY DWELLINGS   │          23500000 │          180.7 │            14 │
-│  2023 │ Staten Island │ Rossville-Port Mobil     │ 01 ONE FAMILY DWELLINGS   │           1999900 │          166.7 │            14 │
-└───────┴───────────────┴──────────────────────────┴───────────────────────────┴───────────────────┴────────────────┴───────────────┘`;
+// Results are STRUCTURED, not the shell's box-drawing output pasted into a code
+// block. That is what they used to be, and it renders badly: the `│ ├ ┼ ┘`
+// glyphs are drawn to butt together at line-height 1, so at the web font's
+// line-height every vertical rule breaks into dashes. As data they render
+// through ResultTable.astro — real rows that wrap and scroll on a phone, with
+// figures set tabular. Values are still this machine's verified output; they
+// were parsed out of the transcript rather than retyped.
+const earthquakesResult = {
+  columns: ["mag", "place", "utc"],
+  numericCols: [0],
+  rows: [
+    [7.7, "68 km NNW of Ende, Indonesia", "2026-08-14 21:58"],
+    [7.4, "5 km S of San José del Palmar, Colombia", "2026-08-10 12:34"],
+    [6.9, "15 km NNW of Pematangsiantar, Indonesia", "2026-08-15 10:54"],
+    [6.8, "The 2026 Kumamoto Region, Japan Earthquake", "2026-07-28 07:27"],
+    [6.3, "south of the Kermadec Islands", "2026-08-05 07:43"],
+    [6.3, "32 km SW of Sarangani, Philippines", "2026-08-05 04:14"],
+  ],
+};
+
+const weatherResult = {
+  columns: ["hour", "temp_f", "icon", "conditions"],
+  numericCols: [1],
+  rows: [
+    ["Mon 21:00", 90.7, "☀️", "Clear sky"],
+    ["Mon 22:00", 89.0, "☀️", "Clear sky"],
+    ["Mon 23:00", 86.5, "☀️", "Clear sky"],
+    ["Tue 00:00", 83.9, "☁️", "Overcast"],
+    ["Tue 01:00", 79.0, "☁️", "Overcast"],
+  ],
+};
+
+// A worker publishes FUNCTIONS, not just tables — the point of the "more than a
+// data source" section. These four are the open-meteo worker's own, called with
+// no FROM clause at all, which is the cleanest way to show they are the
+// worker's and not DuckDB's. Verified in the same session as everything else.
+const functionsSql = `ATTACH 'open_meteo' AS m (TYPE vgi, LOCATION 'https://vgi-open-meteo.rusty-bb6.workers.dev');
+
+-- No table, no FROM — these functions belong to the worker.
+SELECT m.main.weather_code_emoji(95) AS icon,
+       m.main.weather_code_text(95)  AS conditions,
+       m.main.wind_compass(247)      AS wind,
+       m.main.uv_index_category(8.2) AS uv;`;
+
+const functionsResult = {
+  columns: ["icon", "conditions", "wind", "uv"],
+  numericCols: [],
+  rows: [
+    ["\u26c8\ufe0f", "Thunderstorm", "WSW", "Very High"],
+  ],
+};
+
+const listFunctionsSql = `ATTACH 'open_meteo' AS m (TYPE vgi, LOCATION 'https://vgi-open-meteo.rusty-bb6.workers.dev');
+
+-- Everything this worker publishes, by kind.
+SELECT function_name, function_type
+FROM duckdb_functions()
+WHERE database_name = 'm'
+ORDER BY function_type, function_name;`;
+
+const joinResult = {
+  columns: ["mag", "place", "temp_c", "conditions"],
+  numericCols: [0, 2],
+  rows: [
+    [7.7, "68 km NNW of Ende, Indonesia", 24.9, "Clear sky"],
+    [7.4, "5 km S of San José del Palmar, Colombia", 20.8, "Slight rain showers"],
+    [6.9, "15 km NNW of Pematangsiantar, Indonesia", 23.4, "Overcast"],
+    [6.8, "The 2026 Kumamoto Region, Japan Earthquake", 24.5, "Mainly clear"],
+    [6.3, "32 km SW of Sarangani, Philippines", 28.2, "Mainly clear"],
+  ],
+};
 ---
 
 <PageLayout
   title="VGI — Getting Started"
-  description="Attach a hosted VGI worker, then see how to build your own SQL-accessible VGI worker."
+  description="Attach a hosted VGI worker in about a minute and query it with ordinary SQL. No ETL, no connector plumbing, no native extension to build."
 >
   <VGISubNav />
+
+  {/* Puts a "Try it in your browser" button under every runnable SQL block on
+      the page. It scans `pre[data-language="sql"]`, so a block that shouldn't
+      get one opts out with `tryable={false}` on CodeBlock — and because each
+      shell is an isolated in-memory session, every block that DOES get one
+      carries its own ATTACH rather than relying on an earlier example. */}
+  <ExampleShellMounter client:load extensionName="VGI" installSource="community" fixtures={null} />
 
   <!-- ── Page header ─────────────────────────────────────────── -->
   <PageHead
     variant="section"
-    wide
+    container={HEAD_CONTAINER}
     eyebrow="Guide"
-    title="Getting started with VGI"
-    lede="Two paths: connect SQL to a hosted worker, or build your own worker and expose it as SQL."
+    title="Query a VGI worker in a minute"
+    lede="You don't have to build anything to use VGI. Attach a worker somebody else already runs, and it behaves like any other SQL catalog."
   >
     <div class="mt-6 flex flex-wrap items-center gap-3">
-      <Button href="#hosted-worker" variant="primary" size="md">Attach a hosted worker</Button>
-      <Button href="#make-worker" variant="secondary" size="md">Make your own worker</Button>
-      <Button href="https://github.com/Query-farm/vgi" variant="secondary" size="md" external>GitHub ↗</Button>
+      <Button href="#attach" variant="primary" size="md">Start querying</Button>
     </div>
   </PageHead>
 
   <!-- ── Docs grid: section nav / content / page TOC ──────────── -->
-  <div class={`${WRAP_WIDE} grid gap-10 py-10 lg:grid-cols-[220px_minmax(0,1fr)_200px] lg:gap-11`}>
-    <aside class="hidden lg:block lg:sticky lg:top-24 lg:self-start lg:max-h-[calc(100vh-8rem)] lg:overflow-y-auto">
-      <VGISectionNav current={CURRENT} />
-      <h2 class="mt-7 mb-2.5 text-[12.5px] font-semibold text-soil-500">Reference</h2>
-      <ul class="flex flex-col gap-0.5">
-        <li><a href="/products/extensions/vgi" class={`${NAV_LINK} border-soil-200 text-soil-700 hover:border-soil-300 hover:text-soil-900`}>VGI extension</a></li>
-      </ul>
-    </aside>
+  <div class={GRID}>
+    <PageToc items={toc} reference={[{ label: 'VGI extension', href: '/products/extensions/vgi' }]} />
 
     <!-- Not a landmark element: BaseLayout already renders the page's single main. -->
 
     <div class="min-w-0">
       <p class={LEDE}>
-        VGI turns a remote service into a SQL catalog. Start by attaching a worker somebody else
-        already hosts, then build and deploy one of your own.
+        A VGI worker is a program that exposes an API, dataset, model, or internal service as SQL.
+        You <code class={CODE}>ATTACH</code> it by URL and query it — no download, no ETL, no
+        connector to write, no custom extension to compile. Both workers used below are public
+        and need no credentials.
       </p>
 
-      <!-- Path 1 -->
-      <p class={`${EYEBROW} mt-10 block`}>Path 1</p>
-      <h2 id="hosted-worker" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Attach a hosted VGI worker</h2>
-      <p class={P}>
-        VGI lets Haybarn turn a remote service into a SQL catalog. In this example, a VGI worker
-        at <code class={CODE}>https://vgi-volcanos.fly.dev/</code> wraps volcano-related
-        datasets, including Smithsonian Global Volcanism Program data. You do not download the
-        dataset, write ETL, or install a custom local extension. Haybarn attaches to the worker,
-        discovers the schemas and tables it exposes, and lets you query them with ordinary SQL.
-        If you want to expose your own API, dataset, or service this way, see
-        <a href="#make-worker" class={LINK}>Make your own worker</a>.
-      </p>
-      <p class={P}>
-        The key idea: the data access logic lives behind the VGI URL; Haybarn provides the SQL
-        interface.
-      </p>
+      <!-- ── Attach ─────────────────────────────────────────── -->
+      <h2 id="attach" class="mt-10 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Attach your first worker</h2>
 
       <h3 id="run-haybarn" class={H3}>Run Haybarn</h3>
       <p class={P}>
-        Haybarn is Query.Farm's DuckDB-compatible distribution. The commands below run the
-        latest Haybarn release without pinning a version.
+        Haybarn is Query.Farm's DuckDB-compatible distribution, and it ships the VGI extension.
       </p>
       <div class="mt-4"><CodeBlock code={runHaybarn} lang="bash" title="terminal" /></div>
       <p class="mt-4 text-sm leading-relaxed text-soil-700">
-        Need platform-specific binaries, provenance verification, or more install channels? See
-        the <a href="/haybarn/install" class={LINK}>full Haybarn install guide</a>.
+        Platform binaries, provenance verification and more install channels are in the
+        <a href="/haybarn/install" class={LINK}>Haybarn install guide</a>.
       </p>
 
-      <h3 id="install-vgi" class={H3}>Install and load VGI</h3>
-      <p class={P}>
-        Once you are inside the Haybarn shell, install and load the <code class={CODE}>vgi</code>
-        extension.
-      </p>
-      <div class="mt-4"><CodeBlock code={installExtension} lang="sql" title="Haybarn shell" /></div>
+      <h3 id="install-vgi" class={H3}>Load VGI</h3>
+      <p class={P}>Once, inside the Haybarn shell:</p>
+      <div class="mt-4"><CodeBlock code={installVgi} lang="sql" title="Haybarn shell" tryable={false} /></div>
       <p class="mt-4 text-sm leading-relaxed text-soil-700">
-        After the verification query, the result should show both <code class={CODE}>installed</code>
-        and <code class={CODE}>loaded</code> as true:
+        Already installed it before? <code class={CODE}>FORCE INSTALL vgi FROM community</code>
+        refreshes it.
       </p>
-      <div class="mt-4"><CodeBlock code={verifyVgiOutput} lang="text" title="expected result" /></div>
 
-      <h3 id="attach-worker" class={H3}>Attach the hosted worker</h3>
+      <h3 id="first-query" class={H3}>Attach and query</h3>
       <p class={P}>
-        With VGI loaded, attach the remote worker. <code class={CODE}>LOCATION</code> is the
-        worker endpoint.
+        This worker wraps the live feed from the
+        <a href="https://earthquake.usgs.gov/" class={LINK} target="_blank" rel="noopener noreferrer">USGS Earthquake Hazards Program</a>
+        — the same 30-day catalog seismologists watch — and serves it as a table.
       </p>
+      <div class="mt-4"><CodeBlock code={attachEarthquakes} lang="sql" title="Haybarn shell" /></div>
+      <ResultTable columns={earthquakesResult.columns} rows={earthquakesResult.rows} numericCols={earthquakesResult.numericCols} />
       <p class={P}>
-        The alias after <code class={CODE}>AS</code> becomes the catalog name. Here,
-        <code class={CODE}>AS volcanos</code> means later queries use names like
-        <code class={CODE}>volcanos.smithsonian.pleistocene_volcanoes</code>.
+        That is the whole idea. The alias after <code class={CODE}>AS</code> becomes the catalog
+        name, and everything downstream is ordinary SQL — joins, aggregates, window functions,
+        <code class={CODE}>CREATE TABLE AS</code>.
       </p>
-      <div class="mt-4"><CodeBlock code={attachHostedWorker} lang="sql" title="Haybarn shell" /></div>
-      <div class="mt-5 rounded-r-lg border-l-[3px] border-sun-400 bg-[#fffdf7] px-5 py-4">
-        <div class="text-[12.5px] font-medium text-sun-700">Note</div>
-        <p class="mt-1.5 text-sm leading-relaxed text-soil-700">
-          After attaching, Haybarn may open an auth screen. Log in there to continue; the check
-          is there to limit automated traffic to the demo worker. The worker only receives the
-          VGI requests needed to answer your SQL queries.
-        </p>
+      <!-- Cupola: the no-install path to the same worker. Worth surfacing here
+           rather than only in "where to next" — a reader who doesn't want a
+           terminal has otherwise bounced by this point. -->
+      <div class={`mt-8 ${CARD} flex flex-wrap items-center justify-between gap-5 px-6 py-6`}>
+        <div class="max-w-[52ch]">
+          <h3 class="text-xl text-soil-900">Prefer not to install anything?</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">
+            <a href="/products/cupola" class={LINK}>Cupola</a> is a free SQL workbench that runs
+            DuckDB in a browser tab — with charts, pivots and an AI analyst. This link opens it
+            pointed at the same earthquake worker, no download and no setup.
+          </p>
+        </div>
+        <Button href={cupolaEarthquakes} variant="primary" size="md" external>Open in Cupola ↗</Button>
       </div>
 
-      <h3 id="query-sql" class={H3}>Query it with SQL</h3>
+      <!-- ── More examples ──────────────────────────────────── -->
+      <h2 id="examples" class={H2}>More things you can query</h2>
       <p class={P}>
-        Once the worker is attached, <code class={CODE}>volcanos</code> behaves like an attached
-        database. You can inspect its schemas and tables through
-        <code class={CODE}>information_schema</code>, then query worker-backed tables with
-        normal SQL.
+        Same two steps — <code class={CODE}>ATTACH</code>, then SQL — against very different
+        services. Neither of these is a dataset sitting in a bucket; both are live APIs a worker
+        is translating on the fly.
       </p>
-      <p class={P}>
-        The discovery queries show schemas such as <code class={CODE}>earthquakes</code>,
-        <code class={CODE}>hans</code>, <code class={CODE}>smithsonian</code>, and
-        <code class={CODE}>vsc</code>. From there, tables like
-        <code class={CODE}>volcanos.smithsonian.pleistocene_volcanoes</code> are available
-        directly in SQL.
-      </p>
-      <div class="mt-4"><CodeBlock code={queryHostedWorker} lang="sql" title="Haybarn shell" /></div>
 
-      <h3 id="python-script" class={H3}>Use it from a Python script</h3>
-      <div class="mt-4 rounded-r-lg border-l-[3px] border-sun-400 bg-[#fffdf7] px-5 py-4">
-        <div class="text-[12.5px] font-medium text-sun-700">Not yet public</div>
-        <p class="mt-1.5 text-sm leading-relaxed text-soil-700">
-          This script example assumes the Haybarn Python package is available from the public
-          Python package index. Until that package is public, use the Haybarn shell example
-          above.
-        </p>
-      </div>
-      <p class={P}>Install Haybarn in the Python environment that will run your script.</p>
-      <div class="mt-4"><CodeBlock code={installHaybarnPython} lang="bash" title="terminal" /></div>
+      <h3 class={H3}>A weather API, as table functions</h3>
       <p class={P}>
-        Then use the same attach and query flow from application code through the Haybarn Python
-        API.
+        <a href="https://open-meteo.com/" class={LINK} target="_blank" rel="noopener noreferrer">Open-Meteo</a>
+        is a free, open-source weather API. This worker exposes its geocoding and hourly-forecast
+        endpoints as table functions, so a place name and a forecast join in one query.
       </p>
-      <div class="mt-4"><CodeBlock code={scriptHostedWorker} lang="python" title="volcanos.py" /></div>
-
-      <!-- Path 2 -->
-      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Path 2</p>
-      <h2 id="make-worker" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Make your own worker</h2>
+      <div class="mt-4"><CodeBlock code={weatherSql} lang="sql" title="Haybarn shell" /></div>
+      <ResultTable columns={weatherResult.columns} rows={weatherResult.rows} numericCols={weatherResult.numericCols} />
+      <!-- ── Compose ────────────────────────────────────────── -->
+      <h2 id="compose" class={H2}>Workers compose</h2>
       <p class={P}>
-        Start with a dataset, API, model, or internal service you want to make queryable. In
-        this example, we will expose the NYC Department of Finance
-        <a href="https://data.cityofnewyork.us/City-Government/DOF-Summary-of-Neighborhood-Sales-by-Neighborhood-/5ebm-myj7/about_data" class={LINK} target="_blank" rel="noopener noreferrer">Summary of Neighborhood Sales by Neighborhood</a>
-        dataset as a hosted VGI worker.
+        The part that pays off: attach more than one worker in the same session and query across
+        them. Neither service knows the other exists, and you did not build a pipeline to put them
+        in the same place — DuckDB plans across both catalogs.
       </p>
       <p class={P}>
-        You will need an AI coding agent such as Claude Code or Codex, plus a Fly.io account.
-        The agent reads the VGI Python examples, builds the worker, deploys it to Fly.io, and
-        gives you a URL that Haybarn can attach as a SQL catalog.
+        Attach both, then ask what the weather is right now at the sites of the largest recent
+        earthquakes — one query, two services, no pipeline in between.
       </p>
-      <div class="mt-5 rounded-r-lg border-l-[3px] border-sun-400 bg-[#fffdf7] px-5 py-4">
-        <div class="text-[12.5px] font-medium text-sun-700">On hosting</div>
-        <p class="mt-1.5 text-sm leading-relaxed text-soil-700">
-          Fly.io is only needed to host the worker as a public URL. You most likely will not be
-          charged for this demo because the Fly Machines can scale to zero when idle. If you do
-          not want to sign up for Fly.io, change the prompt and ask the agent to make the worker
-          run locally with <code class={CODE}>uv run</code> instead.
-        </p>
-      </div>
-
-      <h3 id="clone-repo" class={H3}>Clone the VGI Python repo</h3>
-      <p class={P}>
-        For now, clone the repository and give your agent the local path. In the future, VGI
-        Python will be installable as a package, so this setup step will be simpler.
-      </p>
-      <div class="mt-4"><CodeBlock code={cloneVgiPython} lang="bash" title="terminal" /></div>
-
-      <h3 id="agent-build" class={H3}>Ask an agent to build and deploy the worker</h3>
-      <p class={P}>
-        Use a prompt like this. Replace the repository path with the actual path on your machine
-        if needed.
-      </p>
-      <div class="mt-4"><CodeBlock code={agentPrompt} lang="text" title="agent prompt" /></div>
+      <div class="mt-4"><CodeBlock code={joinSql} lang="sql" title="Haybarn shell" /></div>
+      <ResultTable columns={joinResult.columns} rows={joinResult.rows} numericCols={joinResult.numericCols} />
       <p class="mt-4 text-sm leading-relaxed text-soil-700">
-        If you want to skip Fly.io, add this follow-up instruction:
+        These are live feeds, so your numbers will differ from the samples above.
       </p>
-      <div class="mt-4"><CodeBlock code={localAgentPrompt} lang="text" title="local prompt" /></div>
 
-      <h3 id="attach-deployed" class={H3}>Attach the deployed worker</h3>
+      <h3 class={H3}>What the planner does with that</h3>
       <p class={P}>
-        When the agent finishes, the generated project should give you the hosted Fly.io URL and
-        the exact <code class={CODE}>ATTACH</code> statement. Open Haybarn, install and load VGI
-        if you have not already, then run that attach statement.
+        This is not two queries stapled together. DuckDB plans the whole thing at once, and pushes
+        what it can to the far side: the earthquake worker is asked for four columns with
+        <code class={CODE}>mag &gt;= 6</code> already applied, rather than for the table.
       </p>
-      <div class="mt-4"><CodeBlock code={attachNycWorker} lang="sql" title="Haybarn shell" /></div>
+      <JoinPlanDiagram />
+      <p class="mt-5 text-sm leading-relaxed text-soil-700">
+        Put <code class={CODE}>EXPLAIN</code> in front of the query to see it yourself — the plan
+        names <code class={CODE}>VGI_TABLE_SCAN</code> and <code class={CODE}>VGI_LATERAL_BATCH</code>,
+        and prints the filter and projection list each worker was handed. Pushdown is opt-in per
+        worker; see <a href="/vgi/architecture#catalogs" class={LINK}>Workers are first-class catalogs</a>.
+      </p>
 
-      <h3 id="useful-question" class={H3}>Ask a useful question</h3>
+      <!-- ── Not just data ──────────────────────────────────── -->
+      <h2 id="functions" class={H2}>Not just data — functions too</h2>
       <p class={P}>
-        Now the DOF dataset behaves like a SQL table. This query looks for neighborhoods that
-        are still under $1M median sale price but have grown quickly over five years.
+        It is easy to read all of the above as "VGI is a way to fetch remote tables." It is not. A
+        worker publishes <strong class="font-medium text-soil-900">functions</strong>, and a table is
+        only one of the shapes they come in. You have already been calling them: every
+        <code class={CODE}>icon</code> and <code class={CODE}>conditions</code> value above came from
+        a function the weather worker exposes, not from a column in a dataset.
       </p>
-      <div class="mt-4"><CodeBlock code={nycGrowthResult} lang="text" title="result" /></div>
       <p class={P}>
-        In plain English: among homes under $1M in this result, Kew Gardens is growing the
-        fastest, followed by Rockaway Park and Holliswood.
+        Called on their own, with no <code class={CODE}>FROM</code> clause at all, they look like any
+        other SQL function — because to DuckDB that is exactly what they are:
       </p>
-      <details class={`mt-6 ${CARD} p-4`}>
-        <summary class="cursor-pointer text-[13px] font-medium text-link">Show the SQL</summary>
-        <div class="mt-4"><CodeBlock code={nycGrowthQuery} lang="sql" title="Haybarn shell" /></div>
-      </details>
+      <div class="mt-4"><CodeBlock code={functionsSql} lang="sql" title="Haybarn shell" /></div>
+      <ResultTable columns={functionsResult.columns} rows={functionsResult.rows} numericCols={functionsResult.numericCols} />
+      <p class={P}>
+        That matters because the code behind a function runs <em>in your worker</em>, in your
+        language, on your machines. So a VGI function can call a model, hit an internal API, apply a
+        licensing rule, or reach a library that has no business being inside a database process —
+        and to the person writing SQL it is just a function.
+      </p>
+      <p class={P}>
+        A worker can expose five shapes in total — scalar, table, table-in-out, aggregate and
+        buffering — plus macros, and the tables and views you have already seen. Ask any worker what
+        it publishes:
+      </p>
+      <div class="mt-4"><CodeBlock code={listFunctionsSql} lang="sql" title="Haybarn shell" /></div>
+      <p class="mt-4 text-sm leading-relaxed text-soil-700">
+        The shapes are laid out in
+        <a href="/vgi/docs/concepts/" class={LINK}>Concepts</a>, and in detail in
+        <a href="/vgi/docs/concepts/lifecycle/" class={LINK}>Function lifecycle</a>.
+      </p>
 
-      <h3 id="join-workers" class={H3}>Join it with another VGI worker</h3>
+      <!-- ── Build ──────────────────────────────────────────── -->
+      <h2 id="build" class={H2}>Want to build a VGI worker?</h2>
       <p class={P}>
-        The important part is that workers compose. You can attach another worker in the same
-        session, whether you wrote it or someone else published it, and query across both
-        catalogs with SQL.
+        Everything above was consuming a worker. Writing one is the other half: you own an API, a
+        dataset, a model or an internal service, and you want SQL access to it without building a
+        pipeline first. A worker is an ordinary program in Python, Go, TypeScript, Rust or Java —
+        no DuckDB internals, no C++, no rebuild per DuckDB release.
       </p>
-      <div class="mt-4"><CodeBlock code={attachSecondWorker} lang="sql" title="Haybarn shell" /></div>
-      <p class={P}>
-        This example joins NYC housing growth with global volcanic eruption counts by year. It
-        is intentionally exploratory: the value is that both external services are now queryable
-        together without building a bespoke data platform first.
-      </p>
-      <div class="mt-4"><CodeBlock code={crossCatalogResult} lang="text" title="result" /></div>
-      <p class={P}>
-        In plain English: for this sample, 2023 had the highest volcano count in the joined
-        range, and Kips Bay had the largest year-over-year housing jump among the returned rows.
-      </p>
-      <details class={`mt-6 ${CARD} p-4`}>
-        <summary class="cursor-pointer text-[13px] font-medium text-link">Show the SQL</summary>
-        <div class="mt-4"><CodeBlock code={crossCatalogQuery} lang="sql" title="Haybarn shell" /></div>
-      </details>
-
-      <div class={`mt-8 ${CARD} p-6`}>
-        <h3 class="text-xl text-soil-900">What is unique here?</h3>
-        <p class="mt-2.5 text-sm leading-relaxed text-soil-700">
-          VGI is not unique because it can fetch a public dataset or deploy code to Fly.io. The
-          distinctive part is how quickly those pieces become usable SQL: a worker can wrap an
-          API, dataset, service, or model; Haybarn can discover its schemas and attach it as a
-          catalog; and DuckDB users can query and join multiple remote workers without
-          hand-building connector plumbing, schema registration, or a full data platform first.
-        </p>
+      <div class={`mt-6 ${CARD} flex flex-wrap items-center justify-between gap-5 px-6 py-6`}>
+        <div class="max-w-[52ch]">
+          <h3 class="text-xl text-soil-900">Building a Worker</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">
+            Whether you should build one at all, what a worker can expose, picking a language, how
+            it runs and gets hosted — then your language's tutorial.
+          </p>
+        </div>
+        <Button href="/vgi/building-a-worker" variant="primary" size="md">Start building →</Button>
       </div>
 
-      <!-- Next steps -->
+      <!-- ── Next steps ─────────────────────────────────────── -->
       <h2 id="next-steps" class={H2}>Where to from here</h2>
       <div class="mt-6 grid gap-3.5 sm:grid-cols-3">
         <a href="/vgi/architecture" class={`${CARD} block p-5 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}>
           <h3 class="text-lg text-soil-900">Architecture</h3>
-          <p class="mt-2 text-sm leading-relaxed text-soil-700">Transports, lifecycle, wire format.</p>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">Transports, lifecycle, wire format — and what the process hop costs.</p>
         </a>
-        <a href="/vgi/languages" class={`${CARD} block p-5 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}>
-          <h3 class="text-lg text-soil-900">Other languages</h3>
-          <p class="mt-2 text-sm leading-relaxed text-soil-700">TypeScript, Go, Rust, and Java SDKs.</p>
+        <a href="/vgi/connect-to-a-worker" class={`${CARD} block p-5 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}>
+          <h3 class="text-lg text-soil-900">Connect to a worker</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">Every ATTACH option, transports, and settings.</p>
         </a>
-        <a href="/vgi/docs/python/" class={`${CARD} block p-5 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}>
-          <h3 class="text-lg text-soil-900">Full Python docs</h3>
-          <p class="mt-2 text-sm leading-relaxed text-soil-700">Tutorial, how-to guides, and API reference.</p>
+        <a href="/vgi/docs/" class={`${CARD} block p-5 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}>
+          <h3 class="text-lg text-soil-900">SDK documentation</h3>
+          <p class="mt-2 text-sm leading-relaxed text-soil-700">Concepts, tutorials and API reference for all five SDKs.</p>
         </a>
       </div>
 
@@ -501,21 +411,5 @@ const crossCatalogResult = `┌───────┬────────�
       </div>
     </div>
 
-    <aside class="hidden xl:block xl:sticky xl:top-24 xl:self-start">
-      <h2 class="mb-2.5 text-[12.5px] font-semibold text-soil-500">On this page</h2>
-      <ul class="flex flex-col gap-0.5">
-        {toc.map((item) => (
-          <li>
-            <a
-              href={`#${item.id}`}
-              class:list={[
-                'block border-l-2 border-soil-200 py-1 text-[13px] text-soil-700 no-underline transition hover:border-soil-300 hover:text-soil-900',
-                item.sub ? 'pl-5 pr-2.5' : 'px-2.5',
-              ]}
-            >{item.label}</a>
-          </li>
-        ))}
-      </ul>
-    </aside>
   </div>
 </PageLayout>

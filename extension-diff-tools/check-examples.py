@@ -242,6 +242,7 @@ class Snippet:
     skip: str | None = None
     is_setup: bool = False
     expected_output: str | None = None
+    expected_output_table: dict[str, Any] | None = None
 
 
 @dataclass
@@ -251,6 +252,17 @@ class Result:
     parse_error: str | None
     exec_status: str | None
     exec_error: str | None
+
+
+# These functions intentionally return a different value (or a process-local
+# handle) on each execution. Their examples still need column/row shape checks,
+# but comparing the captured cell value byte-for-byte creates guaranteed false
+# failures. Keep this list narrow: deterministic hashes and statistics continue
+# to receive exact output validation.
+NONDETERMINISTIC_OUTPUT_RE = re.compile(
+    r"\b(?:crypto_random_bytes|adbc_connect|dist_[a-z0-9_]+_sample|dist_uniform_int_range)\s*\(",
+    re.IGNORECASE,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +309,7 @@ def collect_function_examples(slug: str, fns: list[dict]) -> list[Snippet]:
                 setup=ex.get("setup") or [],
                 skip=ex.get("skip"),
                 expected_output=ex.get("output"),
+                expected_output_table=ex.get("outputTable"),
             ))
     return out
 
@@ -380,14 +393,37 @@ def collect_snippets_for(slug: str) -> list[Snippet]:
     if meta_path.exists():
         snips += collect_quickstart(slug, json.loads(meta_path.read_text()))
 
-    fns_path = base / "augment" / "functions.json"
-    if fns_path.exists():
-        try:
-            fns = json.loads(fns_path.read_text())
-            if isinstance(fns, list):
-                snips += collect_function_examples(slug, fns)
-        except json.JSONDecodeError:
-            pass
+    # Validate the same merged function examples the site renders. Augment
+    # records override generated fields by function name; generated-only
+    # records remain visible. Deduplicate identical examples across overloads.
+    generated_path = base / "generated" / "functions.json"
+    augment_path = base / "augment" / "functions.json"
+    generated: list[dict] = []
+    augment: list[dict] = []
+    try:
+        if generated_path.exists():
+            data = json.loads(generated_path.read_text())
+            if isinstance(data, list):
+                generated = data
+        if augment_path.exists():
+            data = json.loads(augment_path.read_text())
+            if isinstance(data, list):
+                augment = data
+    except json.JSONDecodeError:
+        generated = []
+        augment = []
+
+    aug_by_name = {fn.get("name"): fn for fn in augment if fn.get("name")}
+    merged = [{**fn, **aug_by_name.get(fn.get("name"), {})} for fn in generated]
+    generated_names = {fn.get("name") for fn in generated}
+    merged.extend(fn for fn in augment if fn.get("name") not in generated_names)
+    function_snips = collect_function_examples(slug, merged)
+    seen_function_examples: set[tuple[str, str]] = set()
+    for snip in function_snips:
+        key = (snip.source.split(".examples", 1)[0], snip.code.strip())
+        if key not in seen_function_examples:
+            snips.append(snip)
+            seen_function_examples.add(key)
 
     snips += collect_mdx_blocks(slug, base / "cookbook.mdx")
     snips += collect_mdx_blocks(slug, base / "technical-details.mdx")
@@ -467,7 +503,7 @@ def substitute_bind_vars(sql: str) -> tuple[str, list[str]]:
 # DuckDB harness
 
 
-def open_db_for(slug: str, install_extensions: bool) -> tuple[duckdb.DuckDBPyConnection, bool]:
+def open_db_for(slug: str, install_extensions: bool, force_install: bool = False) -> tuple[duckdb.DuckDBPyConnection, bool]:
     """Returns (connection, extension_loaded). When False, snippets that
     reference the extension's functions will fail with "function does
     not exist" — those are demoted to PARSE-SKIP because the cause is
@@ -477,7 +513,8 @@ def open_db_for(slug: str, install_extensions: bool) -> tuple[duckdb.DuckDBPyCon
     loaded = False
     if install_extensions and slug not in NON_EXTENSION_SLUGS:
         try:
-            db.execute(f"INSTALL '{slug}' FROM community")
+            install_sql = "FORCE INSTALL" if force_install else "INSTALL"
+            db.execute(f"{install_sql} '{slug}' FROM community")
             db.execute(f"LOAD '{slug}'")
             loaded = True
         except duckdb.Error as e:
@@ -568,6 +605,7 @@ def check_snippet(
     executed_in_phase1: set[int] = set()
     statements = list(enumerate(split_statements(rewritten)))
     try:
+        last_cursor = None
         for idx, stmt in statements:
             if not stmt.strip():
                 continue
@@ -651,7 +689,60 @@ def check_snippet(
             stripped = re.sub(r"/\*.*?\*/", "", stripped, flags=re.DOTALL)
             if not stripped.strip():
                 continue
-            db.execute(stmt)
+            last_cursor = db.execute(stmt)
+
+        if snip.expected_output_table is not None:
+            if last_cursor is None or last_cursor.description is None:
+                return Result(snip, S_PARSE_PASS, None, S_EXEC_FAIL, "expected a result table, but the snippet returned none")
+            actual_rows = last_cursor.fetchall()
+            expected_rows = snip.expected_output_table.get("rows", [])
+            actual_columns = [col[0] for col in last_cursor.description]
+            expected_columns = [
+                col.get("name", "") if isinstance(col, dict) else str(col)
+                for col in snip.expected_output_table.get("columns", [])
+            ]
+
+            def display_cell(value: Any) -> str:
+                if value is None:
+                    return "NULL"
+                if isinstance(value, bool):
+                    return "true" if value else "false"
+                if isinstance(value, (bytes, bytearray, memoryview)):
+                    return bytes(value).hex()
+                return str(value)
+
+            rendered_actual = [[display_cell(cell) for cell in row] for row in actual_rows]
+            rendered_expected = [[display_cell(cell) for cell in row] for row in expected_rows]
+            if expected_columns and actual_columns != expected_columns:
+                return Result(
+                    snip, S_PARSE_PASS, None, S_EXEC_FAIL,
+                    f"output columns differ: expected {expected_columns!r}, got {actual_columns!r}",
+                )
+            check_values = NONDETERMINISTIC_OUTPUT_RE.search(snip.code) is None
+            same_shape = (
+                len(rendered_actual) == len(rendered_expected)
+                and all(len(actual) == len(expected) for actual, expected in zip(rendered_actual, rendered_expected))
+            )
+            if not same_shape:
+                return Result(
+                    snip, S_PARSE_PASS, None, S_EXEC_FAIL,
+                    f"output shape differs: expected {rendered_expected!r}, got {rendered_actual!r}",
+                )
+            if check_values and rendered_actual != rendered_expected:
+                return Result(
+                    snip, S_PARSE_PASS, None, S_EXEC_FAIL,
+                    f"output rows differ: expected {rendered_expected!r}, got {rendered_actual!r}",
+                )
+        elif snip.expected_output is not None:
+            if last_cursor is None or last_cursor.description is None:
+                return Result(snip, S_PARSE_PASS, None, S_EXEC_FAIL, "expected output, but the snippet returned none")
+            rows = last_cursor.fetchall()
+            actual = "\n".join("\t".join(str(cell) for cell in row) for row in rows)
+            if actual.strip() != snip.expected_output.strip():
+                return Result(
+                    snip, S_PARSE_PASS, None, S_EXEC_FAIL,
+                    f"output differs: expected {snip.expected_output!r}, got {actual!r}",
+                )
         return Result(snip, S_PARSE_PASS, None, S_EXEC_PASS, None)
     except duckdb.Error as e:
         msg = str(e)
@@ -761,14 +852,17 @@ def split_statements(sql: str) -> list[str]:
 # Driver
 
 
-def check_extension(slug: str, *, install: bool, verbose: bool) -> list[Result]:
+def check_extension(slug: str, *, install: bool, force_install: bool, verbose: bool) -> list[Result]:
     snippets = collect_snippets_for(slug)
     if not snippets:
         return []
-    db, loaded = open_db_for(slug, install_extensions=install)
+    db, loaded = open_db_for(slug, install_extensions=install, force_install=force_install)
     run_fixtures(db, slug)
     results: list[Result] = []
     for snip in snippets:
+        if verbose:
+            preview = snip.code.strip().splitlines()[0][:96]
+            print(f"  [RUN] {slug}:{snip.source} | {preview}", flush=True)
         result = check_snippet(db, snip, extension_loaded=loaded)
         results.append(result)
         # If a snippet crashed the extension internally, the connection
@@ -780,7 +874,7 @@ def check_extension(slug: str, *, install: bool, verbose: bool) -> list[Result]:
                 db.close()
             except Exception:
                 pass
-            db, loaded = open_db_for(slug, install_extensions=install)
+            db, loaded = open_db_for(slug, install_extensions=install, force_install=force_install)
             run_fixtures(db, slug)
     db.close()
     return results
@@ -809,7 +903,12 @@ def report(results_by_ext: dict[str, list[Result]], *, strict: bool, verbose: bo
     n_parse_fail = n_exec_fail = 0
     failures: list[Result] = []
     for slug, results in results_by_ext.items():
-        ext_failed = [r for r in results if r.parse_status == S_PARSE_FAIL or r.exec_status == S_EXEC_FAIL]
+        ext_failed = [
+            r for r in results
+            if r.parse_status == S_PARSE_FAIL
+            or r.exec_status == S_EXEC_FAIL
+            or (strict and r.exec_status == S_EXEC_SKIP)
+        ]
         ext_pass = [r for r in results if r.exec_status == S_EXEC_PASS]
         ext_setup = [r for r in results if r.exec_status == S_SETUP]
         ext_skip = [r for r in results if r.parse_status == S_SKIP]
@@ -865,6 +964,8 @@ def _run_isolated(slug: str, args) -> int:
     cmd = [sys.executable, "-u", str(Path(__file__).resolve()), "--slug", slug]
     if args.no_install:
         cmd.append("--no-install")
+    if args.force_install:
+        cmd.append("--force-install")
     if args.strict:
         cmd.append("--strict")
     if args.verbose:
@@ -886,6 +987,8 @@ def main() -> None:
     ap.add_argument("--slug", help="Only check this extension")
     ap.add_argument("--no-install", action="store_true",
                     help="Don't INSTALL/LOAD extensions (parse-only against base DuckDB)")
+    ap.add_argument("--force-install", action="store_true",
+                    help="Force-refresh extension binaries from the community repository before checking")
     ap.add_argument("--strict", action="store_true",
                     help="Fail on EXEC-SKIP entries — useful when you've added fixtures")
     ap.add_argument("--verbose", action="store_true",
@@ -926,7 +1029,12 @@ def main() -> None:
 
     results_by_ext: dict[str, list[Result]] = {}
     for slug in slugs:
-        results = check_extension(slug, install=not args.no_install, verbose=args.verbose)
+        results = check_extension(
+            slug,
+            install=not args.no_install,
+            force_install=args.force_install,
+            verbose=args.verbose,
+        )
         results_by_ext[slug] = results
 
     sys.exit(report(results_by_ext, strict=args.strict, verbose=args.verbose))

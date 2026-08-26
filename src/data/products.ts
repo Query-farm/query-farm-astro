@@ -1,8 +1,7 @@
 // The data farm's product catalog — shared between /products (the full
 // card grid) and Header.astro (the top-nav "Products" dropdown), so the two
 // never drift the way VGI's per-page nav lists did before they got
-// consolidated into VGISectionNav. Add a new product here once, and it
-// shows up in both places.
+// consolidated. Add a new product here once, and it shows up in both places.
 export interface ProductTile {
   title: string;
   eyebrow: string;
@@ -57,17 +56,17 @@ export const platformComponents: ProductTile[] = [
     status: 'preview',
   },
   {
-    img: '/haybarn/haybarn-logo.png',
+    img: '/haybarn/haybarn-mark.svg',
     title: 'Haybarn',
     eyebrow: 'Independent distribution',
-    outcome: 'Package and ship the platform safely.',
-    description: 'A compatible DuckDB distribution with signed builds, curated extension defaults, build provenance, and enterprise-friendly npm / PyPI distribution.',
+    outcome: 'Bring DuckDB into the enterprise.',
+    description: 'Same SQL and database files as DuckDB, with faster object-store reads, signed artifacts, build provenance, curated extension defaults, and mirrorable npm / PyPI channels.',
     href: '/haybarn',
     cta: 'Explore Haybarn',
     status: 'available',
   },
   {
-    img: '/cupola/cupola-icon-96.png',
+    img: '/cupola/cupola-mark.svg',
     title: 'Cupola',
     eyebrow: 'Web workspace for VGI',
     outcome: 'Browse and query workers in the browser.',

@@ -14,35 +14,45 @@ Branch: `feat/strata-sun-redesign`
 |---|---|
 | Mark | **Strata Sun** — a circle clipped over four hard horizontal bands, palest at top. Reads as a sun and as a core sample seen end-on. `public/mark-strata-sun.svg` |
 | Favicon | 2-band variant. Four bands turn to mud below ~24px. `public/favicon.svg` |
-| Wordmark | **Fraunces**, wght 600, `font-variation-settings: 'opsz' 48, 'SOFT' 40, 'WONK' 1` |
+| Wordmark | **Petrona**, wght 700, slightly tighter tracking than headings (`.qf-wordmark`) |
 | Wordmark dot | The `.` in Query.Farm is **`sun-700`** on light, **`sun-400`** on dark |
-| Display / headings | **Fraunces** — `SOFT 20, WONK 0`. WONK on headings reads twee; the wordmark is the only place it stays on |
+| Display / headings | **Petrona** wght 600, `letter-spacing: -0.022em` |
 | Body | **Commissioner** 300 |
 | Code | **JetBrains Mono** (already in the project) |
 
 Band count reduces with size: **4 bands** at display → **3** at ~22px → **2** at 16px.
 
-### Optical size must track real size
-Fraunces is variable on `opsz 9..144`. Big headlines look clotted at low opsz.
+### The display face is Petrona, not Fraunces
+This brief originally specified Fraunces with an `opsz`/`SOFT`/`WONK` variation table. **That
+was superseded during the migration and the table is gone** — see §10. Fraunces was dropped
+because its roman `f` carries a descending tail and a heavy curled terminal: the family's
+signature glyph, and far too loud at headline size. That was the letterform itself, not the
+WONK axis, which was already 0.
 
-```
-h1 / hero  opsz 120, wght 500   (display weight, NOT bold)
-h2         opsz 72,  wght 600
-h3         opsz 36,  wght 600
-h4         opsz 24,  wght 600
-wordmark   opsz 48,  wght 600, SOFT 40, WONK 1
-```
+Petrona ships **only weight and a real italic** — no `opsz`, no `SOFT`, no `WONK`. So there is
+no optical-size ladder to track: **600 is correct at every heading level**, and size is set with
+the ordinary Tailwind ladder (`text-xl` / `text-2xl` / `text-3xl md:text-4xl` / `text-4xl
+md:text-5xl`). Any `font-variation-settings` naming those axes is dead code — delete it rather
+than carrying it forward.
+
+Petrona is also a touch narrower and lower-contrast than Fraunces, which is why long headlines
+set tighter than the old spec assumed.
 
 ---
 
 ## 2. Figures — the rule that is easy to get wrong
 
-> **Figures come from Commissioner, always tabular. Fraunces sets words.**
+> **Figures come from Commissioner, always tabular. Petrona sets words.**
 
-Fraunces' figures are drawn for character, not data: the `1` is flagged and footed so it sits
-nearly as wide as a `0`, and the family ships **no tabular set**, so right-aligned numeric
-columns do not line up. On a page listing every extension by load count that is a defect, not a
-preference.
+The rule survived the Fraunces → Petrona swap unchanged, because the defect is the same in both:
+their figures are drawn for character, not data, and **neither family ships a tabular set**, so
+right-aligned numeric columns do not line up. On a page listing every extension by load count
+that is a defect, not a preference.
+
+The inverse is equally a violation and is easier to commit by accident: **`.qf-figure` never goes
+on prose.** It forces Commissioner 500 with `tabular-nums` and `-0.035em` tracking — a treatment
+designed for a right-aligned numeric column. Applied to a sentence containing no digits it just
+sets that sentence in the wrong face.
 
 Use `.qf-figure`, or the auto-applied selectors `.stat-value`, `.load-count`, `.fn-count`,
 `td[data-numeric]`, `th[data-numeric]`.
@@ -117,8 +127,8 @@ Thirty-one routes + the extension detail pages + dynamic connector/version pages
 | A | **Home** | Full six stages | `/` |
 | B | **Catalog** | Hairband | `/products/extensions`, `/products/orchard`, `/haybarn/status/*`, `/haybarn/extensions` |
 | C | **Docs / reference** | **None** | `/products/extensions/[slug]` (32 public, 35 built), `/haybarn/{install,security,compatibility,community-extensions}`, `/vgi/{architecture,getting-started,building-a-worker,distributing-a-worker,languages}`, `/products/orchard/connectors/[slug]`, Starlight `/vgi/docs/python/*` |
-| D | **Section landing** | Hairband + one slab | `/haybarn`, `/vgi`, `/products`, `/products/cupola`, `/products/orchard` |
-| E | **Editorial** | Card strips only | `/blog`, `/blog/[slug]`, `/consulting`, `/company/about` |
+| D | **Section landing** | Hairband + one slab | `/haybarn`, `/vgi`, `/products`, `/products/cupola`, `/products/orchard`, `/products/rowfence`, `/consulting` |
+| E | **Editorial** | Card strips only | `/blog`, `/blog/[slug]`, `/company/about` |
 | F | **Company / utility** | Hairband + one panel | `/company/{contact,schedule,newsletter}`, `/404`, `/licenses/source-available` |
 
 ### Family C is the highest-volume and gets the most care
@@ -166,6 +176,43 @@ be **preserved** on function-doc cards — it is a real Safari perf fix on pages
 
 Decisions taken after the brief was first written. Recorded here so the brief
 stays the authority rather than drifting from the code.
+
+**Fraunces → Petrona (§1, §2).** The display face changed during the migration
+and §1 was not updated for two passes, so the brief spent that time instructing
+agents to set headings in a font the project does not load. Fraunces was dropped
+for its roman `f` — a descending tail and a heavy curled terminal, the family's
+signature glyph and far too loud at headline size. That is the letterform, not
+the WONK axis, which was already 0.
+
+The consequence worth writing down: **Petrona has no `opsz`/`SOFT`/`WONK` axes
+at all**, only weight and a real italic. The optical-size ladder that used to
+live in §1 is therefore deleted rather than retuned — there is nothing to tune.
+Headings are 600 at every level and take their size from the ordinary Tailwind
+ladder. `--font-display` in `global.css` is the single source of truth; page-
+local `font-family: 'Petrona', …` rules pin the face and should use
+`font-display` instead, so the next swap doesn't strand them the way this one
+stranded `.qf-faq-summary`.
+
+§2 is unaffected in substance: neither family ships a tabular set, so figures
+still come from Commissioner. The rule now also states its inverse explicitly,
+because applying `.qf-figure` to prose turned out to be the more common error.
+
+**`/consulting` moved from Family E to Family D (§6).** It was filed as editorial
+alongside `/blog` and `/company/about`, and that classification caused a real
+defect rather than describing one. Family E sanctions no slab and no hairband,
+so "card strips only" was the only device available — and the page became six
+consecutive card grids at 3 / 2 / 3 / 4 / 1 / 1 columns, every card the same
+`rounded-xl border border-soil-300`, with nothing bigger, darker, or differently
+shaped to anchor the eye.
+
+The page is not editorial: no reading measure, no running prose, no author, no
+date. Structurally it is what every other section landing is — `PageHead` with a
+hairband, alternating `soil-50` / `soil-100` sections, one `pipe-6` slab, a
+closing CTA. It had in fact already broken Family E by shipping that slab, which
+is the clearest evidence the label was wrong rather than the page.
+
+`/products/rowfence` is added to the same row: it was built to Family D from the
+start and was simply missing from the table.
 
 **Category tints.** Six hues re-cut warm (`cat-gold`, `cat-field`, `cat-clay`,
 `cat-slate`, `cat-plum`, `cat-moss`, each with a `-ink`) live in `global.css`.

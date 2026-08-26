@@ -102,3 +102,20 @@ export function sectionFor(pathname: string): DocsSection | null {
 export function rootOf(section: DocsSection): string {
   return `${DOCS_ROOT}${section.slug}/`;
 }
+
+/**
+ * Spell a small count for running prose ("all five SDKs"), falling back to
+ * digits past the range we care about.
+ *
+ * Exists because two pages spelled SDK counts out by hand and both went stale
+ * at once: /vgi/architecture said "All six SDKs" (it had counted the tabs in
+ * its own comparison, one of which is native C and not an SDK at all) and
+ * /vgi/building-a-worker's page description said "six language SDKs" against
+ * five entries. Callers now count their own data and pass it here, so the
+ * sentence tracks the list.
+ */
+const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+
+export function countWord(n: number): string {
+  return COUNT_WORDS[n] ?? String(n);
+}

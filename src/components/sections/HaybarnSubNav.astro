@@ -1,42 +1,73 @@
 ---
 // Section bar for the Haybarn area — the `.subnav` shape: sticky beneath the
 // global nav, soil-100 ground, section mark + name behind a rule, then tabs.
+//
+// The section outgrew a flat tab row: eight tabs overflowed on a laptop and the
+// row scrolled horizontally, which hides navigation behind a gesture. The three
+// extension-catalog pages (Extensions / Build status / Contribute) now sit in a
+// disclosure under one tab, taking the row back to five.
+//
+// The disclosure is a native <details>/<summary>, not a JS widget: it is
+// keyboard-operable and screen-reader-announced for free, and the only script
+// here is the close-on-outside-click / Escape affordance a native details lacks.
+// Note the row must NOT be overflow-x-auto any more — an overflow container
+// clips the absolutely-positioned panel. With five tabs it wraps instead.
 import { LATEST_STATUS_URL, LATEST_RC } from '../../data/haybarn-versions';
 
 const currentPath = Astro.url.pathname;
 
-const tabs = [
+interface Tab {
+  name: string;
+  href: string;
+  /** Matches every path under this prefix — used for the version-scoped status
+   *  pages, where the href points at the latest version but any version is
+   *  still "this tab". */
+  prefix?: string;
+}
+
+const tabs: Tab[] = [
   { name: 'Overview', href: '/haybarn' },
   { name: 'Install', href: '/haybarn/install' },
-  { name: 'Security', href: '/haybarn/security' },
+];
+
+const extensionTabs: Tab[] = [
   { name: 'Extensions', href: '/haybarn/extensions' },
   // Status is the one version-scoped page. The link points at the latest
   // versioned URL; /haybarn/status (without a version) redirects there.
-  { name: 'Status', href: LATEST_STATUS_URL, prefix: '/haybarn/status' },
+  { name: 'Build status', href: LATEST_STATUS_URL, prefix: '/haybarn/status' },
   { name: 'Contribute', href: '/haybarn/community-extensions' },
-  { name: 'Compatibility & FAQ', href: '/haybarn/compatibility' }
 ];
 
-function isActive(tab: { href: string; prefix?: string }): boolean {
+const tailTabs: Tab[] = [
+  { name: 'Security', href: '/haybarn/security' },
+  { name: 'FAQ', href: '/haybarn/compatibility' },
+];
+
+function isActive(tab: Tab): boolean {
   const href = tab.href;
   if (href === '/haybarn') return currentPath === '/haybarn' || currentPath === '/haybarn/';
-  // Use the optional prefix to keep the Status tab highlighted across
-  // every version variant (e.g. /haybarn/status/v1.5.2 and future ones).
   if (tab.prefix) return currentPath === tab.prefix || currentPath.startsWith(tab.prefix + '/');
   return currentPath === href || currentPath === href + '/';
 }
 
-const tabClass = 'whitespace-nowrap border-b-2 px-3.5 py-[11px] text-sm no-underline transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-link';
+const extensionsActive = extensionTabs.some(isActive);
+
+const tabClass =
+  'whitespace-nowrap border-b-2 px-3.5 py-[11px] text-sm no-underline transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-link';
+const tabOn = 'border-link text-link';
+const tabOff = 'border-transparent text-soil-700 hover:text-soil-900';
+const menuItem =
+  'block px-4 py-2 text-sm no-underline transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-link';
 ---
 
 <div class="sticky z-40 border-b border-soil-300 bg-soil-100" style="top: var(--qf-nav-h)">
   <div class="section-container">
-    <nav class="qf-subnav-row flex items-center overflow-x-auto" aria-label="Haybarn section">
+    <nav class="qf-subnav-row flex flex-wrap items-center" aria-label="Haybarn section">
       <a
         href="/haybarn"
         class="mr-1.5 flex flex-none items-center gap-[9px] whitespace-nowrap border-r border-soil-300 py-[11px] pr-[18px] font-display text-[17px] font-semibold tracking-[-0.018em] text-soil-900 no-underline transition-colors hover:text-link"
       >
-        <img src="/haybarn/haybarn-logo.png" alt="" aria-hidden="true" width="22" height="22" class="h-[22px] w-[22px] object-contain" />
+        <img src="/haybarn/haybarn-mark.svg" alt="" aria-hidden="true" width="22" height="22" class="h-[22px] w-[22px] object-contain" />
         <span>Haybarn</span>
         <span class="hidden font-mono text-[10px] font-normal tracking-[0.06em] text-soil-500 md:inline">v{LATEST_RC}</span>
       </a>
@@ -44,24 +75,92 @@ const tabClass = 'whitespace-nowrap border-b-2 px-3.5 py-[11px] text-sm no-under
       {tabs.map(tab => (
         <a
           href={tab.href}
-          class:list={[
-            tabClass,
-            isActive(tab) ? 'border-link text-link' : 'border-transparent text-soil-700 hover:text-soil-900'
-          ]}
+          class:list={[tabClass, isActive(tab) ? tabOn : tabOff]}
           aria-current={isActive(tab) ? 'page' : undefined}
+        >{tab.name}</a>
+      ))}
+
+      <details class="qf-subnav-menu relative flex-none">
+        <summary
+          class:list={[tabClass, 'flex cursor-pointer list-none items-center gap-1.5', extensionsActive ? tabOn : tabOff]}
+          aria-current={extensionsActive ? 'page' : undefined}
         >
-          {tab.name}
-        </a>
+          Extensions
+          <svg
+            class="qf-subnav-chevron h-3 w-3 transition-transform duration-150"
+            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+          ><polyline points="6 9 12 15 18 9" /></svg>
+        </summary>
+        <div
+          class="absolute left-0 top-full z-50 mt-px min-w-[190px] overflow-hidden rounded-lg border border-soil-300 bg-[#fffdf7] py-1 shadow-[0_10px_28px_rgba(33,26,18,0.14)]"
+        >
+          {extensionTabs.map(tab => (
+            <a
+              href={tab.href}
+              class:list={[menuItem, isActive(tab) ? 'bg-link/8 font-medium text-link' : 'text-soil-700 hover:bg-soil-100 hover:text-soil-900']}
+              aria-current={isActive(tab) ? 'page' : undefined}
+            >{tab.name}</a>
+          ))}
+        </div>
+      </details>
+
+      {tailTabs.map(tab => (
+        <a
+          href={tab.href}
+          class:list={[tabClass, isActive(tab) ? tabOn : tabOff]}
+          aria-current={isActive(tab) ? 'page' : undefined}
+        >{tab.name}</a>
       ))}
     </nav>
   </div>
 </div>
 
 <style>
-  .qf-subnav-row {
-    scrollbar-width: none;
-  }
-  .qf-subnav-row::-webkit-scrollbar {
+  /* Safari still paints the disclosure triangle without this, even with
+     list-style:none on the summary itself. */
+  .qf-subnav-menu > summary::-webkit-details-marker {
     display: none;
   }
+  .qf-subnav-menu[open] .qf-subnav-chevron {
+    transform: rotate(180deg);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .qf-subnav-chevron {
+      transition: none;
+    }
+  }
 </style>
+
+<script>
+  // The two behaviours a native <details> does not give you. Delegated from
+  // document so this survives the subnav being re-rendered on navigation, and
+  // registered once regardless of how many times the module is evaluated.
+  const FLAG = '__qfSubnavMenuWired';
+
+  function closeMenus(except?: Element | null) {
+    document.querySelectorAll<HTMLDetailsElement>('details.qf-subnav-menu[open]').forEach(el => {
+      if (el !== except) el.open = false;
+    });
+  }
+
+  if (!(FLAG in window)) {
+    (window as any)[FLAG] = true;
+
+    document.addEventListener('click', e => {
+      const target = e.target as Element | null;
+      closeMenus(target?.closest('details.qf-subnav-menu'));
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.key !== 'Escape') return;
+      const open = document.querySelector<HTMLDetailsElement>('details.qf-subnav-menu[open]');
+      if (!open) return;
+      open.open = false;
+      open.querySelector('summary')?.focus();
+    });
+
+    // View transitions swap the DOM without a reload; leave nothing open.
+    document.addEventListener('astro:after-swap', () => closeMenus());
+  }
+</script>

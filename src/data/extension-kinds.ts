@@ -33,6 +33,7 @@ export type ExtensionKind =
   | 'table'
   | 'aggregate'
   | 'copy'
+  | 'type'
   | 'macro'
   | 'pragma'
   | 'secret'
@@ -46,6 +47,7 @@ export const KIND_TINT: Record<string, string> = {
   table:      'border-cat-field-ink/40 bg-cat-field text-cat-field-ink',
   aggregate:  'border-cat-gold-ink/40  bg-cat-gold  text-cat-gold-ink',
   copy:       'border-cat-plum-ink/40  bg-cat-plum  text-cat-plum-ink',
+  type:       'border-cat-clay-ink/40  bg-cat-clay  text-cat-clay-ink',
   macro:      'border-cat-moss-ink/40  bg-cat-moss  text-cat-moss-ink',
   pragma:     'border-cat-clay-ink/40  bg-cat-clay  text-cat-clay-ink',
   secret:     'border-cat-gold-ink/40  bg-cat-gold  text-cat-gold-ink',
@@ -62,6 +64,7 @@ export const KIND_LABEL: Record<string, string> = {
   table: 'Table function',
   aggregate: 'Aggregate function',
   copy: 'Copy function',
+  type: 'Logical type',
   macro: 'Macro',
   pragma: 'Setting',
   secret: 'Secret',

@@ -2,7 +2,6 @@
 import PageLayout from '../../layouts/PageLayout.astro';
 import ExtensionsSubNav from '../../components/sections/ExtensionsSubNav.astro';
 import ExtensionCard from '../../components/products/ExtensionCard.astro';
-import ExtensionIcon from '../../components/products/ExtensionIcon.astro';
 import Button from '../../components/ui/Button.astro';
 import CodeBlock from '../../components/ui/CodeBlock.astro';
 import { publicExtensions } from '../../data/extensions';
@@ -135,19 +134,28 @@ const barW = buckets.length > 0 ? (innerW - barGap * (buckets.length - 1)) / buc
 const peakLoads = buckets.reduce((m, b) => Math.max(m, b.loads), 0);
 const latestLoads = buckets.length ? buckets[buckets.length - 1].loads : 0;
 
-// Ordering: loads descending, unknown loads last, then name. The first slice
-// gets cards; the tail goes into the dense table.
-const ranked = [...publicExtensions].sort(
-  (a, b) => (b.usageCount ?? -1) - (a.usageCount ?? -1) || a.name.localeCompare(b.name),
+const maxUsageCount = publicExtensions.reduce(
+  (max, extension) => Math.max(max, extension.usageCount ?? 0),
+  0,
 );
-const CARD_COUNT = 12;
-const featured = ranked.slice(0, CARD_COUNT);
-const tail = ranked.slice(CARD_COUNT);
-const maxUsageCount = ranked[0]?.usageCount;
-const usagePeriodLabel = ranked.find(e => e.usagePeriod)?.usagePeriod ?? 'last 90 days';
 
 const searchKey = (e: (typeof publicExtensions)[number]) =>
   `${e.name} ${e.id} ${e.description} ${bucketOf[e.id]?.pill ?? ''} ${bucketOf[e.id]?.title ?? ''}`.toLowerCase();
+
+const faqItems = [
+  {
+    question: 'What is a DuckDB extension?',
+    answer: "A DuckDB extension is native code that loads inside DuckDB and runs as part of it — the fastest way to add features DuckDB doesn't ship with, with no separate service to run.",
+  },
+  {
+    question: 'How do I install a DuckDB extension?',
+    answer: 'Run INSTALL extension_name FROM community; then LOAD extension_name; in DuckDB. Query.Farm extensions are published to the DuckDB community repository, signed and verified.',
+  },
+  {
+    question: "Are Query.Farm's DuckDB extensions free?",
+    answer: 'Most are open source and free to install from the DuckDB community repository; a few advanced extensions are commercial. Each extension page lists its license and pricing.',
+  },
+];
 
 // SEO: structured data. This collection page + a machine-readable ItemList of
 // every extension, the breadcrumb trail, and an FAQ. Mirrors the per-extension
@@ -187,32 +195,11 @@ const jsonLd = [
   {
     '@context': 'https://schema.org',
     '@type': 'FAQPage',
-    mainEntity: [
-      {
-        '@type': 'Question',
-        name: 'What is a DuckDB extension?',
-        acceptedAnswer: {
-          '@type': 'Answer',
-          text: "A DuckDB extension is native code that loads inside DuckDB and runs as part of it — the fastest way to add features DuckDB doesn't ship with, with no separate service to run.",
-        },
-      },
-      {
-        '@type': 'Question',
-        name: 'How do I install a DuckDB extension?',
-        acceptedAnswer: {
-          '@type': 'Answer',
-          text: 'Run INSTALL extension_name FROM community; then LOAD extension_name; in DuckDB. Query.Farm extensions are published to the DuckDB community repository, signed and verified.',
-        },
-      },
-      {
-        '@type': 'Question',
-        name: "Are Query.Farm's DuckDB extensions free?",
-        acceptedAnswer: {
-          '@type': 'Answer',
-          text: 'Most are open source and free to install from the DuckDB community repository; a few advanced extensions are commercial. Each extension page lists its license and pricing.',
-        },
-      },
-    ],
+    mainEntity: faqItems.map(item => ({
+      '@type': 'Question',
+      name: item.question,
+      acceptedAnswer: { '@type': 'Answer', text: item.answer },
+    })),
   },
 ];
 
@@ -425,31 +412,31 @@ LOAD airport;`;
          single wrapping flex row this bar grew to three lines and 113px tall by
          1180px — a sticky header that eats a third of the viewport, and the
          search field ended up on its own orphan row. -->
-    <div class="mx-auto flex w-full max-w-[1360px] items-center gap-3 px-5 py-3 sm:px-7">
-      <div class="qf-chiprow flex min-w-0 flex-1 items-center gap-2.5 overflow-x-auto">
-        <button type="button" class="qf-pill flex-none" data-bucket="all" aria-pressed="true">All {totalExtensions}</button>
+    <div class="mx-auto flex w-full max-w-[1360px] flex-col items-stretch gap-2 px-5 py-3 sm:flex-row sm:items-center sm:gap-3 sm:px-7">
+      <div class="qf-chiprow flex min-w-0 flex-1 items-center gap-2.5 overflow-x-auto pb-0.5 sm:pb-0">
+        <button type="button" class="qf-pill flex-none" data-bucket="all" aria-controls="ext-buckets" aria-pressed="true">All {totalExtensions}</button>
         {bucketCounts.map((bucket) => (
-          <button type="button" class="qf-pill flex-none" data-bucket={bucket.id} aria-pressed="false" title={bucket.title}>
+          <button type="button" class="qf-pill flex-none" data-bucket={bucket.id} aria-controls="ext-buckets" aria-pressed="false" title={bucket.title}>
             {bucket.pill} <span class="qf-figure">{bucket.count}</span>
           </button>
         ))}
       </div>
 
-      <span class="hidden flex-none text-[13px] font-medium text-soil-500 xl:inline">
-        Sort: loads &#8595;
-      </span>
-
-      <span class="flex w-[190px] flex-none items-center gap-2 rounded-full border border-soil-300 bg-white px-3.5 py-1.5 focus-within:border-link">
+      <span class="flex w-full flex-none items-center gap-2 rounded-full border border-soil-300 bg-white px-3.5 py-1.5 focus-within:border-link sm:w-[190px]">
         <label for="ext-filter" class="sr-only">Filter extensions</label>
         <input
           id="ext-filter"
           type="search"
           autocomplete="off"
+          aria-controls="ext-buckets"
+          aria-describedby="ext-filter-status"
+          aria-keyshortcuts="/"
           placeholder="Filter&#8230;"
           class="w-full min-w-0 border-0 bg-transparent text-sm text-soil-900 placeholder:text-soil-500 focus:outline-none"
         />
         <kbd class="hidden flex-none rounded border border-soil-300 px-1.5 font-mono text-[9.5px] text-soil-500 sm:inline">/</kbd>
       </span>
+      <span id="ext-filter-status" class="sr-only" role="status" aria-live="polite"></span>
     </div>
   </div>
 
@@ -467,7 +454,7 @@ LOAD airport;`;
       return (
         <section
           id={bucket.id}
-          class="ext-bucket scroll-mt-32"
+          class="ext-bucket scroll-mt-52 sm:scroll-mt-32"
           data-bucket={bucket.id}
         >
           <div class="mx-auto w-full max-w-[1360px] px-5 py-11 sm:px-7">
@@ -526,11 +513,24 @@ LOAD airport;`;
   </div>
 
   <div class="mx-auto w-full max-w-[1360px] px-5 sm:px-7">
-    <p id="ext-empty" hidden class="py-10 text-center text-soil-600">
+    <p id="ext-empty" hidden role="status" aria-live="polite" class="py-10 text-center text-soil-600">
       No extensions match that filter.
     </p>
 
-    <div class="mt-16 mb-20 rounded-2xl border border-soil-300/70 bg-soil-100 px-6 py-12 text-center sm:px-10">
+    <section class="mt-16 border-t border-soil-300 pt-10" aria-labelledby="extensions-faq-title">
+      <p class="qf-eyebrow text-sun-700">Frequently asked questions</p>
+      <h2 id="extensions-faq-title" class="mt-3 font-display text-3xl text-soil-900">DuckDB extension basics</h2>
+      <div class="mt-6 grid gap-3 lg:grid-cols-3">
+        {faqItems.map(item => (
+          <details class="rounded-xl border border-soil-300 bg-white px-5 py-4 lg:open:col-span-1">
+            <summary class="cursor-pointer rounded font-medium text-soil-900 marker:text-sun-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-link">{item.question}</summary>
+            <p class="mt-3 text-sm leading-relaxed text-soil-700">{item.answer}</p>
+          </details>
+        ))}
+      </div>
+    </section>
+
+    <div class="mt-12 mb-20 rounded-2xl border border-soil-300/70 bg-soil-100 px-6 py-12 text-center sm:px-10">
       <p class="qf-eyebrow text-sun-700">Expert help</p>
       <h2 class="mx-auto mt-3 max-w-[20ch] font-display text-3xl text-soil-900">
         Need a custom DuckDB extension?
@@ -557,6 +557,7 @@ LOAD airport;`;
     const bucketEls = Array.from(document.querySelectorAll<HTMLElement>('.ext-bucket'));
     const input = document.getElementById('ext-filter') as HTMLInputElement | null;
     const empty = document.getElementById('ext-empty');
+    const filterStatus = document.getElementById('ext-filter-status');
 
     let activeBucket = 'all';
 
@@ -576,6 +577,7 @@ LOAD airport;`;
       for (const sub of subs) sub.hidden = !anyVisible(sub);
       for (const b of bucketEls) b.hidden = !anyVisible(b);
       if (empty) empty.hidden = visible !== 0;
+      if (filterStatus) filterStatus.textContent = `${visible} extension${visible === 1 ? '' : 's'} shown`;
     }
 
     for (const pill of pills) {

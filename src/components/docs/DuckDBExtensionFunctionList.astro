@@ -1,0 +1,65 @@
+---
+import DuckDBExtensionFunctionDoc from './DuckDBExtensionFunctionDoc.astro';
+import type { FunctionDocData } from '../../data/extension-types';
+import { extensionNameAnchor } from '../../lib/extension-anchors';
+import { extensionFunctionCategoryAnchorPath } from '../../lib/extension-reference';
+
+interface Props {
+  functions: FunctionDocData[];
+  allFunctions: FunctionDocData[];
+  extensionSlug: string;
+  headingLevel?: 'h2' | 'h3' | 'h4';
+}
+
+const { functions, allFunctions, extensionSlug, headingLevel = 'h3' } = Astro.props;
+
+type RelatedSummary = { id: string; name: string; description: string; href: string };
+const functionIndex = new Map<string, RelatedSummary>();
+for (const fn of allFunctions) {
+  const summary = {
+    id: fn.id,
+    name: fn.name,
+    description: fn.description,
+    href: extensionFunctionCategoryAnchorPath(
+      extensionSlug,
+      fn.categories[0] ?? 'Functions',
+      extensionNameAnchor(fn.name),
+    ),
+  };
+  if (!functionIndex.has(fn.name)) functionIndex.set(fn.name, summary);
+  functionIndex.set(fn.id, summary);
+}
+
+const resolveRelated = (refs: string[] | undefined): RelatedSummary[] => {
+  const seen = new Set<string>();
+  return (refs ?? []).flatMap(ref => {
+    const related = functionIndex.get(ref);
+    if (!related || seen.has(related.name)) return [];
+    seen.add(related.name);
+    return [related];
+  });
+};
+
+const seenNames = new Set<string>();
+const annotated = functions.map(fn => {
+  const firstByName = !seenNames.has(fn.name);
+  seenNames.add(fn.name);
+  return { fn, firstByName, nameAnchor: extensionNameAnchor(fn.name) };
+});
+---
+
+<div class="space-y-5">
+  {annotated.map(({ fn, firstByName, nameAnchor }) => (
+    <div>
+      {firstByName && nameAnchor !== fn.id && (
+        <span id={nameAnchor} class="block scroll-mt-32" aria-hidden="true"></span>
+      )}
+      <DuckDBExtensionFunctionDoc
+        {...fn}
+        extensionSlug={extensionSlug}
+        headingLevel={headingLevel}
+        resolvedRelated={resolveRelated(fn.relatedFunctions)}
+      />
+    </div>
+  ))}
+</div>

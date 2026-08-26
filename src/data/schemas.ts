@@ -39,6 +39,12 @@ export const FunctionExampleSchema = z.object({
   outputTable: OutputTableSchema.optional(),
 });
 
+export const FunctionFormSchema = z.object({
+  parameters: z.array(FunctionParameterSchema),
+  returnType: z.string().optional(),
+  returnTypeUnion: z.array(z.string()).optional(),
+});
+
 export const FunctionDocDataSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -61,6 +67,19 @@ export const FunctionDocDataSchema = z.object({
   // Set when collapsed overloads return different types. `returnType` becomes
   // the union label; this lists every concrete return type observed.
   returnTypeUnion: z.array(z.string()).optional(),
+  // Distinct arity/name shapes for overloaded functions. The merge layer
+  // computes these; keeping them in the schema prevents Zod from stripping
+  // them before the reference UI can render every callable form.
+  forms: z.array(FunctionFormSchema).optional(),
+});
+
+// ---------- Registered logical types ----------
+
+export const RegisteredTypeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  category: z.string().default('Types'),
+  description: z.string().default(''),
 });
 
 // ---------- Pragmas / Settings ----------
@@ -316,6 +335,7 @@ export const ExtensionDataSchema = z.object({
   metadata: ExtensionMetadataSchema,
   technicalOverview: TechnicalOverviewSchema.optional(),
   functions: z.array(FunctionDocDataSchema).optional(),
+  types: z.array(RegisteredTypeSchema).optional(),
   pragmas: z.array(PragmaSchema).optional(),
   secrets: z.array(SecretSchema).optional(),
   macros: z.array(MacroSchema).optional(),

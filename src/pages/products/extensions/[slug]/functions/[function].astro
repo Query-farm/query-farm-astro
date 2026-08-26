@@ -1,0 +1,45 @@
+---
+import { publicExtensions } from '../../../../../data/extensions';
+import { getExtensionData } from '../../../../../data/extension-loader';
+import { extensionNameAnchor } from '../../../../../lib/extension-anchors';
+import {
+  extensionFunctionCategoryAnchorPath,
+  uniqueExtensionFunctionNames,
+} from '../../../../../lib/extension-reference';
+
+export async function getStaticPaths() {
+  const paths = [];
+  for (const extension of publicExtensions) {
+    const data = await getExtensionData(extension.id);
+    if (!data) continue;
+
+    const functions = data.functions ?? [];
+    const names = uniqueExtensionFunctionNames(functions);
+    const slugs = new Set<string>();
+    for (const functionName of names) {
+      const functionSlug = extensionNameAnchor(functionName);
+      if (slugs.has(functionSlug)) {
+        throw new Error(`Function names in "${extension.id}" share the route slug "${functionSlug}".`);
+      }
+      slugs.add(functionSlug);
+
+      const fn = functions.find(candidate => candidate.name === functionName);
+      if (!fn) continue;
+      paths.push({
+        params: { slug: extension.id, function: functionSlug },
+        props: {
+          target: extensionFunctionCategoryAnchorPath(
+            extension.id,
+            fn.categories[0] ?? 'Functions',
+            extensionNameAnchor(functionName),
+          ),
+        },
+      });
+    }
+  }
+  return paths;
+}
+
+const { target } = Astro.props as { target: string };
+return Astro.redirect(target, 301);
+---

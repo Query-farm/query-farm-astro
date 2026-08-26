@@ -129,6 +129,7 @@ export function createMinimalExtensionData(extensionId: string): ExtensionData |
     icon: extension.icon || '📦',
     description: extension.description,
     githubUrl: extension.githubUrl || '',
+    installSource: 'community',
     cta: {
       title: `Start Using ${extension.name}`,
       description: `Install the ${extension.name} extension and explore its capabilities.`,

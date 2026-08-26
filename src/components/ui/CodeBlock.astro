@@ -156,7 +156,9 @@ const copyButtonClass =
 </style>
 
 <!-- Load Prism.js for syntax highlighting -->
-<script is:inline>
+<script>
+  const qfWindow = window as Window & { Prism?: any; __qfPrismLoading?: boolean };
+
   /**
    * Teach Prism's stock SQL grammar the DuckDB statement keywords it doesn't
    * ship: it was written for MySQL/T-SQL, so `INSTALL x FROM community;`
@@ -172,7 +174,8 @@ const copyButtonClass =
    * Testing for the inserted token is both the guard and real grammar state.
    */
   function patchDuckDBSqlGrammar() {
-    if (typeof Prism === 'undefined' || !Prism.languages || !Prism.languages.sql) return;
+    const Prism = qfWindow.Prism;
+    if (!Prism || !Prism.languages || !Prism.languages.sql) return;
     if (Prism.languages.sql['duckdb-keyword']) return;
     Prism.languages.insertBefore('sql', 'keyword', {
       'duckdb-keyword': {
@@ -195,7 +198,8 @@ const copyButtonClass =
    * actually shows.
    */
   function defineCedarGrammar() {
-    if (typeof Prism === 'undefined' || !Prism.languages) return;
+    const Prism = qfWindow.Prism;
+    if (!Prism || !Prism.languages) return;
     if (Prism.languages.cedar) return;
     Prism.languages.cedar = {
       'comment': { pattern: /\/\/.*/, greedy: true },
@@ -210,7 +214,8 @@ const copyButtonClass =
   }
 
   function highlightWithDuckDBSql() {
-    if (typeof Prism === 'undefined') return;
+    const Prism = qfWindow.Prism;
+    if (!Prism) return;
     patchDuckDBSqlGrammar();
     defineCedarGrammar();
     Prism.highlightAll();
@@ -225,7 +230,7 @@ const copyButtonClass =
    * skipped by the onerror path, which is harmless.
    */
   function neededPrismLanguages() {
-    const langs = new Set();
+    const langs = new Set<string>();
     document.querySelectorAll('pre[class*="language-"]').forEach(function(pre) {
       const match = /language-([\w+#-]+)/.exec(pre.className);
       if (match) langs.add(match[1]);
@@ -236,8 +241,8 @@ const copyButtonClass =
   // Load Prism.js from CDN if not already loaded. Every CodeBlock emits this
   // same inline script, so the in-flight flag keeps N blocks from queuing N
   // copies of the loader before the first one has finished.
-  if (typeof Prism === 'undefined' && !window.__qfPrismLoading) {
-    window.__qfPrismLoading = true;
+  if (!qfWindow.Prism && !qfWindow.__qfPrismLoading) {
+    qfWindow.__qfPrismLoading = true;
     const script = document.createElement('script');
     script.src = 'https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js';
     script.onload = function() {
@@ -269,24 +274,24 @@ const copyButtonClass =
       });
     };
     document.head.appendChild(script);
-  } else if (typeof Prism !== 'undefined') {
+  } else if (qfWindow.Prism) {
     // Prism already loaded, just highlight
     highlightWithDuckDBSql();
   }
 </script>
 
-<script is:inline>
+<script>
   // Copy functionality
   (function() {
-    function setupCopyButtons() {
-      const copyButtons = document.querySelectorAll('.copy-button');
+    function setupCopyButtons(root?: ParentNode) {
+      const scope = root && root.querySelectorAll ? root : document;
+      const copyButtons = scope.querySelectorAll<HTMLButtonElement>('.copy-button');
 
       copyButtons.forEach(button => {
-        // Remove existing listeners to prevent duplicates
-        const newButton = button.cloneNode(true);
-        button.parentNode.replaceChild(newButton, button);
+        if (button.dataset.copySetup === 'true') return;
+        button.dataset.copySetup = 'true';
 
-        newButton.addEventListener('click', async function() {
+        button.addEventListener('click', async function(this: HTMLButtonElement) {
           const codeId = this.getAttribute('data-code-id');
           const codeBlock = document.getElementById(codeId);
 
@@ -320,9 +325,14 @@ const copyButtonClass =
 
     // Run on page load
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', setupCopyButtons);
+      document.addEventListener('DOMContentLoaded', () => setupCopyButtons(document));
     } else {
-      setupCopyButtons();
+      setupCopyButtons(document);
     }
+
+    document.addEventListener('qf:content-loaded', event => {
+      const root = (event as CustomEvent<{ root?: ParentNode }>).detail?.root;
+      setupCopyButtons(root);
+    });
   })();
 </script>

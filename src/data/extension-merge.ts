@@ -11,6 +11,7 @@ import type {
   LogStorageType,
   TechnicalOverview,
   PricingInfo,
+  RegisteredType,
 } from './extension-types';
 
 type Keyed = { name: string };
@@ -198,6 +199,7 @@ export interface ExtensionTree {
     pragmas?: Partial<Pragma>[];
     secrets?: Partial<Secret>[];
     macros?: Partial<Macro>[];
+    types?: RegisteredType[];
     /** Tool-discovered platform/version matrix; merged into metadata. */
     compatibility?: {
       platforms?: ExtensionMetadata['platforms'];
@@ -216,6 +218,7 @@ export interface ExtensionTree {
     pragmas?: Partial<Pragma>[];
     secrets?: Partial<Secret>[];
     macros?: Partial<Macro>[];
+    types?: RegisteredType[];
     filesystems?: Filesystem[];
     storageExtensions?: StorageExtension[];
     logTypes?: LogType[];
@@ -259,6 +262,12 @@ export function mergeExtensionTree(tree: ExtensionTree): ExtensionData {
         categories: [],
       }) as Partial<FunctionDocData>,
     ));
+  }
+  if (tree.generated.types || tree.augment.types) {
+    data.types = mergeByName(
+      tree.generated.types ?? [],
+      tree.augment.types ?? [],
+    );
   }
   if (tree.generated.pragmas || tree.augment.pragmas) {
     data.pragmas = mergeByName(

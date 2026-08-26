@@ -8,6 +8,7 @@ import type {
   FunctionExampleSchema,
   FunctionDocDataSchema,
   FunctionFormSchema,
+  RegisteredTypeSchema,
   PragmaSchema,
   SecretParameterSchema,
   SecretSchema,
@@ -35,6 +36,7 @@ export type OutputTable = z.infer<typeof OutputTableSchema>;
 export type FunctionExample = z.infer<typeof FunctionExampleSchema>;
 export type FunctionDocData = z.infer<typeof FunctionDocDataSchema>;
 export type FunctionForm = z.infer<typeof FunctionFormSchema>;
+export type RegisteredType = z.infer<typeof RegisteredTypeSchema>;
 export type Pragma = z.infer<typeof PragmaSchema>;
 export type SecretParameter = z.infer<typeof SecretParameterSchema>;
 export type Secret = z.infer<typeof SecretSchema>;

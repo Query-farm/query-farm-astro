@@ -1,0 +1,282 @@
+---
+/**
+ * Install picker for the Haybarn slab — the shape DuckDB's own install page
+ * uses (pick a client, pick a platform, get the exact command), scoped to what
+ * Haybarn actually publishes.
+ *
+ * Every command and every asset name here was checked against the live
+ * registries rather than guessed, because a wrong install command is worse than
+ * no install command. Two results worth keeping in mind if you edit this:
+ *
+ *   - npm `haybarn` has `latest` pinned to 0.0.0-placeholder, so the CLI MUST
+ *     be invoked as `haybarn@rc` until a stable release exists.
+ *   - the Rust crate uses its own version line (1.10505.x), not the engine's,
+ *     and has no stable release, so `cargo add haybarn` alone fails to resolve.
+ *
+ * All panels render server-side and are toggled with the `hidden` attribute, so
+ * the picker works without JS beyond the tab switch (the default panel is the
+ * one a first-time visitor most likely wants) and needs no framework.
+ */
+import { Icon } from 'astro-icon/components';
+import { LATEST_RC, LATEST_RC_PYPI, RELEASE_ASSET_BASE, LATEST_TAG } from '../../data/haybarn-versions';
+
+const RELEASES = 'https://github.com/Query-farm-haybarn/haybarn/releases';
+
+// Versions that do NOT track the engine version and so cannot be derived.
+// Checked against crates.io and Maven Central; update when those publish.
+const RUST_VERSION = '1.10505.0-rc.1';
+const JDBC_VERSION = '1.5.4-rc1';
+
+type Asset = { label: string; file: string };
+type Platform = { id: string; name: string; icon: string; assets: Asset[]; note?: string };
+
+const platforms: Platform[] = [
+  {
+    id: 'macos', name: 'macOS', icon: 'simple-icons:apple',
+    assets: [
+      { label: 'Apple Silicon', file: 'haybarn_cli-osx-arm64.zip' },
+      { label: 'Intel', file: 'haybarn_cli-osx-amd64.zip' },
+      { label: 'Universal', file: 'haybarn_cli-osx-universal.zip' },
+    ],
+  },
+  {
+    id: 'linux', name: 'Linux', icon: 'simple-icons:linux',
+    assets: [
+      { label: 'x86-64 · glibc', file: 'haybarn_cli-linux-amd64.zip' },
+      { label: 'ARM64 · glibc', file: 'haybarn_cli-linux-arm64.zip' },
+      { label: 'x86-64 · musl', file: 'haybarn_cli-linux-amd64-musl.zip' },
+      { label: 'ARM64 · musl', file: 'haybarn_cli-linux-arm64-musl.zip' },
+    ],
+  },
+  {
+    id: 'windows', name: 'Windows', icon: 'simple-icons:windows',
+    assets: [{ label: 'x86-64', file: 'haybarn_cli-windows-amd64.zip' }],
+    note: 'ARM64 Windows is not built yet — the x86-64 build runs under emulation.',
+  },
+];
+
+// Non-CLI clients are platform-independent: one command each.
+const clients = [
+  { id: 'cli', name: 'CLI', icon: 'ph:terminal-window-bold' },
+  { id: 'python', name: 'Python', icon: 'simple-icons:python' },
+  { id: 'node', name: 'Node.js', icon: 'simple-icons:nodedotjs' },
+  { id: 'rust', name: 'Rust', icon: 'simple-icons:rust' },
+  { id: 'java', name: 'Java', icon: 'simple-icons:openjdk' },
+  { id: 'wasm', name: 'WebAssembly', icon: 'simple-icons:webassembly' },
+];
+
+const runners = `# Run it without installing anything, via npm
+npx haybarn@rc
+
+# ...or via PyPI
+uvx haybarn-cli==${LATEST_RC_PYPI}`;
+
+const langCmd: Record<string, { code: string; after?: string }> = {
+  python: {
+    code: `pip install --pre haybarn`,
+    after: 'The package and import name are both <code>haybarn</code>. Because the API surface matches DuckDB’s, porting is a one-line change: <code>import haybarn as duckdb</code>.',
+  },
+  node: {
+    code: `npm install @haybarn/node-api@rc`,
+    after: 'A drop-in for <code>@duckdb/node-api</code> — the import path is the only edit. Extensions can also be declared in <code>package.json</code> and loaded straight from <code>node_modules</code>.',
+  },
+  rust: {
+    code: `cargo add haybarn@${RUST_VERSION}`,
+    after: 'The crate follows its own version line rather than the engine’s, and has no stable release yet, so the version is required — a bare <code>cargo add haybarn</code> will not resolve.',
+  },
+  java: {
+    code: `<dependency>
+  <groupId>farm.query.haybarn</groupId>
+  <artifactId>haybarn_jdbc</artifactId>
+  <version>${JDBC_VERSION}</version>
+</dependency>`,
+    after: 'On Gradle: <code>implementation("farm.query.haybarn:haybarn_jdbc:' + JDBC_VERSION + '")</code>. The JDBC URL prefix is <code>jdbc:haybarn:</code>.',
+  },
+  wasm: {
+    code: `npm install @haybarn/haybarn-wasm`,
+    after: 'The public TypeScript API matches duckdb-wasm, so porting is a single import rewrite — plus the OAuth and worker bridges duckdb-wasm has no equivalent for.',
+  },
+};
+
+const PRE = 'overflow-x-auto p-5 font-mono text-[12.8px] leading-[1.9] text-[#e9e1d3]';
+const CODE_IN = '[&_code]:rounded [&_code]:bg-white/10 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_code]:text-cream';
+---
+
+<div class="qf-install" data-client="cli" data-platform="macos">
+  <!-- Client selector -->
+  <div class="flex flex-wrap items-center gap-2">
+    <span class="mr-1 text-[12.5px] font-medium uppercase tracking-[0.07em] text-cream-2">Client</span>
+    {clients.map((c, i) => (
+      <button
+        type="button" class="qf-pick" data-pick="client" data-value={c.id}
+        aria-pressed={i === 0 ? 'true' : 'false'}
+      ><Icon name={c.icon} class="qf-pick-icon" /><span>{c.name}</span></button>
+    ))}
+  </div>
+
+  <!-- Platform selector: only meaningful for the CLI's direct downloads -->
+  <div class="mt-3 flex flex-wrap items-center gap-2" data-role="platform-row">
+    <span class="mr-1 text-[12.5px] font-medium uppercase tracking-[0.07em] text-cream-2">Platform</span>
+    {platforms.map((p, i) => (
+      <button
+        type="button" class="qf-pick" data-pick="platform" data-value={p.id}
+        aria-pressed={i === 0 ? 'true' : 'false'}
+      ><Icon name={p.icon} class="qf-pick-icon" /><span>{p.name}</span></button>
+    ))}
+  </div>
+
+  <!-- ── CLI ─────────────────────────────────────────────────── -->
+  <div data-panel="cli" class="mt-5">
+    <div class="overflow-hidden rounded-xl border border-white/15 bg-rock-950">
+      <div class="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
+        <span class="text-[12.5px] font-medium text-cream-2">Terminal</span>
+        <button type="button" class="qf-copy2 rounded-md border border-rock-800 px-2.5 py-1 text-[13px] font-medium text-cream-2 transition-colors hover:border-sun-400 hover:text-sun-400">Copy</button>
+      </div>
+      <pre class={PRE}><code>{runners}</code></pre>
+    </div>
+
+    {platforms.map(p => (
+      <div data-plat={p.id} class="mt-4">
+        <div class="text-[12.5px] font-medium text-cream-2">
+          Or download the {p.name} build of <span class="font-mono">{LATEST_TAG}</span>
+        </div>
+        <div class="mt-2.5 flex flex-wrap gap-2">
+          {p.assets.map(a => (
+            <a
+              href={`${RELEASE_ASSET_BASE}/${a.file}`}
+              class="rounded-lg border border-white/20 bg-white/5 px-3 py-2 text-[13px] font-medium text-cream no-underline transition-colors hover:border-sun-400 hover:text-sun-400"
+            >{a.label} <span class="text-cream-2">↓</span></a>
+          ))}
+        </div>
+        {p.note && <p class="mt-2.5 text-[13px] leading-relaxed text-cream-2">{p.note}</p>}
+      </div>
+    ))}
+
+    <p class="mt-4 text-[13px] leading-relaxed text-cream-2">
+      Every artifact is listed in <a href={`${RELEASE_ASSET_BASE}/SHA256SUMS`} class="text-sun-400 underline decoration-sun-400/40 underline-offset-2">SHA256SUMS</a>,
+      signed in <a href={`${RELEASE_ASSET_BASE}/SHA256SUMS.asc`} class="text-sun-400 underline decoration-sun-400/40 underline-offset-2">SHA256SUMS.asc</a>,
+      and carries SLSA build provenance. <a href={RELEASES} class="text-sun-400 underline decoration-sun-400/40 underline-offset-2">All releases</a>
+    </p>
+  </div>
+
+  <!-- ── Language clients ────────────────────────────────────── -->
+  {Object.entries(langCmd).map(([id, { code, after }]) => (
+    <div data-panel={id} class="mt-5" hidden>
+      <div class="overflow-hidden rounded-xl border border-white/15 bg-rock-950">
+        <div class="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
+          <span class="text-[12.5px] font-medium text-cream-2">{id === 'java' ? 'pom.xml' : 'Terminal'}</span>
+          <button type="button" class="qf-copy2 rounded-md border border-rock-800 px-2.5 py-1 text-[13px] font-medium text-cream-2 transition-colors hover:border-sun-400 hover:text-sun-400">Copy</button>
+        </div>
+        <pre class={PRE}><code>{code}</code></pre>
+      </div>
+      {after && <p class={`mt-3 max-w-[68ch] text-[13.5px] leading-relaxed text-cream-2 ${CODE_IN}`} set:html={after} />}
+    </div>
+  ))}
+</div>
+
+<style>
+  /* Outlined pills: an unselected option has to look pressable. The first pass
+     rendered them as bare text, which read as labels rather than controls. */
+  .qf-pick {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    background: rgba(255, 255, 255, 0.06);
+    padding: 6px 12px;
+    font-size: 13.5px;
+    font-weight: 500;
+    line-height: 1.3;
+    color: var(--color-cream);
+    cursor: pointer;
+    transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+  }
+  .qf-pick:hover {
+    border-color: var(--color-sun-400);
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--color-sun-400);
+  }
+  .qf-pick:focus-visible {
+    outline: 2px solid var(--color-sun-400);
+    outline-offset: 2px;
+  }
+  .qf-pick[aria-pressed='true'] {
+    background: var(--color-sun-400);
+    border-color: var(--color-sun-400);
+    /* Ink on gold, not cream: sun-400 is a light ground (DESIGN_BRIEF §3). */
+    color: var(--color-rock-950);
+  }
+  .qf-pick-icon {
+    width: 15px;
+    height: 15px;
+    flex: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .qf-pick { transition: none; }
+  }
+</style>
+
+<script>
+  // Tab switching + copy, scoped to each .qf-install instance.
+  function wireInstall(root: HTMLElement) {
+    if (root.dataset.wired) return;
+    root.dataset.wired = '1';
+
+    // Selected state lives entirely in CSS off aria-pressed, so this only has
+    // to keep the accessible state correct and the styling follows.
+    const paint = (group: string, value: string) => {
+      root.querySelectorAll<HTMLButtonElement>(`[data-pick="${group}"]`).forEach(b => {
+        b.setAttribute('aria-pressed', String(b.dataset.value === value));
+      });
+    };
+
+    const render = () => {
+      const client = root.dataset.client!;
+      const platform = root.dataset.platform!;
+      root.querySelectorAll<HTMLElement>('[data-panel]').forEach(p => {
+        p.hidden = p.dataset.panel !== client;
+      });
+      // The platform row only affects the CLI's download links.
+      const row = root.querySelector<HTMLElement>('[data-role="platform-row"]');
+      if (row) row.hidden = client !== 'cli';
+      root.querySelectorAll<HTMLElement>('[data-plat]').forEach(d => {
+        d.hidden = d.dataset.plat !== platform;
+      });
+      paint('client', client);
+      paint('platform', platform);
+    };
+
+    root.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        root.dataset[btn.dataset.pick === 'client' ? 'client' : 'platform'] = btn.dataset.value!;
+        render();
+      });
+    });
+
+    // Preselect the visitor's own platform. Progressive enhancement only —
+    // without JS the server-rendered macOS panel is still correct and complete.
+    const ua = navigator.userAgent;
+    const guess = /Win/i.test(ua) ? 'windows' : /Mac/i.test(ua) ? 'macos' : /Linux|X11|Android/i.test(ua) ? 'linux' : null;
+    if (guess) root.dataset.platform = guess;
+    render();
+
+    root.querySelectorAll<HTMLButtonElement>('button.qf-copy2').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const pre = btn.closest('.rounded-xl')?.querySelector('pre');
+        if (!pre) return;
+        try {
+          await navigator.clipboard.writeText(pre.textContent ?? '');
+          btn.textContent = 'Copied';
+          setTimeout(() => { btn.textContent = 'Copy'; }, 1600);
+        } catch { /* clipboard unavailable */ }
+      });
+    });
+  }
+
+  function wireAll() {
+    document.querySelectorAll<HTMLElement>('.qf-install').forEach(wireInstall);
+  }
+  wireAll();
+  document.addEventListener('astro:after-swap', wireAll);
+</script>

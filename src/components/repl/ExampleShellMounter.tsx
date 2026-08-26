@@ -304,10 +304,11 @@ export default function ExampleShellMounter({ extensionName, installSource, fixt
 
   useEffect(() => {
     ensureStyle();
-    const cleanups: Array<() => void> = [];
+    const cleanupByBlock = new Map<HTMLElement, () => void>();
     let counter = 0;
 
-    document
+    const attachExamples = (root: ParentNode = document) => {
+      root
       .querySelectorAll<HTMLElement>('pre[data-language="sql"]')
       .forEach((pre) => {
         if (pre.dataset[ATTACHED] === "true") return;
@@ -361,16 +362,43 @@ export default function ExampleShellMounter({ extensionName, installSource, fixt
           else open();
         });
 
-        cleanups.push(() => {
+        cleanupByBlock.set(pre, () => {
+          close();
           runBar.remove();
           stopAdopting();
           restoreToolbar();
-          container.remove();
           delete pre.dataset[ATTACHED];
         });
       });
+    };
 
-    return () => cleanups.forEach((fn) => fn());
+    const detachExamples = (root: HTMLElement) => {
+      for (const [pre, cleanup] of cleanupByBlock) {
+        if (!root.contains(pre)) continue;
+        cleanup();
+        cleanupByBlock.delete(pre);
+      }
+    };
+
+    const onContentLoaded = (event: Event) => {
+      const root = (event as CustomEvent<{ root?: HTMLElement }>).detail?.root;
+      attachExamples(root ?? document);
+    };
+    const onContentWillUnload = (event: Event) => {
+      const root = (event as CustomEvent<{ root?: HTMLElement }>).detail?.root;
+      if (root) detachExamples(root);
+    };
+
+    attachExamples();
+    document.addEventListener('qf:content-loaded', onContentLoaded);
+    document.addEventListener('qf:content-will-unload', onContentWillUnload);
+
+    return () => {
+      document.removeEventListener('qf:content-loaded', onContentLoaded);
+      document.removeEventListener('qf:content-will-unload', onContentWillUnload);
+      cleanupByBlock.forEach(cleanup => cleanup());
+      cleanupByBlock.clear();
+    };
   }, [extensionName, installSource, fixtures]);
 
   return (

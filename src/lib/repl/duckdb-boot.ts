@@ -234,14 +234,28 @@ export async function createSession(): Promise<Session> {
       try {
         // Best-effort: free up the alias first so re-running an ATTACH (a
         // different tab reusing it, or the same example run twice) is
-        // idempotent rather than a hard error. No-op, silently, if nothing
-        // was attached under that name yet.
+        // idempotent rather than a hard error.
+        //
+        // `IF EXISTS` matters even though the failure is caught here: a bare
+        // `DETACH` on an alias that was never attached still *runs*, and
+        // duckdb-wasm's ConsoleLogger prints the resulting binder error before
+        // the promise rejects. Every first run therefore logged
+        // `Failed to detach database with name "eq": database not found` to the
+        // console — harmless, but indistinguishable from a real failure, and it
+        // cost an afternoon of debugging exactly once.
         const alias = attachAliasOf(sql);
         if (alias) {
           try {
-            await db.runQuery(connId, `DETACH ${alias}`);
+            await db.runQuery(connId, `DETACH DATABASE IF EXISTS ${alias}`);
           } catch {
-            /* wasn't attached — nothing to free */
+            // Older engines have no `IF EXISTS` on DETACH. Fall back to the
+            // bare form so the alias still gets freed (noisily) rather than
+            // leaving a re-run to fail with "database already exists".
+            try {
+              await db.runQuery(connId, `DETACH ${alias}`);
+            } catch {
+              /* wasn't attached — nothing to free */
+            }
           }
         }
         const bytes = await db.runQuery(connId, sql);

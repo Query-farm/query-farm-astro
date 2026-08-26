@@ -1,6 +1,6 @@
 // Build the Pagefind search index over the static site, then augment it with a
-// custom record per extension function. The function reference lazy-loads its
-// detail from /products/extensions/<slug>/functions.json (and is marked
+// custom record per extension function. The function reference progressively
+// loads category detail from server-rendered pages (and is marked
 // data-pagefind-ignore in the HTML), so without these custom records the deep
 // content of large extensions (stochastic, datasketches, …) would be missing.
 //
@@ -17,6 +17,16 @@ const EXT_SRC = join('src', 'data', 'extensions');
 
 function text(v) {
   return typeof v === 'string' ? v : '';
+}
+
+function routeAnchor(value) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
 }
 
 // Flatten a function entry into a searchable plain-text blob.
@@ -77,8 +87,9 @@ async function main() {
     }
     for (const [name, fns] of byName) {
       const content = fns.map(functionContent).join(' — ');
+      const category = fns[0].categories?.[0] || 'Functions';
       await index.addCustomRecord({
-        url: `/products/extensions/${slug}/#${name}`,
+        url: `/products/extensions/${slug}/functions/category/${routeAnchor(category)}#${encodeURIComponent(routeAnchor(name))}`,
         content: `${name} — ${content}`,
         language: 'en',
         // `kind` filter lets the search widget hide functions by default

@@ -19,16 +19,19 @@ import DuckDBExtensionContentsTable from '../../../components/docs/DuckDBExtensi
 import DuckDBExtensionFunctionReference from '../../../components/docs/DuckDBExtensionFunctionReference.astro';
 import DuckDBExtensionPricing from '../../../components/docs/DuckDBExtensionPricing.astro';
 import DuckDBExtensionCookbook from '../../../components/docs/DuckDBExtensionCookbook.astro';
+import DuckDBExtensionTypeReference from '../../../components/docs/DuckDBExtensionTypeReference.astro';
 import ExtensionSection from '../../../components/docs/ExtensionSection.astro';
 import ExtensionPageTOC from '../../../components/docs/ExtensionPageTOC.astro';
 import Callout from '../../../components/docs/Callout.astro';
 import ExampleShellMounter from '../../../components/repl/ExampleShellMounter.tsx';
 import { parseInline } from 'marked';
-import { extensions, getExtensionById, getExtensionsByIds } from '../../../data/extensions';
+import { publicExtensions, getExtensionById, getExtensionsByIds } from '../../../data/extensions';
 import { getExtensionData, loadExtensionMdx, loadCookbookMdx, loadCheckFixtures } from '../../../data/extension-loader';
+import { extensionNameAnchor } from '../../../lib/extension-anchors';
+import { extensionFunctionCategoryAnchorPath } from '../../../lib/extension-reference';
 
 export async function getStaticPaths() {
-  return extensions.map(ext => ({
+  return publicExtensions.map(ext => ({
     params: { slug: ext.id },
     props: { extensionId: ext.id }
   }));
@@ -38,7 +41,7 @@ interface Props {
   extensionId: string;
 }
 
-const { extensionId } = Astro.props;
+const { extensionId } = Astro.props as Props;
 
 // Load extension data
 const extensionData = await getExtensionData(extensionId);
@@ -59,6 +62,7 @@ const {
   metadata,
   technicalOverview,
   functions = [],
+  types = [],
   pragmas = [],
   secrets = [],
   macros = [],
@@ -76,7 +80,7 @@ const GITHUB_URL = metadata.githubUrl;
 interface ExtensionContent {
   id: string;
   name: string;
-  type: 'scalar' | 'table' | 'aggregate' | 'copy' | 'macro' | 'pragma' | 'secret' | 'filesystem' | 'storage' | 'logtype' | 'logstorage';
+  type: 'scalar' | 'table' | 'aggregate' | 'copy' | 'type' | 'macro' | 'pragma' | 'secret' | 'filesystem' | 'storage' | 'logtype' | 'logstorage';
   category: string;
   description: string;
   href: string;
@@ -92,7 +96,7 @@ const firstSentence = (s: string): string => {
 };
 
 // Helper to map items to extension content format
-const mapToContent = <T extends { id: string; name: string; category: string; description: string }>(
+const mapToContent = <T extends { id?: string; name: string; category?: string; description?: string }>(
   items: T[],
   type: ExtensionContent['type'],
   options?: {
@@ -102,16 +106,30 @@ const mapToContent = <T extends { id: string; name: string; category: string; de
   }
 ): ExtensionContent[] => {
   return items.map(item => {
-    const id = options?.idTransform ? options.idTransform(item) : item.id;
+    const id = options?.idTransform ? options.idTransform(item) : item.id ?? extensionNameAnchor(item.name);
     return {
       id,
       name: item.name + (options?.nameSuffix || ''),
       type,
-      category: item.category || options?.defaultCategory || item.category,
-      description: firstSentence(item.description),
+      category: item.category || options?.defaultCategory || 'Other',
+      description: firstSentence(item.description ?? ''),
       href: `#${id}`
     };
   });
+};
+
+// Secrets and catalog implementations can legitimately share the same public
+// name (for example both are called `adbc`). Preserve short anchors everywhere
+// they are unique, and namespace only real collisions so every page ID remains
+// unambiguous without churning existing deep links across the catalog.
+const sharedObjectAnchorCounts = [...secrets, ...storageExtensions].reduce((counts, item) => {
+  const anchor = extensionNameAnchor(item.id || item.name);
+  counts.set(anchor, (counts.get(anchor) ?? 0) + 1);
+  return counts;
+}, new Map<string, number>());
+const objectAnchor = (kind: 'secret' | 'catalog', item: { id?: string; name: string }) => {
+  const anchor = extensionNameAnchor(item.id || item.name);
+  return (sharedObjectAnchorCounts.get(anchor) ?? 0) > 1 ? `${kind}-${anchor}` : anchor;
 };
 
 const extensionContents: ExtensionContent[] = [
@@ -125,17 +143,25 @@ const extensionContents: ExtensionContent[] = [
     type: fn.type,
     category: cat,
     description: firstSentence(fn.description),
-    href: `#${fn.id}`
+    href: extensionFunctionCategoryAnchorPath(extensionId, cat, fn.id)
   }))),
+  ...types.map(type => ({
+    id: extensionNameAnchor(type.id || type.name),
+    name: type.name,
+    type: 'type' as const,
+    category: type.category && type.category !== 'None' ? type.category : 'Types',
+    description: firstSentence(type.description || 'Logical type registered by this extension.'),
+    href: `#${extensionNameAnchor(type.id || type.name)}`,
+  })),
   // All other types use the helper
   ...mapToContent(macros, 'macro', { nameSuffix: '()' }),
   ...mapToContent(pragmas, 'pragma', {
     defaultCategory: 'Configuration',
-    idTransform: (p) => p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    idTransform: (p) => extensionNameAnchor(p.name)
   }),
-  ...mapToContent(secrets, 'secret'),
+  ...mapToContent(secrets, 'secret', { idTransform: (secret) => objectAnchor('secret', secret) }),
   ...mapToContent(filesystems, 'filesystem', { nameSuffix: '://', defaultCategory: 'Filesystems' }),
-  ...mapToContent(storageExtensions, 'storage'),
+  ...mapToContent(storageExtensions, 'storage', { idTransform: (storage) => objectAnchor('catalog', storage) }),
   ...mapToContent(logTypes, 'logtype'),
   ...mapToContent(logStorageTypes, 'logstorage')
 ];
@@ -175,6 +201,7 @@ const tocItems: TOCItem[] = [
   ...(extensionContents.length > 0 ? [{ id: 'functions-index', label: 'Extension Contents' }] : []),
   // Function Reference
   ...(functions.length > 0 ? [{ id: 'function-reference', label: 'Functions' }] : []),
+  ...(types.length > 0 ? [{ id: 'types', label: 'Types' }] : []),
   // Macros
   ...(macros.length > 0 ? [{ id: 'macros', label: 'Macros' }] : []),
   // Logging
@@ -236,6 +263,11 @@ const loadPeriod = metadata.usageStats?.period ?? listing?.usagePeriod;
 // catalogue metadata, already listed in the Compatibility section, and three
 // static chips under every extension name said nothing a reader acts on.
 const headerBadges: { label: string; tone?: 'neutral' | 'gold' | 'field'; href?: string; title?: string }[] = [
+  ...(metadata.status === 'experimental'
+    ? [{ label: 'Experimental', tone: 'gold' as const, href: '#compatibility', title: 'API and behavior may still change.' }]
+    : metadata.status === 'beta'
+      ? [{ label: 'Beta', tone: 'neutral' as const, href: '#compatibility', title: 'Usable, but not yet marked stable.' }]
+      : []),
   ...(metadata.pricing === 'paid' ? [{ label: 'Commercial', tone: 'gold' as const, href: '#pricing' }] : []),
 ];
 
@@ -332,6 +364,7 @@ const jsonLd = [
          double line. `first-of-type` counts sections only, so an optional
          notice above them doesn't shift which one is suppressed. -->
     <div class="min-w-0 [&>section:first-of-type]:border-t-0">
+      <ExtensionPageTOC items={tocItems} mobile class="min-[900px]:hidden" />
       <!-- Page-top notice (deprecation, successor announcement, advisory). -->
       {metadata.notice && (
         <div class="mb-8 [&_a]:text-link [&_a]:underline [&_a]:underline-offset-2 [&_a]:decoration-link/45 hover:[&_a]:decoration-link [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:bg-soil-100 [&_code]:text-soil-900 [&_code]:font-mono [&_code]:text-[0.9em]">
@@ -434,8 +467,14 @@ const jsonLd = [
 
       <!-- Function Reference -->
       {functions && functions.length > 0 && (
-        <DuckDBExtensionFunctionReference functions={functions} slug={extensionId} />
+        <DuckDBExtensionFunctionReference
+          functions={functions}
+          slug={extensionId}
+          categoryDescriptions={extensionData.categoryDescriptions}
+        />
       )}
+
+      {types.length > 0 && <DuckDBExtensionTypeReference types={types} />}
 
       <!-- Extension Macros -->
       {macros && macros.length > 0 && (
@@ -502,7 +541,7 @@ const jsonLd = [
           />
           <div class="space-y-8">
             {storageExtensions.map((storage) => (
-              <DuckDBExtensionStorageDoc {...storage} />
+              <DuckDBExtensionStorageDoc {...storage} id={objectAnchor('catalog', storage)} />
             ))}
           </div>
         </ExtensionSection>
@@ -536,7 +575,7 @@ const jsonLd = [
           />
           <div class="space-y-8">
             {secrets.map((secret) => (
-              <DuckDBExtensionSecretDoc {...secret} />
+              <DuckDBExtensionSecretDoc {...secret} id={objectAnchor('secret', secret)} />
             ))}
           </div>
         </ExtensionSection>
@@ -577,6 +616,7 @@ const jsonLd = [
       <!-- Compatibility -->
       <ExtensionInfo
         githubUrl={GITHUB_URL}
+        status={metadata.status}
         githubStars={metadata.githubStars}
         license={metadata.license}
         licenseHref={/source-available/i.test(metadata.license ?? '') ? '/licenses/source-available' : undefined}

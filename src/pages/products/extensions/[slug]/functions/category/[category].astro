@@ -1,0 +1,89 @@
+---
+import PageLayout from '../../../../../../layouts/PageLayout.astro';
+import ExtensionsSubNav from '../../../../../../components/sections/ExtensionsSubNav.astro';
+import DuckDBExtensionFunctionCategory from '../../../../../../components/docs/DuckDBExtensionFunctionCategory.astro';
+import ExampleShellMounter from '../../../../../../components/repl/ExampleShellMounter.tsx';
+import { publicExtensions } from '../../../../../../data/extensions';
+import {
+  getExtensionData,
+  loadCheckFixtures,
+} from '../../../../../../data/extension-loader';
+import { groupExtensionFunctions } from '../../../../../../lib/extension-reference';
+
+export async function getStaticPaths() {
+  const paths = [];
+  for (const extension of publicExtensions) {
+    const data = await getExtensionData(extension.id);
+    if (!data) continue;
+    for (const category of groupExtensionFunctions(data.functions ?? [])) {
+      paths.push({
+        params: { slug: extension.id, category: category.slug },
+        props: { extensionId: extension.id, categoryName: category.name },
+      });
+    }
+  }
+  return paths;
+}
+
+interface Props {
+  extensionId: string;
+  categoryName: string;
+}
+
+const { extensionId, categoryName } = Astro.props;
+const extensionData = await getExtensionData(extensionId);
+if (!extensionData) return Astro.redirect('/products/extensions');
+
+const categories = groupExtensionFunctions(extensionData.functions ?? []);
+const category = categories.find(item => item.name === categoryName);
+if (!category) return Astro.redirect(`/products/extensions/${extensionId}#function-reference`);
+
+const { metadata, functions = [] } = extensionData;
+const wasmSupported = (metadata.platforms ?? []).some(platform => platform.platform === 'WASM');
+const installSource = (metadata as any).installSource ?? 'community';
+const fixtures = loadCheckFixtures(extensionId);
+const description = extensionData.categoryDescriptions?.[category.name]
+  ?? `${category.functions.length} ${category.name.toLowerCase()} functions provided by the ${metadata.displayName} DuckDB extension.`;
+---
+
+<PageLayout
+  title={`${category.name} functions — ${metadata.displayName} DuckDB Extension`}
+  description={description}
+  ogType="article"
+  noindex
+>
+  <ExtensionsSubNav
+    breadcrumbs={[
+      { name: 'Products', href: '/products' },
+      { name: 'DuckDB Extensions', href: '/products/extensions' },
+      { name: metadata.displayName, href: `/products/extensions/${extensionId}` },
+    ]}
+  />
+
+  {wasmSupported && (
+    <ExampleShellMounter
+      client:load
+      extensionName={metadata.name}
+      installSource={installSource}
+      fixtures={fixtures}
+    />
+  )}
+
+  <div class="mx-auto w-full max-w-[1000px] px-5 py-10 sm:px-7 sm:py-14">
+    <nav aria-label="Breadcrumb" class="mb-7 text-sm text-soil-600">
+      <a href={`/products/extensions/${extensionId}`} class="text-link no-underline hover:underline">{metadata.displayName}</a>
+      <span class="mx-2" aria-hidden="true">/</span>
+      <span aria-current="page">{category.name}</span>
+    </nav>
+
+    <h1 class="sr-only">{category.name} functions in the {metadata.displayName} DuckDB extension</h1>
+    <DuckDBExtensionFunctionCategory
+      category={category.name}
+      categorySlug={category.slug}
+      description={extensionData.categoryDescriptions?.[category.name]}
+      functions={category.functions}
+      allFunctions={functions}
+      extensionSlug={extensionId}
+    />
+  </div>
+</PageLayout>

@@ -11,10 +11,10 @@
 // related list.
 import type { APIRoute, GetStaticPaths } from 'astro';
 import { getExtensionData } from '../../../../data/extension-loader';
-import { extensions } from '../../../../data/extensions';
+import { publicExtensions } from '../../../../data/extensions';
 
 export const getStaticPaths: GetStaticPaths = () =>
-  extensions.map((e) => ({ params: { slug: e.id } }));
+  publicExtensions.map((e) => ({ params: { slug: e.id } }));
 
 export const GET: APIRoute = async ({ params }) => {
   const slug = params.slug as string;
@@ -28,14 +28,17 @@ export const GET: APIRoute = async ({ params }) => {
   const nameToId: Record<string, string> = {};
   for (const fn of data.functions) {
     entries[fn.id] = {
+      id:              fn.id,
       name:            fn.name,
       type:            fn.type,
       categories:      fn.categories,
       returnType:      fn.returnType,
       returnTypeUnion: (fn as any).returnTypeUnion,
+      forms:           (fn as any).forms,
       parameters:      fn.parameters,
       returns:         fn.returns,
       returnsTable:    fn.returnsTable,
+      returnsTableDynamic: fn.returnsTableDynamic,
       description:     fn.description,
       examples:        fn.examples,
       options:         fn.options,

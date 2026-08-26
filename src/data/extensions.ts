@@ -70,10 +70,10 @@ export const extensions: Extension[] = Object.entries(metadataModules)
 //   - 'example' is a docs reference template, not a real installable extension.
 //   - Anything still carrying a "TODO: ..." description is a scaffold that hasn't
 //     been authored yet — don't advertise it.
-// Detail pages and internal lookups still see the full `extensions` set; the
-// listing page imports `publicExtensions` for what to show.
-// 'chsql' and 'quackscale' are authored but held back from the catalog for now
-// (their data lives under src/data/extensions/ and detail pages still build).
+// Internal data tooling and lookups still see the full `extensions` set. Public
+// listing/detail routes and their JSON endpoints are generated exclusively from
+// `publicExtensions`, so held-back records cannot leak through a guessed URL.
+// 'chsql' and 'quackscale' are authored but held back from the site for now.
 const HIDDEN_FROM_LISTING = new Set(['example', 'chsql', 'quackscale']);
 export const publicExtensions: Extension[] = extensions.filter(
   (e) => !HIDDEN_FROM_LISTING.has(e.id) && !/^\s*TODO\b/i.test(e.description),

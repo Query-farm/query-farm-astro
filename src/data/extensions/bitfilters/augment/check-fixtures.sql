@@ -45,9 +45,15 @@ FROM range(0, 40) t(i);
 CREATE OR REPLACE TABLE the_filter AS
 SELECT xor8_filter(hash(id)) AS filter FROM source_set;
 
--- Generic filter table referenced by *_contains examples in functions.json.
+-- Typed filter columns referenced by *_contains examples in functions.json.
+-- Filter blobs are family/width-specific: passing an xor8 blob to a
+-- binary_fuse16 probe is invalid and can crash native extension code.
 CREATE OR REPLACE TABLE filter_table AS
-SELECT xor8_filter(hash(id)) AS filter FROM ids;
+SELECT xor8_filter(hash(id))          AS xor8_filter_value,
+       xor16_filter(hash(id))         AS xor16_filter_value,
+       binary_fuse8_filter(hash(id))  AS binary_fuse8_filter_value,
+       binary_fuse16_filter(hash(id)) AS binary_fuse16_filter_value
+FROM ids;
 
 -- Pre-built `interesting_filter` and `partition_filters` tables so that
 -- snippets which both CREATE and reference these tables can EXPLAIN-parse
