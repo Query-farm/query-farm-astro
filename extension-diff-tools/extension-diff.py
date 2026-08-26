@@ -4,7 +4,6 @@
 # dependencies = [
 #   "duckdb>=1.4",
 #   "pyarrow>=17",
-#   "httpx>=0.27",
 # ]
 # ///
 """
@@ -174,177 +173,6 @@ def function_signature_id(name: str, param_types: list) -> str:
     """Stable id for a (possibly overloaded) function: name + param type list."""
     sig = ",".join(str(t) for t in param_types) if param_types else ""
     return f"{name}({sig})" if sig else name
-
-
-REGISTRY_BASE = "https://community-extensions.duckdb.org"
-CACHE_PATH = Path.home() / ".cache" / "duckdb-extension-diff" / "probes.json"
-CACHE_TTL_SECONDS = 24 * 60 * 60  # 24 hours
-
-# Latest patch of each supported DuckDB branch — the only versions the site
-# advertises compatibility against. Bump these as new patches are released.
-DUCKDB_VERSIONS = [
-    "v1.4.4",
-    "v1.5.2",
-]
-
-# Map registry platform identifiers -> (display label, architecture label).
-PLATFORM_MAP = {
-    "linux_amd64":      ("Linux",   "x86_64"),
-    "linux_arm64":      ("Linux",   "aarch64"),
-    "linux_amd64_musl": ("Linux (musl)", "x86_64"),
-    "osx_amd64":        ("macOS",   "Intel"),
-    "osx_arm64":        ("macOS",   "Apple Silicon"),
-    "windows_amd64":    ("Windows", "x86_64"),
-    "windows_arm64":    ("Windows", "aarch64"),
-    "wasm_eh":          ("WASM",    "eh"),
-    "wasm_mvp":         ("WASM",    "mvp"),
-    "wasm_threads":     ("WASM",    "threads"),
-}
-
-
-def _load_probe_cache() -> dict:
-    if not CACHE_PATH.exists():
-        return {}
-    try:
-        return json.loads(CACHE_PATH.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _save_probe_cache(cache: dict) -> None:
-    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CACHE_PATH.write_text(json.dumps(cache, indent=2, sort_keys=True))
-
-
-def discover_compatibility(slug: str) -> dict:
-    """HEAD-probe the community-extensions registry for the (version, platform)
-    matrix and return the set of supported pairs collapsed into the site's
-    ExtensionMetadata shape. Probe results are cached on disk with a 24h TTL
-    so reruns are essentially free."""
-    import httpx
-    import concurrent.futures
-    import time
-
-    cache = _load_probe_cache()
-    now = time.time()
-
-    pairs: list[tuple[str, str]] = []
-    cached_hits = 0
-    for v in DUCKDB_VERSIONS:
-        for p in PLATFORM_MAP:
-            pairs.append((v, p))
-
-    def url_for(pair: tuple[str, str]) -> str:
-        v, p = pair
-        ext = "wasm" if p.startswith("wasm_") else "gz"
-        return f"{REGISTRY_BASE}/{v}/{p}/{slug}.duckdb_extension.{ext}"
-
-    # Split pairs into cached (still fresh) and to-probe.
-    found: set[tuple[str, str]] = set()
-    to_probe: list[tuple[str, str]] = []
-    for pair in pairs:
-        entry = cache.get(url_for(pair))
-        if entry and (now - entry.get("ts", 0) < CACHE_TTL_SECONDS):
-            cached_hits += 1
-            if entry.get("status") == 200:
-                found.add(pair)
-        else:
-            to_probe.append(pair)
-
-    if to_probe:
-        with httpx.Client(timeout=10.0, follow_redirects=True) as client:
-            def probe(pair: tuple[str, str]):
-                url = url_for(pair)
-                try:
-                    # 1-byte ranged GET reliably yields total size via
-                    # Content-Range across both HEAD-headerful (.gz) and
-                    # HEAD-headerless (.wasm via Cloudflare) artifacts.
-                    r = client.get(url, headers={"Range": "bytes=0-0"})
-                    status = r.status_code
-                    size = None
-                    if status in (200, 206):
-                        cr = r.headers.get("Content-Range", "")
-                        # "bytes 0-0/<total>"
-                        if "/" in cr:
-                            try:
-                                size = int(cr.rsplit("/", 1)[-1])
-                            except ValueError:
-                                size = None
-                        if size is None:
-                            cl = r.headers.get("Content-Length")
-                            size = int(cl) if cl else None
-                        # Normalize: a successful range GET means the URL exists.
-                        status = 200
-                    return pair, url, status, size
-                except (httpx.HTTPError, ValueError):
-                    return pair, url, None, None
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=24) as ex:
-                for pair, url, status, content_length in ex.map(probe, to_probe):
-                    if status is not None:
-                        entry: dict = {"status": status, "ts": now}
-                        if content_length is not None:
-                            entry["bytes"] = content_length
-                        cache[url] = entry
-                    if status == 200:
-                        found.add(pair)
-        _save_probe_cache(cache)
-
-    print(f"  cache: {cached_hits} hits / {len(to_probe)} fetched")
-
-    if not found:
-        return {}
-
-    versions = sorted({v.lstrip("v") for v, _ in found},
-                      key=lambda s: tuple(int(x) for x in s.split(".")))
-    # Group architectures by display platform label, preserving order
-    plat_order = ["Linux", "Linux (musl)", "macOS", "Windows", "WASM"]
-    arches_by_plat: dict[str, list[str]] = {}
-    for _, p in found:
-        label, arch = PLATFORM_MAP[p]
-        arches_by_plat.setdefault(label, [])
-        if arch not in arches_by_plat[label]:
-            arches_by_plat[label].append(arch)
-
-    platforms = []
-    for label in plat_order:
-        if label in arches_by_plat:
-            platforms.append({"platform": label, "architectures": arches_by_plat[label]})
-
-    # Compiled binary sizes per (platform, architecture). For each platform key,
-    # take the size from the latest DuckDB version that has an artifact (sizes
-    # are stable enough across patch releases that this is fine).
-    sizes: list[dict] = []
-    seen_keys: set[str] = set()
-    sorted_versions = sorted(
-        {v for v, _ in found},
-        key=lambda s: tuple(int(x) for x in s.lstrip("v").split(".")),
-        reverse=True,
-    )
-    for v in sorted_versions:
-        for p in PLATFORM_MAP:
-            if p in seen_keys:
-                continue
-            ext = "wasm" if p.startswith("wasm_") else "gz"
-            url = f"{REGISTRY_BASE}/{v}/{p}/{slug}.duckdb_extension.{ext}"
-            entry = cache.get(url)
-            if entry and entry.get("status") == 200 and "bytes" in entry:
-                label, arch = PLATFORM_MAP[p]
-                sizes.append({
-                    "platform": label,
-                    "architecture": arch,
-                    "bytes": entry["bytes"],
-                })
-                seen_keys.add(p)
-
-    # Sort sizes by display platform order, preserving architecture order
-    plat_index = {label: i for i, label in enumerate(plat_order)}
-    sizes.sort(key=lambda s: (plat_index.get(s["platform"], 99), s["architecture"]))
-
-    out: dict = {"platforms": platforms, "duckdbVersions": versions}
-    if sizes:
-        out["binarySizes"] = sizes
-    return out
 
 
 def execute_example(con, expr: str) -> dict | None:
@@ -578,9 +406,9 @@ def main() -> None:
     ap.add_argument("--haybarn", action="store_true",
                     help="Scan against Haybarn (Query.Farm's DuckDB distribution) instead of "
                          "DuckDB. Implies --community, routes the CLI through the bundled "
-                         "`haybarn` wrapper (override with HAYBARN_CMD), and skips the two "
-                         "DuckDB-only steps that can't see a Haybarn extension: in-process "
-                         "example baking and community-registry compatibility discovery.")
+                         "`haybarn` wrapper (override with HAYBARN_CMD), and skips the "
+                         "DuckDB-only step that can't see a Haybarn extension: in-process "
+                         "example baking.")
     ap.add_argument("--duckdb", type=Path, default=Path("duckdb"),
                     help="DuckDB CLI binary to use in --community mode (default: PATH lookup)")
     ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE_DUCKDB,
@@ -751,18 +579,16 @@ def main() -> None:
         if views:
             write_json(generated_dir / "views.json", views)
 
-        if args.haybarn:
-            print("Haybarn mode: skipping community-registry compatibility "
-                  "discovery (extension ships in the Haybarn distribution).")
-        elif args.community:
-            print("Discovering platform/version compatibility from registry...")
-            compat = discover_compatibility(args.slug)
-            if compat:
-                write_json(generated_dir / "compatibility.json", compat)
-                print(f"  platforms: {len(compat.get('platforms', []))}, "
-                      f"versions: {len(compat.get('duckdbVersions', []))}")
-            else:
-                print("  no compatibility info found (registry returned 404 for all probes)")
+        # compatibility.json is not written here. binary-sizes-snapshot.py,
+        # which probes haybarn-extensions.query.farm/community — the
+        # distribution this site's in-browser REPL actually installs
+        # from — is the single definitive source for platform/WASM
+        # compatibility. It used to race this tool's own upstream
+        # (community-extensions.duckdb.org) probe for the same file, with
+        # whichever ran most recently silently winning; that produced stale
+        # or wrong WASM-availability data depending on run order. Run
+        # `binary-sizes-snapshot.py --site <site> --slug <slug>` (or
+        # `npm run refresh:snapshots`) to (re)generate it.
 
         if args.init:
             write_metadata_stub(augment_dir, args.slug)
