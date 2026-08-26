@@ -127,8 +127,27 @@ function ensureStyle(): void {
   document.head.appendChild(tag);
 }
 
+/**
+ * Extract runnable SQL from a code block. Two renderers feed this component:
+ * CodeBlock.astro (Prism, hand-authored examples) puts the whole snippet in a
+ * single text node, where `.textContent` is exactly the source string.
+ * Expressive Code (MDX/Markdown fences — cookbook.mdx, technical-details.mdx)
+ * instead lays out each line as its own block-level `.ec-line` div with no
+ * literal "\n" between them; the line break is CSS, not a character, so
+ * `.textContent` there runs every line together while still preserving each
+ * line's own indentation — which is exactly the "no spacing" bug this guards
+ * against. Rejoin on "\n" whenever that per-line structure is present.
+ */
 function getSql(pre: HTMLElement): string {
-  return (pre.querySelector("code")?.textContent ?? pre.textContent ?? "").trim();
+  const code = pre.querySelector("code");
+  if (!code) return (pre.textContent ?? "").trim();
+
+  const lines = code.querySelectorAll(":scope > .ec-line");
+  if (lines.length > 0) {
+    return Array.from(lines).map((line) => line.textContent ?? "").join("\n").trim();
+  }
+
+  return (code.textContent ?? "").trim();
 }
 
 /** Relative luminance (WCAG) of a computed `rgb()`/`rgba()` string, or null when
