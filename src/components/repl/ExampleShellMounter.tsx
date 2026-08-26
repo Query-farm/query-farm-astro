@@ -252,55 +252,48 @@ function findOrCreateToolbar(pre: HTMLElement): { bar: HTMLElement; cleanup: () 
   };
 }
 
-/** MDX code blocks get their Copy button from a separate inline script that runs
- *  on DOMContentLoaded, appended *inside* the `<pre>` and positioned over the
- *  code. Once this component adds a toolbar, that leaves the two controls in
- *  different places. Move Copy into the bar so they read as one cluster.
+/** MDX code blocks (technical-details.mdx, cookbook.mdx) render through
+ *  Expressive Code, which ships its own "Copy to clipboard" button — a `.copy`
+ *  div (an aria-live region plus the `<button>`) rendered as a *sibling* of
+ *  `<pre>` inside the wrapping `<figure class="frame">`, absolutely
+ *  positioned over the code's top-right corner. Left alone, that reads as a
+ *  second, differently-styled control floating apart from the toolbar this
+ *  component builds for the Copy button CodeBlock.astro blocks already have —
+ *  two affordances for one action, worse on narrow screens where they can
+ *  visually collide. Adopt it into the shared toolbar instead of adding a
+ *  competing button of our own: move the whole `.copy` div (not just the
+ *  button) so its aria-live announcement and click wiring — both written
+ *  assuming they stay put in the figure — keep working, and only override the
+ *  positioning that assumed it too.
  *
- *  The button may not exist yet — the two scripts race, and which lands first
- *  varies — so watch briefly for it rather than checking once and giving up. */
+ *  Server-rendered, so it's already in the DOM by the time this runs — no
+ *  need to watch for it. CodeBlock.astro blocks have no `.copy` sibling
+ *  (there's nothing to adopt), so this is a no-op for them; they keep their
+ *  own toolbar button untouched.
+ *
+ *  On a hover-capable device, Expressive Code's own stylesheet hides this
+ *  button by default (`opacity: 0`) and reveals it on hovering the frame,
+ *  focusing a sibling before it in DOM order, or showing its "Copied!"
+ *  toast — floating unlabelled over the code, hide-until-hover avoids
+ *  permanent visual clutter. None of that reasoning survives the move: it
+ *  now lives in an always-visible toolbar (like CodeBlock.astro's own Copy
+ *  button, never hidden), sits *before* `<pre>` in the new DOM order (so
+ *  the focus-a-sibling reveal can't fire for anything after it), and
+ *  hide-by-default there just reads as broken rather than tidy. Force it
+ *  permanently visible instead of relying on any of those triggers. */
 function adoptProseCopyButton(pre: HTMLElement, bar: HTMLElement): () => void {
-  let observer: MutationObserver | null = null;
-
-  const move = (btn: HTMLElement): void => {
-    // Its stylesheet rule is `.prose pre .copy-btn`, so moving it out of the
-    // <pre> drops every one of those declarations and the browser's default
-    // button chrome shows through. Restate the shape inline, matching the Copy
-    // button CodeBlock renders in its own toolbar.
-    Object.assign(btn.style, {
+  const copyWrapper = pre.parentElement?.querySelector<HTMLElement>(":scope > .copy") ?? null;
+  if (copyWrapper) {
+    Object.assign(copyWrapper.style, {
       position: "static",
+      inset: "auto",
       margin: "0",
-      display: "inline-flex",
-      alignItems: "center",
-      gap: "0.25rem",
-      padding: "0.25rem 0.625rem",
-      fontSize: "13px",
-      fontWeight: "500",
-      lineHeight: "1.4",
-      color: "#c6b8a2",
-      background: "transparent",
-      border: "1px solid transparent",
-      borderRadius: "0.375rem",
-      cursor: "pointer",
     });
-    bar.appendChild(btn);
-  };
-
-  const existing = pre.querySelector<HTMLElement>(":scope > .copy-btn");
-  if (existing) {
-    move(existing);
-  } else {
-    observer = new MutationObserver(() => {
-      const btn = pre.querySelector<HTMLElement>(":scope > .copy-btn");
-      if (!btn) return;
-      move(btn);
-      observer?.disconnect();
-      observer = null;
-    });
-    observer.observe(pre, { childList: true });
+    const btn = copyWrapper.querySelector<HTMLElement>("button");
+    if (btn) Object.assign(btn.style, { opacity: "1", width: "2.5rem", height: "2.5rem" });
+    bar.appendChild(copyWrapper);
   }
-
-  return () => observer?.disconnect();
+  return () => {};
 }
 
 interface OpenShell {

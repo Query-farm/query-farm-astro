@@ -87,14 +87,12 @@ const panelLink = 'block rounded px-2 py-1.5 text-sm text-soil-700 no-underline 
 
 <div class="sticky z-40 border-b border-soil-300 bg-soil-100" style="top: var(--qf-nav-h)">
   <div class="section-container">
-    {/* overflow-x-auto (for narrow viewports, where the tab row itself needs
-        to scroll) forces overflow-y to compute as auto too — the CSS overflow
-        spec doesn't allow one axis visible and the other not — which clips
-        any dropdown panel that hangs below a tab, since it's a descendant of
-        this row. lg:overflow-visible lifts that at the width where hover
-        panels are actually the interaction (mobile doesn't really "hover"),
-        and by then the row fits without needing to scroll anyway. */}
-    <nav class="qf-subnav-row flex items-center overflow-x-auto lg:overflow-visible" aria-label="VGI section">
+    {/* flex-wrap, not overflow-x-auto: a horizontally-scrolling row hides the
+        tabs that don't fit behind a swipe gesture, and — worse, on this bar
+        specifically — an overflow-x container clips the absolutely-positioned
+        panel, since it's a descendant of the row. Tabs wrap to a second line
+        instead once they don't fit (matches HaybarnSubNav). */}
+    <nav class="qf-subnav-row flex flex-wrap items-center" aria-label="VGI section">
       <a
         href="/vgi"
         class="mr-1.5 flex flex-none items-center gap-[9px] whitespace-nowrap border-r border-soil-300 py-[11px] pr-[18px] font-display text-[17px] font-semibold tracking-[-0.018em] text-soil-900 no-underline transition-colors hover:text-link"
@@ -103,55 +101,127 @@ const panelLink = 'block rounded px-2 py-1.5 text-sm text-soil-700 no-underline 
         <span>VGI</span>
       </a>
 
-      {tabs.map(tab => (
-        <div class="group relative flex-none">
-          <a
-            href={tab.href}
-            class:list={[
-              tabClass,
-              isActive(tab) ? 'border-link text-link' : 'border-transparent text-soil-700 hover:text-soil-900'
-            ]}
+      {tabs.map(tab => tab.panel && tab.items ? (
+        // A native <details>/<summary> disclosure, not a hover panel: hover
+        // has no touch equivalent, so a group-hover reveal (the previous
+        // approach) was unreachable on any touch device — tapping the tab
+        // just navigated away via its own href instead of ever showing the
+        // panel. <details> is tap/keyboard/screen-reader operable for free,
+        // and — because closed panel content isn't rendered at all, not just
+        // hidden — never contributes to the page's layout width the way an
+        // `invisible` (but still fully laid out) hover panel did; that's what
+        // pushed this row's own overflow into the whole page scrolling
+        // sideways on mobile. Every panel already lists its own tab's page
+        // (as its first "Overview" item, or Language SDKs' footer link), so
+        // nothing becomes unreachable by giving up the tab label as a direct
+        // link.
+        <details class="qf-subnav-menu relative flex-none">
+          <summary
+            class:list={[tabClass, 'flex cursor-pointer list-none items-center gap-1.5', isActive(tab) ? 'border-link text-link' : 'border-transparent text-soil-700 hover:text-soil-900']}
             aria-current={isActive(tab) ? 'page' : undefined}
           >
             {tab.name}
-          </a>
-
-          {tab.panel && tab.items && (
-            <div class="invisible absolute left-0 top-full z-10 w-56 pt-1 opacity-0 transition-all duration-150 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
-              <div class="rounded-xl border border-soil-300 bg-white p-2 shadow-xl">
-                <ul class="space-y-0.5">
-                  {tab.items.map(item => (
-                    <li>
-                      <a
-                        href={item.href}
-                        class:list={[panelLink, item.icon && 'flex items-center gap-2']}
-                        {...(item.external ? { target: '_blank', rel: 'noopener' } : {})}
-                      >
-                        {item.icon && <Icon name={item.icon} class="h-4 w-4 flex-none text-soil-500" />}
-                        <span>{item.name}{item.external ? ' ↗' : ''}</span>
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-                {tab.footerHref && (
-                  <a href={tab.footerHref} class="mt-1 block border-t border-soil-200 px-2 pt-2 text-sm font-medium text-link no-underline transition-colors hover:text-link-hover">
-                    {tab.footerLabel}
+            <svg
+              class="qf-subnav-chevron h-3 w-3 transition-transform duration-150"
+              viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+            ><polyline points="6 9 12 15 18 9" /></svg>
+          </summary>
+          <div class="absolute left-0 top-full z-50 mt-px w-56 overflow-hidden rounded-xl border border-soil-300 bg-white p-2 shadow-[0_10px_28px_rgba(33,26,18,0.14)]">
+            <ul class="space-y-0.5">
+              {tab.items.map(item => (
+                <li>
+                  <a
+                    href={item.href}
+                    class:list={[panelLink, item.icon && 'flex items-center gap-2']}
+                    {...(item.external ? { target: '_blank', rel: 'noopener' } : {})}
+                  >
+                    {item.icon && <Icon name={item.icon} class="h-4 w-4 flex-none text-soil-500" />}
+                    <span>{item.name}{item.external ? ' ↗' : ''}</span>
                   </a>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
+                </li>
+              ))}
+            </ul>
+            {tab.footerHref && (
+              <a href={tab.footerHref} class="mt-1 block border-t border-soil-200 px-2 pt-2 text-sm font-medium text-link no-underline transition-colors hover:text-link-hover">
+                {tab.footerLabel}
+              </a>
+            )}
+          </div>
+        </details>
+      ) : (
+        <a
+          href={tab.href}
+          class:list={[
+            tabClass,
+            isActive(tab) ? 'border-link text-link' : 'border-transparent text-soil-700 hover:text-soil-900'
+          ]}
+          aria-current={isActive(tab) ? 'page' : undefined}
+        >
+          {tab.name}
+        </a>
       ))}
     </nav>
   </div>
 </div>
 
 <style>
-  .qf-subnav-row {
-    scrollbar-width: none;
-  }
-  .qf-subnav-row::-webkit-scrollbar {
+  /* Belt-and-suspenders: a closed <details> should already collapse its
+     non-summary content (the panel) to nothing per the HTML spec's own
+     suggested UA rule, and normally does — but that turned out to be
+     inconsistent here (observed rendering the panel at full size, absolutely
+     positioned and off the right edge of the viewport, while `.open` still
+     read false), which is exactly what fed the page-level horizontal
+     scrolling on mobile this component exists to fix. Stating it explicitly
+     doesn't depend on that default surviving whatever's overriding it. */
+  .qf-subnav-menu:not([open]) > div {
     display: none;
   }
+
+  /* Safari still paints the disclosure triangle without this, even with
+     list-style:none on the summary itself. */
+  .qf-subnav-menu > summary::-webkit-details-marker {
+    display: none;
+  }
+  .qf-subnav-menu[open] .qf-subnav-chevron {
+    transform: rotate(180deg);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .qf-subnav-chevron {
+      transition: none;
+    }
+  }
 </style>
+
+<script>
+  // The two behaviours a native <details> does not give you. Delegated from
+  // document so this survives the subnav being re-rendered on navigation, and
+  // registered once regardless of how many times the module is evaluated.
+  const FLAG = '__qfSubnavMenuWired';
+
+  function closeMenus(except?: Element | null) {
+    document.querySelectorAll<HTMLDetailsElement>('details.qf-subnav-menu[open]').forEach(el => {
+      if (el !== except) el.open = false;
+    });
+  }
+
+  if (!(FLAG in window)) {
+    (window as any)[FLAG] = true;
+
+    document.addEventListener('click', e => {
+      const target = e.target as Element | null;
+      closeMenus(target?.closest('details.qf-subnav-menu'));
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.key !== 'Escape') return;
+      const open = document.querySelector<HTMLDetailsElement>('details.qf-subnav-menu[open]');
+      if (!open) return;
+      open.open = false;
+      open.querySelector('summary')?.focus();
+    });
+
+    // View transitions swap the DOM without a reload; leave nothing open.
+    document.addEventListener('astro:after-swap', () => closeMenus());
+  }
+</script>
