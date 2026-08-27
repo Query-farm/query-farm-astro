@@ -28,6 +28,7 @@ const formattedDate = new Date(pubDate).toLocaleDateString('en-US', {
   year: 'numeric',
   month: 'long',
   day: 'numeric',
+  timeZone: 'UTC',
 });
 const isoDate = new Date(pubDate).toISOString().slice(0, 10);
 
@@ -40,6 +41,7 @@ const topic = tags[0];
 const tagLinks = tags.map(tag => ({ label: tag, href: `/blog/tags/${tagSlug(tag)}` }));
 
 const figure = blogFigure(entry.id);
+const hasOpeningBrief = entry.body.includes('class="article-brief"');
 
 // Article structured data for rich results (E-E-A-T: named author, dates).
 const canonicalURL = new URL(Astro.url.pathname, Astro.site);
@@ -64,6 +66,20 @@ const jsonLd = {
 };
 
 const shareUrl = canonicalURL.href;
+
+// One genuinely related next read is more useful than a generic content grid.
+// Shared topics establish relevance; recency only breaks ties.
+const relatedPost = (await getCollection('blog'))
+  .filter(post => post.id !== entry.id && !post.data.draft)
+  .map(post => ({
+    post,
+    sharedTopics: post.data.tags.filter(tag => tags.includes(tag)).length,
+  }))
+  .filter(candidate => candidate.sharedTopics > 0)
+  .sort((a, b) =>
+    b.sharedTopics - a.sharedTopics ||
+    b.post.data.pubDate.valueOf() - a.post.data.pubDate.valueOf()
+  )[0]?.post;
 ---
 
 <BaseLayout
@@ -77,6 +93,7 @@ const shareUrl = canonicalURL.href;
   articleSection={topic}
   articleTags={tags}
 >
+  <div class="article-progress" aria-hidden="true"><i></i></div>
   <article>
     <div class="mx-auto max-w-[720px] px-6 pt-11 pb-5">
       {topic && (
@@ -128,13 +145,13 @@ const shareUrl = canonicalURL.href;
           source={figure.source}
           precision={figure.precision}
         />
-      ) : (
+      ) : !hasOpeningBrief ? (
         <div class="flex h-28 overflow-hidden rounded-xl border border-soil-300" aria-hidden="true">
           {topicBands(topic).map(band => (
             <i class="flex-1" style={`background:${band}`}></i>
           ))}
         </div>
-      )}
+      ) : null}
     </div>
 
     <div class="qf-prose px-6 pt-6 pb-14">
@@ -160,6 +177,31 @@ const shareUrl = canonicalURL.href;
           </ul>
         </div>
       </div>
+    )}
+
+    {relatedPost && (
+      <aside class="mx-auto max-w-[720px] px-6 pt-8" aria-labelledby="keep-reading-title">
+        <a
+          href={`/blog/${relatedPost.id}`}
+          class="related-read group block overflow-hidden rounded-xl border border-soil-300 bg-[#fffdf7] no-underline transition hover:-translate-y-0.5 hover:border-sun-500 hover:shadow-[0_12px_32px_rgba(60,43,24,0.09)] motion-reduce:hover:translate-y-0"
+        >
+          <div class="grid h-1 grid-cols-6" aria-hidden="true">
+            {topicBands(relatedPost.data.tags[0]).map(band => <i style={`background:${band}`}></i>)}
+          </div>
+          <div class="px-6 py-5 sm:px-7 sm:py-6">
+            <p id="keep-reading-title" class="text-[12.5px] font-medium text-sun-700">Keep reading</p>
+            <h2 class="mt-2 text-[clamp(1.25rem,3vw,1.65rem)] leading-tight transition-colors group-hover:text-link">
+              {relatedPost.data.title}
+            </h2>
+            <p class="mt-2 line-clamp-2 text-[14.5px] leading-relaxed text-soil-600">
+              {relatedPost.data.description}
+            </p>
+            <span class="mt-4 inline-flex items-center gap-2 text-[12.5px] font-medium text-link">
+              Read next <span aria-hidden="true">→</span>
+            </span>
+          </div>
+        </a>
+      </aside>
     )}
 
     <div class="mx-auto max-w-[720px] px-6 pt-8 pb-20">
@@ -189,34 +231,151 @@ const shareUrl = canonicalURL.href;
       </div>
     </div>
   </article>
+
+  <script>
+    const progressBar = document.querySelector<HTMLElement>('.article-progress i');
+    const article = document.querySelector<HTMLElement>('main article');
+
+    if (progressBar && article) {
+      let frame = 0;
+      const updateProgress = () => {
+        frame = 0;
+        const start = article.offsetTop;
+        const distance = Math.max(1, article.offsetHeight - window.innerHeight);
+        const progress = Math.min(1, Math.max(0, (window.scrollY - start) / distance));
+        progressBar.style.transform = `scaleX(${progress})`;
+      };
+      const requestUpdate = () => {
+        if (!frame) frame = requestAnimationFrame(updateProgress);
+      };
+      updateProgress();
+      addEventListener('scroll', requestUpdate, { passive: true });
+      addEventListener('resize', requestUpdate, { passive: true });
+    }
+  </script>
 </BaseLayout>
 
 <style is:global>
+  .article-progress {
+    position: fixed;
+    z-index: 45;
+    top: var(--qf-nav-h);
+    left: 0;
+    width: 100%;
+    height: 3px;
+    pointer-events: none;
+  }
+  .article-progress i {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: var(--color-sun-500);
+    transform: scaleX(0);
+    transform-origin: left center;
+  }
+
+  .article-brief {
+    overflow: hidden;
+    border: 1px solid var(--color-soil-300);
+    border-radius: 12px;
+    background: #fffdf7;
+  }
+  .article-brief::before {
+    content: '';
+    display: block;
+    height: 5px;
+    background: linear-gradient(to right,
+      var(--color-pipe-1) 0 16.666%, var(--color-pipe-2) 16.666% 33.333%,
+      var(--color-pipe-3) 33.333% 50%, var(--color-pipe-4) 50% 66.666%,
+      var(--color-pipe-5) 66.666% 83.333%, var(--color-pipe-6) 83.333% 100%);
+  }
+  .article-brief-inner { padding: 24px 26px 26px; }
+  .article-brief-label {
+    color: var(--color-sun-700);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .article-brief ul { margin-top: 13px; display: grid; gap: 11px; }
+  .article-brief li {
+    position: relative;
+    padding-left: 19px;
+    color: var(--color-soil-800);
+    font-size: 15.5px;
+    line-height: 1.55;
+  }
+  .article-brief li::before {
+    content: '';
+    position: absolute;
+    top: .62em;
+    left: 0;
+    width: 7px;
+    height: 7px;
+    transform: rotate(45deg);
+    background: var(--color-field-700);
+  }
+  .qf-prose .article-brief-label { color: var(--color-sun-700); }
+  .qf-prose .article-brief ul { padding-left: 0; list-style: none; }
+  .qf-prose .article-brief li {
+    margin-top: 0;
+    color: var(--color-soil-800);
+  }
+
   /* Editorial prose — family E. 720px measure, Fraunces doing more work here
      than anywhere else on the site. Global because <Content /> renders markdown
      outside this component's scope; every selector is fenced behind .qf-prose. */
   .qf-prose {
     max-width: 720px;
+    min-width: 0;
     margin: 0 auto;
-    font-size: 17px;
+    overflow-wrap: break-word;
+    font-size: 17.5px;
     line-height: 1.75;
+    counter-reset: article-section;
   }
+  .qf-prose > * { min-width: 0; max-width: 100%; }
   .qf-prose > * + * { margin-top: 20px; }
   .qf-prose p,
   .qf-prose li { color: var(--color-soil-700); }
   .qf-prose strong { color: var(--color-soil-900); font-weight: 600; }
 
   .qf-prose h2 {
-    margin-top: 46px;
-    padding-top: 22px;
+    margin-top: 58px;
+    padding-top: 28px;
     border-top: 1px solid var(--color-soil-300);
     font-size: clamp(1.5rem, 3.4vw, 2.25rem);
+    counter-increment: article-section;
   }
-  .qf-prose h3 { margin-top: 32px; font-size: clamp(1.2rem, 2.2vw, 1.5rem); }
+  .qf-prose h2::before {
+    content: 'Section ' counter(article-section, decimal-leading-zero);
+    display: block;
+    margin-bottom: 9px;
+    color: var(--color-sun-700);
+    font-family: 'Commissioner', ui-sans-serif, system-ui, sans-serif;
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: .02em;
+  }
+  .qf-prose h2 + p { color: var(--color-soil-800); font-size: 1.035em; }
+  .qf-prose h3 {
+    margin-top: 38px;
+    border-left: 3px solid var(--color-sun-400);
+    padding-left: 14px;
+    font-size: clamp(1.2rem, 2.2vw, 1.5rem);
+  }
   .qf-prose h4 { margin-top: 26px; }
 
   /* Drop cap — only when the post actually opens on prose. */
   .qf-prose > p:first-child::first-letter {
+    font-family: 'Petrona', Georgia, serif;
+    font-weight: 500;
+    float: left;
+    font-size: 66px;
+    line-height: 0.78;
+    padding: 6px 12px 0 0;
+    color: var(--color-sun-700);
+  }
+  .qf-prose > .article-brief + p::first-letter {
     font-family: 'Petrona', Georgia, serif;
     font-weight: 500;
     float: left;
@@ -368,6 +527,13 @@ const shareUrl = canonicalURL.href;
   }
 
   .qf-prose img { border-radius: 10px; max-width: 100%; height: auto; }
+  .qf-prose p:has(> img:only-child) { margin-top: 34px; }
+  .qf-prose p:has(> img:only-child) + p:has(> em:only-child) {
+    margin-top: 10px;
+    color: var(--color-soil-500);
+    font-size: 13px;
+    line-height: 1.55;
+  }
   .qf-prose figure { margin-top: 30px; margin-bottom: 30px; }
   .qf-prose figcaption {
     font-size: 13px;
@@ -376,4 +542,13 @@ const shareUrl = canonicalURL.href;
     margin-top: 10px;
   }
   .qf-prose hr { border: 0; border-top: 1px solid var(--color-soil-300); margin: 40px 0; }
+
+  @media (max-width: 640px) {
+    .article-brief-inner { padding: 20px 20px 22px; }
+    .article-brief li { font-size: 15px; }
+    .qf-prose { font-size: 17px; line-height: 1.72; }
+    .qf-prose h2 { margin-top: 48px; padding-top: 24px; }
+    .qf-prose blockquote { padding: 16px 18px; }
+    .qf-prose blockquote.is-pullquote { padding-left: 17px; }
+  }
 </style>

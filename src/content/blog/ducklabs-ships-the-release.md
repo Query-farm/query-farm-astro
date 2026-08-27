@@ -7,7 +7,16 @@ tags: ["DuckDB", "Governance", "Distribution", "Haybarn", "VGI"]
 heroImage: '/media/posts/ducklabs-ships-the-release/social.png'
 ---
 
-# The Foundation owns the IP. DuckLabs ships the release.
+<aside class="article-brief" aria-labelledby="article-brief-title">
+  <div class="article-brief-inner">
+    <p id="article-brief-title" class="article-brief-label">In brief</p>
+    <ul>
+      <li>DuckDB's MIT-licensed IP remains with the independent Foundation.</li>
+      <li>DuckLabs still controls the practical release path: reviews, merges, builds, and extension distribution.</li>
+      <li>Query Farm is investing in Haybarn, an independent extension repository, and VGI so customers are not bound to one release queue or one query engine.</li>
+    </ul>
+  </div>
+</aside>
 
 I've been asked all day what the [AWS acquisition of DuckLabs](https://www.aboutamazon.com/news/company-news/aws-ducklabs) means. The questions have come from Query Farm customers, other DuckDB extension developers, and DuckDB users. It's been a busy day across Discord, LinkedIn, and email, and I can't reply to everyone individually, so I'm writing my answers here.
 
@@ -31,7 +40,7 @@ Stewardship and development are different jobs, and only one of them ships code.
 
 It matters who merges PRs, who builds the code, and who ships it, because those people decide what's in a release and what isn't—and which bugs get fixed and which don't. For extension developers, it also matters who can release extensions that interoperate with a release, who approves extensions for the [community extensions repository](https://github.com/duckdb/community-extensions), and, most of all, *when* those PRs get merged.
 
-For those of us building and shipping on DuckDB, the merge queue is the dependency, not the license.
+<blockquote class="is-pullquote">For those of us building and shipping on DuckDB, the merge queue is the dependency, not the license.</blockquote>
 
 Right now the Foundation has a [three-member board](https://duckdb.foundation/#who-runs-it): Hannes as Chair, Mark, and Peter Boncz.
 
@@ -139,7 +148,7 @@ Because the worker is an ordinary service rather than a compiled extension, mult
 
 And because the interface is a protocol rather than an engine ABI, the same worker can eventually serve more than one SQL engine.
 
-Write the connector once; reach it from wherever you query.
+<blockquote class="is-pullquote">Write the connector once; reach it from wherever you query.</blockquote>
 
 VGI is [open source on GitHub](https://github.com/Query-farm/vgi), and the [RPC protocol](https://vgi-rpc.query.farm) is open as well.
 
