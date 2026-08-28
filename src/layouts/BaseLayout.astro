@@ -3,6 +3,9 @@ import Header from '../components/layout/Header.astro';
 import MobileNav from '../components/layout/MobileNav.astro';
 import Footer from '../components/layout/Footer.astro';
 import '../styles/global.css';
+import { createHash } from 'node:crypto';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 interface Props {
   title: string;
@@ -41,6 +44,24 @@ const {
 const canonicalURL = new URL(Astro.url.pathname, Astro.site);
 const fullTitle = title === 'Query.Farm' ? title : `${title} | Query.Farm`;
 const ogImageURL = new URL(ogImage, Astro.site);
+
+// Cache-bust the image URL itself, not just the page's. Discord (and other
+// unfurl bots) cache a fetched og:image by its own URL, separate from the
+// page's embed-metadata cache — re-sharing the PAGE with a `?v=` query
+// string still hands the bot the same unversioned /og-image.jpg it already
+// has cached, so a redesigned default image can sit stale in link previews
+// for months after the site itself is fixed. Stamping a content hash onto
+// the image URL means every real change to the file is a genuinely new URL
+// (the same trick /favicon.svg?v=2 above uses by hand). Static site, public/
+// assets only — skip anything that isn't a local file (an absolute URL, or
+// a path that doesn't resolve, which shouldn't happen for a valid prop).
+if (!/^https?:\/\//.test(ogImage)) {
+  const ogImagePath = join(process.cwd(), 'public', ogImage);
+  if (existsSync(ogImagePath)) {
+    const hash = createHash('sha256').update(readFileSync(ogImagePath)).digest('hex').slice(0, 10);
+    ogImageURL.searchParams.set('v', hash);
+  }
+}
 ---
 
 <!DOCTYPE html>
