@@ -499,5 +499,20 @@ export default defineConfig({
         '340ce136a669.ngrok-free.app', // your ngrok host
       ],
 }
+,
+    optimizeDeps: {
+      // duckdb-boot.ts statically imports this for its small JS API surface
+      // (selectBundle/createWorker/AsyncDuckDB/...) but fetches the actual
+      // wasm binaries and worker scripts from unpkg at runtime — see that
+      // file's comments. The npm package still ships those binaries
+      // alongside the JS entry (~180MB unpacked), which esbuild's dep
+      // pre-bundler chokes on: every request for it 504s "Outdated Optimize
+      // Dep" and the dev log logs its own diagnosis ("The dependency might
+      // be incompatible with the dep optimizer. Try adding it to
+      // optimizeDeps.exclude"). Excluding it serves the package's small ESM
+      // entry (dist/duckdb-browser.mjs, ~34KB) directly instead of routing
+      // it through the optimizer.
+      exclude: ['@haybarn/haybarn-wasm'],
+    },
   }
 });

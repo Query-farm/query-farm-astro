@@ -96,6 +96,17 @@ const SHELL_STYLE_ID = "example-shell-surface-style";
  */
 const SHELL_STYLE = `
 .example-shell {
+  /* Margin here, not Tailwind's mt-2/mb-6 on the element: this shell lands
+     as a DOM child of .expressive-code (ExampleShellMounter inserts the run
+     bar and this container right after the code block's figure, which is
+     itself inside that wrapper), and Expressive Code ships its own reset —
+     .expressive-code :not(:is(svg, svg *)), setting margin: revert — in a
+     CSS layer that outranks Tailwind's utilities layer. Any margin-*
+     utility class here silently computes to 0 regardless of its value; this
+     rule is a plain unlayered style tag, which beats a layered one
+     unconditionally, so it's the one place margin actually sticks. */
+  margin-top: 0.5rem;
+  margin-bottom: 1.5rem;
   background: #1a1512;
   border: 1px solid #2a2420;
   border-radius: 10px;
@@ -623,7 +634,7 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
   }, [extensionName, installSource, sql, fixtures]);
 
   return (
-    <div className="example-shell mt-2">
+    <div className="example-shell">
       {/* .panel-head, dark side: mono / uppercase / tracked, on rock-950. */}
       <div className="example-shell-head">
         {/* Live-status dot — field-400, the one cool note in the palette. */}

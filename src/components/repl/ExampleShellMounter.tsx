@@ -117,6 +117,16 @@ const STYLE = `
 @media (prefers-reduced-motion: reduce) {
   .example-try-button { transition: none; }
 }
+/* Expressive Code draws the copy glyph as a mask-image inset from the
+   (now 2rem) button by a fixed 0.475rem margin on all sides — the button
+   shrank in adoptProseCopyButton below, but that inset didn't, so the glyph
+   still reads oversized relative to CodeBlock.astro's own 14px copy icon in
+   the same toolbar. A bigger inset margin is the only way to shrink the
+   glyph itself without shrinking the button's (already-small) click target;
+   0.5625rem leaves a ~14px icon on the 2rem button, matching CodeBlock's. */
+.code-block-toolbar .copy button::after {
+  margin: 0.5625rem;
+}
 `;
 
 function ensureStyle(): void {
@@ -288,7 +298,19 @@ function findOrCreateToolbar(pre: HTMLElement): { bar: HTMLElement; cleanup: () 
  *  button, never hidden), sits *before* `<pre>` in the new DOM order (so
  *  the focus-a-sibling reveal can't fire for anything after it), and
  *  hide-by-default there just reads as broken rather than tidy. Force it
- *  permanently visible instead of relying on any of those triggers. */
+ *  permanently visible instead of relying on any of those triggers.
+ *
+ *  Expressive Code ships the button at 2.5rem square, but that's its
+ *  touch/no-hover size (`@media (scripting)`-style fallback for devices with
+ *  no mouse) meant to stay tappable while floating unlabelled over code; its
+ *  own `@media (hover: hover)` rule shrinks it to 2rem for anything with a
+ *  mouse. Sizing to the 2.5rem default here — the button's inline style,
+ *  which always wins over that external media-query rule regardless of
+ *  which one actually matches — pinned every desktop visitor to the touch
+ *  size, reading as oversized next to CodeBlock.astro's own ~1.75rem copy
+ *  button in the same toolbar. Match the hover-capable size instead: this
+ *  toolbar is always visible (never hover-revealed) on every input type, so
+ *  there's no touch-target case left to size up for. */
 function adoptProseCopyButton(pre: HTMLElement, bar: HTMLElement): () => void {
   const copyWrapper = pre.parentElement?.querySelector<HTMLElement>(":scope > .copy") ?? null;
   if (copyWrapper) {
@@ -298,7 +320,7 @@ function adoptProseCopyButton(pre: HTMLElement, bar: HTMLElement): () => void {
       margin: "0",
     });
     const btn = copyWrapper.querySelector<HTMLElement>("button");
-    if (btn) Object.assign(btn.style, { opacity: "1", width: "2.5rem", height: "2.5rem" });
+    if (btn) Object.assign(btn.style, { opacity: "1", width: "2rem", height: "2rem" });
     bar.appendChild(copyWrapper);
   }
   return () => {};
