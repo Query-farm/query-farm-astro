@@ -1,0 +1,42 @@
+---
+title: Run and deploy a C# worker
+description: Build, publish, and serve QueryFarm.Vgi workers over supported transports.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+Use one entry point for local subprocess and pooled launcher operation:
+
+<CodeBlock code={`await worker.RunFromArgsAsync(args);`} lang="csharp" tryable={false} />
+
+`RunFromArgsAsync` selects stdio by default and AF_UNIX when the VGI launcher supplies its socket
+arguments. Those are the two worker transports shipped in `QueryFarm.Vgi` 0.3.0.
+
+## Publish
+
+<CodeBlock code={`dotnet publish --configuration Release --runtime linux-x64 --self-contained true
+# use linux-arm64 for Graviton/ARM64`} lang="bash" tryable={false} />
+
+Attach the resulting executable with `launch:`:
+
+<CodeBlock code={`ATTACH 'launch:/srv/demo/demo-worker' AS demo (TYPE vgi);`} lang="sql" tryable={false} />
+
+`launch:` amortizes CLR startup and JIT across queries and lets DuckDB open concurrent connections
+to the same Unix socket. A bare executable location uses stdio and may start a new process for each
+pool slot or query.
+
+<Callout type="warning" title="No HTTP server in the C# worker SDK yet">
+The generic RPC stack has HTTP/client capabilities, but `QueryFarm.Vgi.Worker` currently exposes
+only stdio and Unix sockets. Do not copy Python, Go, TypeScript, or Java HTTP deployment instructions
+into a C# worker deployment.
+</Callout>
+
+## Production process rules
+
+- Reserve stdout for the protocol; log to stderr or the in-band call context.
+- Treat a worker as concurrent. Function registrations are shared; producer/processor objects are
+  per invocation.
+- Bound memory by emitting batches and using durable buffering state.
+- Publish for the target architecture and smoke-test the exact published executable.
+- Use cancellation tokens when hosting `RunStdioAsync` or `RunUnixSocketAsync` yourself.

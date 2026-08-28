@@ -1,0 +1,42 @@
+---
+title: 2. Your first table function
+description: Stream generated Arrow record batches from C# into DuckDB.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import numbersSrc from '../../../../../../examples/vgi-csharp/NumbersFunction.cs?raw';
+
+A table function turns scalar arguments into zero or more rows. DuckDB repeatedly ticks its
+producer, so it can stream bounded batches without materializing the whole result.
+
+<CodeBlock code={numbersSrc} lang="csharp" title="NumbersFunction.cs" tryable={false} />
+
+The important pieces are:
+
+- `ArgumentsSchema` declares positional and named constant arguments with `TableArgFields`.
+- `OutputSchema` declares the columns returned to SQL.
+- `CreateProducer` reads bound arguments once and returns per-call state.
+- `Produce` emits one `RecordBatch` per tick and eventually calls `Finish()`.
+
+<Callout type="note" title="A public type currently lives under Internal">
+`TableInitParams.Arguments` is the public `TableArguments` type, currently namespaced under
+`QueryFarm.Vgi.Internal`; that is why this example imports the namespace. Limit that dependency to
+argument reads so it is easy to update if the type moves to the public table namespace.
+</Callout>
+
+<Callout type="tip" title="Batch for throughput and backpressure">
+Emit thousands of rows at a time, not one row and not the whole data set. The example caps each
+batch at 4,096 rows. The engine controls subsequent ticks and can stop early for cancellation or a
+limit.
+</Callout>
+
+Register the function with `RegisterTable`, then query it:
+
+<CodeBlock code={`SELECT * FROM demo.numbers(5);
+-- 0, 1, 2, 3, 4
+
+SELECT count(*), sum(n) FROM demo.numbers(1_000_000);`} lang="sql" tryable={false} />
+
+For projection/filter pushdown, statistics, ordering, limits, partitions, and split planning, see
+[Optimizer integration](/vgi/docs/csharp/how-to/pushdown-and-statistics/).

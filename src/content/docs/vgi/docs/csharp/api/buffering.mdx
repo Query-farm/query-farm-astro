@@ -1,0 +1,413 @@
+---
+title: "Buffering functions"
+description: "Sink, combine, and source phases with durable cross-process state."
+---
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Sink, combine, and source phases with durable cross-process state.
+
+</div>
+
+<div class="api-member">
+
+<a id="CopyToFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `CopyToFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Buffering/CopyToFunction.cs#L25" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public abstract class CopyToFunction : ITableBufferingFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Base class for a COPY ... TO (FORMAT &#39;&lt;name&gt;&#39;, ...) writer — mechanically a table-buffering (Sink+Combine) function with NO Source phase: Process writes one input batch, Combine runs exactly once (on the coordinator, after every batch has been written) to close the destination, and the (never actually drained — COPY TO produces no rows) finalize producer just finishes immediately. Register via Worker.RegisterCopyToFormat, which also advertises it through catalog_copy_from_formats (the RPC that covers both directions) — including this class&#39;s SinkOrderDependent as the format&#39;s ordered flag. Mirrors vgi-python/ vgi-java&#39;s CopyToFunction . Cross-process invariant: Write (Sink) and Close (Combine, exactly once) may run on DIFFERENT worker processes (pool rotation, or pool false ) — any state one needs to hand the other MUST go through TableBufferingProcessParams.Storage/ TableBufferingCombineParams.Storage, never an in-memory field on this instance.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public IReadOnlyList&lt;byte[]&gt; Combine(IReadOnlyList&lt;byte[]&gt; stateIds, TableBufferingCombineParams combineParams) ;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public ITableFunctionProducer CreateFinalizeProducer(byte[] finalizeStateId, TableBufferingFinalizeParams finalizeParams) ;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Schema OutputSchema &#123; get; &#125;</code></pre>
+<p>COPY TO produces no output rows.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Schema ResolveOutputSchema(TableInOutBindParams bindParams) ;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public abstract Schema ArgumentsSchema &#123; get; &#125;</code></pre>
+<p>The format&#39;s OPTIONS — every field a named argument; never a positional or TABLE-typed argument (the input TABLE argument this Sink+Source shape implies is the COPY source itself, wired automatically — Worker.RegisterCopyToFormat never adds an explicit TableArgFields.Table field for it).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public abstract string Description &#123; get; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public abstract string Name &#123; get; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[] Process(RecordBatch batch, TableBufferingProcessParams processParams) ;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public virtual bool SinkOrderDependent;</code></pre>
+<p>true forces a single-threaded, source-ordered sink — override when row order in the destination must match source order (the C++ operator otherwise shards the sink across threads/processes, arbitrary interleaving).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public virtual string SchemaName;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public void Bind(TableInOutBindParams bindParams) ;</code></pre>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="IFunctionStorage"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `IFunctionStorage`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Buffering/IFunctionStorage.cs#L17" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface IFunctionStorage</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Durable, cross-PROCESS storage scoped to one query execution — the coordination primitive ITableBufferingFunction.Process/ITableBufferingFunction.Combine/the FINALIZE producer use to hand state to each other. Necessary because, unlike a table-in-out function&#39;s substream (which stays on ONE connection end to end), table-buffering&#39;s table_buffering_process / table_buffering_combine calls are each independently worker-pool-acquired unary RPCs — under the stdio/subprocess transport that can mean a SEPARATE OS PROCESS per call (see Internal.CrossProcessWorkQueue &#39;s doc comment for the same discovery in the plain-table-function context), so in-memory state on one call is invisible to the next. The concrete implementation ( Internal.FunctionStorage ) backs this with files under the OS temp directory, keyed by the query&#39;s execution_id — durable and visible across process boundaries without any extra runtime dependency (matches vgi-python&#39;s BoundStorage role, minus the SQLite backend).</p>
+
+</div>
+
+<div class="api-member">
+
+<a id="ITableBufferingFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `ITableBufferingFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Buffering/ITableBufferingFunction.cs#L36" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface ITableBufferingFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>The raw contract a table-buffering (Sink+Source) function implements — a table-in-out-shaped call site ( f(data TABLE, ...) ) that, unlike ITableInOutFunction, must see EVERY input row across EVERY substream before producing any output. Ported from vgi-python&#39;s TableBufferingFunction /vgi-java&#39;s TableBufferingFunction . Three phases, matching the C++ PhysicalVgiTableBuffering Sink+Source operator: Sink — Process, once per input batch (parallel across threads/processes unless SinkOrderDependent) — stash the batch and return an opaque state_id . Combine — Combine, once, after every Sink call completes — group/merge the collected state_id s into finalize_state_id s, one per Source output stream. Source — CreateFinalizeProducer, once per finalize_state_id — builds an ITableFunctionProducer the framework ticks until it finishes. This is what makes a GLOBALLY correct &quot;sum every row&quot; (or sort/dedupe/etc.) possible: unlike ITableInOutFunction&#39;s per-substream FINALIZE (which only ever sees its own substream&#39;s share of the input — wrong for a query-wide aggregate), Combine sees every Sink call&#39;s result before Source ever runs. Cross-process invariant: Process/Combine are each independently worker-pool-acquired unary RPCs (see TableBufferingProcessParams&#39;s doc comment) — any state one call needs to hand to a later call/phase MUST go through TableBufferingProcessParams.Storage/TableBufferingCombineParams.Storage, never an in-memory field on the function instance (which is only ever visible within the ONE worker process that happens to run a given call).</p>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableBufferingCombineParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableBufferingCombineParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Buffering/TableBufferingCombineParams.cs#L10" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class TableBufferingCombineParams</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Parameters an ITableBufferingFunction sees on its single Combine-phase call. See TableBufferingProcessParams&#39;s doc comment for why Arguments/Settings come from IFunctionStorage.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Apache.Arrow.Schema? InputSchema &#123; get; init; &#125;</code></pre>
+<p>The bind-time TABLE argument&#39;s column schema (recovered, like Arguments, from the persisted bind context) — useful for a function that needs the source&#39;s column names/types at Combine time even when zero batches were ever Process ed (e.g. writing a header-only file for a genuinely empty COPY TO source).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public ICallContext? Ctx &#123; get; init; &#125;</code></pre>
+<p>In-band log sink — see TableBufferingProcessParams.Ctx.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Protocol.CopyToContext? CopyTo &#123; get; init; &#125;</code></pre>
+<p>Non-null only for a COPY ... TO sink — see TableBufferingProcessParams.CopyTo&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? AttachOpaqueData &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Secrets &#123; get; init; &#125;</code></pre>
+<p>Already-resolved secrets — see TableBufferingProcessParams.Secrets&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Settings &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? TransactionId &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required IFunctionStorage Storage &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required TableArguments Arguments &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required byte[] ExecutionId &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required string FunctionName &#123; get; init; &#125;</code></pre>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableBufferingFinalizeParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableBufferingFinalizeParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Buffering/TableBufferingFinalizeParams.cs#L13" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class TableBufferingFinalizeParams</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Parameters an ITableBufferingFunction sees when building the FINALIZE (Source-phase) producer for one FinalizeStateId — mirrors init(phase=TABLE_BUFFERING_FINALIZE) . Unlike Process/Combine, this call DOES ride the full bind_call on the wire (the shared init RPC&#39;s InitRequest.BindCall ), so Arguments/Settings are decoded directly rather than recovered from storage — but reading them back from Storage works too if that&#39;s more convenient.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public IReadOnlyList&lt;byte[]&gt;? JoinKeys &#123; get; init; &#125;</code></pre>
+<p>One embedded-IPC single-column batch per IN-filter/join-key column ( InitRequest.JoinKeys ) — mirrors Table.TableInitParams.JoinKeys.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public IReadOnlyList&lt;long&gt;? ProjectionIds &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Schema ProjectedSchema;</code></pre>
+<p>Convenience: OutputSchema narrowed to ProjectionIds (or the full schema when ProjectionIds is null) — the schema a projection-pushdown-aware FINALIZE producer should actually emit. Mirrors Table.TableInitParams.ProjectedSchema.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? AttachOpaqueData &#123; get; init; &#125;</code></pre>
+<p>Raw BindRequest.AttachOpaqueData — see Table.TableBindParams.AttachOpaqueData&#39;s doc comment. Needed by a function whose durable state is scoped to the ATTACH session rather than (or in addition to) this execution id — e.g. a persistent, cross-call collection keyed by attach identity.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? PushdownFilters &#123; get; init; &#125;</code></pre>
+<p>Raw embedded-IPC pushdown-filter bytes ( InitRequest.PushdownFilters ) — null when DuckDB pushed no filters down. Only meaningful when this function advertised ITableBufferingFunction.FilterPushdown. Decode with Internal.PushdownFilterCodec. Mirrors Table.TableInitParams.PushdownFilters.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Settings &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required IFunctionStorage Storage &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required Schema OutputSchema &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required TableArguments Arguments &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required byte[] ExecutionId &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required byte[] FinalizeStateId &#123; get; init; &#125;</code></pre>
+<p>One of the ids ITableBufferingFunction.Combine returned — names which output stream this producer drains.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required string FunctionName &#123; get; init; &#125;</code></pre>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableBufferingProcessParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableBufferingProcessParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Buffering/TableBufferingProcessParams.cs#L13" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class TableBufferingProcessParams</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Parameters an ITableBufferingFunction sees on each Sink-phase ITableBufferingFunction.Process call. NOTE: unlike TableInOut.TableInOutInitParams, Arguments/Settings here are recovered from IFunctionStorage (stashed at init(phase=TABLE_BUFFERING) time) rather than riding this call&#39;s own wire request — table_buffering_process &#39;s wire shape carries neither, since it&#39;s a standalone unary RPC that may land on a worker process that never itself ran this query&#39;s bind.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public ICallContext? Ctx &#123; get; init; &#125;</code></pre>
+<p>In-band log sink (surfaces as a duckdb_logs() row with type=&#39;VGI&#39; ) — null only in a unit test that constructs this params object directly.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Protocol.CopyToContext? CopyTo &#123; get; init; &#125;</code></pre>
+<p>Non-null only for a COPY ... TO sink — see TableInOut.TableInOutBindParams.CopyTo&#39;s doc comment. Recovered (like Arguments/Settings) from the persisted bind context, since this call&#39;s own wire request carries neither.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? AttachOpaqueData &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Secrets &#123; get; init; &#125;</code></pre>
+<p>Already-RESOLVED secrets (any two-phase dynamic-scope retry completed back at bind time, before this Sink phase ever started) — decode with SecretArgCodec.Decode then SecretArgCodec.FindByType/ SecretArgCodec.ForScopeOfType. null when none were resolved. Recovered from the persisted bind context, like Arguments/Settings.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Settings &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? TransactionId &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? BatchIndex &#123; get; init; &#125;</code></pre>
+<p>DuckDB&#39;s globally-unique batch index — populated only when this function advertised ITableBufferingFunction.RequiresInputBatchIndex.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required IFunctionStorage Storage &#123; get; init; &#125;</code></pre>
+<p>Cross-process durable storage scoped to this execution — see IFunctionStorage&#39;s doc comment. The canonical pattern: Append this batch&#39;s data (or a derived summary) under a namespace/key of your choosing, then return a state_id that ITableBufferingFunction.Combine and/or the FINALIZE producer knows how to read back.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required TableArguments Arguments &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required byte[] ExecutionId &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required string FunctionName &#123; get; init; &#125;</code></pre>
+
+</div>
+
+</div>
+
+</div>

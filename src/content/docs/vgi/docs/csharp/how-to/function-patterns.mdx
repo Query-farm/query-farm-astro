@@ -1,0 +1,43 @@
+---
+title: Choose a function pattern
+description: Compare the five VGI function lifecycles implemented by QueryFarm.Vgi.
+---
+
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import echoSrc from '../../../../../../examples/vgi-csharp/EchoFunction.cs?raw';
+import sumSrc from '../../../../../../examples/vgi-csharp/SumFunction.cs?raw';
+import collectSrc from '../../../../../../examples/vgi-csharp/CollectFunction.cs?raw';
+
+Choose by lifecycle, not by the name of the operation:
+
+| Shape | SQL shape | Use when |
+|---|---|---|
+| `ScalarFn` / `IScalarFunction` | one row → one value | Rows are independent and vectorizable. |
+| `ITableFunction` | arguments → rows | The worker produces a relation. |
+| `ITableInOutFunction` | rows → rows, streaming | Each input batch can produce output without seeing later batches. |
+| `IAggregateFunction` | rows → one value per group | DuckDB owns grouping; the worker owns mergeable group state. |
+| `ITableBufferingFunction` | rows → rows, after all input | Output depends on the complete relation: global sort, collect, write, or deduplicate. |
+
+## Streaming table-in/out
+
+<CodeBlock code={echoSrc} lang="csharp" title="EchoFunction.cs" tryable={false} />
+
+The output schema may depend on the input schema. Each processor belongs to one input substream;
+do not use instance fields for query-wide state.
+
+## Aggregate
+
+<CodeBlock code={sumSrc} lang="csharp" title="SumFunction.cs" tryable={false} />
+
+State is opaque `byte[]`, which makes it portable across processes. Preserve SQL null semantics:
+the absence of state can differ from a serialized zero.
+
+## Buffering
+
+<CodeBlock code={collectSrc} lang="csharp" title="CollectFunction.cs" tryable={false} />
+
+`Process` is the sink, `Combine` decides the final output streams, and the final producer is the
+source. Store derived summaries when possible; storing complete Arrow batches costs more memory and
+I/O.
+
+The shared [function lifecycle](/vgi/docs/concepts/lifecycle/) explains when each phase runs.

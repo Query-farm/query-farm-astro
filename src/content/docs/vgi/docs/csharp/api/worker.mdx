@@ -1,0 +1,234 @@
+---
+title: "Worker & serving"
+description: "The worker builder, registration surface, and supported process transports."
+---
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+The worker builder, registration surface, and supported process transports.
+
+</div>
+
+<div class="api-member">
+
+<a id="Worker"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `Worker`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Worker.cs#L25" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class Worker</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Fluent builder for a VGI worker process — ports vgi-java&#39;s Worker builder pattern. Serves over stdio (the default, and what DuckDB&#39;s bare-command LOCATION subprocess transport uses) or over an AF_UNIX socket (RunUnixSocketAsync, the LOCATION &#39;launch:&lt;argv&gt;&#39; pooled-launcher transport). RunTcp / RunHttp and the rest of RunFromArgs &#39;s flag surface land in later milestones. CRITICAL: stdout is the wire channel (stdio mode) or the launcher&#39;s discovery-line channel (unix-socket mode) — never write to Console.Out from a registered function or from a worker&#39;s own Main ; use Console.Error for any diagnostics.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Task RunFromArgsAsync(string[] args, CancellationToken cancellationToken = default) ;</code></pre>
+<p>The canonical CLI entry point every worker&#39;s Main calls. Understands the launcher transport ( --unix &lt;path&gt; [--idle-timeout &lt;seconds&gt;] ) and defaults to stdio when no flags are given — --http / --tcp / --access-log are parsed by later milestones.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Task RunStdioAsync(CancellationToken cancellationToken = default) ;</code></pre>
+<p>Serves over stdin/stdout until the client disconnects.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker CatalogName(string name) ;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker DatabaseComment(string comment) ;</code></pre>
+<p>Declares this worker&#39;s database-level comment, surfaced via duckdb_databases().comment (see CatalogRegistry.DatabaseComment).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker DatabaseTags(Dictionary&lt;string, string&gt; tags) ;</code></pre>
+<p>Declares this worker&#39;s database-level tags, surfaced via duckdb_databases().tags (see CatalogRegistry.DatabaseTags).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker DefaultSchema(string name) ;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker GlobalFunctionPrefix(string prefix) ;</code></pre>
+<p>Sets the prefix ( &lt;prefix&gt;_&lt;name&gt; ) every RegisterGlobal* function is published under catalog-wide — see Protocol.CatalogAttachResult.GlobalFunctionPrefix. Leave unset ( &quot;&quot; ) to publish bare names.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker ProtocolVersion(string version) ;</code></pre>
+<p>Overrides the declared VGI protocol version — for test fixtures ONLY (e.g. protocol_version/version_mismatch.test &#39;s deliberately-incompatible worker). Every real worker should leave this at DefaultProtocolVersion.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterAggregate(IAggregateFunction function, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers an aggregate function — see RegisterScalar&#39;s doc comment for the identity parameter&#39;s meaning.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterCatalog(Protocol.CatalogInfo info, bool exclusive = false) ;</code></pre>
+<p>Declares a catalog this worker process serves, visible via the pre- ATTACH discovery table function vgi_catalogs(&#39;&lt;location&gt;&#39;) — see CatalogRegistry.RegisterCatalog&#39;s doc comment (including the exclusive parameter&#39;s meaning). Optional: a worker with none declared is still perfectly attachable (this only affects PRE-attach discovery); most single-logical-catalog fixtures never call this.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterCatalogTable(CatalogTable table, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a real catalog table (queryable as a plain table, e.g. SELECT * FROM catalog.schema.table_name — not just as schema.function_name(...) ) — see CatalogTable&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterCopyFromFormat( Table.ITableFunction handler, string formatName, string? description = null, string? comment = null, Dictionary&lt;string, string&gt;? tags = null, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a COPY ... FROM (FORMAT &#39;&lt;formatName&gt;&#39;, ...) reader — handler is an ordinary Table.ITableFunction (also registered under its own name, exactly as RegisterTable would) whose Table.TableBindParams.CopyFrom/Table.TableInitParams.CopyFrom carry the destination path and DuckDB-required output schema. formatName is the bare (unqualified) name FORMAT &#39;&lt;alias&gt;.&lt;formatName&gt;&#39; will use — see Protocol.CopyFromFormatInfo.FormatName&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterCopyToFormat( Buffering.ITableBufferingFunction handler, string formatName, string? description = null, string? comment = null, Dictionary&lt;string, string&gt;? tags = null, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a COPY ... TO (FORMAT &#39;&lt;formatName&gt;&#39;, ...) writer — handler is an ordinary Buffering.ITableBufferingFunction (also registered under its own name, exactly as RegisterTableBuffering would) whose TableInOut.TableInOutBindParams.CopyTo/ Buffering.TableBufferingProcessParams.CopyTo/ Buffering.TableBufferingCombineParams.CopyTo carry the destination path. formatName — see RegisterCopyFromFormat&#39;s doc comment. Buffering.ITableBufferingFunction.SinkOrderDependent is advertised as this format&#39;s ordered flag automatically.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterGlobalAggregate(IAggregateFunction function, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers an aggregate function BOTH at its normal schema-qualified name AND catalog-wide — see RegisterGlobalScalar&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterGlobalScalar(IScalarFunction function, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a scalar function BOTH at its normal schema-qualified name AND catalog-wide (callable unqualified, or with GlobalFunctionPrefix) — see CatalogRegistry.GlobalFunctions&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterGlobalTable(ITableFunction function, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a table function BOTH at its normal schema-qualified name AND catalog-wide — see RegisterGlobalScalar&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterGlobalTableBuffering(ITableBufferingFunction function, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a table-buffering function BOTH at its normal schema-qualified name AND catalog-wide — see RegisterGlobalScalar&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterGlobalTableInOut(ITableInOutFunction function, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a table-in-out function BOTH at its normal schema-qualified name AND catalog-wide — see RegisterGlobalScalar&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterMacro(CatalogMacro macro, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a real catalog macro (scalar or table).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterScalar(IScalarFunction function, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a scalar function. identity is the attach-identity bucket it lives under (see CatalogRegistry&#39;s doc comment) — leave it at the default for an ordinary single-logical-catalog worker; set it to a specific attach name (the first argument of ATTACH &#39;&lt;name&gt;&#39; AS ... ) only for a fixture that deliberately serves different function sets depending on which name the SAME worker binary was attached under ( same_name_catalogs.test ).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterSchema(string schemaName, string? comment = null, Dictionary&lt;string, string&gt;? tags = null, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Declares a schema&#39;s comment/tags explicitly — optional, see CatalogRegistry.RegisterSchema.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterSecretType(string name, string description, Apache.Arrow.Schema parametersSchema) ;</code></pre>
+<p>Declares a custom DuckDB secret TYPE ( CREATE SECRET (TYPE &lt;name&gt;, ...) ) this worker exposes via catalog_attach — a secret type must be declared here at least once for duckdb_secret_types() / CREATE SECRET to know it exists at all. parametersSchema describes the secret&#39;s key/value parameters; mark a sensitive field&#39;s metadata &quot;redact&quot;:&quot;true&quot; so DuckDB masks it in duckdb_secrets() . A function reads a resolved secret of this type via Attributes.SecretAttribute (scalar) or ITableFunction.RequiredSecrets /Internal.SecretsAccessor (table/table-in-out, including dynamic scope-based lookups).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterSetting(string name, string description, Apache.Arrow.Types.IArrowType type, Apache.Arrow.IArrowArray? defaultValue = null) ;</code></pre>
+<p>Declares a global/session DuckDB setting ( SET &lt;name&gt; = ... ) this worker exposes via catalog_attach — a setting must be declared here at least once for duckdb_settings() to know it exists at all; a function&#39;s own Attributes.SettingAttribute/ RequiredSettings only reads an already-declared setting&#39;s current value at bind time. defaultValue is a single-element Arrow array (e.g. new BooleanArray.Builder().Append(false).Build() ) holding the setting&#39;s default; pass null for a setting with no default (e.g. a struct-typed setting with no meaningful all-fields default).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterTable(ITableFunction function, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a table (&quot;producer&quot;) function — see RegisterScalar&#39;s doc comment for the identity parameter&#39;s meaning.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterTableBuffering(ITableBufferingFunction function, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a table-buffering (Sink+Source) function — see RegisterScalar&#39;s doc comment for the identity parameter&#39;s meaning.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterTableInOut(ITableInOutFunction function, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a streaming table-in-out function — see RegisterScalar&#39;s doc comment for the identity parameter&#39;s meaning.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Worker RegisterView(CatalogView view, string identity = CatalogRegistry.DefaultIdentity) ;</code></pre>
+<p>Registers a real catalog view.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public async Task RunUnixSocketAsync(string path, double idleTimeoutSeconds = 300, CancellationToken cancellationToken = default) ;</code></pre>
+<p>Serves over an AF_UNIX domain socket at path — the launcher transport ( LOCATION &#39;launch:&lt;argv&gt;&#39; ), letting a single worker process amortize its own startup cost across every DuckDB connection/process pointed at the same worker tuple. Follows the worker-side contract in ~/Development/vgi/docs/launcher-protocol.md exactly: binds, emits exactly one UNIX:&lt;abs path&gt; line on stdout (flushed, and nothing else on stdout ever again — logging MUST go to Console.Error), serves each connection on its own task, and self-shuts-down once idleTimeoutSeconds have elapsed with zero connected clients (0 = never times out). Returns once the socket has been closed and every in-flight connection has drained — whether from an idle timeout or cancellationToken being cancelled by the caller (e.g. on SIGTERM/SIGINT).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public const string DefaultProtocolVersion = &quot;1.4.0&quot;;</code></pre>
+<p>VGI application protocol surface version this worker declares — emitted as the vgi_rpc.protocol_version per-request metadata key and enforced by QueryFarm.VgiRpc.Server.RpcServer (exact major+minor match; patch ignored) at the dispatch boundary, before any method-specific handling runs. Mirrors vgi-python&#39;s VgiProtocol.protocol_version /vgi-java&#39;s Worker.VGI_PROTOCOL_VERSION — bump rules: MAJOR = backward-incompatible surface change, MINOR = additive, PATCH = worker bug fixes. 1.1.0 added the nullable schema_name field to the bind request. 1.3.0 added global_functions / global_function_prefix to the catalog_attach result (see Protocol.CatalogAttachResult). 1.4.0 added table_function_plan (split-based scan planning) plus split_tokens / row_limit on the init request.</p>
+
+</div>
+
+</div>
+
+</div>

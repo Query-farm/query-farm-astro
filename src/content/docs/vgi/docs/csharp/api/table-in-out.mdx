@@ -1,0 +1,209 @@
+---
+title: "Table-in-out functions"
+description: "Streaming relation transforms that process Arrow record batches."
+---
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Streaming relation transforms that process Arrow record batches.
+
+</div>
+
+<div class="api-member">
+
+<a id="ITableInOutFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `ITableInOutFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/TableInOut/ITableInOutFunction.cs#L23" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface ITableInOutFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>The raw contract a streaming table-in-out function implements — the VGI analog of Table.ITableFunction for a function that takes a TABLE argument and transforms it batch-by-batch (ExchangeState-shaped: client sends an input batch, this replies with exactly one output turn per input turn), optionally followed by a per-substream FINALIZE phase (ProducerState-shaped) once the input stream ends. Ported from vgi-python&#39;s TableInOutGenerator /vgi-java&#39;s raw TableInOutExchangeState pattern. IMPORTANT — this is the per-SUBSTREAM shape: DuckDB fans a streaming table-in-out call out to one worker PROCESS per substream by default (see vgi_table_in_out_impl.cpp &#39;s &quot;Phase A&quot; comments), so ITableInOutProcessor instances never see input from more than one substream, and a FINALIZE phase (if any) runs on that SAME substream&#39;s own accumulated state — it is NOT a global cross-substream aggregation. A function that needs a single correct answer over the WHOLE input regardless of how DuckDB partitions it (e.g. a plain &quot;sum every row&quot;) belongs to Buffering.ITableBufferingFunction instead, which is purpose-built for that (see its own doc comment for why a per-substream finalize is unsound for that case).</p>
+
+</div>
+
+<div class="api-member">
+
+<a id="ITableInOutProcessor"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `ITableInOutProcessor`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/TableInOut/ITableInOutProcessor.cs#L14" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface ITableInOutProcessor</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>The per-substream cursor an ITableInOutFunction.CreateProcessor returns — driven once per input batch during the INPUT phase (Process, exchange-shaped: one output batch per input batch turn) and, if the function has a finalize step (ITableInOutFunction.HasFinalize), once per client &quot;tick&quot; during the FINALIZE phase that follows on the SAME connection (Finalize, producer-shaped — mirrors Table.ITableFunctionProducer.Produce).</p>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableInOutBindParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableInOutBindParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/TableInOut/TableInOutBindParams.cs#L11" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class TableInOutBindParams</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Parameters an ITableInOutFunction/Buffering.ITableBufferingFunction sees at bind time — the table-in-out analog of TableBindParams, with one addition: InputSchema is always populated (the TABLE argument&#39;s per-call column schema), since a table-in-out/table-buffering function without a TABLE input is meaningless.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Protocol.CopyToContext? CopyTo &#123; get; init; &#125;</code></pre>
+<p>Non-null only when this bind opened a COPY ... TO (FORMAT &#39;&lt;this function&#39;s name&gt;&#39;, ...) — the destination path (no expected-schema field; the source columns ride InputSchema instead). See Buffering.CopyToFunction.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[] ArgumentsBytes &#123; get; init; &#125;</code></pre>
+<p>Opaque, not-yet-decoded serialized argument bytes for the NON-table positional/named arguments — decode with TableArgCodec.Decode (or use Arguments). The TABLE argument itself never appears here (the C++ side omits it entirely when building this struct — see Table.TableArgFields.Table&#39;s doc comment).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[] AttachOpaqueData &#123; get; init; &#125;</code></pre>
+<p>Raw BindRequest.AttachOpaqueData — see Table.TableBindParams.AttachOpaqueData&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Settings &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required Internal.SecretsAccessor Secrets &#123; get; init; &#125;</code></pre>
+<p>Secrets access for this bind attempt — see Table.TableBindParams.Secrets&#39;s doc comment (same static-vs-dynamic split, same two-phase retry mechanism).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required Schema InputSchema &#123; get; init; &#125;</code></pre>
+<p>The TABLE argument&#39;s per-call column schema (its actual runtime column names/types — dynamic, since callers can pass any query as the TABLE argument).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required TableArguments Arguments &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required string FunctionName &#123; get; init; &#125;</code></pre>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableInOutInitParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableInOutInitParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/TableInOut/TableInOutInitParams.cs#L10" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class TableInOutInitParams</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Parameters an ITableInOutFunction sees when its per-substream processor is created (mirrors the init(phase=INPUT) RPC) — fires once per substream, before any input batches arrive.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public IReadOnlyList&lt;long&gt;? ProjectionIds &#123; get; init; &#125;</code></pre>
+<p>Zero-based indices (into OutputSchema) of the columns DuckDB actually needs for THIS call, or null for &quot;all columns&quot; — the table-in-out analog of Table.TableInitParams.ProjectionIds. Only meaningful when this function advertised ITableInOutFunction.ProjectionPushdown; unlike a plain table function&#39;s producer (where an unadvertised function can still emit full-width batches and let DuckDB trim them client-side), the batched correlated-LATERAL operator VALIDATES the wire schema strictly against whatever it negotiated — so a ITableInOutFunction.ProjectionPushdown-advertising processor MUST emit exactly ProjectedSchema, not OutputSchema, whenever this is non-null.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Schema ProjectedSchema;</code></pre>
+<p>Convenience: OutputSchema narrowed to ProjectionIds (or the full schema when ProjectionIds is null) — the schema a projection-pushdown-aware processor should actually emit.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[] AttachOpaqueData &#123; get; init; &#125;</code></pre>
+<p>Raw BindRequest.AttachOpaqueData — see Table.TableBindParams.AttachOpaqueData&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? ExecutionId &#123; get; init; &#125;</code></pre>
+<p>Stable across the INPUT and (if this function has one) FINALIZE phase of ONE substream — mint/reuse a per-substream accumulator keyed by this if needed, though for the common case (finalize runs on the very same connection right after INPUT&#39;s EOS) ordinary mutable state captured by the ITableInOutProcessor instance itself is simpler and sufficient; this is provided for parity with the wire protocol, not because most functions need it.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Secrets &#123; get; init; &#125;</code></pre>
+<p>Fully-RESOLVED secrets from the bind call that opened this processor — see Table.TableInitParams.Secrets&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Settings &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? SubstreamId &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required Schema InputSchema &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required Schema OutputSchema &#123; get; init; &#125;</code></pre>
+<p>The resolved per-call output schema (from ITableInOutFunction.ResolveOutputSchema) — the function&#39;s FULL declared output shape, regardless of what this call actually requested. A processor that advertises ITableInOutFunction.ProjectionPushdown must emit ProjectedSchema instead (the wire itself is declared with the narrowed schema — see ProjectionIds&#39;s doc comment); every other processor emits this FULL schema unconditionally.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required TableArguments Arguments &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required string FunctionName &#123; get; init; &#125;</code></pre>
+
+</div>
+
+</div>
+
+</div>

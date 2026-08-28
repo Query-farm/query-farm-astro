@@ -1,0 +1,60 @@
+---
+title: 1. Your first scalar function
+description: Build and run a vectorized C# scalar VGI function from DuckDB.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+import workerSrc from '../../../../../../examples/vgi-csharp/UpperCaseFunction.cs?raw';
+import programSrc from '../../../../../../examples/vgi-csharp/Program.cs?raw';
+
+A scalar function transforms one input row into one output value, but C# receives and returns a
+whole Arrow column per call.
+
+## Create the project
+
+<CodeBlock code={`dotnet new console --framework net10.0
+dotnet add package QueryFarm.Vgi --version 0.3.0`} lang="bash" tryable={false} />
+
+## Write the function
+
+<CodeBlock code={workerSrc} lang="csharp" title="UpperCaseFunction.cs" tryable={false} />
+
+`ScalarFn` inspects the single `Compute` method. `[Param]` marks a per-row input Arrow array; the
+unannotated builder is the output. The Arrow types form the SQL signature, and the parameter name
+becomes the named SQL argument.
+
+<Callout type="note" title="Nulls are explicit">
+Arrow carries nullability separately from values. Check `IsNull(row)` and append a null to the
+output builder when the input is null.
+</Callout>
+
+## Register and run it
+
+The complete documentation worker registers all examples, but a production worker follows the same
+fluent pattern:
+
+<CodeBlock code={programSrc} lang="csharp" title="Program.cs" tryable={false} />
+
+Build a framework-dependent executable:
+
+<CodeBlock code={`dotnet build --configuration Release`} lang="bash" tryable={false} />
+
+Then attach it from DuckDB or Haybarn. Use the executable produced beside the `.dll`, not
+`dotnet run`, so the launcher owns one stable process command.
+
+<CodeBlock code={`INSTALL vgi FROM community;
+LOAD vgi;
+ATTACH 'launch:/absolute/path/bin/Release/net10.0/your-worker' AS demo (TYPE vgi);
+
+SELECT demo.upper_case('hello');`} lang="sql" tryable={false} />
+
+The result is `HELLO`.
+
+<Callout type="warning" title="Keep stdout reserved">
+In stdio mode stdout is the wire channel; in launcher mode its first line announces the Unix socket.
+Write diagnostics to `Console.Error` or the VGI call context, never `Console.Out`.
+</Callout>
+
+Next, [write a table function](/vgi/docs/csharp/tutorial/table/) or compare all
+[five function patterns](/vgi/docs/csharp/how-to/function-patterns/).

@@ -77,7 +77,7 @@ export default defineConfig({
     // Starlight bundles astro-expressive-code, which must be registered before
     // mdx() so MDX code blocks render.
     starlight({
-      // One Starlight instance serves Concepts plus five SDKs, so the site
+    // One Starlight instance serves Concepts plus every SDK, so the site
       // title can't name a language — it used to say "VGI Python", which put
       // "| VGI Python" in the <title> of every Go, Rust and Java page. The
       // route middleware narrows this per section where it can.
@@ -427,6 +427,52 @@ export default defineConfig({
                 { label: 'Arrow helpers', slug: 'vgi/docs/java/api/types' },
                 { label: 'Client', slug: 'vgi/docs/java/api/client' },
                 { label: 'Protocol', slug: 'vgi/docs/java/api/protocol' },
+              ],
+            },
+          ],
+        },
+        {
+          label: 'C#',
+          items: [
+            { label: 'Overview', slug: 'vgi/docs/csharp' },
+            { label: "What's new", slug: 'vgi/docs/csharp/release-notes' },
+            {
+              label: 'Tutorial',
+              items: [
+                { label: 'Scalar function', slug: 'vgi/docs/csharp/tutorial/scalar' },
+                { label: 'Table function', slug: 'vgi/docs/csharp/tutorial/table' },
+              ],
+            },
+            { label: 'Function patterns', slug: 'vgi/docs/csharp/how-to/function-patterns' },
+            {
+              label: 'How-to guides',
+              items: [
+                { label: 'Overview', slug: 'vgi/docs/csharp/how-to' },
+                { label: 'Running a worker', slug: 'vgi/docs/csharp/how-to/running' },
+                { label: 'Expose a catalog', slug: 'vgi/docs/csharp/how-to/catalogs' },
+                { label: 'Optimizer integration', slug: 'vgi/docs/csharp/how-to/pushdown-and-statistics' },
+                { label: 'Persist state', slug: 'vgi/docs/csharp/how-to/state-storage' },
+                { label: 'Settings and secrets', slug: 'vgi/docs/csharp/how-to/settings-and-secrets' },
+                { label: 'Custom COPY formats', slug: 'vgi/docs/csharp/how-to/copy-formats' },
+                { label: 'Result caching', slug: 'vgi/docs/csharp/how-to/result-caching' },
+                { label: 'Testing', slug: 'vgi/docs/csharp/how-to/testing' },
+                { label: 'RPC client', slug: 'vgi/docs/csharp/how-to/rpc-client' },
+              ],
+            },
+            {
+              label: 'API Reference',
+              // Roslyn topic groups; keep in sync with scripts/gen-api-csharp/Program.cs.
+              items: [
+                { label: 'API overview', slug: 'vgi/docs/csharp/api' },
+                { label: 'Worker & serving', slug: 'vgi/docs/csharp/api/worker' },
+                { label: 'Scalar functions', slug: 'vgi/docs/csharp/api/scalar' },
+                { label: 'Table functions', slug: 'vgi/docs/csharp/api/table' },
+                { label: 'Table-in-out functions', slug: 'vgi/docs/csharp/api/table-in-out' },
+                { label: 'Buffering functions', slug: 'vgi/docs/csharp/api/buffering' },
+                { label: 'Aggregate functions', slug: 'vgi/docs/csharp/api/aggregate' },
+                { label: 'Catalogs', slug: 'vgi/docs/csharp/api/catalog' },
+                { label: 'Attributes & Arrow types', slug: 'vgi/docs/csharp/api/attributes-types' },
+                { label: 'Protocol', slug: 'vgi/docs/csharp/api/protocol' },
               ],
             },
           ],

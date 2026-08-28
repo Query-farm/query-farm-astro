@@ -25,6 +25,18 @@ export interface DocsSection {
   blurb: string;
 }
 
+/** Product-page metadata for one shipped worker SDK. Keep language facts here, not per page. */
+export interface LanguageDocsSection extends DocsSection {
+  status: string;
+  /** Trusted, repository-authored HTML used by /vgi/languages for inline code/figures. */
+  descriptionHtml: string;
+  install: string;
+  rpcDocs: string;
+  local: string;
+  http: boolean;
+  fit: string;
+}
+
 export const DOCS_ROOT = '/vgi/docs/';
 
 /** The language-neutral Concepts section. Not an SDK — it has no switcher chip. */
@@ -37,7 +49,7 @@ export const CONCEPTS = {
   blurb: 'The protocol, the worker model, and the five function shapes — whichever SDK you use.',
 } satisfies DocsSection;
 
-export const LANGUAGES: DocsSection[] = [
+export const LANGUAGES: LanguageDocsSection[] = [
   {
     slug: 'python',
     name: 'Python',
@@ -45,6 +57,13 @@ export const LANGUAGES: DocsSection[] = [
     icon: 'simple-icons:python',
     repo: 'https://github.com/Query-farm/vgi-python',
     blurb: 'PyArrow-native workers, type-annotated functions, the reference implementation.',
+    status: 'Reference implementation',
+    descriptionHtml: 'Build VGI workers in Python — the reference implementation, with strict typing, every transport, streaming, introspection, shared memory, and OpenTelemetry. The <code>vgi</code> package is the worker framework; <code>vgi-rpc</code> is its transport layer.',
+    install: 'pip install vgi-python\n# or: uv add vgi-python',
+    rpcDocs: 'https://vgi-rpc-python.query.farm',
+    local: 'Pipes, subprocess, Unix socket, shared memory',
+    http: true,
+    fit: 'The reference SDK, and the shortest path if your logic is already Python — ML, pandas, or the scientific stack.',
   },
   {
     slug: 'go',
@@ -53,6 +72,13 @@ export const LANGUAGES: DocsSection[] = [
     icon: 'simple-icons:go',
     repo: 'https://github.com/Query-farm/vgi-go',
     blurb: 'Single-binary workers on arrow-go, with struct-tag argument declarations.',
+    status: 'Feature parity',
+    descriptionHtml: 'Build single-binary VGI workers in Go on Apache Arrow. Includes HTTP serving, OpenTelemetry, dispatch hooks, external storage, and checksummed payloads.',
+    install: 'go get github.com/Query-farm/vgi-go/vgi',
+    rpcDocs: 'https://vgi-rpc-go.query.farm',
+    local: 'Pipes, subprocess, Unix socket',
+    http: true,
+    fit: 'One static binary to ship and a mature HTTP server. Easy to hand someone a release artifact they just run.',
   },
   {
     slug: 'typescript',
@@ -61,6 +87,13 @@ export const LANGUAGES: DocsSection[] = [
     icon: 'simple-icons:typescript',
     repo: 'https://github.com/Query-farm/vgi-typescript',
     blurb: 'Node, Bun and Deno workers with fully typed function configs.',
+    status: 'Feature parity',
+    descriptionHtml: 'Build fully typed VGI workers for Bun, Node.js, and Deno. Includes HTTP server/client, OpenTelemetry, dispatch hooks, external storage, and checksummed payloads.',
+    install: 'npm install @query-farm/vgi\n# or: bun add @query-farm/vgi',
+    rpcDocs: 'https://vgi-rpc-typescript.query.farm',
+    local: 'Pipes, subprocess, Unix socket',
+    http: true,
+    fit: 'Bun, Node, and Deno — and the natural pick for edge and serverless runtimes that only speak HTTP.',
   },
   {
     slug: 'rust',
@@ -69,6 +102,13 @@ export const LANGUAGES: DocsSection[] = [
     icon: 'simple-icons:rust',
     repo: 'https://github.com/Query-farm/vgi-rust',
     blurb: 'Zero-overhead workers on arrow-rs, across three composable crates.',
+    status: 'Feature parity',
+    descriptionHtml: 'Build VGI workers in Rust with tight memory control and wire-level compatibility. Optional HTTP, JWT, OAuth-PKCE, mTLS, OpenTelemetry, and Sentry features.',
+    install: 'cargo add vgi',
+    rpcDocs: 'https://vgi-rpc-rust.query.farm',
+    local: 'Pipes, subprocess, Unix socket',
+    http: true,
+    fit: 'Throughput and tight memory control, tracking the Python reference byte-for-byte on the wire.',
   },
   {
     slug: 'java',
@@ -79,7 +119,29 @@ export const LANGUAGES: DocsSection[] = [
     // brand marks, and Java's there is openjdk.
     icon: 'simple-icons:openjdk',
     repo: 'https://github.com/Query-farm/vgi-java',
-    blurb: 'JVM workers on Arrow Java, wired up through Gradle.',
+    blurb: 'JDK 25 workers on Arrow Java, wired up through Gradle.',
+    status: 'Feature parity',
+    descriptionHtml: 'Build VGI workers on JDK <span class="qf-figure">25+</span> with <code>farm.query:vgi</code>. Annotation-driven functions, catalogs, HTTP, and a shared-memory side channel.',
+    install: '# Gradle (Kotlin DSL), JDK 25+:\nimplementation("farm.query:vgi:0.27.0")',
+    rpcDocs: 'https://vgi-rpc-java.query.farm',
+    local: 'Pipes, subprocess, Unix socket, shared memory',
+    http: true,
+    fit: 'JVM shops. Annotation-driven functions that reach the drivers and internal libraries you already run.',
+  },
+  {
+    slug: 'csharp',
+    name: 'C#',
+    group: 'C#',
+    icon: 'simple-icons:csharp',
+    repo: 'https://github.com/Query-farm/vgi-csharp',
+    blurb: '.NET 10 workers on Apache Arrow with all five function shapes and full catalog support.',
+    status: 'Worker feature parity',
+    descriptionHtml: 'Build VGI workers for <span class="qf-figure">.NET 10</span> with <code>QueryFarm.Vgi</code>. All five function shapes, catalogs, optimizer integration, settings, secrets, COPY formats, caching, and a cross-language RPC client.',
+    install: 'dotnet add package QueryFarm.Vgi --version 0.3.0',
+    rpcDocs: 'https://vgi-rpc-csharp.query.farm',
+    local: 'Pipes, subprocess, Unix socket',
+    http: false,
+    fit: '.NET services and libraries. Strong Arrow types, one publishable executable, and direct access to the C# ecosystem.',
   },
 ];
 

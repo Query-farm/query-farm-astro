@@ -1,0 +1,44 @@
+---
+title: Integrate with the optimizer
+description: Make C# VGI scans apply pushed filters and expose useful planning metadata.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+An `ITableFunction` can advertise projection, filter, limit, order, sampling, partition, and
+late-materialization capabilities. Bind and init parameters then carry the corresponding request.
+
+## Statistics
+
+Return column statistics from `Statistics` when they are cheap and reliable:
+
+<CodeBlock code={`public IReadOnlyDictionary<string, ColumnStatisticsInput>? Statistics(TableBindParams p)
+{
+    var count = p.Arguments.Int64(0);
+    if (count <= 0) return null;
+    return new Dictionary<string, ColumnStatisticsInput>
+    {
+        ["n"] = new() { Min = 0L, Max = count - 1, HasNull = false, HasNotNull = true,
+                        DistinctCount = count },
+    };
+}`} lang="csharp" tryable={false} />
+
+DuckDB can eliminate impossible filters or estimate joins without scanning the worker.
+
+## Pushdown is a correctness contract
+
+Set `FilterPushdown => true` only if every producer applies `TableInitParams.PushdownFilters` and
+`JoinKeys`. The C++ operator may omit a residual filter once a function claims it handled the
+predicate. Ignoring pushed filters after advertising support can return wrong rows, not merely run
+slowly.
+
+<Callout type="warning" title="Internal helpers are not public API">
+The SDK's fixture worker uses internal codecs and evaluators to exercise every protocol feature.
+Application code should not depend on `QueryFarm.Vgi.Internal`; prefer public contracts or pin and
+wrap any unavoidable low-level work until a public helper is added.
+</Callout>
+
+Projection-aware producers must emit `initParams.ProjectedSchema`, with arrays in exactly that
+schema's order. For split planning, tokens must remain valid for their advertised lifetime and be
+decodable by any worker process in the pool.

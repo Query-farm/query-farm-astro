@@ -1,0 +1,684 @@
+---
+title: "Table functions"
+description: "Set-returning producers, bind/init parameters, and table argument declarations."
+---
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Set-returning producers, bind/init parameters, and table argument declarations.
+
+</div>
+
+<div class="api-member">
+
+<a id="CopyFromFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `CopyFromFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Table/CopyFromFunction.cs#L17" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public abstract class CopyFromFunction : ITableFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Base class for a COPY ... FROM (FORMAT &#39;&lt;name&gt;&#39;, ...) reader — an ordinary producer function whose output schema is dictated ENTIRELY by the COPY target (DuckDB inserts no cast for COPY FROM, so Read must emit rows matching Protocol.CopyFromContext.ExpectedSchema exactly: column-for-column, name AND type, no more no fewer). Register via Worker.RegisterCopyFromFormat, which also advertises it through catalog_copy_from_formats . Mirrors vgi-python/vgi-java&#39;s CopyFromFunction .</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public ITableFunctionProducer CreateProducer(TableInitParams initParams) ;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Schema OutputSchema &#123; get; &#125;</code></pre>
+<p>Never actually used — ResolveOutputSchema always overrides it with the COPY target&#39;s own required schema.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Schema ResolveOutputSchema(TableBindParams bindParams) ;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public abstract Schema ArgumentsSchema &#123; get; &#125;</code></pre>
+<p>The format&#39;s OPTIONS — every field a named (optional or required) argument; never a positional or TABLE-typed argument (the row data is the COPY target itself, not a call argument).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public abstract string Description &#123; get; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public abstract string Name &#123; get; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public virtual string SchemaName;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public void Bind(TableBindParams bindParams) ;</code></pre>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="ITableFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `ITableFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Table/ITableFunction.cs#L18" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface ITableFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>The raw contract a table (&quot;producer&quot;) function implements — the VGI analog of Scalar.IScalarFunction for the ProducerState stream kind (client sends empty &quot;tick&quot; batches; the server emits data batches until it calls OutputCollector.Finish() ). Ported from vgi-java&#39;s TableFunction /vgi-python&#39;s TableFunction , adapted to C#&#39;s immutable-array model. A table function&#39;s SQL arguments are ALWAYS bind-time constants — there is no per-row input the way a scalar function has one (that&#39;s what makes table-in-out/ ITableInOutFunction , M4, a different interface) — so TableBindParams.Arguments/TableInitParams.Arguments decode with Internal.TableArgCodec, not Internal.ScalarArgCodec.</p>
+
+</div>
+
+<div class="api-member">
+
+<a id="ITableFunctionProducer"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `ITableFunctionProducer`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Table/ITableFunctionProducer.cs#L10" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface ITableFunctionProducer</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>The per-call cursor an ITableFunction.CreateProducer returns — driven once per client &quot;tick&quot; by Internal.TableProducerStreamState (the ProducerState dispatch glue). Mirrors vgi-java&#39;s TableProducerState.produceTick(OutputCollector, ...) .</p>
+
+</div>
+
+<div class="api-member">
+
+<a id="PlanRequest"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `PlanRequest`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Table/PlanRequest.cs#L8" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class PlanRequest</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>The inputs an ITableFunction.Plan call receives beyond its bind parameters: the pushdown it may use to emit fewer splits, and the place in the enumeration it is resuming from. Only invoked when ITableFunction.SupportsSplits is true.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public IReadOnlyList&lt;long&gt;? ProjectionIds &#123; get; init; &#125;</code></pre>
+<p>Columns the scan actually reads, or null for all.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public bool FiltersComplete &#123; get; init; &#125;</code></pre>
+<p>false means the client may still narrow the filter set further on a later continuation call; true (the common case) means what this call carries is final.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Cursor &#123; get; init; &#125;</code></pre>
+<p>A place in the ENUMERATION of splits — NOT a place in the data. Empty on the first call for a scan.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? PushdownFilters &#123; get; init; &#125;</code></pre>
+<p>Raw embedded-IPC pushdown-filter bytes — STATIC filters only (join-key values aren&#39;t known at plan time; they arrive later, per split init, via TableInitParams.JoinKeys). On a continuation call this already includes refined_filters &#39; narrowing merged in. Decode with Internal.PushdownFilterCodec.Decode. null when DuckDB pushed no filters down.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? MaxSplitsPerResponse &#123; get; init; &#125;</code></pre>
+<p>Pagination cap for THIS call — not a sizing hint. A function that ignores it may return more splits than asked; nothing here truncates on its behalf.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? MinSplits &#123; get; init; &#125;</code></pre>
+<p>The parallelism FLOOR (the client&#39;s own thread count) — a small but expensive table still needs one split per thread. null when the client has none.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? TargetSplitBytes &#123; get; init; &#125;</code></pre>
+<p>The primary sizing lever: emit splits of roughly this many bytes each, since the client cannot see per-split cost and claims them greedily as interchangeable units. null when the client has no opinion.</p>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="PlanResult"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `PlanResult`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Table/PlanResult.cs#L15" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class PlanResult</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>What an ITableFunction.Plan call produces: the splits, plus the few plan-level facts an author can meaningfully set. Deliberately NOT the wire Protocol.TableFunctionPlanResult, which carries several fields the framework fills in or that no author should have to think about. An EMPTY Splits is legal and means &quot;no work&quot;: a fully-pruned scan reaches it, and the client produces an empty result rather than an error — this is distinct from a function that never overrides ITableFunction.Plan at all, which ITableFunction.SupportsSplits (checked BEFORE Plan is ever called) already gates.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public IReadOnlyList&lt;ScanSplit&gt; Splits &#123; get; init; &#125;</code></pre>
+<p>One entry per unit of work. Empty is legal (see this type&#39;s doc comment).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public IReadOnlyList&lt;byte[]&gt;? NextCursors &#123; get; init; &#125;</code></pre>
+<p>Continued enumeration. More than one MUST partition the remaining enumeration disjointly and exhaustively — nothing on the client (or here) checks this.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? CatalogVersion &#123; get; init; &#125;</code></pre>
+<p>The snapshot this plan is pinned to, or null to use the live catalog version. It is the anchor every token in this plan is stamped with and checked against at redemption — naming a version the catalog will not agree with is how a plan is made to expire (see expired_token.test ).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? EstimatedTotalRows &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? EstimatedTotalSplits &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? MaxWorkers &#123; get; init; &#125;</code></pre>
+<p>Normative cap on redemption concurrency, or null for none.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public static PlanResult Of(IReadOnlyList&lt;ScanSplit&gt; splits) ;</code></pre>
+<p>A finished plan: these splits and no continuation.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public static readonly PlanResult Empty = new();</code></pre>
+<p>An empty plan: no splits, no continuation.</p>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="ScanSplit"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `ScanSplit`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Table/ScanSplit.cs#L18" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class ScanSplit</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>One named, independently redeemable unit of scan work — the author-facing counterpart of Protocol.ScanSplitWire (which additionally carries the framework-stamped token ). A split NAMES work rather than describing it: &quot;these three files at version 47&quot; survives a retry; &quot;rows 0-999 of whatever this returns now&quot; does not — and a distributed engine WILL retry, so the difference is correctness, not tidiness. The same split may be redeemed more than once (recursive CTEs, retried tasks) and may be abandoned mid-stream (LIMIT, an empty join build side); neither is an error — see the redeeming TableInitParams.SplitPayloads. Set only Payload (and, optionally, the estimate fields) — the framework stamps the consistency anchor and the bind fingerprint into the token, so an author never writes any of that bookkeeping.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public bool RowsExact &#123; get; init; &#125;</code></pre>
+<p>Whether EstimatedRows is exact rather than an estimate.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? ColumnStatistics &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? EndPosition &#123; get; init; &#125;</code></pre>
+<p>Inclusive upper bound; null means UNBOUNDED.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? PartitionBounds &#123; get; init; &#125;</code></pre>
+<p>2-row (min, max) batch in the vgi_partition_values encoding, one column per partition column — see Internal.PartitionValuesCodec.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? StartPosition &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? EstimatedBytes &#123; get; init; &#125;</code></pre>
+<p>Byte estimate — load-bearing for an engine that bin-packs splits by weight; null degrades it to round-robin by count.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? EstimatedRows &#123; get; init; &#125;</code></pre>
+<p>Row estimate for this split, or null if unknown.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required byte[] Payload &#123; get; init; &#125;</code></pre>
+<p>The worker&#39;s own opaque bytes naming this unit of work — round-tripped verbatim through the token and handed back on TableInitParams.SplitPayloads when this split is redeemed.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public static ScanSplit Of(byte[] payload) ;</code></pre>
+<p>A split naming the given work, with no estimates.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public static ScanSplit Of(byte[] payload, long rows, long bytes) ;</code></pre>
+<p>A split naming the given work, with an exact row count and a byte estimate.</p>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableArgFields"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableArgFields`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Table/TableArgFields.cs#L11" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public static class TableArgFields</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Small convenience factories for ITableFunction.ArgumentsSchema fields — every table-function fixture needs a positional-vs-named field one way or another, so this avoids each one hand-rolling the vgi_arg=named metadata dictionary (see VgiWireMetadata).</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public static Field AnyVarargs(string name) ;</code></pre>
+<p>An ANY-typed varargs field (e.g. constant_columns &#39;s trailing arguments) — vgi_type=any + vgi_varargs=true metadata.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public static Field Named(string name, IArrowType type, bool nullable = true) ;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public static Field NamedWithDoc(string name, IArrowType type, string doc, bool nullable = true) ;</code></pre>
+<p>A named field carrying human-readable documentation ( vgi_doc metadata, e.g. a COPY TO/FROM format&#39;s option_description ) alongside the ordinary vgi_arg=named marker.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public static Field Positional(string name, IArrowType type, bool nullable = true) ;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public static Field PositionalWithRange( string name, IArrowType type, double ge = double.NaN, double gt = double.NaN, double le = double.NaN, double lt = double.NaN, bool nullable = true) ;</code></pre>
+<p>A positional field declaring a numeric range constraint (agent discovery via vgi_function_arguments() &#39;s arg_range column) — each bound is double.NaN when unset (see Attributes.ConstParamAttribute&#39;s identically-shaped bounds). Surfacing the constraint is purely declarative; a caller that also wants BIND-TIME enforcement (e.g. rejecting a negative count) still checks it itself.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public static Field Table(string name) ;</code></pre>
+<p>The TABLE-typed argument a table-in-out/table-buffering function&#39;s ITableFunction.ArgumentsSchema-equivalent declares ( vgi_type=table metadata) — the field&#39;s own Arrow TYPE is irrelevant and never round-trips (the C++ side unconditionally overrides it to LogicalType::TABLE once this marker is seen, per vgi_arrow_utils.cpp &#39;s BuildArgumentSpecs ), only its NAME and POSITION matter (the name becomes the table-input&#39;s registered arg name; the position is excluded from the &quot;positional_N&quot; renumbering Internal.TableArgCodec reads back at bind — the C++ side skips the TABLE slot entirely when building BindRequest.Arguments , so the SURVIVING positional args are renumbered contiguously starting at 0 in their original relative order).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public static Field TypedVarargs(string name, IArrowType type, bool nullable = true) ;</code></pre>
+<p>A TYPED varargs field (e.g. a blended row_sum(v1, v2, ...) function&#39;s per-row value columns) — vgi_varargs=true metadata on a field of the DECLARED type, unlike AnyVarargs&#39;s vgi_type=any sentinel: every vararg at a call site must resolve to (or implicitly cast to) exactly type.</p>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableBindParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableBindParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Table/TableBindParams.cs#L7" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class TableBindParams</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Parameters an ITableFunction sees at bind time.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Protocol.CopyFromContext? CopyFrom &#123; get; init; &#125;</code></pre>
+<p>Non-null only when this bind opened a COPY ... FROM (FORMAT &#39;&lt;this function&#39;s name&gt;&#39;, ...) — the destination path and the exact output schema DuckDB requires (no cast is inserted for COPY FROM). See Buffering.CopyToFunction&#39;s sibling doc comment for the COPY TO side.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Schema? InputSchema &#123; get; init; &#125;</code></pre>
+<p>The concrete per-call argument schema DuckDB resolved (decoded from Protocol.BindRequest.InputSchema), field-for-field matching ITableFunction.ArgumentsSchema&#39;s declared positional/named order — the REAL resolved type behind any ANY -typed/varargs argument (e.g. constant_columns ). null when the call site declared no such dynamic arguments.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[] ArgumentsBytes &#123; get; init; &#125;</code></pre>
+<p>Opaque, not-yet-decoded serialized argument bytes — decode with TableArgCodec.Decode (or use Arguments, already decoded).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[] AttachOpaqueData &#123; get; init; &#125;</code></pre>
+<p>Raw Protocol.BindRequest.AttachOpaqueData — echoed back verbatim by the C++ extension for every RPC belonging to ONE ATTACH &#39;s lifetime, so (unlike CatalogRegistry.DefaultIdentity&#39;s name-derived, deterministic-per-name routing key) it is safe to use as a genuinely per-attach-SESSION unique key — e.g. scoping a writable fixture&#39;s durable row store so two independent ATTACH es of the same catalog (two parallel test files, or two attaches in one session) never see each other&#39;s data. Empty when the call carries none.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[] TransactionOpaqueData &#123; get; init; &#125;</code></pre>
+<p>Raw Protocol.BindRequest.TransactionOpaqueData — non-empty only when this call runs inside an explicit SQL transaction ( BEGIN / COMMIT / ROLLBACK ) on a catalog that advertised Protocol.CatalogAttachResult.SupportsTransactions; empty for an autocommit statement (each gets its own fresh, effectively-unused transaction) or a catalog that doesn&#39;t support transactions at all. Use it as a per-transaction storage key (see Internal.FunctionStorage — already cross-process/durable, so it doubles as transaction-scoped storage keyed by this value instead of an execution id) for state that must survive across multiple binds within ONE transaction and be cleared on COMMIT/ROLLBACK — see table/transaction_storage.test &#39;s tx_cached_value fixture.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Settings &#123; get; init; &#125;</code></pre>
+<p>Opaque, not-yet-decoded serialized settings bytes (one row, columns named by DuckDB setting key) — null when this function declared no ITableFunction.RequiredSettings.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required Internal.SecretsAccessor Secrets &#123; get; init; &#125;</code></pre>
+<p>Secrets access for this bind attempt — statically pre-resolved secrets are readable immediately via Internal.SecretsAccessor.Resolved; a DYNAMIC (call-argument- derived) scope lookup goes through Internal.SecretsAccessor.Get from ITableFunction.Bind, which triggers the C++ extension&#39;s two-phase bind retry when unresolved. See Internal.SecretsAccessor&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required TableArguments Arguments &#123; get; init; &#125;</code></pre>
+<p>The decoded view of ArgumentsBytes — every positional/named SQL argument this call was made with (all bind-time constants; a table function has no per-row input).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required string FunctionName &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public string? AtUnit &#123; get; init; &#125;</code></pre>
+<p>The time-travel AT (VERSION =&gt; ...) / AT (TIMESTAMP =&gt; ...) clause unit/value this bind carries (Protocol.BindRequest.AtUnit/ AtValue ) — both null when the query has no AT clause. A function that resolves its own version (rather than relying on a catalog-level Catalog.CatalogTable.ResolveAtClause/ Catalog.CatalogTable.ResolveScanArguments swap) reads these directly — see table/time_travel_pushdown.test &#39;s tt_pushdown_fn .</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public string? AtValue &#123; get; init; &#125;</code></pre>
+<p>See AtUnit.</p>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="TableInitParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `TableInitParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Table/TableInitParams.cs#L11" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class TableInitParams</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Parameters an ITableFunction sees when its producer stream is opened (mirrors the init RPC) — the table-function analog of Scalar.ScalarProcessParams, except this fires once per call (not once per batch) since a table function&#39;s producer then drives its own output pace.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public IReadOnlyList&lt;byte[]&gt;? JoinKeys &#123; get; init; &#125;</code></pre>
+<p>One embedded-IPC single-column batch per IN-filter/join-key column ( InitRequest.JoinKeys ) — a pushdown_filters node of type &quot;join_keys&quot; names which one of these (by its keys_column field) holds its candidate value set. Decode with Internal.PushdownFilterCodec&#39;s join-key helpers.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public IReadOnlyList&lt;byte[]&gt;? SplitPayloads &#123; get; init; &#125;</code></pre>
+<p>The VERIFIED, envelope-stripped ScanSplit.Payload bytes this init is redeeming — null for an ordinary (non-split) init, and a single-element list for a split init (the client redeems exactly one split per init call; see AdvanceToNextSplit &#39;s greedy per-split claim loop). A function that declared ITableFunction.SupportsSplits but is only ever meant to be read through the split path can check this for null and refuse the ordinary-init fallback (see splits/rollback.test &#39;s vgi_split_scans=false scenario).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public IReadOnlyList&lt;long&gt;? ProjectionIds &#123; get; init; &#125;</code></pre>
+<p>Zero-based indices (into OutputSchema) of the columns DuckDB actually needs — null means &quot;all columns&quot;. Only meaningful when this function advertised ITableFunction.ProjectionPushdown; otherwise DuckDB still expects (and will itself trim) the FULL OutputSchema from every emitted batch.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Protocol.CopyFromContext? CopyFrom &#123; get; init; &#125;</code></pre>
+<p>Non-null only when this init opened a COPY ... FROM — see TableBindParams.CopyFrom&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Schema ProjectedSchema;</code></pre>
+<p>Convenience: OutputSchema narrowed to ProjectionIds (or the full schema when ProjectionIds is null) — the schema a projection-pushdown-aware producer should actually emit.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public VgiNullOrder? OrderByNullOrder &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public VgiOrderByDirection? OrderByDirection &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[] AttachOpaqueData &#123; get; init; &#125;</code></pre>
+<p>Raw BindRequest.AttachOpaqueData — see TableBindParams.AttachOpaqueData&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[] TransactionOpaqueData &#123; get; init; &#125;</code></pre>
+<p>See TableBindParams.TransactionOpaqueData — the same value, re-decoded from the Protocol.BindRequest embedded in this init call.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? ExecutionId &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? PushdownFilters &#123; get; init; &#125;</code></pre>
+<p>Raw embedded-IPC pushdown-filter bytes ( InitRequest.PushdownFilters ) — null when DuckDB pushed no filters down. Only meaningful when this function advertised ITableFunction.FilterPushdown. Decode with PushdownFilter.Decode.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Secrets &#123; get; init; &#125;</code></pre>
+<p>Fully-RESOLVED secrets from the bind call that opened this producer — by the time init runs, any two-phase secret-scope retry (see Internal.SecretsAccessor) has already completed, so this is plain already-resolved data: decode with Internal.SecretArgCodec.Decode then Internal.SecretArgCodec.FindByType/ Internal.SecretArgCodec.ForScopeOfType. null when no secrets were resolved.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Settings &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public double? TablesamplePercentage &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? OrderByLimit &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? RowLimit &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public long? TablesampleSeed &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required Schema OutputSchema &#123; get; init; &#125;</code></pre>
+<p>The resolved per-call output schema (from ITableFunction.ResolveOutputSchema). Every batch the returned ITableFunctionProducer emits must use this schema — or the ProjectedSchema subset when ProjectionIds is non-null and this function advertises ITableFunction.ProjectionPushdown.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required TableArguments Arguments &#123; get; init; &#125;</code></pre>
+<p>Same decoded arguments as the bind call that opened this producer (re-decoded rather than reused from TableBindParams — nothing about one call may be cached on the shared ITableFunction singleton).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required string FunctionName &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public string? AtUnit &#123; get; init; &#125;</code></pre>
+<p>See TableBindParams.AtUnit — the same value, re-decoded from the Protocol.BindRequest embedded in this init call. This is where a function-backed table with a version-independent schema (so it has no need to override ITableFunction.Bind/ITableFunction.ResolveOutputSchema) should resolve its version — e.g. inside ITableFunction.CreateProducer.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public string? AtValue &#123; get; init; &#125;</code></pre>
+<p>See AtUnit.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public string? OrderByColumnName &#123; get; init; &#125;</code></pre>
+
+</div>
+
+</div>
+
+</div>

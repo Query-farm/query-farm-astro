@@ -1,0 +1,39 @@
+---
+title: Persist state across workers
+description: Use mergeable byte state and IFunctionStorage instead of process-local C# objects.
+---
+
+import Callout from '../../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../../components/ui/CodeBlock.astro';
+
+VGI may route phases of one query to different processes. State that crosses an RPC boundary must
+be serialized; an instance field, static dictionary, or singleton is not query-wide storage.
+
+## Aggregate state
+
+`IAggregateFunction` stores one opaque `byte[]` per group. `Update` creates or changes it, `Combine`
+merges two serialized states, and `Finalize` produces an Arrow array. Use a stable encoding and
+include a version tag for state that may survive mixed deployments.
+
+<CodeBlock code={`states[groupId] = BitConverter.GetBytes(current + value);
+
+public byte[] Combine(byte[] source, byte[]? target, AggregateCallParams p) =>
+    BitConverter.GetBytes(BitConverter.ToInt64(source)
+        + (target is null ? 0 : BitConverter.ToInt64(target)));`} lang="csharp" tryable={false} />
+
+## Buffering state
+
+`IFunctionStorage.Append(namespace, key, value)` writes a durable execution-scoped log visible to
+later process calls; `ScanLog` reads it during combine or finalize. Store compact partial results
+when the algorithm allows it.
+
+<Callout type="note" title="POCOs are not the exchange format">
+The VGI call boundary uses Arrow record batches for tabular arguments and results. Aggregate and
+buffering coordination uses opaque bytes. A POCO can be your in-process model, but you must encode
+it into Arrow or bytes before it crosses the boundary; arbitrary object graphs are not serialized
+by the framework.
+</Callout>
+
+For complex state, define an explicit binary or Arrow schema rather than relying on .NET runtime
+object serialization. That keeps the format portable across architecture, process, SDK version,
+and potentially language.

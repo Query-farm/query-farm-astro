@@ -1,0 +1,127 @@
+---
+title: "Aggregate functions"
+description: "Per-group state update, combine, and finalization."
+---
+
+<div class="api-module-doc">
+
+<p class="api-module-doc__label">On this page</p>
+
+Per-group state update, combine, and finalization.
+
+</div>
+
+<div class="api-member">
+
+<a id="AggregateBindParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `AggregateBindParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Aggregate/AggregateBindParams.cs#L9" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class AggregateBindParams</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Parameters an IAggregateFunction sees on its aggregate_bind call — once per bound SQL call site (shared by every parallel worker connection DuckDB spawns for that one query).</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public Schema? InputSchema &#123; get; init; &#125;</code></pre>
+<p>Schema of the NON-const (&quot;Param&quot;) input columns — null only for a truly nullary aggregate with zero declared Param columns (e.g. vgi_count() ).</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Secrets &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public byte[]? Settings &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required TableArguments Arguments &#123; get; init; &#125;</code></pre>
+<p>Bind-time constant ( ConstParam ) values, keyed by their own sequential index among JUST the const positions — see Protocol.AggregateBindRequest.Arguments&#39;s doc comment.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required string FunctionName &#123; get; init; &#125;</code></pre>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="AggregateCallParams"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `AggregateCallParams`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Aggregate/AggregateCallParams.cs#L12" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public sealed class AggregateCallParams</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>Parameters an IAggregateFunction sees on every aggregate_update / _combine / _finalize call. Unlike AggregateBindParams, these three RPCs are each independently worker-pool-acquired unary calls (may land on a different process than the one that ran aggregate_bind ) — so Arguments is recovered from durable storage (stashed at bind time) rather than riding this call&#39;s own wire request, mirroring Buffering.TableBufferingProcessParams&#39;s doc comment for the same reason.</p>
+
+<p class="api-section">Public members</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public ICallContext? Ctx &#123; get; init; &#125;</code></pre>
+<p>In-band log sink (surfaces as a duckdb_logs() row with type=&#39;VGI&#39; ) — null only in a unit test that constructs this params object directly.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required TableArguments Arguments &#123; get; init; &#125;</code></pre>
+<p>The SAME bind-time const-argument values AggregateBindParams.Arguments carried — reloaded from storage, since update/combine/finalize don&#39;t ride the original bind request.</p>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required byte[] ExecutionId &#123; get; init; &#125;</code></pre>
+
+</div>
+
+<div class="api-member">
+
+<pre class="api-sig"><code>public required string FunctionName &#123; get; init; &#125;</code></pre>
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-member">
+
+<a id="IAggregateFunction"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">interface</span> `IAggregateFunction`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-csharp/blob/main/src/QueryFarm.Vgi/Aggregate/IAggregateFunction.cs#L47" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>public interface IAggregateFunction</code></pre>
+
+<p class="api-section">Description</p>
+
+<p>The raw contract a VGI aggregate function implements — SELECT f(...) FROM t GROUP BY g . Ported from vgi-python&#39;s/vgi-java&#39;s AggregateFunction , reshaped into the hand-rolled, Arrow-array-native style this port&#39;s other four function kinds (Scalar.IScalarFunction, Table.ITableFunction, TableInOut.ITableInOutFunction, Buffering.ITableBufferingFunction) already use, rather than attribute-driven reflection binding. Five phases, matching the C++ extension&#39;s AggregateFunction registration ( vgi_aggregate_function_impl.cpp ): Bind — Bind/ResolveOutputSchema, once per bound call site — validate arguments, resolve a dynamic (ANY) output type. Update — Update, once per input batch (parallel across threads/processes) — fold rows into per-group accumulator state, keyed by an opaque group_id the C++ side assigns (NOT the SQL-level GROUP BY key — purely an internal per-DuckDB-aggregate-state handle). Combine — Combine, whenever DuckDB merges two states (parallel aggregation across threads, OR a window segment tree) — fold one group&#39;s state into another&#39;s. Finalize — Finalize, once per requested batch of group ids — produce the single output value each group id resolves to. Destructor — best-effort cleanup, handled generically by VgiServiceImpl (wipes ALL of this execution&#39;s stored state) — no per-function hook needed. State lifecycle: every group&#39;s accumulator state is opaque byte[] this function chooses its own encoding for (a few packed primitives for vgi_sum / vgi_avg , an embedded Arrow IPC batch for something that needs to replay raw rows at finalize time like nest_tensor / vgi_percentile ). It is NEVER cached in-memory across calls — DuckDB spawns a SEPARATE OS PROCESS per parallel worker under the stdio/subprocess transport, so anything one call needs a LATER call (possibly in a different process) to see must round-trip through the state bytes Update/Combine return. &quot;Must reassign to persist&quot;: Update&#39;s states dictionary is pre-populated ONLY with existing on-disk bytes for group ids that already had saved state; a brand-new group id is simply ABSENT until this implementation adds an entry for it. After the call returns, EVERY entry present in the dictionary (new or updated) is persisted — an entry never touched this call (present neither before nor added during it) stays untouched. This is what makes &quot;the post-update state happens to be byte-identical to some notion of empty&quot; harmless: presence in the dictionary, not a value comparison, is what triggers a write.</p>
+
+</div>
