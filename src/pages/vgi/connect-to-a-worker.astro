@@ -40,6 +40,7 @@ const CURRENT = '/vgi/connect-to-a-worker';
 
 const toc = [
   { id: 'local-or-distributed', label: 'Local or distributed?' },
+  { id: 'database', label: 'Workers in a database' },
   { id: 'ssh', label: 'Running a worker elsewhere' },
   { id: 'location', label: 'What LOCATION accepts' },
   { id: 'who-operates', label: 'Who operates it?' },
@@ -47,7 +48,7 @@ const toc = [
   { id: 'next-steps', label: 'Where to next' },
 ];
 
-// Four connectors, four LOCATION forms, one session. The hosted pair is
+// Five connectors, five LOCATION forms, one session. The hosted pair is
 // Orchard's actual subscribe flow (products/orchard/subscribe.astro): CREATE
 // SECRET carrying a token, then ATTACH a hosted URL. The other three forms are
 // the ones documented in the table below.
@@ -57,6 +58,12 @@ ATTACH 'calc' AS calc (TYPE vgi, LOCATION 'uv run calc_worker.py');
 -- Container: pulled from a registry and run for you, nothing to install
 ATTACH 'sklearn' AS sk (TYPE vgi, LOCATION 'oci://ghcr.io/query-farm/vgi-sklearn:latest');
 
+-- Database: restore a verified platform build from a package table
+ATTACH 'models' AS models (
+  TYPE vgi,
+  LOCATION 'database://worker_registry/main/packages/models?package_version=2.1.0'
+);
+
 -- Another machine: LOCATION is a command, and ssh is a command
 ATTACH 'metrics' AS metrics (TYPE vgi, LOCATION 'ssh gpu-box -- uv run metrics_worker.py');
 
@@ -64,7 +71,7 @@ ATTACH 'metrics' AS metrics (TYPE vgi, LOCATION 'ssh gpu-box -- uv run metrics_w
 CREATE SECRET orchard (TYPE vgi, TOKEN 'orch_live_...');
 ATTACH 'kafka' AS kafka (TYPE vgi, LOCATION 'https://orchard.query.farm/kafka');
 
--- Four workers, four transports, one SQL surface
+-- Five workers, five delivery paths, one SQL surface
 SELECT * FROM kafka.main.messages LIMIT 10;`;
 
 const sshExample = `ATTACH 'metrics' AS metrics (
@@ -73,6 +80,17 @@ const sshExample = `ATTACH 'metrics' AS metrics (
 );
 
 SELECT * FROM metrics.main.gpu_utilization;`;
+
+const databaseExample = `-- The registry is an ordinary attached DuckDB database.
+ATTACH 'worker-registry.duckdb' AS worker_registry;
+
+-- VGI selects the requested worker, this machine's platform, and the version.
+ATTACH 'models' AS models (
+  TYPE vgi,
+  LOCATION 'database://worker_registry/main/packages/models?package_version=2.1.0'
+);
+
+SELECT * FROM models.main.predict('features.parquet');`;
 
 // ── Every LOCATION form the extension accepts, from its own transport
 // detection (vgi/src/include/vgi_transport.hpp + vgi_transport.cpp, plus
@@ -122,6 +140,11 @@ const locationForms = [
     detail: 'The same thing with the asset name built from your platform by convention, so there is no filename to write out.',
   },
   {
+    form: '`database://catalog/schema/table/worker?package_version=…`',
+    icon: 'ph:database',
+    detail: '**Database package.** Reads a platform-specific executable or archive from a committed DuckDB table, verifies its SHA-256, materializes it in an immutable local cache, and runs it as a subprocess. The package travels with the database; execution stays on the attaching machine.',
+  },
+  {
     form: '`worker:/workers/example.js`',
     icon: 'simple-icons:webassembly',
     detail: '**Web Worker.** In-browser DuckDB-WASM only: the worker runs as a Web Worker, reached over a SharedArrayBuffer ring instead of a socket.',
@@ -135,7 +158,7 @@ const nextCards = [
 ];
 
 const pageDescription =
-  'Where a VGI worker runs and how DuckDB connects to it: local subprocess or distributed service, self-hosted or Orchard, and every LOCATION form the extension accepts — command, launch:, unix://, tcp://, http(s)://, oci://, github://, and worker:.';
+  'Where a VGI worker runs and how DuckDB connects to it: local subprocess or distributed service, self-hosted or Orchard, and every LOCATION form the extension accepts — including database-backed worker packages.';
 ---
 
 <PageLayout
@@ -155,8 +178,9 @@ const pageDescription =
       A VGI worker is a normal program, in any language, that answers SQL queries over Arrow IPC —
       <code class={CODE}>ATTACH</code> is how DuckDB reaches one (more on the protocol itself:
       <a href="/vgi/architecture" class={LINK}>Architecture →</a>). Where that worker actually runs
-      is your decision: a process on your laptop, a container pulled from a registry, a command run
-      over ssh, or a service someone else operates. The SQL that connects to it doesn't change.
+      is your decision: a process on your laptop, an executable stored in a database, a container
+      pulled from a registry, a command run over ssh, or a service someone else operates. The SQL
+      that connects to it doesn't change.
     </Fragment>
     <div class="mt-6 flex flex-wrap items-center gap-3">
       <Button href="#location" variant="primary" size="md">What LOCATION accepts →</Button>
@@ -208,6 +232,32 @@ const pageDescription =
       <div class="mt-5 max-w-xl">
         <WorkerFanoutDiagram variant="distributed" />
       </div>
+
+      <!-- ── Database packages ─────────────────────────────────── -->
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Local execution, portable package</p>
+      <h2 id="database" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">A worker can travel inside a database</h2>
+      <p class={P}>
+        A <code class={CODE}>database://</code> location points at a package table instead of a
+        command or network address. VGI selects the row for the worker name, package version, and
+        current DuckDB platform; verifies the stored digest; then copies or extracts the package
+        into its local cache and starts the entrypoint as an ordinary subprocess. A later attach
+        to the same immutable package reuses that materialized copy.
+      </p>
+      <p class={P}>
+        This is distribution, not remote execution. The database carries the program bytes — a
+        raw executable or an archive containing several files — while each DuckDB process runs
+        its own local worker. That makes a registry database useful for reproducible snapshots,
+        controlled internal distribution, and environments where fetching a release or container
+        at query time is undesirable.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={databaseExample} lang="sql" title="attach-from-database.sql" tryable={false} />
+      </div>
+      <p class={P}>
+        See <a href="/vgi/database-workers" class={LINK}>Workers in a database</a> for the package
+        table contract, the <code class={CODE}>vgi_worker_package()</code> helper, archives,
+        platforms, cache cleanup, and the security model.
+      </p>
 
       <!-- ── SSH ────────────────────────────────────────────────── -->
       <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Still local, just not nearby</p>

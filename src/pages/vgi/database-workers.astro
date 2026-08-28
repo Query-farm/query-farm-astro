@@ -1,0 +1,425 @@
+---
+import PageLayout from '../../layouts/PageLayout.astro';
+import VGISubNav from '../../components/sections/VGISubNav.astro';
+import PageHead from '../../components/ui/PageHead.astro';
+import Button from '../../components/ui/Button.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import PageToc from '../../components/vgi/PageToc.astro';
+import { GRID, HEAD_CONTAINER } from '../../lib/vgi-layout';
+import { Icon } from 'astro-icon/components';
+
+const CARD = 'rounded-xl border border-soil-300 bg-[#fffdf7]';
+const EYEBROW = 'qf-eyebrow text-sun-700';
+const LEDE = 'text-[17.5px] leading-relaxed text-soil-700';
+const P = 'mt-4 leading-relaxed text-soil-700';
+const CODE = 'rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[0.88em] text-soil-900';
+const LINK = 'text-link underline decoration-link/40 underline-offset-2 hover:decoration-link';
+
+const toc = [
+  { id: 'how-it-works', label: 'How it works' },
+  { id: 'package', label: 'Package a worker' },
+  { id: 'table-contract', label: 'Package table contract' },
+  { id: 'attach', label: 'Attach from the registry' },
+  { id: 'formats-platforms', label: 'Formats and platforms' },
+  { id: 'cache', label: 'Cache and cleanup' },
+  { id: 'security', label: 'Security' },
+  { id: 'checklist', label: 'Production checklist' },
+];
+
+const flow = [
+  {
+    icon: 'ph:package',
+    title: 'Package',
+    body: 'Store one executable or archive as a BLOB row, alongside its platform, version, entrypoint, and SHA-256.',
+  },
+  {
+    icon: 'ph:magnifying-glass',
+    title: 'Resolve',
+    body: 'ATTACH selects exactly one row for the requested worker, current platform, and immutable package version.',
+  },
+  {
+    icon: 'ph:play',
+    title: 'Run locally',
+    body: 'VGI verifies the bytes, materializes them in its private cache, and launches the entrypoint as a child process.',
+  },
+];
+
+const packageExample = `LOAD vgi;
+
+-- Keep the registry in an ordinary persistent DuckDB database.
+ATTACH 'worker-registry.duckdb' AS worker_registry;
+
+-- vgi_worker_package() uses read_blob(), detects the archive format,
+-- fills in pragma_platform(), and computes the SHA-256.
+CREATE TABLE worker_registry.main.worker_packages AS
+SELECT * FROM vgi_worker_package(
+  'dist/acme-worker.tar.gz',
+  'acme-worker',
+  '1.4.0',
+  entrypoint := 'bin/acme-worker'
+);
+
+ALTER TABLE worker_registry.main.worker_packages
+  ADD PRIMARY KEY (worker_name, platform, package_version);
+
+CHECKPOINT;`;
+
+const insertExample = `-- Add another immutable build using normal SQL.
+INSERT INTO worker_registry.main.worker_packages
+SELECT * FROM vgi_worker_package(
+  'dist/acme-worker-1.5.0',
+  'acme-worker',
+  '1.5.0'
+);
+
+-- Cross-packaging: use the exact pragma_platform() value of the target.
+INSERT INTO worker_registry.main.worker_packages
+SELECT * FROM vgi_worker_package(
+  'dist/acme-worker-linux-arm64.tar.gz',
+  'acme-worker',
+  '1.5.0',
+  entrypoint := 'bin/acme-worker',
+  platform := 'linux_arm64'
+);`;
+
+const attachExample = `-- The registry may be attached read-only.
+ATTACH 'worker-registry.duckdb' AS worker_registry (READ_ONLY);
+
+ATTACH 'acme' AS acme (
+  TYPE vgi,
+  LOCATION 'database://worker_registry/main/worker_packages/acme-worker?package_version=1.4.0'
+);
+
+SELECT * FROM acme.main.events LIMIT 10;`;
+
+const digestExample = `-- The row digest is always recomputed. For an out-of-band pin,
+-- append the expected 64-character SHA-256 as a URI fragment.
+ATTACH 'acme' AS pinned_acme (
+  TYPE vgi,
+  LOCATION 'database://worker_registry/main/worker_packages/acme-worker?package_version=1.4.0#sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+);`;
+
+const cacheExample = `-- See every immutable package materialized on this machine.
+SELECT * FROM vgi_worker_cache();
+
+-- Apply the configured age and size limits now.
+SELECT * FROM vgi_worker_cache_prune();
+
+-- Remove everything not protected by a running catalog or process lease.
+DETACH acme;
+SELECT * FROM vgi_worker_pool_flush();
+SELECT * FROM vgi_worker_cache_flush();`;
+
+const columns = [
+  ['worker_name', 'VARCHAR', 'Stable package name used by the URI.'],
+  ['platform', 'VARCHAR', 'Exact consumer platform from pragma_platform().'],
+  ['package_version', 'VARCHAR', 'Publisher-selected immutable version.'],
+  ['package_format', 'VARCHAR', 'Executable or supported archive/compression format.'],
+  ['entrypoint', 'VARCHAR', 'Relative executable path after extraction.'],
+  ['contents', 'BLOB', 'Complete executable or archive bytes.'],
+  ['sha256', 'VARCHAR', '64-character SHA-256 of contents.'],
+];
+
+const formats = [
+  {
+    name: 'executable',
+    detail: 'A directly runnable file. raw and binary are accepted aliases.',
+  },
+  {
+    name: 'zip · tar · tar.gz · tar.zst',
+    detail: 'Multi-file archives. Supply an explicit relative entrypoint.',
+  },
+  {
+    name: 'gzip · zstd',
+    detail: 'A single compressed executable. The decompressed filename becomes the entrypoint unless overridden.',
+  },
+];
+
+const settings = [
+  ['vgi_worker_cache_max_bytes', '5 GiB', 'Maximum managed cache size.'],
+  ['vgi_worker_cache_ttl_seconds', '30 days', 'Remove packages unused for this long.'],
+  ['vgi_worker_package_max_bytes', '512 MiB', 'Maximum stored/compressed BLOB size.'],
+  ['vgi_worker_package_max_extracted_bytes', '1 GiB', 'Maximum extracted package size.'],
+  ['vgi_worker_package_max_files', '10,000', 'Maximum archive entries.'],
+];
+
+const checklist = [
+  'Use a committed, non-temporary table. Resolution runs through a dedicated connection, so temporary tables and uncommitted rows are intentionally invisible.',
+  'Enforce one row per worker, platform, and package version with a primary key or unique constraint.',
+  'Treat package versions as immutable. Publish a new version instead of replacing bytes under an existing coordinate.',
+  'Build and test every platform you publish. A package row must contain native code for the machine that will execute it.',
+  'Use an out-of-band digest pin when the expected build is known independently of the registry.',
+  'Attach only registries whose writers you trust. Integrity verification detects changed bytes; it does not make untrusted native code safe.',
+];
+
+const nextCards = [
+  {
+    title: 'Connect to a Worker',
+    body: 'Compare database packages with commands, containers, releases, sockets, and HTTP.',
+    href: '/vgi/connect-to-a-worker',
+  },
+  {
+    title: 'Distributing a Worker',
+    body: 'Choose what to publish and who operates the worker.',
+    href: '/vgi/distributing-a-worker',
+  },
+  {
+    title: 'Architecture',
+    body: 'How the child-process transport and Arrow IPC protocol fit together.',
+    href: '/vgi/architecture',
+  },
+];
+---
+
+<PageLayout
+  title="VGI — Store Workers in a Database"
+  description="Store complete VGI worker executables and archives in DuckDB, then attach them with database:// using verified packages, platform selection, immutable caching, and safe cleanup."
+>
+  <VGISubNav />
+
+  <PageHead
+    variant="section"
+    container={HEAD_CONTAINER}
+    eyebrow="Database workers"
+    title="The database can carry the worker too."
+  >
+    <Fragment slot="lede">
+      Store a complete VGI executable or archive in a DuckDB table, move or snapshot that database
+      like any other, then <code class={CODE}>ATTACH</code> the worker with a
+      <code class={CODE}>database://</code> location. VGI verifies, caches, and runs the package
+      locally — no separate release download or container pull at query time.
+    </Fragment>
+    <div class="mt-6 flex flex-wrap items-center gap-3">
+      <Button href="#package" variant="primary" size="md">Package a worker →</Button>
+      <Button href="/vgi/connect-to-a-worker" variant="secondary" size="md">Compare connection options</Button>
+    </div>
+  </PageHead>
+
+  <div class={GRID}>
+    <PageToc
+      items={toc}
+      reference={[
+        { label: 'Connect to a Worker', href: '/vgi/connect-to-a-worker' },
+        { label: 'Distributing a Worker', href: '/vgi/distributing-a-worker' },
+      ]}
+    />
+
+    <div class="min-w-0 max-w-[78ch]">
+      <p class={LEDE}>
+        A database-backed worker is still a local worker. What changes is delivery: instead of
+        naming a command, release asset, or container image, the location names a row in a package
+        registry. The bytes travel with the database; each attaching machine executes its own
+        platform build.
+      </p>
+
+      <p class={`${EYEBROW} mt-10 block`}>From BLOB to process</p>
+      <h2 id="how-it-works" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">How it works</h2>
+      <div class="mt-6 grid gap-3.5 md:grid-cols-3">
+        {flow.map((item, i) => (
+          <div class={`${CARD} p-5`}>
+            <div class="flex items-center justify-between gap-3">
+              <span class="flex h-10 w-10 items-center justify-center rounded-lg border border-soil-300 bg-soil-100 text-soil-900">
+                <Icon name={item.icon} class="h-5 w-5" aria-hidden="true" />
+              </span>
+              <span class="qf-figure text-[12px] text-soil-500">{String(i + 1).padStart(2, '0')}</span>
+            </div>
+            <h3 class="mt-4 text-[17px] text-soil-900">{item.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{item.body}</p>
+          </div>
+        ))}
+      </div>
+      <p class={P}>
+        The resolver is deliberately narrow: it finds exactly one row, recomputes its digest, and
+        turns it into a child-process location. It is not a database extension loader, a remote
+        execution service, or a sandbox.
+      </p>
+
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Write the registry</p>
+      <h2 id="package" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Package a worker with SQL</h2>
+      <p class={P}>
+        <code class={CODE}>vgi_worker_package()</code> is a convenience table macro over DuckDB's
+        own <code class={CODE}>read_blob()</code>, <code class={CODE}>pragma_platform()</code>, and
+        hashing primitives. It is not a separate importer: materialize or insert the one row it
+        returns using normal SQL and normal transactions.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={packageExample} lang="sql" title="create-worker-registry.sql" tryable={false} />
+      </div>
+      <p class={P}>
+        The source file is needed only while that statement runs. After commit, the complete bytes
+        live in <code class={CODE}>contents</code>; a reader does not need the build directory or
+        the original artifact path.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={insertExample} lang="sql" title="add-worker-builds.sql" tryable={false} />
+      </div>
+
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Seven required columns</p>
+      <h2 id="table-contract" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Package table contract</h2>
+      <p class={P}>
+        The table name is yours. VGI only requires the columns below; the packaging macro also
+        emits an optional <code class={CODE}>created_at</code> timestamp. Additional publisher
+        metadata is fine.
+      </p>
+      <div class="mt-5 overflow-x-auto">
+        <table class="w-full min-w-[650px] border-collapse text-left text-sm">
+          <thead>
+            <tr class="border-b-2 border-soil-300">
+              <th class="py-2.5 pr-4 font-semibold text-soil-900">Column</th>
+              <th class="py-2.5 pr-4 font-semibold text-soil-900">Type</th>
+              <th class="py-2.5 font-semibold text-soil-900">Meaning</th>
+            </tr>
+          </thead>
+          <tbody>
+            {columns.map(([name, type, meaning]) => (
+              <tr class="border-b border-soil-200 align-top">
+                <td class="py-3 pr-4"><code class={CODE}>{name}</code></td>
+                <td class="py-3 pr-4 font-mono text-[12.5px] text-soil-700">{type}</td>
+                <td class="py-3 leading-relaxed text-soil-700">{meaning}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class={P}>
+        VGI counts all matching rows and fails if the coordinate is ambiguous. A primary key on
+        <code class={CODE}>(worker_name, platform, package_version)</code> makes that invariant
+        explicit.
+      </p>
+
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Read in a new process</p>
+      <h2 id="attach" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Attach from the registry</h2>
+      <p class={P}>
+        The location has four path components — catalog, schema, table, and worker — followed by a
+        required package version:
+      </p>
+      <div class={`${CARD} mt-5 overflow-x-auto px-5 py-4 font-mono text-[13px] text-soil-900`}>
+        database://catalog/schema/table/worker?package_version=version[#sha256=digest]
+      </div>
+      <p class={P}>
+        Catalog, schema, and table are resolved as quoted identifiers. Worker name, platform, and
+        version are bound values rather than SQL text. Percent-encode names containing
+        <code class={CODE}>/</code>, <code class={CODE}>?</code>, <code class={CODE}>#</code>, or
+        <code class={CODE}>%</code>.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={attachExample} lang="sql" title="attach-database-worker.sql" tryable={false} />
+      </div>
+      <p class={P}>
+        Resolution uses a dedicated database connection. Commit the package row before attaching;
+        temporary tables and uncommitted changes are intentionally not visible. The attached
+        registry itself can be read-only.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={digestExample} lang="sql" title="pin-the-package.sql" tryable={false} />
+      </div>
+
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>What the BLOB contains</p>
+      <h2 id="formats-platforms" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Formats and platforms</h2>
+      <p class={P}>
+        A worker is often more than one file. Store the whole runtime as an archive and name the
+        executable inside it; VGI extracts the package with bounded, traversal-safe archive rules.
+      </p>
+      <div class="mt-6 flex flex-col gap-3.5">
+        {formats.map((format) => (
+          <div class={`${CARD} grid gap-2 p-5 sm:grid-cols-[180px_1fr] sm:gap-5`}>
+            <code class="font-mono text-[13px] text-sun-700">{format.name}</code>
+            <p class="text-sm leading-relaxed text-soil-700">{format.detail}</p>
+          </div>
+        ))}
+      </div>
+      <p class={P}>
+        <code class={CODE}>package_format := 'auto'</code> recognizes those filename extensions.
+        Everything else is treated as a raw executable. Archive packages require an explicit,
+        relative <code class={CODE}>entrypoint</code>.
+      </p>
+      <p class={P}>
+        Store one row per supported platform. By default the macro records the packaging machine's
+        exact <code class={CODE}>pragma_platform()</code> value; pass <code class={CODE}>platform
+        := …</code> when inserting a cross-compiled build. At attach time there is no fallback to a
+        “close enough” architecture — the platform must match exactly.
+      </p>
+
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Reuse without races</p>
+      <h2 id="cache" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Cache and cleanup</h2>
+      <p class={P}>
+        Cache identity includes the verified content digest, normalized format, and entrypoint.
+        Installation happens through a private staging directory and atomic rename, so concurrent
+        DuckDB processes converge on one immutable copy. Running catalogs and pooled subprocesses
+        hold cross-process leases; cleanup skips an artifact while any process still uses it.
+      </p>
+      <div class="mt-5">
+        <CodeBlock code={cacheExample} lang="sql" title="worker-cache.sql" tryable={false} />
+      </div>
+      <div class="mt-5 overflow-x-auto">
+        <table class="w-full min-w-[680px] border-collapse text-left text-sm">
+          <thead>
+            <tr class="border-b-2 border-soil-300">
+              <th class="py-2.5 pr-4 font-semibold text-soil-900">Setting</th>
+              <th class="py-2.5 pr-4 font-semibold text-soil-900">Default</th>
+              <th class="py-2.5 font-semibold text-soil-900">Limit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {settings.map(([name, defaultValue, meaning]) => (
+              <tr class="border-b border-soil-200 align-top">
+                <td class="py-3 pr-4"><code class={CODE}>{name}</code></td>
+                <td class="qf-figure py-3 pr-4 text-soil-700">{defaultValue}</td>
+                <td class="py-3 leading-relaxed text-soil-700">{meaning}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class={P}>
+        Set <code class={CODE}>vgi_worker_cache_dir</code> to choose the cache root. It must be on a
+        filesystem that permits execution. With no override, VGI follows its release cache and
+        then <code class={CODE}>XDG_CACHE_HOME</code> or the current user's cache directory.
+      </p>
+
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Trust boundary</p>
+      <h2 id="security" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">A verified package is still native code</h2>
+      <div class="mt-5 rounded-r-lg border-l-[3px] border-sun-400 bg-[#fffdf7] px-5 py-4">
+        <p class="text-sm leading-relaxed text-soil-700">
+          Attaching a database package executes code supplied by that database. Use registries
+          whose writers you trust. SHA-256 verification proves which bytes you received; it does
+          not sandbox them or decide whether they are safe.
+        </p>
+      </div>
+      <p class={P}>
+        VGI recomputes the row digest before cache lookup and can require an independent digest pin
+        in the URI. Cached entrypoints are executed directly rather than through a shell. Archive
+        entries must be relative and normalized; traversal, links, backslashes, drive prefixes,
+        excessive file counts, and oversized extraction are rejected before installation.
+      </p>
+      <p class={P}>
+        Because execution requires a native child process, <code class={CODE}>database://</code> is
+        for desktop and server DuckDB builds. It is not available inside browser DuckDB-WASM.
+      </p>
+
+      <p class={`${EYEBROW} mt-12 block border-t border-soil-300 pt-6`}>Before handing it over</p>
+      <h2 id="checklist" class="mt-3 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Production checklist</h2>
+      <div class="mt-6 flex flex-col gap-3.5">
+        {checklist.map((item, i) => (
+          <div class={`${CARD} flex gap-4 p-5`}>
+            <span class="qf-figure flex-none text-[13px] text-sun-700">{String(i + 1).padStart(2, '0')}</span>
+            <p class="text-sm leading-relaxed text-soil-700">{item}</p>
+          </div>
+        ))}
+      </div>
+
+      <h2 class="mt-12 scroll-mt-32 border-t border-soil-300 pt-6 text-2xl md:text-3xl text-soil-900">Keep going</h2>
+      <div class="mt-6 grid gap-3.5 sm:grid-cols-3">
+        {nextCards.map((item) => (
+          <a
+            href={item.href}
+            class={`${CARD} block p-5 no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400`}
+          >
+            <h3 class="text-lg text-soil-900">{item.title}</h3>
+            <p class="mt-2 text-sm leading-relaxed text-soil-700">{item.body}</p>
+          </a>
+        ))}
+      </div>
+    </div>
+  </div>
+</PageLayout>
