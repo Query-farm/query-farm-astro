@@ -1,7 +1,21 @@
 ---
-interface Props {
+interface MapLayer {
   /** A GeoJSON Feature, FeatureCollection, or Geometry object. */
   geojson: object;
+  color?: string;
+  weight?: number;
+  fillColor?: string;
+  fillOpacity?: number;
+  dashArray?: string;
+  /** Shown in the legend below the map, alongside a swatch in this layer's color. */
+  label?: string;
+}
+
+interface Props {
+  /** A GeoJSON Feature, FeatureCollection, or Geometry object. Ignored if `layers` is set. */
+  geojson?: object;
+  /** Multiple independently-styled layers drawn in order (later layers on top). */
+  layers?: MapLayer[];
   /** Optional center [lng, lat]; auto-fits to geometry if omitted. */
   center?: [number, number];
   zoom?: number;
@@ -9,20 +23,58 @@ interface Props {
   caption?: string;
 }
 
-const { geojson, center, zoom, height = '380px', caption } = Astro.props;
+const DEFAULT_STYLE = { color: '#16a34a', weight: 2, fillColor: '#22c55e', fillOpacity: 0.35 };
+
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return hex;
+  const [, r, g, b] = m;
+  return `rgba(${parseInt(r, 16)}, ${parseInt(g, 16)}, ${parseInt(b, 16)}, ${alpha})`;
+}
+
+const { geojson, layers: layersProp, center, zoom, height = '380px', caption } = Astro.props;
+const layers: MapLayer[] = layersProp ?? (geojson ? [{ geojson, ...DEFAULT_STYLE }] : []);
+
 const id = 'gjmap-' + Math.random().toString(36).slice(2, 9);
-const data = JSON.stringify(geojson);
+const layersData = JSON.stringify(
+  layers.map(({ geojson: g, ...style }) => ({ geojson: g, style: { ...DEFAULT_STYLE, ...style } }))
+);
 const opts = JSON.stringify({ center, zoom });
+// The legend swatch mirrors the actual map style: fill at the layer's real
+// fillOpacity (0 renders as fully transparent, matching an outline-only
+// layer like a query boundary) with the stroke always fully opaque, dashed
+// when the layer itself is dashed.
+const legendEntries = layers
+  .filter((l) => l.label)
+  .map((l) => ({
+    label: l.label,
+    borderColor: l.color ?? DEFAULT_STYLE.color,
+    borderStyle: l.dashArray ? 'dashed' : 'solid',
+    background: hexToRgba(l.fillColor ?? DEFAULT_STYLE.fillColor, l.fillOpacity ?? DEFAULT_STYLE.fillOpacity),
+  }));
 ---
 
 <figure class="my-6">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
   <div id={id} style={`height: ${height}; width: 100%; border-radius: 8px; overflow: hidden;`}></div>
+  {legendEntries.length > 0 && (
+    <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-sm text-soil-600">
+      {legendEntries.map((l) => (
+        <span class="inline-flex items-center gap-1.5">
+          <span
+            class="inline-block w-3 h-3 rounded-sm"
+            style={`background-color: ${l.background}; border: 2px ${l.borderStyle} ${l.borderColor};`}
+          />
+          {l.label}
+        </span>
+      ))}
+    </div>
+  )}
   {caption && <figcaption class="text-sm text-soil-600 mt-2 text-center">{caption}</figcaption>}
 </figure>
 
-<script type="module" define:vars={{ id, data, opts }}>
+<script type="module" define:vars={{ id, layersData, opts }}>
   // @ts-ignore — loaded from CDN; leaflet ESM exposes named exports (no default).
   const L = await import('https://unpkg.com/leaflet@1.9.4/dist/leaflet-src.esm.js');
   const map = L.map(id, { scrollWheelZoom: false });
@@ -30,13 +82,15 @@ const opts = JSON.stringify({ center, zoom });
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
-  const layer = L.geoJSON(JSON.parse(data), {
-    style: { color: '#16a34a', weight: 2, fillColor: '#22c55e', fillOpacity: 0.35 },
-  }).addTo(map);
+
+  const parsedLayers = JSON.parse(layersData);
+  const geoLayers = parsedLayers.map(({ geojson, style }) => L.geoJSON(geojson, { style }).addTo(map));
+
   const o = JSON.parse(opts);
   if (o.center) {
     map.setView([o.center[1], o.center[0]], o.zoom ?? 12);
-  } else {
-    map.fitBounds(layer.getBounds(), { padding: [20, 20] });
+  } else if (geoLayers.length > 0) {
+    const group = L.featureGroup(geoLayers);
+    map.fitBounds(group.getBounds(), { padding: [20, 20] });
   }
 </script>

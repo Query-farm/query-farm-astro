@@ -22,6 +22,10 @@
         {
           "label": "It's a thin binding over the reference library",
           "description": "The DuckDB functions wrap the upstream [A5 Rust library](https://github.com/felixpalmer/a5), so cell IDs are identical to what the reference implementation produces — a DuckDB-computed ID round-trips through the JS/TypeScript library and back unchanged."
+        },
+        {
+          "label": "Sanity-check a cell before trusting it",
+          "description": "[`a5_is_valid_cell`](#a5_is_valid_cell) confirms a `UBIGINT` is a canonically-encoded A5 cell rather than an arbitrary integer — useful right after decoding external data. [`a5_world_cell`](#a5_world_cell) returns the single root cell (ID `0`) that sits above all twelve resolution-0 cells and is the ultimate ancestor for any `a5_cell_to_parent` walk."
         }
       ]
     },
@@ -44,7 +48,26 @@
         },
         {
           "label": "Cells are integers first, geometry on demand",
-          "description": "Storage and joins use the compact integer. When you need to *draw* a cell, the boundary is materialized as `[lon, lat]` vertex pairs that pair with the [`spatial`](https://duckdb.org/docs/extensions/spatial) extension's polygon builders for GeoJSON output — the exact pattern is in the Cookbook."
+          "description": "Storage and joins use the compact integer. When you need to *draw* a cell, [`a5_cell_to_geometry`](#a5_cell_to_geometry) materializes it directly as a DuckDB `GEOMETRY` polygon — the exact pattern is in the Cookbook."
+        }
+      ]
+    },
+    {
+      "icon": "🗺️",
+      "title": "Direct GEOMETRY integration",
+      "description": "`a5_cell_to_geometry`, `a5_cell_to_point`, and `a5_geometry_to_cells` read and write DuckDB's built-in `GEOMETRY` type directly as plain little-endian WKB — no dependency on the `spatial` extension to *produce* them. Load `spatial` alongside A5 only when you want its functions (`ST_AsGeoJSON`, `ST_Intersects`, …) downstream of a value A5 already gave you.",
+      "bulletPoints": [
+        {
+          "label": "Cell to geometry, and back",
+          "description": "[`a5_cell_to_geometry`](#a5_cell_to_geometry) returns a cell's boundary as a `POLYGON`; [`a5_cell_to_point`](#a5_cell_to_point) returns its center as a `POINT`. [`a5_geometry_to_cells`](#a5_geometry_to_cells) runs the other direction — it accepts any `GEOMETRY` (point, line, polygon, or a MULTI*/GEOMETRYCOLLECTION mix of them) and returns the covering set of A5 cells at a chosen resolution."
+        },
+        {
+          "label": "Points snap, lines trace, polygons fill",
+          "description": "A point geometry maps to its containing cell. A line is traced cell-by-cell along its length. A polygon is filled by cell-center containment by default — pass `overlapping := true` to additionally include cells that merely touch the polygon boundary, for genuinely gap-free coverage at the cost of some cells extending past the edge. Polygon holes are subtracted before filling."
+        },
+        {
+          "label": "Coverings come back compacted — uncompact before you draw them",
+          "description": "Polygon coverage from `a5_geometry_to_cells` is compacted — complete groups of sibling cells collapse to their parent — the same shape [`a5_compact`](#a5_compact) produces. That's the right shape for storage, transfer, and set operations, but cell boundaries at different resolutions don't nest geometrically: rendering a mixed-resolution result directly can show gaps that aren't really there. Call [`a5_uncompact`](#a5_uncompact) to a single resolution first whenever you're drawing the result on a map."
         }
       ]
     },

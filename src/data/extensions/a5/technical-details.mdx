@@ -53,7 +53,7 @@ Pick the coarsest resolution that still distinguishes the phenomena you're measu
 | 21–25      | 31 m² – 0.5 m²        | Room / vehicle scale               |
 | 26–30      | 8 cm² – 0.03 mm²      | Sub-meter precision                |
 
-[`a5_cell_area`](#a5_cell_area) returns the exact equal-area size for any resolution; [`a5_get_num_cells`](#a5_get_num_cells) returns the global cell count.
+[`a5_cell_area`](#a5_cell_area) returns the exact equal-area size for any resolution; [`a5_cell_edge_length_avg`](#a5_cell_edge_length_avg) returns the average edge length in meters (individual edges vary from it by roughly ±10%); [`a5_get_num_cells`](#a5_get_num_cells) returns the global cell count.
 
 ## Hierarchy and compaction
 
@@ -84,9 +84,29 @@ Three traversal primitives, depending on how you define "near":
 
 Each returns a `UBIGINT[]`. The typical use is to expand to a coverage set, then probe an indexed cell column with `WHERE cell_id IN (UNNEST(...))` — much cheaper than `ST_DWithin` against raw geometries.
 
-## Boundary rendering
+## GEOMETRY integration
 
-[`a5_cell_to_boundary`](#a5_cell_to_boundary) returns cell vertices as `[lon, lat]` pairs. Pair with the [`spatial`](https://duckdb.org/docs/extensions/spatial) extension to render cells as GeoJSON or any other format DuckDB-spatial supports — see the [Cookbook](#cookbook) for the exact polygon-construction pattern. The `closed_ring` variant repeats the first vertex at the end so the result is directly usable as a polygon ring; the `segments` overload interpolates additional points along each edge for smoother rendering on curved projections.
+[`a5_cell_to_geometry`](#a5_cell_to_geometry) and [`a5_cell_to_point`](#a5_cell_to_point) emit DuckDB's built-in `GEOMETRY` type directly — a `POLYGON` for the cell boundary, a `POINT` for its center — as plain little-endian WKB, with **no dependency on the `spatial` extension** to produce them. Load `spatial` alongside A5 only when you want to run its functions (`ST_AsGeoJSON`, `ST_Intersects`, `ST_Area`, …) against a value A5 already gave you:
+
+```sql
+SELECT ST_AsGeoJSON(
+    a5_cell_to_geometry(
+        a5_lonlat_to_cell(-74.0060, 40.7128, 10)
+    )
+) AS geojson;
+```
+
+[`a5_geometry_to_cells`](#a5_geometry_to_cells) runs the other direction: it accepts any `GEOMETRY` (point, line, polygon, or a MULTI*/GEOMETRYCOLLECTION mix) and returns the A5 cells covering it at a chosen resolution. Points map to their containing cell, lines are traced, and polygons are filled by cell-center containment by default; pass `overlapping := true` to additionally include cells merely touching the boundary, for genuinely gap-free coverage. Polygon holes are subtracted before filling, and the covering set comes back compacted the same way [`a5_compact`](#a5_compact) would.
+
+<Callout type="note" title="Uncompact before you draw it">
+A compacted result is the right shape for storage, transfer, and set operations — but cell boundaries at different resolutions don't nest geometrically, so rendering a mixed-resolution result directly can show gaps that aren't really there. Call [`a5_uncompact`](#a5_uncompact) to a single resolution first whenever you draw the result on a map, as the [Cookbook](#cookbook) does.
+</Callout>
+
+For the raw vertex data underneath a cell's boundary — for custom rendering pipelines that don't go through `GEOMETRY` — [`a5_cell_to_boundary`](#a5_cell_to_boundary) returns `[lon, lat]` pairs directly. The `closed_ring` variant repeats the first vertex at the end so the result is directly usable as a polygon ring; the `segments` overload interpolates additional points along each edge for smoother rendering on curved projections.
+
+## Cell validity and the world cell
+
+[`a5_is_valid_cell`](#a5_is_valid_cell) reports whether a `UBIGINT` is a canonically-encoded A5 cell rather than an arbitrary integer — useful right after decoding IDs from external data. [`a5_world_cell`](#a5_world_cell) returns the single root cell (ID `0`) that sits above all twelve resolution-0 cells; it's the cell `0` that [`a5_cell_to_boundary`](#a5_cell_to_boundary) special-cases to an empty boundary, since the whole-globe cell has no finite polygon to draw.
 
 ## Cell IDs as hex strings
 

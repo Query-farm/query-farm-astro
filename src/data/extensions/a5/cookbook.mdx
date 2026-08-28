@@ -45,26 +45,18 @@ SELECT a5_cell_to_lonlat(a5_lonlat_to_cell(-74.0060, 40.7128, 15)) AS center_coo
 
 <QueryResult columns={["center_coords"]} rows={[["[-74.00764805615836, 40.71280225138428]"]]} />
 
-For radians instead of degrees, use [`a5_cell_to_spherical`](#a5_cell_to_spherical).
+For a `GEOMETRY` point instead of a raw `[lon, lat]` array, use [`a5_cell_to_point`](#a5_cell_to_point).
 
 ## Render a cell as a polygon
 
-[`a5_cell_to_boundary`](#a5_cell_to_boundary) returns the cell's vertices as `[lon, lat]` pairs — pair with the [`spatial`](https://duckdb.org/docs/extensions/spatial) extension to produce GeoJSON:
+[`a5_cell_to_geometry`](#a5_cell_to_geometry) returns the cell boundary directly as DuckDB's built-in `GEOMETRY` type — no [`spatial`](https://duckdb.org/docs/extensions/spatial) extension needed to produce it. Load `spatial` only for functions that consume it, like `ST_AsGeoJSON`:
 
 ```sql
-SELECT
-    ST_AsGeoJSON(
-        ST_MakePolygon(
-            ST_MakeLine(
-                list_transform(
-                    a5_cell_to_boundary(
-                        a5_lonlat_to_cell(-3.7037, 40.41677, 10)
-                    ),
-                    x -> ST_Point(x[1], x[2])
-                )
-            )
-        )
-    ) AS geojson;
+SELECT ST_AsGeoJSON(
+    a5_cell_to_geometry(
+        a5_lonlat_to_cell(-3.7037, 40.41677, 10)
+    )
+) AS geojson;
 ```
 
 The cell at resolution 10 covering Madrid (-3.7037, 40.41677):
@@ -83,6 +75,82 @@ The cell at resolution 10 covering Madrid (-3.7037, 40.41677):
   }}
   caption="A5 cell at resolution 10 (Madrid). The five-sided shape reflects A5's pentagonal partitioning of the globe."
 />
+
+## Cover a polygon (or point, or line) with cells
+
+[`a5_geometry_to_cells`](#a5_geometry_to_cells) runs the inverse of `a5_cell_to_geometry` — hand it any `GEOMETRY` and a resolution, and it returns the covering set of A5 cells. A plain `::GEOMETRY` cast from WKT text works with no extension beyond `a5` itself. The result comes back **compacted** — complete groups of sibling cells collapse to a coarser parent — the right shape for storage, transfer, and set operations. But cell boundaries at different resolutions don't nest geometrically, so **uncompact to a single resolution before drawing the cells on a map**; skip that and a mixed-resolution result will show gaps that aren't really there:
+
+```sql
+SELECT unnest(a5_uncompact(
+    a5_geometry_to_cells(
+        'POLYGON((-74.02 40.70, -73.99 40.70, -73.99 40.72, -74.02 40.72, -74.02 40.70))'::GEOMETRY,
+        12
+    ),
+    12
+)) AS cell;
+```
+
+Points map to their containing cell, lines are traced, and polygons are filled by cell-center containment by default — which really does leave a gap at the polygon's edge, visible below where the query rectangle's left and bottom edges cross cells whose center falls just outside it:
+
+<GeoJsonMap
+  layers={[
+    {
+      geojson: { type: 'Polygon', coordinates: [[[-74.02, 40.70], [-73.99, 40.70], [-73.99, 40.72], [-74.02, 40.72], [-74.02, 40.70]]] },
+      color: '#1f2937', weight: 2, fillOpacity: 0, dashArray: '6 4',
+      label: 'Query polygon',
+    },
+    {
+      geojson: { type: 'FeatureCollection', features: [
+        { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-74.01873945954674, 40.720572334371376], [-74.03224146728053, 40.717282778310285], [-74.022965980133, 40.70963570662063], [-74.00844615136577, 40.709618978945024], [-74.00437258656791, 40.718825235327024], [-74.01873945954674, 40.720572334371376]]] } },
+        { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-74.00844615136577, 40.709618978945024], [-73.99392680450427, 40.709600402952574], [-73.98159978331131, 40.714460865814246], [-73.99086921483337, 40.72211171919402], [-74.00437258656791, 40.718825235327024], [-74.00844615136577, 40.709618978945024]]] } },
+        { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-73.99815822391002, 40.69866358039439], [-73.9846596772249, 40.70194910482933], [-73.99392680450427, 40.709600402952574], [-74.00844615136577, 40.709618978945024], [-74.01251873076399, 40.70041231358282], [-73.99815822391002, 40.69866358039439]]] } },
+      ] },
+      color: '#2563eb', fillColor: '#3b82f6', weight: 1.5, fillOpacity: 0.35,
+      label: 'Default (cell-center), uncompacted — 3 cells',
+    },
+  ]}
+  caption="Default (cell-center) coverage of a bounding box over Lower Manhattan at resolution 12 — cells whose center falls outside the polygon are excluded, leaving a gap along the edge."
+/>
+
+Pass `overlapping := true` for genuinely gap-free coverage — it additionally includes every cell that merely touches the boundary. Uncompact this one too before drawing it:
+
+```sql
+SELECT unnest(a5_uncompact(
+    a5_geometry_to_cells(
+        'POLYGON((-74.02 40.70, -73.99 40.70, -73.99 40.72, -74.02 40.72, -74.02 40.70))'::GEOMETRY,
+        12,
+        true
+    ),
+    12
+)) AS cell;
+```
+
+<GeoJsonMap
+  layers={[
+    {
+      geojson: { type: 'Polygon', coordinates: [[[-74.02, 40.70], [-73.99, 40.70], [-73.99, 40.72], [-74.02, 40.72], [-74.02, 40.70]]] },
+      color: '#1f2937', weight: 2, fillOpacity: 0, dashArray: '6 4',
+      label: 'Query polygon',
+    },
+    {
+      geojson: { type: 'FeatureCollection', features: [
+        { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-74.01873945954674, 40.720572334371376], [-74.03224146728053, 40.717282778310285], [-74.022965980133, 40.70963570662063], [-74.00844615136577, 40.709618978945024], [-74.00437258656791, 40.718825235327024], [-74.01873945954674, 40.720572334371376]]] } },
+        { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-74.00844615136577, 40.709618978945024], [-74.022965980133, 40.709635706620624], [-74.03528909155324, 40.704771240488], [-74.02601591313709, 40.69712372081967], [-74.01251873076399, 40.70041231358282], [-74.00844615136577, 40.709618978945024]]] } },
+        { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-74.01251873076399, 40.70041231358282], [-74.02601591313709, 40.69712372081967], [-74.01674606938667, 40.68947483186598], [-74.00223226231549, 40.68945665698675], [-73.99815822391002, 40.69866358039439], [-74.01251873076399, 40.70041231358282]]] } },
+        { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-74.00223226231549, 40.68945665698675], [-73.98771893566669, 40.689436636660695], [-73.97539588083185, 40.69429644232246], [-73.9846596772249, 40.70194910482933], [-73.99815822391002, 40.69866358039438], [-74.00223226231549, 40.68945665698675]]] } },
+        { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-73.96707991908818, 40.71443903265131], [-73.98159978331131, 40.714460865814246], [-73.99392680450427, 40.709600402952574], [-73.9846596772249, 40.70194910482933], [-73.9711598339282, 40.70523317673411], [-73.96707991908818, 40.71443903265131]]] } },
+        { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-74.00844615136577, 40.709618978945024], [-73.99392680450427, 40.709600402952574], [-73.98159978331131, 40.714460865814246], [-73.99086921483337, 40.72211171919402], [-74.00437258656791, 40.718825235327024], [-74.00844615136577, 40.709618978945024]]] } },
+        { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-73.99815822391002, 40.69866358039439], [-73.9846596772249, 40.70194910482933], [-73.99392680450427, 40.709600402952574], [-74.00844615136577, 40.709618978945024], [-74.01251873076399, 40.70041231358282], [-73.99815822391002, 40.69866358039439]]] } },
+        { type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[-74.00437258656791, 40.718825235327024], [-73.99086921483337, 40.72211171919402], [-74.00014198079043, 40.729761205193284], [-74.01466735453607, 40.7297783323151], [-74.01873945954674, 40.72057233437138], [-74.00437258656791, 40.718825235327024]]] } },
+      ] },
+      color: '#ea580c', fillColor: '#f97316', weight: 1.5, fillOpacity: 0.35,
+      label: 'overlapping := true, uncompacted — 8 cells',
+    },
+  ]}
+  caption="Overlapping coverage of the same bounding box, uncompacted to a uniform resolution: genuinely gap-free, at the cost of cells extending past the query polygon's edge."
+/>
+
+`a5_geometry_to_cells`'s compacted output is also the right shape to join against a uniform-resolution indexed cell column — `a5_uncompact` it to that resolution first — but that's a different reason to uncompact than the rendering one above: joins care about matching resolutions, drawing cares about geometric nesting.
 
 ## Roll up to a coarser resolution
 
@@ -195,7 +263,7 @@ JOIN   zones  z USING (cell)
 GROUP  BY z.zone_name;
 ```
 
-For polygon zones rather than centroids, encode each zone as a covering set (via [`a5_spherical_cap`](#a5_spherical_cap) or by walking children of a parent cell) and `UNNEST` it before joining.
+For polygon zones rather than centroids, encode each zone with [`a5_geometry_to_cells`](#a5_geometry_to_cells) instead and `UNNEST` the result before joining.
 
 ## Inspect the base grid
 
@@ -205,4 +273,9 @@ The 12 root cells covering the entire globe at resolution 0:
 SELECT unnest(a5_get_res0_cells()) AS root_cell;
 ```
 
-[`a5_get_num_cells`](#a5_get_num_cells) returns the total cell count at any resolution — useful for sizing decisions before encoding a large dataset.
+[`a5_get_num_cells`](#a5_get_num_cells) returns the total cell count at any resolution — useful for sizing decisions before encoding a large dataset. [`a5_world_cell`](#a5_world_cell) returns the single root cell (ID `0`) above all twelve of these; [`a5_is_valid_cell`](#a5_is_valid_cell) is a quick sanity check when a `UBIGINT` came from outside DuckDB — it rejects a cell whose encoded origin points past the 12 base cells, which is the shape of ID corruption you'd actually hit (a bit-flipped or truncated cell), not just any small integer:
+
+```sql
+SELECT a5_is_valid_cell(a5_lonlat_to_cell(-74.0060, 40.7128, 10)) AS ok,
+       a5_is_valid_cell(63::UBIGINT << 58)                       AS bogus;
+```
