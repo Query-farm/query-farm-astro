@@ -7,6 +7,10 @@ import {
   extensionFunctionCategoryPath,
   groupExtensionFunctions,
 } from '../../lib/extension-reference';
+import { parseInline } from 'marked';
+
+const renderInline = (s: string): string =>
+  parseInline(s ?? '', { async: false }) as string;
 
 interface Props {
   functions: FunctionDocData[];
@@ -22,7 +26,7 @@ const {
   slug,
   categoryDescriptions = {},
   eyebrow = 'API Reference',
-  title = 'Function Documentation',
+  title = 'Function Reference',
   description,
 } = Astro.props;
 
@@ -53,29 +57,37 @@ for (const category of categories) {
 
   <nav aria-label="Function categories" class="mb-10 border-t border-soil-300">
     {categories.map(category => (
-      <a
-        href={extensionFunctionCategoryPath(slug, category.name)}
-        class="group grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-5 gap-y-2 border-b border-soil-300 px-1 py-5 text-soil-900 no-underline transition hover:bg-sun-400/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-link aria-[current=true]:bg-sun-400/10 md:grid-cols-[minmax(11rem,0.4fr)_minmax(0,1fr)_auto] md:items-center md:px-3"
-        data-function-category-link
-        data-category-slug={category.slug}
-        aria-controls="function-category-region"
-        aria-expanded="false"
-      >
-        <span class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <div class="group relative grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-5 gap-y-2 border-b border-soil-300 px-1 py-5 text-soil-900 transition hover:bg-sun-400/10 md:grid-cols-[minmax(11rem,0.4fr)_minmax(0,1fr)_auto] md:items-center md:px-3">
+        {/* The category action covers the row, while Markdown links in the
+            description sit above it. This keeps the generous row target
+            without producing invalid nested <a> elements. */}
+        <a
+          href={extensionFunctionCategoryPath(slug, category.name)}
+          class="absolute inset-0 z-0 no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-link aria-[current=true]:bg-sun-400/10"
+          data-function-category-link
+          data-category-slug={category.slug}
+          data-category-name={category.name}
+          aria-controls="function-category-region"
+          aria-expanded="false"
+        >
+          <span class="sr-only">View {category.name} functions</span>
+        </a>
+        <span class="pointer-events-none relative z-[1] flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <span class="font-display text-xl font-semibold group-hover:text-link">{category.name}</span>
           <span class="whitespace-nowrap text-sm tabular-nums text-soil-500">
             {category.functions.length} {category.functions.length === 1 ? 'function' : 'functions'}
           </span>
         </span>
         {categoryDescriptions[category.name] && (
-          <span class="col-span-2 block max-w-3xl text-[15px] leading-relaxed text-soil-700 md:col-span-1 md:col-start-2 md:row-start-1">
-            {categoryDescriptions[category.name]}
-          </span>
+          <span
+            class="pointer-events-none relative z-[2] col-span-2 block max-w-3xl text-[15px] leading-relaxed text-soil-700 [&_a]:pointer-events-auto [&_a]:text-link [&_a]:underline [&_a]:underline-offset-2 [&_a]:decoration-link/45 hover:[&_a]:decoration-link [&_code]:rounded [&_code]:bg-soil-100 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[13px] [&_code]:text-soil-900 md:col-span-1 md:col-start-2 md:row-start-1"
+            set:html={renderInline(categoryDescriptions[category.name])}
+          />
         )}
-        <span class="col-start-2 row-start-1 text-xl text-link transition-transform group-hover:translate-x-0.5 md:col-start-3" aria-hidden="true">
+        <span class="pointer-events-none relative z-[1] col-start-2 row-start-1 text-xl text-link transition-transform group-hover:translate-x-0.5 md:col-start-3" aria-hidden="true">
           →
         </span>
-      </a>
+      </div>
     ))}
   </nav>
 
@@ -100,7 +112,7 @@ for (const category of categories) {
       let requestNumber = 0;
 
       const linkForSlug = slug => links.find(link => link.dataset.categorySlug === slug);
-      const categoryName = link => link.querySelector('.font-display')?.textContent?.trim() || 'category';
+      const categoryName = link => link.dataset.categoryName || 'category';
 
       async function fetchCategory(link) {
         const url = link.href;
@@ -223,6 +235,10 @@ for (const category of categories) {
       }
 
       window.addEventListener('popstate', () => restoreFromHash());
+      // Inline Markdown links in a category summary can target a function in
+      // this lazy-loaded region. Native fragment navigation emits hashchange,
+      // not popstate, so route those links through the same category loader.
+      window.addEventListener('hashchange', () => restoreFromHash());
       restoreFromHash();
     })();
   </script>

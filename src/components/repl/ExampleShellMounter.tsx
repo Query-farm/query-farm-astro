@@ -2,10 +2,11 @@
  * Mounts per-example "Try" buttons on an extension page.
  *
  * Rendered as an Astro React island (so the React runtime/preamble is present),
- * it scans the server-rendered SQL code blocks, attaches a small ▶ Try button to
- * each, and — on click — renders an isolated ExampleShell into a container placed
- * right below that block via a React portal. The engine boots once and is shared;
- * each shell runs in its own sandbox session (see src/lib/repl/duckdb-boot.ts).
+ * it scans the server-rendered SQL code blocks, attaches a run control to each,
+ * and — on click — renders an isolated ExampleShell below that block via a React
+ * portal. Extension pages use a compact toolbar icon; narrative pages can keep
+ * the larger CTA row. The engine boots once and is shared; each shell runs in
+ * its own sandbox session (see src/lib/repl/duckdb-boot.ts).
  */
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -15,11 +16,13 @@ const STYLE_ID = "example-shell-style";
 const ATTACHED = "exampleShellAttached";
 
 const PLAY_ICON =
-  '<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="13 2 3 14 11 14 11 22 21 10 13 10 13 2"></polygon></svg>';
+  '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 5 7 7-7 7"></path></svg>';
 const HIDE_ICON =
   '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
 const TRY_LABEL = `<span class="example-try-icon">${PLAY_ICON}</span><span>Try it in your browser</span>`;
 const HIDE_LABEL = `<span class="example-try-icon">${HIDE_ICON}</span><span>Hide</span>`;
+const RUN_ICON_LABEL = `<span class="example-toolbar-icon">${PLAY_ICON}</span><span>Run via WASM</span>`;
+const CLOSE_ICON_LABEL = `<span class="example-toolbar-icon">${HIDE_ICON}</span><span>Hide</span>`;
 
 const STYLE = `
 /* The Try button used to live as a small pill inside the code block's top
@@ -114,18 +117,20 @@ const STYLE = `
   background: rgba(26, 21, 18, 0.22);
 }
 .example-try-icon svg { display: block; }
-@media (prefers-reduced-motion: reduce) {
-  .example-try-button { transition: none; }
+.example-toolbar-run-button {
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
 }
-/* Expressive Code draws the copy glyph as a mask-image inset from the
-   (now 2rem) button by a fixed 0.475rem margin on all sides — the button
-   shrank in adoptProseCopyButton below, but that inset didn't, so the glyph
-   still reads oversized relative to CodeBlock.astro's own 14px copy icon in
-   the same toolbar. A bigger inset margin is the only way to shrink the
-   glyph itself without shrinking the button's (already-small) click target;
-   0.5625rem leaves a ~14px icon on the 2rem button, matching CodeBlock's. */
-.code-block-toolbar .copy button::after {
-  margin: 0.5625rem;
+.example-toolbar-run-button[aria-expanded="true"] {
+  color: #e9e1d3;
+  background: #2a2420;
+}
+.example-toolbar-icon,
+.example-toolbar-icon svg {
+  display: block;
+}
+@media (prefers-reduced-motion: reduce) {
+  .example-try-button,
+  .example-toolbar-run-button { transition: none; }
 }
 `;
 
@@ -220,7 +225,8 @@ function isOnDarkGround(el: HTMLElement): boolean {
 function findOrCreateToolbar(pre: HTMLElement): { bar: HTMLElement; cleanup: () => void } {
   const prev = pre.previousElementSibling as HTMLElement | null;
   if (prev && (prev.classList.contains("code-block-toolbar") || prev.querySelector(":scope > .copy-button"))) {
-    return { bar: prev, cleanup: () => {} };
+    const controls = prev.querySelector<HTMLElement>(":scope > .code-block-controls");
+    return { bar: controls ?? prev, cleanup: () => {} };
   }
 
   const preStyle = getComputedStyle(pre);
@@ -238,7 +244,7 @@ function findOrCreateToolbar(pre: HTMLElement): { bar: HTMLElement; cleanup: () 
     alignItems: "center",
     justifyContent: "flex-end",
     gap: "0.25rem",
-    padding: "0.375rem 0.5rem",
+    padding: "0.25rem 0.5rem",
     // Code always sits on rock-900; the bar above it is rock-950 with a
     // rock-800 rule, matching the .panel-head shape on the dark side.
     background: "#100d0a",
@@ -300,28 +306,38 @@ function findOrCreateToolbar(pre: HTMLElement): { bar: HTMLElement; cleanup: () 
  *  hide-by-default there just reads as broken rather than tidy. Force it
  *  permanently visible instead of relying on any of those triggers.
  *
- *  Expressive Code ships the button at 2.5rem square, but that's its
- *  touch/no-hover size (`@media (scripting)`-style fallback for devices with
- *  no mouse) meant to stay tappable while floating unlabelled over code; its
- *  own `@media (hover: hover)` rule shrinks it to 2rem for anything with a
- *  mouse. Sizing to the 2.5rem default here — the button's inline style,
- *  which always wins over that external media-query rule regardless of
- *  which one actually matches — pinned every desktop visitor to the touch
- *  size, reading as oversized next to CodeBlock.astro's own ~1.75rem copy
- *  button in the same toolbar. Match the hover-capable size instead: this
- *  toolbar is always visible (never hover-revealed) on every input type, so
- *  there's no touch-target case left to size up for. */
+ *  Extension prose overrides that icon-only touch control with the same text
+ *  "Copy" action CodeBlock.astro renders. Do not pin a square size here: that
+ *  would override the text control and recreate the tall mobile toolbar. */
 function adoptProseCopyButton(pre: HTMLElement, bar: HTMLElement): () => void {
   const copyWrapper = pre.parentElement?.querySelector<HTMLElement>(":scope > .copy") ?? null;
   if (copyWrapper) {
+    const originalParent = copyWrapper.parentNode;
+    const originalNextSibling = copyWrapper.nextSibling;
+    const originalWrapperStyle = copyWrapper.getAttribute("style");
+    const btn = copyWrapper.querySelector<HTMLElement>("button");
+    const originalButtonStyle = btn?.getAttribute("style") ?? null;
     Object.assign(copyWrapper.style, {
       position: "static",
       inset: "auto",
       margin: "0",
     });
-    const btn = copyWrapper.querySelector<HTMLElement>("button");
-    if (btn) Object.assign(btn.style, { opacity: "1", width: "2rem", height: "2rem" });
+    if (btn) btn.style.opacity = "1";
     bar.appendChild(copyWrapper);
+
+    return () => {
+      if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
+        originalParent?.insertBefore(copyWrapper, originalNextSibling);
+      } else {
+        originalParent?.appendChild(copyWrapper);
+      }
+      if (originalWrapperStyle === null) copyWrapper.removeAttribute("style");
+      else copyWrapper.setAttribute("style", originalWrapperStyle);
+      if (btn) {
+        if (originalButtonStyle === null) btn.removeAttribute("style");
+        else btn.setAttribute("style", originalButtonStyle);
+      }
+    };
   }
   return () => {};
 }
@@ -336,12 +352,21 @@ interface OpenShell {
 interface Props {
   extensionName: string;
   installSource: string;
+  /** Put a compact run icon beside Copy instead of a repeated CTA below each
+   *  block. The below-block control remains the default for narrative pages
+   *  whose bespoke examples portal additional actions into that row. */
+  controls?: "below" | "toolbar";
   /** Raw check-fixtures.sql for this extension, run once per session to seed
    *  the sample tables the examples reference. Null when the extension has none. */
   fixtures?: string | null;
 }
 
-export default function ExampleShellMounter({ extensionName, installSource, fixtures }: Props) {
+export default function ExampleShellMounter({
+  extensionName,
+  installSource,
+  fixtures,
+  controls = "below",
+}: Props) {
   const [shells, setShells] = useState<OpenShell[]>([]);
 
   useEffect(() => {
@@ -358,15 +383,14 @@ export default function ExampleShellMounter({ extensionName, installSource, fixt
         if (!sql) return;
         pre.dataset[ATTACHED] = "true";
 
-        // The top toolbar still exists (and still hosts Copy — for MDX blocks
-        // that means adopting a copy button that lands there asynchronously),
-        // but Try no longer lives in it: a small pill up there competed with
-        // Copy and the title for attention and went unnoticed.
+        // Both rendering paths expose one toolbar. MDX blocks get one here and
+        // donate Expressive Code's own wired copy control to it; CodeBlock.astro
+        // already supplied the toolbar and text Copy button.
         const { bar, cleanup: restoreToolbar } = findOrCreateToolbar(pre);
         const stopAdopting = adoptProseCopyButton(pre, bar);
         const id = ++counter;
-        // The run bar goes immediately after whichever element is the whole
-        // visual block, not just after <pre> itself. For CodeBlock.astro
+        // The shell (and, on narrative pages, its run bar) goes immediately
+        // after whichever element is the whole visual block. For CodeBlock.astro
         // blocks that's .code-block-wrapper; for Expressive Code blocks
         // (MDX/Markdown fences) <pre> only reaches its toolbar-and-code
         // portion — its actual parent is <figure class="frame">, which draws
@@ -379,39 +403,52 @@ export default function ExampleShellMounter({ extensionName, installSource, fixt
           (pre.closest("figure.frame") as HTMLElement | null) ??
           pre;
 
-        // Try now gets its own bar directly under the block — a full-width,
-        // unmissable button rather than a toolbar pill.
-        const runBar = document.createElement("div");
-        runBar.className = "example-run-bar";
-
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.className = "example-try-button";
-        // Ground check starts from blockRoot's *parent*, not blockRoot
-        // itself: the run bar lands as blockRoot's sibling (same parent),
-        // beside it rather than inside it, so that's the background the
-        // button actually sits on. blockRoot itself is always dark by
-        // design — CodeBlock.astro's own bg-rock-900, or an Expressive Code
-        // <figure> — so checking it directly always says "dark" regardless
-        // of what the surrounding page background actually is.
-        if (isOnDarkGround(blockRoot.parentElement ?? blockRoot)) btn.classList.add("is-on-dark");
-        btn.setAttribute("aria-label", "Run this example in an in-browser shell");
-        btn.innerHTML = TRY_LABEL;
-        runBar.appendChild(btn);
-        blockRoot.insertAdjacentElement("afterend", runBar);
+        btn.setAttribute("aria-expanded", "false");
 
-        // The shell opens below the run bar. One reusable container per
-        // block, appended/removed on toggle.
+        let runBar: HTMLElement | null = null;
+        if (controls === "toolbar") {
+          btn.className = "code-toolbar-button example-toolbar-run-button";
+          btn.setAttribute("aria-label", "Run this example via WebAssembly");
+          btn.title = "Run via WASM";
+          btn.innerHTML = RUN_ICON_LABEL;
+          bar.appendChild(btn);
+        } else {
+          // Narrative pages keep the larger CTA row: bespoke examples such as
+          // the live train board portal a second action into this same node.
+          runBar = document.createElement("div");
+          runBar.className = "example-run-bar";
+          btn.className = "example-try-button";
+          if (isOnDarkGround(blockRoot.parentElement ?? blockRoot)) btn.classList.add("is-on-dark");
+          btn.setAttribute("aria-label", "Run this example in an in-browser shell");
+          btn.innerHTML = TRY_LABEL;
+          runBar.appendChild(btn);
+          blockRoot.insertAdjacentElement("afterend", runBar);
+        }
+
+        // One reusable shell container per block, appended/removed on toggle.
         const container = document.createElement("div");
 
         const close = () => {
-          btn.innerHTML = TRY_LABEL;
+          btn.innerHTML = controls === "toolbar" ? RUN_ICON_LABEL : TRY_LABEL;
+          btn.setAttribute("aria-expanded", "false");
+          if (controls === "toolbar") {
+            btn.setAttribute("aria-label", "Run this example via WebAssembly");
+            btn.title = "Run via WASM";
+          }
           setShells((prev) => prev.filter((s) => s.id !== id));
           container.remove();
         };
         const open = () => {
-          runBar.insertAdjacentElement("afterend", container);
-          btn.innerHTML = HIDE_LABEL;
+          const shellAnchor = controls === "toolbar" ? blockRoot : runBar;
+          shellAnchor?.insertAdjacentElement("afterend", container);
+          btn.innerHTML = controls === "toolbar" ? CLOSE_ICON_LABEL : HIDE_LABEL;
+          btn.setAttribute("aria-expanded", "true");
+          if (controls === "toolbar") {
+            btn.setAttribute("aria-label", "Hide the in-browser shell");
+            btn.title = "Hide browser shell";
+          }
           setShells((prev) =>
             prev.some((s) => s.id === id) ? prev : [...prev, { id, container, sql, onClose: close }],
           );
@@ -425,7 +462,8 @@ export default function ExampleShellMounter({ extensionName, installSource, fixt
 
         cleanupByBlock.set(pre, () => {
           close();
-          runBar.remove();
+          runBar?.remove();
+          btn.remove();
           stopAdopting();
           restoreToolbar();
           delete pre.dataset[ATTACHED];
@@ -460,7 +498,7 @@ export default function ExampleShellMounter({ extensionName, installSource, fixt
       cleanupByBlock.forEach(cleanup => cleanup());
       cleanupByBlock.clear();
     };
-  }, [extensionName, installSource, fixtures]);
+  }, [extensionName, installSource, fixtures, controls]);
 
   return (
     <>

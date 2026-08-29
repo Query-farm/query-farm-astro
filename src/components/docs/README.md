@@ -1,11 +1,11 @@
-# DuckDB Extension Function Documentation Components
+# DuckDB Extension Function Reference Components
 
 This directory contains reusable components for documenting DuckDB extension functions.
 
 ## Components
 
 ### DuckDBExtensionFunctionDoc.astro
-Main wrapper component that renders complete function documentation including signature, parameters, returns, description, examples, and navigation.
+Main wrapper component that renders the complete function reference, including signatures, parameters, returns, descriptions, examples, and navigation.
 
 ### DuckDBExtensionFunctionSignature.astro
 Displays the function signature with syntax highlighting.
