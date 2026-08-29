@@ -82,27 +82,27 @@ function isActive(tab: SubNavTab): boolean {
   return (tab.items ?? []).some(item => !item.external && matches(item.href));
 }
 
-const tabClass = 'whitespace-nowrap border-b-2 px-3.5 py-[11px] text-sm no-underline transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-link';
+const tabClass = 'snap-start whitespace-nowrap border-b-2 px-3.5 py-[11px] text-sm no-underline transition-colors focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-link';
 const panelLink = 'block rounded px-2 py-1.5 text-sm text-soil-700 no-underline transition-colors hover:bg-soil-100 hover:text-soil-900';
 ---
 
 <div class="sticky z-40 border-b border-soil-300 bg-soil-100" style="top: var(--qf-nav-h)">
   <div class="section-container">
-    {/* flex-wrap, not overflow-x-auto: a horizontally-scrolling row hides the
-        tabs that don't fit behind a swipe gesture, and — worse, on this bar
-        specifically — an overflow-x container clips the absolutely-positioned
-        panel, since it's a descendant of the row. Tabs wrap to a second line
-        instead once they don't fit (matches HaybarnSubNav). */}
-    <nav class="qf-subnav-row flex flex-wrap items-center" aria-label="VGI section">
+    <nav class="qf-subnav-row flex items-center" aria-label="VGI section">
       <a
         href="/vgi"
-        class="mr-1.5 flex flex-none items-center gap-[9px] whitespace-nowrap border-r border-soil-300 py-[11px] pr-[18px] font-display text-[17px] font-semibold tracking-[-0.018em] text-soil-900 no-underline transition-colors hover:text-link"
+        class="mr-1.5 flex flex-none items-center gap-[9px] whitespace-nowrap border-r border-soil-300 py-[11px] pr-[18px] font-display text-[17px] font-semibold leading-none tracking-[-0.018em] text-soil-900 no-underline transition-colors hover:text-link"
       >
         <img src="/vgi/vgi-logo.png" alt="" aria-hidden="true" width="22" height="22" class="h-[22px] w-[22px] object-contain" />
         <span>VGI</span>
       </a>
 
-      {tabs.map(tab => tab.panel && tab.items ? (
+      {/* Keep the section identity pinned while the peer destinations occupy
+          one swipeable line. Edge fades are updated by the small script below
+          so the rail advertises additional content without wrapping. */}
+      <div class="qf-vgi-tabs-shell relative min-w-0 flex-1">
+        <div class="qf-vgi-tabs flex items-center" data-vgi-tab-rail>
+        {tabs.map(tab => tab.panel && tab.items ? (
         // A native <details>/<summary> disclosure, not a hover panel: hover
         // has no touch equivalent, so a group-hover reveal (the previous
         // approach) was unreachable on any touch device — tapping the tab
@@ -128,7 +128,7 @@ const panelLink = 'block rounded px-2 py-1.5 text-sm text-soil-700 no-underline 
               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
             ><polyline points="6 9 12 15 18 9" /></svg>
           </summary>
-          <div class="absolute left-0 top-full z-50 mt-px w-56 overflow-hidden rounded-xl border border-soil-300 bg-white p-2 shadow-[0_10px_28px_rgba(33,26,18,0.14)]">
+          <div class="qf-subnav-panel z-50 mt-px overflow-hidden rounded-xl border border-soil-300 bg-white p-2 shadow-[0_10px_28px_rgba(33,26,18,0.14)]">
             <ul class="space-y-0.5">
               {tab.items.map(item => (
                 <li>
@@ -161,12 +161,84 @@ const panelLink = 'block rounded px-2 py-1.5 text-sm text-soil-700 no-underline 
         >
           {tab.name}
         </a>
-      ))}
+        ))}
+        </div>
+      </div>
     </nav>
   </div>
 </div>
 
 <style>
+  .qf-vgi-tabs {
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+    scroll-snap-type: inline proximity;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .qf-vgi-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* A clipped label can be mistaken for broken layout; a soft edge cue makes
+     the swipe affordance explicit. JS removes each cue at its corresponding
+     end of the rail. */
+  .qf-vgi-tabs-shell::before,
+  .qf-vgi-tabs-shell::after {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    z-index: 20;
+    width: 1.75rem;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 140ms ease;
+  }
+  .qf-vgi-tabs-shell::before {
+    inset-inline-start: 0;
+    background: linear-gradient(to right, var(--color-soil-100), transparent);
+  }
+  .qf-vgi-tabs-shell::after {
+    inset-inline-end: 0;
+    background: linear-gradient(to left, var(--color-soil-100), transparent);
+  }
+  .qf-vgi-tabs-shell.is-away-from-start::before,
+  .qf-vgi-tabs-shell:not(.is-at-end)::after {
+    opacity: 1;
+  }
+
+  /* The panel escapes the tab rail's overflow on compact viewports. At the
+     desktop breakpoint the entire row fits, so it returns to its conventional
+     position beneath the triggering tab. */
+  .qf-subnav-panel {
+    position: fixed;
+    inset-inline: 1rem;
+    top: calc(var(--qf-nav-h) + 45px);
+    width: auto;
+    max-height: calc(100dvh - var(--qf-nav-h) - 61px);
+    overflow-y: auto;
+  }
+
+  @media (min-width: 64rem) {
+    .qf-vgi-tabs {
+      overflow: visible;
+    }
+    .qf-vgi-tabs-shell::before,
+    .qf-vgi-tabs-shell::after {
+      display: none;
+    }
+    .qf-subnav-panel {
+      position: absolute;
+      inset-inline: 0 auto;
+      top: 100%;
+      width: 14rem;
+      max-height: none;
+      overflow: hidden;
+    }
+  }
+
   /* Belt-and-suspenders: a closed <details> should already collapse its
      non-summary content (the panel) to nothing per the HTML spec's own
      suggested UA rule, and normally does — but that turned out to be
@@ -188,7 +260,9 @@ const panelLink = 'block rounded px-2 py-1.5 text-sm text-soil-700 no-underline 
     transform: rotate(180deg);
   }
   @media (prefers-reduced-motion: reduce) {
-    .qf-subnav-chevron {
+    .qf-subnav-chevron,
+    .qf-vgi-tabs-shell::before,
+    .qf-vgi-tabs-shell::after {
       transition: none;
     }
   }
@@ -199,6 +273,7 @@ const panelLink = 'block rounded px-2 py-1.5 text-sm text-soil-700 no-underline 
   // document so this survives the subnav being re-rendered on navigation, and
   // registered once regardless of how many times the module is evaluated.
   const FLAG = '__qfSubnavMenuWired';
+  const RAIL_FLAG = '__qfVgiSubnavRailWired';
 
   function closeMenus(except?: Element | null) {
     document.querySelectorAll<HTMLDetailsElement>('details.qf-subnav-menu[open]').forEach(el => {
@@ -225,4 +300,39 @@ const panelLink = 'block rounded px-2 py-1.5 text-sm text-soil-700 no-underline 
     // View transitions swap the DOM without a reload; leave nothing open.
     document.addEventListener('astro:after-swap', () => closeMenus());
   }
+
+  function updateRailEdges(rail: HTMLElement) {
+    const shell = rail.parentElement;
+    if (!shell) return;
+    const maxScroll = Math.max(0, rail.scrollWidth - rail.clientWidth);
+    shell.classList.toggle('is-away-from-start', rail.scrollLeft > 2);
+    shell.classList.toggle('is-at-end', rail.scrollLeft >= maxScroll - 2);
+  }
+
+  function prepareVgiTabRails() {
+    document.querySelectorAll<HTMLElement>('[data-vgi-tab-rail]').forEach(rail => {
+      if (rail.dataset.railWired !== 'true') {
+        rail.dataset.railWired = 'true';
+        rail.addEventListener('scroll', () => updateRailEdges(rail), { passive: true });
+      }
+
+      requestAnimationFrame(() => {
+        const active = rail.querySelector<HTMLElement>('[aria-current="page"]');
+        if (active && rail.scrollWidth > rail.clientWidth) {
+          const railRect = rail.getBoundingClientRect();
+          const activeRect = active.getBoundingClientRect();
+          rail.scrollLeft += activeRect.left - railRect.left
+            - ((rail.clientWidth - activeRect.width) / 2);
+        }
+        updateRailEdges(rail);
+      });
+    });
+  }
+
+  if (!(RAIL_FLAG in window)) {
+    (window as any)[RAIL_FLAG] = true;
+    document.addEventListener('astro:page-load', prepareVgiTabRails);
+    window.addEventListener('resize', prepareVgiTabRails, { passive: true });
+  }
+  prepareVgiTabRails();
 </script>
