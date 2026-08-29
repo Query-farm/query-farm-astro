@@ -10,13 +10,15 @@ import ExampleShellMounter from '../../components/repl/ExampleShellMounter.tsx';
 import OvertureMapExample from '../../components/vgi/OvertureMapExample.tsx';
 import LiveTrainBoard from '../../components/vgi/LiveTrainBoard.tsx';
 import ConnectorCard from '../../components/products/ConnectorCard.astro';
-import { featuredConnectors } from '../../data/connectors';
+import { featuredConnectors, statusLabel } from '../../data/connectors';
 import { LANGUAGES, rootOf } from '../../lib/vgi-docs';
 
 // Orchard preview for the "discover" fork below — real prototype catalog
 // entries (src/data/connectors.ts), not placeholders. Orchard itself is
 // still incomplete, but these are the same live cards its own pages render.
 const orchardPreview = featuredConnectors.slice(0, 3);
+const fmtUses = (n?: number) =>
+  n == null ? '' : n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k` : String(n);
 
 // Real data-source credits for the tabs below — logo + link, reused across
 // whichever tabs actually query that source. Logos are each org's own
@@ -64,6 +66,7 @@ const tourExamples = [
   {
     id: 'weather',
     label: 'Weather forecast',
+    mobileLabel: 'Weather',
     filename: 'weather.sql',
     sql: `ATTACH 'open_meteo' AS m (TYPE vgi, LOCATION 'https://vgi-open-meteo.rusty-bb6.workers.dev');
 
@@ -98,6 +101,7 @@ ORDER BY w.time limit 6;`,
   {
     id: 'earthquakes',
     label: 'Earthquakes',
+    mobileLabel: 'Earthquakes',
     filename: 'earthquakes.sql',
     sql: `ATTACH 'earthquakes' AS eq (TYPE vgi, LOCATION 'https://vgi-earthquakes.rusty-bb6.workers.dev');
 
@@ -127,6 +131,7 @@ LIMIT 8;`,
   {
     id: 'trains',
     label: 'Amsterdam Centraal departures',
+    mobileLabel: 'Trains',
     filename: 'amsterdam-departures.sql',
     // vgi-trains-ts — a brand-new worker (deployed straight to Cloudflare,
     // no earlier vgi-* naming baggage), wrapping the NS (Nederlandse
@@ -199,6 +204,7 @@ LIMIT 10;`,
 // ST_Centroid/spatial extension needed.
 const mapExample = {
   label: 'Churches in Charlottesville, VA',
+  mobileLabel: 'Map',
   filename: 'charlottesville-churches.sql',
   setupSql: `SET s3_region = 'us-west-2';
 INSTALL httpfs;
@@ -377,19 +383,14 @@ const jsonLd = [
 >
   <VGISubNav />
 
-  {/* Not gated behind a wasmSupported check the way the extension detail page
-      gates it (metadata.platforms) — this is a bespoke page, not driven by
-      that metadata, and vgi/augment/metadata.json doesn't declare a platforms
-      list at all. Mounted unconditionally so the button is visible to test;
-      whether it actually works depends on the unverified pieces noted above
-      tourSql. */}
-  <ExampleShellMounter client:load extensionName="VGI" installSource="community" fixtures={null} />
-
   <!-- ── Page header ─────────────────────────────────────────── -->
   <PageHead
     variant="section"
     title="The universal SQL interface."
     hairband
+    class="vgi-page-head"
+    titleClass="mt-2 text-[2.1rem] leading-[1.12] text-soil-900 sm:mt-3 sm:text-4xl md:text-5xl"
+    ledeClass="mt-3 max-w-[58ch] text-base leading-relaxed text-soil-700 sm:mt-3.5 sm:text-[17.5px]"
   >
     {/* Lede moved from the prop to the slot so Haybarn can be linked. It
         deliberately avoids the word "worker" — that term is introduced and
@@ -426,15 +427,26 @@ const jsonLd = [
           alt="Vector Gateway Interface"
           width="1197"
           height="880"
-          class="h-auto w-[220px] sm:w-[268px] lg:w-[320px]"
+          fetchpriority="high"
+          class="h-auto w-[180px] sm:w-[268px] lg:w-[320px]"
         />
       </picture>
     </Fragment>
 
-    <div class="mt-6 flex flex-wrap items-center gap-3">
-      <Button href="/vgi/getting-started" variant="primary" size="md">Get started</Button>
-      <Button href="/vgi/architecture" variant="secondary" size="md">How it works</Button>
-      <Button href="https://github.com/Query-farm/vgi" variant="secondary" size="md" external>GitHub ↗</Button>
+    <div class="mt-5 flex flex-wrap items-center gap-x-3 gap-y-2 sm:mt-6">
+      <Button href="/vgi/getting-started" variant="primary" size="md" class="min-h-11">Get started</Button>
+      <Button href="/vgi/architecture" variant="secondary" size="md" class="min-h-11">How it works</Button>
+      <a
+        href="https://github.com/Query-farm/vgi"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="inline-flex min-h-11 items-center px-1 text-sm font-medium text-link no-underline hover:underline"
+      >GitHub ↗</a>
+    </div>
+
+    <div class="mt-4 inline-flex items-baseline gap-2 rounded-lg border border-soil-300 bg-white/60 px-3 py-2 lg:hidden">
+      <span class="qf-figure text-xl leading-none text-sun-700">115</span>
+      <span class="text-[12.5px] font-medium text-soil-700">Workers built</span>
     </div>
 
     <Fragment slot="aside">
@@ -444,7 +456,7 @@ const jsonLd = [
   </PageHead>
 
   <!-- ── The gist ────────────────────────────────────────────── -->
-  <section class="py-16 lg:py-[70px]">
+  <section class="py-12 sm:py-16 lg:py-[70px]">
     <div class={WRAP}>
       <span class={EYEBROW}>The gist</span>
       <h2 class="mt-3 max-w-[26ch] text-3xl md:text-4xl text-soil-900">
@@ -457,22 +469,12 @@ const jsonLd = [
         it queryable in SQL.
       </p>
       <p class={`mt-3.5 max-w-[68ch] ${LEDE}`}>
-        A worker can run entirely on your own machine, or be reached over HTTP. Locally, DuckDB
-        spawns it for you and talks over pipes, a Unix socket, or shared memory — no service to
-        deploy, and nothing on the network. Over HTTP, the worker runs wherever you deploy it,
-        and any number of DuckDB sessions can attach to the same one. Because a worker is just an
-        HTTP service, you can also put a pool of them behind a load balancer and scale it like
-        any other tier — the usual shape for a shared model or inference service. Same worker,
-        same protocol; only the
-        <a href="/vgi/architecture#transports">transport</a> changes.
-      </p>
-      <p class={`mt-3.5 max-w-[68ch] ${LEDE}`}>
-        And because DuckDB has
-        <a href="https://duckdb.org/docs/stable/clients/overview">client libraries</a> for
-        Node.js, Python, Go, and Rust, plus
-        <a href="https://duckdb.org/docs/stable/clients/adbc">ADBC</a> and
-        <a href="https://duckdb.org/docs/stable/clients/odbc/overview">ODBC</a>, every VGI worker
-        is reachable from whatever language you already work in.
+        Run a worker locally over pipes or shared memory, or deploy the same worker over HTTP for
+        many DuckDB sessions to share. Only the
+        <a href="/vgi/architecture#transports">transport</a> changes. Because it sits behind
+        DuckDB, the worker is also available through DuckDB's
+        <a href="https://duckdb.org/docs/stable/clients/overview">client libraries</a>, ADBC, and
+        ODBC — from whatever language your application already uses.
       </p>
       <p class={`mt-3.5 max-w-[68ch] ${LEDE}`}>
         In practice, that shows up as a handful of recurring patterns:
@@ -489,18 +491,22 @@ const jsonLd = [
               {...linkProps}
               class:list={[
                 CARD,
-                'p-6 text-center',
+                'p-4 text-left sm:p-6 sm:text-center',
                 u.href && 'block no-underline transition duration-200 hover:-translate-y-1 hover:border-sun-400'
               ]}
             >
-              <Icon name={`ph:${u.icon}`} class="mx-auto block h-8 w-8 text-sun-700" aria-hidden="true" />
-              <h3 class="mt-4 text-xl text-soil-900">{u.title}</h3>
-              <p class="mt-2.5 text-sm leading-relaxed text-soil-700">{u.description}</p>
-              {u.href && (
-                <span class="mt-4 inline-block text-[12.5px] font-medium text-link">
-                  {u.linkLabel ?? 'Learn more'} {u.external ? '↗' : '→'}
-                </span>
-              )}
+              <div class="flex items-start gap-3 sm:block">
+                <Icon name={`ph:${u.icon}`} class="mt-0.5 block h-6 w-6 flex-none text-sun-700 sm:mx-auto sm:h-8 sm:w-8" aria-hidden="true" />
+                <div class="min-w-0">
+                  <h3 class="text-lg text-soil-900 sm:mt-4 sm:text-xl">{u.title}</h3>
+                  <p class="mt-1.5 text-sm leading-relaxed text-soil-700 sm:mt-2.5">{u.description}</p>
+                  {u.href && (
+                    <span class="mt-2 inline-block text-[12.5px] font-medium text-link sm:mt-4">
+                      {u.linkLabel ?? 'Learn more'} {u.external ? '↗' : '→'}
+                    </span>
+                  )}
+                </div>
+              </div>
             </Tag>
           );
         })}
@@ -520,7 +526,7 @@ const jsonLd = [
       <p class={`${EYEBROW} mt-12 block`}>Terminology</p>
       <h2 class="mt-3 text-2xl md:text-3xl text-soil-900">VGI Protocol and VGI worker</h2>
       <div class="mt-6 grid gap-3.5 md:grid-cols-2">
-        <div class={`${CARD} p-6`}>
+        <div class={`${CARD} p-5 sm:p-6`}>
           <span class={EYEBROW}>VGI Protocol</span>
           <h3 class="mt-2.5 text-xl text-soil-900">What DuckDB speaks to reach a worker</h3>
           <p class="mt-2.5 text-sm leading-relaxed text-soil-700">
@@ -529,7 +535,7 @@ const jsonLd = [
             catalog discovery, query planning, and the data itself.
           </p>
         </div>
-        <div class={`${CARD} p-6`}>
+        <div class={`${CARD} p-5 sm:p-6`}>
           <span class={EYEBROW}>VGI worker</span>
           <h3 class="mt-2.5 text-xl text-soil-900">The service that exposes data</h3>
           <p class="mt-2.5 text-sm leading-relaxed text-soil-700">
@@ -543,7 +549,7 @@ const jsonLd = [
   </section>
 
   <!-- ── The one dark slab: the 10-second tour ────────────────── -->
-  <section id="tour" class="scroll-mt-32 bg-pipe-6 py-16 text-cream">
+  <section id="tour" class="scroll-mt-32 bg-pipe-6 py-12 text-cream sm:py-16">
     <div class={WRAP}>
       <span class="qf-eyebrow text-sun-400">The 10-second tour</span>
       <h2 class="mt-3 text-3xl md:text-4xl text-cream">We could have faked this demo. We didn't.</h2>
@@ -554,6 +560,10 @@ const jsonLd = [
         ETL, no connector plumbing, no native rebuild, either way.
       </p>
 
+      {/* The runnable examples begin here, several viewports below the hero.
+          Idle hydration keeps their React runtime out of the critical path. */}
+      <ExampleShellMounter client:idle extensionName="VGI" installSource="community" fixtures={null} />
+
       <!-- Tabs — file-tab strip (underline style, sun-400 active, matching
            VGISubNav's own tab idiom) over one panel per example. Each panel
            is a self-contained code-wrapper + sample-output pair;
@@ -562,30 +572,45 @@ const jsonLd = [
            just reveals a block that already has its own button/shell state —
            nothing here has to coordinate with it beyond hide/show a panel. -->
       <div class="mt-6" id="tour-tabs">
-        <div class="flex gap-1 overflow-x-auto border-b border-white/10" role="tablist" aria-label="Example queries">
+        <div class="tour-tab-rail-shell relative">
+        <div class="tour-tab-rail flex gap-1 overflow-x-auto border-b border-white/10" role="tablist" aria-label="Example queries" data-tour-tab-rail>
           {tourExamples.map((ex, i) => (
             <button
               type="button"
               class:list={[
-                'tour-tab whitespace-nowrap border-b-2 px-3.5 py-2 text-[13.5px] font-medium transition-colors hover:text-cream',
+                'tour-tab min-h-11 whitespace-nowrap border-b-2 px-3.5 py-2 text-[13.5px] font-medium transition-colors hover:text-cream',
                 i === 0 ? 'border-sun-400 text-sun-400' : 'border-transparent text-cream-2',
               ]}
               data-tab={ex.id}
+              id={`tour-tab-${ex.id}`}
               role="tab"
               aria-selected={i === 0 ? 'true' : 'false'}
-            >{ex.label}</button>
+              aria-controls={`tour-panel-${ex.id}`}
+              tabindex={i === 0 ? 0 : -1}
+            ><span class="sm:hidden">{ex.mobileLabel}</span><span class="hidden sm:inline">{ex.label}</span></button>
           ))}
           <button
             type="button"
-            class="tour-tab whitespace-nowrap border-b-2 border-transparent px-3.5 py-2 text-[13.5px] font-medium text-cream-2 transition-colors hover:text-cream"
+            class="tour-tab min-h-11 whitespace-nowrap border-b-2 border-transparent px-3.5 py-2 text-[13.5px] font-medium text-cream-2 transition-colors hover:text-cream"
             data-tab="map"
+            id="tour-tab-map"
             role="tab"
             aria-selected="false"
-          >{mapExample.label}</button>
+            aria-controls="tour-panel-map"
+            tabindex="-1"
+          ><span class="sm:hidden">{mapExample.mobileLabel}</span><span class="hidden sm:inline">{mapExample.label}</span></button>
+        </div>
         </div>
 
         {tourExamples.map((ex, i) => (
-          <div class="tour-tab-panel" data-tab-panel={ex.id} role="tabpanel" hidden={i !== 0}>
+          <div
+            class="tour-tab-panel"
+            data-tab-panel={ex.id}
+            id={`tour-panel-${ex.id}`}
+            role="tabpanel"
+            aria-labelledby={`tour-tab-${ex.id}`}
+            hidden={i !== 0}
+          >
             <!-- Source credit + description — sets up what this example is
                  and where its data/functions come from before the reader
                  hits the SQL, rather than explaining it after. Persists
@@ -657,7 +682,7 @@ const jsonLd = [
                 verbatim (one source of truth: the terminal button above
                 runs it once, this one keeps re-running just its final
                 SELECT on an interval). */}
-            {ex.id === 'trains' && <LiveTrainBoard client:load sql={ex.sql} />}
+            {ex.id === 'trains' && <LiveTrainBoard client:visible sql={ex.sql} />}
           </div>
         ))}
 
@@ -666,7 +691,7 @@ const jsonLd = [
              is off on its CodeBlock so ExampleShellMounter's generic scan
              skips it — OvertureMapExample is this tab's own run button, not
              a second one stacked underneath. -->
-        <div class="tour-tab-panel" data-tab-panel="map" role="tabpanel" hidden>
+        <div class="tour-tab-panel" data-tab-panel="map" id="tour-panel-map" role="tabpanel" aria-labelledby="tour-tab-map" hidden>
           <div class="mt-5 flex items-center gap-3.5 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-4">
             <div class="flex flex-none items-center gap-2">
               {mapExample.sources.map((src, si) => (
@@ -685,14 +710,14 @@ const jsonLd = [
             <CodeBlock code={mapExample.sql} lang="sql" title={mapExample.filename} tryable={false} />
           </div>
 
-          <OvertureMapExample client:load sql={mapExample.sql} setupSql={mapExample.setupSql} />
+          <OvertureMapExample client:visible sql={mapExample.sql} setupSql={mapExample.setupSql} />
         </div>
       </div>
     </div>
   </section>
 
   <!-- ── Under the hood ──────────────────────────────────────── -->
-  <section class="border-y border-soil-300 bg-soil-100 py-16 lg:py-[70px]">
+  <section class="border-y border-soil-300 bg-soil-100 py-12 sm:py-16 lg:py-[70px]">
     <div class={WRAP}>
       <div class="grid gap-10 lg:grid-cols-[0.95fr_1.05fr] lg:items-center">
         <div>
@@ -755,7 +780,7 @@ const jsonLd = [
        growing. Orchard IS the 115 from vgi-workers-created.txt, at various
        stages of landing in the catalog — not a separate universe next to
        it, which is how this section used to read. -->
-  <section id="discover" class="scroll-mt-32 py-16 lg:py-[70px]">
+  <section id="discover" class="scroll-mt-32 py-12 sm:py-16 lg:py-[70px]">
     <div class={WRAP}>
       <span class={EYEBROW}>Most visitors start here</span>
       <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">Find a worker someone already built</h2>
@@ -765,7 +790,34 @@ const jsonLd = [
         yourself.
       </p>
 
-      <div class="mt-8 grid gap-3.5 sm:grid-cols-3">
+      <div class="mt-8 grid gap-3 sm:hidden">
+        {orchardPreview.map((connector) => (
+          <a
+            href={`/products/orchard/connectors/${connector.id}`}
+            class={`${CARD} flex items-start gap-3 p-4 text-soil-900 no-underline`}
+          >
+            <div class={`flex h-11 w-11 flex-none items-center justify-center rounded-lg border border-soil-300/70 text-2xl ${connector.theme.iconBg}`}>
+              {connector.icon}
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <h3 class="text-lg text-soil-900">{connector.name}</h3>
+                {connector.popular && (
+                  <span class="rounded-full border border-sun-400 bg-sun-200 px-2 py-0.5 text-[11px] font-medium text-sun-800">★ Popular</span>
+                )}
+              </div>
+              <p class="mt-0.5 text-xs font-medium text-sun-700">{connector.category}</p>
+              <p class="mt-2 text-[13px] leading-relaxed text-soil-700">{connector.tagline}</p>
+              <p class="mt-2 text-xs text-soil-500">
+                {statusLabel[connector.status]}
+                {connector.uses != null && <> · <span class="qf-figure text-soil-700">{fmtUses(connector.uses)}</span> attaches/mo</>}
+              </p>
+            </div>
+          </a>
+        ))}
+      </div>
+
+      <div class="mt-8 hidden gap-3.5 sm:grid sm:grid-cols-3">
         {orchardPreview.map((connector) => (
           <ConnectorCard connector={connector} showPricing={false} />
         ))}
@@ -831,7 +883,7 @@ const jsonLd = [
   </section>
 
   <!-- ── Fork 2: build your own (the ~10% path) ─────────────────── -->
-  <section id="build" class="scroll-mt-32 border-y border-soil-300 bg-soil-100 py-16 lg:py-[70px]">
+  <section id="build" class="scroll-mt-32 border-y border-soil-300 bg-soil-100 py-12 sm:py-16 lg:py-[70px]">
     <div class={WRAP}>
       <span class={EYEBROW}>Building something new?</span>
       <h2 class="mt-3 text-3xl md:text-4xl text-soil-900">Write your own VGI worker</h2>
@@ -868,9 +920,9 @@ const jsonLd = [
   </section>
 
   <!-- ── CTA ─────────────────────────────────────────────────── -->
-  <section class="pt-16 pb-16 lg:pt-[70px]">
+  <section class="py-12 sm:py-16 lg:py-[70px]">
     <div class={WRAP}>
-      <div class={`${CARD} flex flex-wrap items-center justify-between gap-6 px-8 py-9`}>
+      <div class={`${CARD} flex flex-wrap items-center justify-between gap-6 px-6 py-7 sm:px-8 sm:py-9`}>
         <div class="max-w-[52ch]">
           <h2 class="text-2xl md:text-3xl text-soil-900">Building something with VGI?</h2>
           <p class="mt-3 text-[17.5px] leading-relaxed text-soil-700">
@@ -886,6 +938,64 @@ const jsonLd = [
     </div>
   </section>
 </PageLayout>
+
+<style>
+  @media (max-width: 39.999rem) {
+    :global(.vgi-page-head) {
+      padding-block: 2rem;
+    }
+  }
+
+  .tour-tab-rail {
+    overscroll-behavior-inline: contain;
+    scroll-snap-type: inline proximity;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tour-tab-rail::-webkit-scrollbar {
+    display: none;
+  }
+  .tour-tab {
+    scroll-snap-align: start;
+  }
+  /* Astro islands default to `display: contents`, which gives Intersection
+     Observer a zero-size target. These two islands begin inside hidden tabs;
+     make their custom elements real boxes so `client:visible` can hydrate
+     them when a reader reveals and reaches the example. */
+  :global(#tour-tabs astro-island[client='visible']) {
+    display: block;
+  }
+  .tour-tab-rail-shell::before,
+  .tour-tab-rail-shell::after {
+    content: '';
+    position: absolute;
+    inset-block: 0;
+    z-index: 2;
+    width: 1.5rem;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 140ms ease;
+  }
+  .tour-tab-rail-shell::before {
+    inset-inline-start: 0;
+    background: linear-gradient(to right, var(--color-pipe-6), transparent);
+  }
+  .tour-tab-rail-shell::after {
+    inset-inline-end: 0;
+    background: linear-gradient(to left, var(--color-pipe-6), transparent);
+  }
+  .tour-tab-rail-shell.is-away-from-start::before,
+  .tour-tab-rail-shell:not(.is-at-end)::after {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tour-tab-rail-shell::before,
+    .tour-tab-rail-shell::after {
+      transition: none;
+    }
+  }
+</style>
 
 <script>
   // Copy button for hand-rolled rock-900/950 code blocks (brief §3: code never
@@ -962,23 +1072,63 @@ const jsonLd = [
 
     const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('.tour-tab'));
     const panels = Array.from(root.querySelectorAll<HTMLElement>('.tour-tab-panel'));
+    const rail = root.querySelector<HTMLElement>('[data-tour-tab-rail]');
+    const railShell = rail?.parentElement;
 
-    tabs.forEach((tab) => {
-      tab.addEventListener('click', () => {
-        const id = tab.dataset.tab;
-        tabs.forEach((t) => {
-          const active = t === tab;
-          t.classList.toggle('border-sun-400', active);
-          t.classList.toggle('text-sun-400', active);
-          t.classList.toggle('border-transparent', !active);
-          t.classList.toggle('text-cream-2', !active);
-          t.setAttribute('aria-selected', String(active));
-        });
-        panels.forEach((p) => {
-          p.hidden = p.dataset.tabPanel !== id;
-        });
+    const updateRailEdges = () => {
+      if (!rail || !railShell) return;
+      const maxScroll = Math.max(0, rail.scrollWidth - rail.clientWidth);
+      railShell.classList.toggle('is-away-from-start', rail.scrollLeft > 2);
+      railShell.classList.toggle('is-at-end', rail.scrollLeft >= maxScroll - 2);
+    };
+
+    const revealTab = (tab: HTMLButtonElement) => {
+      if (!rail) return;
+      const railRect = rail.getBoundingClientRect();
+      const tabRect = tab.getBoundingClientRect();
+      const left = rail.scrollLeft + tabRect.left - railRect.left
+        - ((rail.clientWidth - tabRect.width) / 2);
+      rail.scrollTo({
+        left,
+        behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      });
+    };
+
+    const activate = (tab: HTMLButtonElement) => {
+      const id = tab.dataset.tab;
+      tabs.forEach((t) => {
+        const active = t === tab;
+        t.classList.toggle('border-sun-400', active);
+        t.classList.toggle('text-sun-400', active);
+        t.classList.toggle('border-transparent', !active);
+        t.classList.toggle('text-cream-2', !active);
+        t.setAttribute('aria-selected', String(active));
+        t.tabIndex = active ? 0 : -1;
+      });
+      panels.forEach((p) => {
+        p.hidden = p.dataset.tabPanel !== id;
+      });
+      revealTab(tab);
+    };
+
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => activate(tab));
+      tab.addEventListener('keydown', (event) => {
+        let nextIndex = index;
+        if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length;
+        else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length;
+        else if (event.key === 'Home') nextIndex = 0;
+        else if (event.key === 'End') nextIndex = tabs.length - 1;
+        else return;
+
+        event.preventDefault();
+        tabs[nextIndex].focus();
+        activate(tabs[nextIndex]);
       });
     });
+
+    rail?.addEventListener('scroll', updateRailEdges, { passive: true });
+    requestAnimationFrame(updateRailEdges);
   }
   wireTourTabs();
   document.addEventListener('astro:after-swap', wireTourTabs);
