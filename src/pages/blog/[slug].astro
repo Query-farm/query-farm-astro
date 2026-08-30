@@ -3,9 +3,12 @@ import { getCollection, render } from 'astro:content';
 import type { CollectionEntry } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import BarTable from '../../components/charts/BarTable.astro';
+import SqlKeywordText from '../../components/blog/SqlKeywordText.astro';
+import ExampleShellMounter from '../../components/repl/ExampleShellMounter.tsx';
 import { readingTime, tagSlug } from '../../lib/blog-tags';
 import { topicBands } from '../../lib/blog-topics';
 import { blogFigure } from '../../data/blog-figures';
+import { blogWasmExamples } from '../../data/blog-wasm-examples';
 
 export async function getStaticPaths() {
   const blogPosts = await getCollection('blog');
@@ -20,9 +23,9 @@ interface Props {
 }
 
 const { entry } = Astro.props;
-const { Content } = await render(entry);
+const { Content, headings } = await render(entry);
 
-const { title, description, pubDate, author, tags, heroImage } = entry.data;
+const { title, description, pubDate, author, tags, heroImage, leadVisual } = entry.data;
 
 const formattedDate = new Date(pubDate).toLocaleDateString('en-US', {
   year: 'numeric',
@@ -41,7 +44,10 @@ const topic = tags[0];
 const tagLinks = tags.map(tag => ({ label: tag, href: `/blog/tags/${tagSlug(tag)}` }));
 
 const figure = blogFigure(entry.id);
+const wasmExamples = blogWasmExamples(entry.id);
 const hasOpeningBrief = entry.body?.includes('class="article-brief"') ?? false;
+const sectionHeadings = headings.filter(heading => heading.depth === 2);
+const showSectionIndex = sectionHeadings.length >= 6;
 
 // Article structured data for rich results (E-E-A-T: named author, dates).
 const canonicalURL = new URL(Astro.url.pathname, Astro.site);
@@ -105,7 +111,7 @@ const relatedPost = (await getCollection('blog'))
         </div>
       )}
 
-      <h1 class="mt-3.5 text-[clamp(2rem,4.6vw,3.5rem)] leading-[1.04] tracking-[-0.03em]">{title}</h1>
+      <h1 class="mt-3.5 text-[clamp(2rem,4.6vw,3.5rem)] leading-[1.04] tracking-[-0.03em]"><SqlKeywordText text={title} /></h1>
 
       {/* Byline: one voice. Commissioner throughout, figures tabular via
           .qf-figure (brief §2). Sentence case, no tracking — the kicker and
@@ -122,7 +128,7 @@ const relatedPost = (await getCollection('blog'))
       </div>
 
       {description && (
-        <p class="mt-5 text-[17.5px] leading-relaxed text-soil-700">{description}</p>
+        <p class="mt-5 text-[17.5px] leading-relaxed text-soil-700"><SqlKeywordText text={description} /></p>
       )}
     </div>
 
@@ -145,6 +151,15 @@ const relatedPost = (await getCollection('blog'))
           source={figure.source}
           precision={figure.precision}
         />
+      ) : leadVisual ? (
+        <img
+          class="article-lead-visual"
+          src={leadVisual.src}
+          alt={leadVisual.alt}
+          width={leadVisual.width}
+          height={leadVisual.height}
+          aria-hidden={leadVisual.alt === '' ? 'true' : undefined}
+        />
       ) : !hasOpeningBrief ? (
         <div class="flex h-28 overflow-hidden rounded-xl border border-soil-300" aria-hidden="true">
           {topicBands(topic).map(band => (
@@ -154,8 +169,33 @@ const relatedPost = (await getCollection('blog'))
       ) : null}
     </div>
 
-    <div class="qf-prose px-6 pt-6 pb-14">
-      <Content />
+    <div class="article-body">
+      {wasmExamples && (
+        <ExampleShellMounter
+          client:idle
+          extensionName={wasmExamples.extensionName}
+          installSource={wasmExamples.installSource}
+          fixtures={wasmExamples.setupSql ?? null}
+          controls={wasmExamples.controls}
+        />
+      )}
+
+      {showSectionIndex && (
+        <nav class="article-index" aria-labelledby="article-index-title">
+          <div class="article-index__inner">
+            <p id="article-index-title" class="article-index__title">In this article</p>
+            <ol>
+              {sectionHeadings.map(heading => (
+                <li><a href={`#${heading.slug}`}><SqlKeywordText text={heading.text} /></a></li>
+              ))}
+            </ol>
+          </div>
+        </nav>
+      )}
+
+      <div class="qf-prose px-6 pt-6 pb-14">
+        <Content />
+      </div>
     </div>
 
     {/* Filed under — the full tag set, once, at the foot of the piece, where
@@ -191,7 +231,7 @@ const relatedPost = (await getCollection('blog'))
           <div class="px-6 py-5 sm:px-7 sm:py-6">
             <p id="keep-reading-title" class="text-[12.5px] font-medium text-sun-700">Keep reading</p>
             <h2 class="mt-2 text-[clamp(1.25rem,3vw,1.65rem)] leading-tight transition-colors group-hover:text-link">
-              {relatedPost.data.title}
+              <SqlKeywordText text={relatedPost.data.title} />
             </h2>
             <p class="mt-2 line-clamp-2 text-[14.5px] leading-relaxed text-soil-600">
               {relatedPost.data.description}
@@ -272,6 +312,83 @@ const relatedPost = (await getCollection('blog'))
     background: var(--color-sun-500);
     transform: scaleX(0);
     transform-origin: left center;
+  }
+  .article-lead-visual {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  .article-body {
+    position: relative;
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  .article-index { padding: 24px 24px 0; }
+  .article-index__inner {
+    border: 1px solid var(--color-soil-300);
+    border-radius: 12px;
+    background: #fffdf7;
+    padding: 20px 22px 22px;
+  }
+  .article-index__title {
+    color: var(--color-sun-700);
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .article-index ol {
+    counter-reset: article-index;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px 24px;
+    margin-top: 13px;
+  }
+  .article-index li {
+    counter-increment: article-index;
+    display: grid;
+    grid-template-columns: 2.2em minmax(0, 1fr);
+    align-items: baseline;
+    min-width: 0;
+  }
+  .article-index li::before {
+    content: counter(article-index, decimal-leading-zero);
+    color: var(--color-soil-400);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .article-index a {
+    color: var(--color-soil-800);
+    font-size: 13.5px;
+    line-height: 1.45;
+    text-decoration: none;
+  }
+  .article-index a:hover { color: var(--color-link); text-decoration: underline; }
+  .article-index a:focus-visible {
+    border-radius: 2px;
+    outline: 2px solid var(--color-link);
+    outline-offset: 2px;
+  }
+
+  @media (min-width: 1280px) {
+    .article-index {
+      position: absolute;
+      top: 24px;
+      left: calc(100% + 28px);
+      width: 220px;
+      height: calc(100% - 24px);
+      padding: 0;
+    }
+    .article-index__inner {
+      position: sticky;
+      top: calc(var(--qf-nav-h) + 24px);
+      padding: 17px 18px 18px;
+    }
+    .article-index ol {
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+    .article-index li { grid-template-columns: 2.1em minmax(0, 1fr); }
+    .article-index a { font-size: 12.5px; line-height: 1.4; }
   }
 
   .article-brief {
@@ -517,6 +634,82 @@ const relatedPost = (await getCollection('blog'))
     color: var(--color-soil-700);
   }
   .qf-prose tr:last-child td { border-bottom: 0; }
+  .qf-prose .engine-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    white-space: nowrap;
+  }
+  .qf-prose .engine-name > img {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 24px;
+    border-radius: 5px;
+    object-fit: contain;
+  }
+  .qf-prose .engine-name > img.engine-logo--square { width: 24px; }
+  .qf-prose .engine-name > img.engine-logo--dark {
+    background: var(--color-rock-900);
+    padding: 4px;
+  }
+  .qf-prose .engine-name > img.engine-logo--sqlite { width: 42px; }
+
+  .qf-prose .engine-comparison {
+    display: grid;
+    gap: 14px;
+    margin-top: 28px;
+  }
+  .qf-prose .engine-card {
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr);
+    gap: 22px;
+    overflow: hidden;
+    border: 1px solid var(--color-soil-300);
+    border-radius: 12px;
+    background: #fffdf7;
+    padding: 18px 20px;
+  }
+  .qf-prose .engine-card--featured {
+    border-color: color-mix(in srgb, var(--color-field-700) 45%, var(--color-soil-300));
+    background: color-mix(in srgb, var(--color-field-700) 5%, #fffdf7);
+    box-shadow: inset 4px 0 0 var(--color-field-700);
+  }
+  .qf-prose .engine-card h3 {
+    align-self: start;
+    margin: 2px 0 0;
+    border: 0;
+    padding: 0;
+    color: var(--color-soil-900);
+    font-family: 'Commissioner', ui-sans-serif, system-ui, sans-serif;
+    font-size: 14.5px;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .qf-prose .engine-card dl { min-width: 0; }
+  .qf-prose .engine-card dl > div {
+    display: grid;
+    grid-template-columns: 142px minmax(0, 1fr);
+    gap: 14px;
+    padding: 9px 0;
+    border-top: 1px solid var(--color-soil-200);
+  }
+  .qf-prose .engine-card dl > div:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+  .qf-prose .engine-card dl > div:last-child { padding-bottom: 0; }
+  .qf-prose .engine-card dt {
+    color: var(--color-sun-700);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.45;
+  }
+  .qf-prose .engine-card dd {
+    min-width: 0;
+    color: var(--color-soil-700);
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
   /* Numeric columns: tabular Commissioner, never Fraunces (brief §2). */
   .qf-prose td[align='right'],
   .qf-prose th[align='right'] {
@@ -524,6 +717,57 @@ const relatedPost = (await getCollection('blog'))
     font-weight: 500;
     font-variant-numeric: tabular-nums lining-nums;
     letter-spacing: -0.03em;
+  }
+
+  /* Query output sits directly under its SQL block. It borrows the terminal
+     surface from the VGI tour, but uses real table cells so it remains usable
+     on a narrow screen and accessible to assistive technology. */
+  .qf-prose .query-result {
+    overflow-x: auto;
+    border: 1px solid var(--color-rock-800);
+    border-radius: 12px;
+    background: var(--color-rock-900);
+    color: #e9e1d3;
+  }
+  .qf-prose pre + .query-result { margin-top: 8px; }
+  .qf-prose .query-result__label {
+    position: sticky;
+    left: 0;
+    width: max-content;
+    min-width: 100%;
+    border-bottom: 1px solid rgb(255 255 255 / 10%);
+    padding: 9px 14px;
+    color: var(--color-sun-400);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .qf-prose .query-result table {
+    display: table;
+    min-width: 100%;
+    width: max-content;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .qf-prose .query-result th {
+    border-bottom: 1px solid rgb(255 255 255 / 10%);
+    background: transparent;
+    color: #f4ece0;
+    font-family: inherit;
+    font-size: inherit;
+    font-weight: 600;
+    padding: 9px 14px;
+  }
+  .qf-prose .query-result td {
+    border-bottom: 1px solid rgb(255 255 255 / 6%);
+    color: #e9e1d3;
+    padding: 7px 14px;
+    white-space: nowrap;
+  }
+  .qf-prose .query-result__null {
+    color: #a99d8b;
+    font-style: italic;
   }
 
   .qf-prose img { border-radius: 10px; max-width: 100%; height: auto; }
@@ -544,11 +788,14 @@ const relatedPost = (await getCollection('blog'))
   .qf-prose hr { border: 0; border-top: 1px solid var(--color-soil-300); margin: 40px 0; }
 
   @media (max-width: 640px) {
+    .article-index ol { grid-template-columns: 1fr; }
     .article-brief-inner { padding: 20px 20px 22px; }
     .article-brief li { font-size: 15px; }
     .qf-prose { font-size: 17px; line-height: 1.72; }
     .qf-prose h2 { margin-top: 48px; padding-top: 24px; }
     .qf-prose blockquote { padding: 16px 18px; }
     .qf-prose blockquote.is-pullquote { padding-left: 17px; }
+    .qf-prose .engine-card { grid-template-columns: 1fr; gap: 14px; padding: 17px; }
+    .qf-prose .engine-card dl > div { grid-template-columns: 1fr; gap: 3px; }
   }
 </style>

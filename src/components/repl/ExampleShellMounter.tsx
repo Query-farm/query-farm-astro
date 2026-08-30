@@ -402,6 +402,18 @@ export default function ExampleShellMounter({
           (pre.closest(".code-block-wrapper") as HTMLElement | null) ??
           (pre.closest("figure.frame") as HTMLElement | null) ??
           pre;
+        // Blog examples place a static, accessible result table immediately
+        // after the Expressive Code wrapper. It is useful before the reader
+        // starts WASM, but becomes duplicate output once the live terminal is
+        // open. Hide only that adjacent sample and restore its original state
+        // when the shell closes; other narrative-page content is untouched.
+        const resultSibling =
+          (blockRoot.closest(".expressive-code")?.nextElementSibling as HTMLElement | null) ??
+          (blockRoot.nextElementSibling as HTMLElement | null);
+        const staticResult = resultSibling?.classList.contains("query-result")
+          ? resultSibling
+          : null;
+        const staticResultWasHidden = staticResult?.hidden ?? false;
 
         const btn = document.createElement("button");
         btn.type = "button";
@@ -431,6 +443,7 @@ export default function ExampleShellMounter({
         const container = document.createElement("div");
 
         const close = () => {
+          if (staticResult) staticResult.hidden = staticResultWasHidden;
           btn.innerHTML = controls === "toolbar" ? RUN_ICON_LABEL : TRY_LABEL;
           btn.setAttribute("aria-expanded", "false");
           if (controls === "toolbar") {
@@ -441,6 +454,7 @@ export default function ExampleShellMounter({
           container.remove();
         };
         const open = () => {
+          if (staticResult) staticResult.hidden = true;
           const shellAnchor = controls === "toolbar" ? blockRoot : runBar;
           shellAnchor?.insertAdjacentElement("afterend", container);
           btn.innerHTML = controls === "toolbar" ? CLOSE_ICON_LABEL : HIDE_LABEL;
