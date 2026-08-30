@@ -500,11 +500,33 @@ export default defineConfig({
       ],
     }),
     mdx(),
-    // Blog tag archives stay out of the sitemap. A tag holding one post carries
-    // robots noindex (src/lib/blog-tags.ts), and submitting a noindex URL is a
-    // Search Console error; archives are reachable from every post's footer
-    // anyway, so nothing depends on them being listed here.
-    sitemap({ filter: page => !new URL(page).pathname.startsWith('/blog/tags/') }),
+    // Keep the sitemap to pages that are actually indexable. Submitting a
+    // noindex or redirect-only URL is a Search Console error, and all of
+    // these are reachable through on-page navigation anyway, so nothing
+    // depends on them being listed here.
+    sitemap({
+      filter: page => {
+        const { pathname } = new URL(page);
+        // Blog tag archives: a tag holding one post carries robots noindex
+        // (src/lib/blog-tags.ts).
+        if (pathname.startsWith('/blog/tags/')) return false;
+        // Per-function pages under an extension are pure 301 redirects to
+        // their category anchor (src/pages/products/extensions/[slug]/functions/[function].astro)
+        // — never resolve with a 200, so they don't belong in a sitemap.
+        if (/^\/products\/extensions\/[^/]+\/functions\/(?!category\/)[^/]+\/$/.test(pathname)) {
+          return false;
+        }
+        // The function category listing pages render but are marked
+        // noindex (src/pages/products/extensions/[slug]/functions/category/[category].astro).
+        if (/^\/products\/extensions\/[^/]+\/functions\/category\/[^/]+\/$/.test(pathname)) {
+          return false;
+        }
+        // /products/haybarn/status is a noindex meta-refresh redirect to the
+        // latest versioned status page (src/pages/products/haybarn/status/index.astro).
+        if (pathname === '/products/haybarn/status/') return false;
+        return true;
+      },
+    }),
     react(),
   ],
   markdown: {
