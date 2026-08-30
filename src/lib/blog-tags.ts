@@ -29,7 +29,8 @@ export function tagSlug(tag: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/** Published posts, newest first. Drafts never reach any public surface. */
+/** Published posts, newest first. Drafts are filtered out of every listing;
+ *  src/pages/blog/[slug].astro additionally skips building their pages. */
 export async function getPublishedPosts(): Promise<BlogPost[]> {
   const posts = await getCollection('blog');
   return posts
