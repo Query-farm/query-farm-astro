@@ -1,10 +1,13 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["duckdb>=1.5.0"]
+# dependencies = ["haybarn==1.5.5rc1"]
 # ///
 """
 Per-extension SQL example validator.
+
+SQL is executed with Query.Farm's Haybarn distribution, pinned in the inline
+script dependencies above so local and CI runs use the same engine release.
 
 Walks every extension under `src/data/extensions/<slug>/` and checks every
 piece of authored SQL we render on the page:
@@ -71,7 +74,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-import duckdb
+import haybarn as duckdb
 
 ROOT = Path(__file__).resolve().parent.parent
 EXT_DIR = ROOT / "src" / "data" / "extensions"
