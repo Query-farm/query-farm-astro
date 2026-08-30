@@ -732,6 +732,46 @@ def _summary(obj: griffe.Object, index: dict[str, tuple[str, str]]) -> str:
     return autolink_md(resolve_xrefs_md(esc_md(first), index), index)
 
 
+def _plain_text(text: str) -> str:
+    """Strip mkdocstrings cross-ref syntax and code-span backticks to plain text.
+
+    For text headed into YAML frontmatter (and from there a plain `<meta name="description">`
+    tag) rather than MDX prose — markup left in would show up literally instead of rendering.
+    """
+    text = _XREF_RE.sub(lambda m: m.group("text"), text)
+    return text.replace("``", "").replace("`", "").strip()
+
+
+def _yaml_dq(s: str) -> str:
+    """A double-quoted YAML scalar, safe for arbitrary text in frontmatter."""
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def module_description(mod: Module) -> str:
+    """A real, per-module meta description, instead of the identical-everywhere
+    ``API reference for vgi.<module>`` boilerplate.
+
+    The best source is the module's own docstring — Griffe already gives us that, so
+    we take its one-line summary (the first line, by the same PEP 257/Google-style
+    convention `_summary` reads for prose). When that's missing or too short to be
+    useful on its own, fall back to a description built from the module's actual
+    exported symbol names, which is still more specific than the generic line and
+    never blank.
+    """
+    summary = ""
+    if mod.docstring and mod.docstring.value.strip():
+        summary = _plain_text(mod.docstring.value.strip().splitlines()[0])
+    if len(summary) >= 20:
+        return summary
+    names = [n for n, _obj, _alias in module_members(mod)]
+    if names:
+        shown = ", ".join(names[:5])
+        if len(names) > 5:
+            shown += f", and {len(names) - 5} more"
+        return f"API reference for {mod.canonical_path}: {shown}."
+    return f"API reference for {mod.canonical_path}."
+
+
 def render_inherited(cls: Class, index: dict[str, tuple[str, str]]) -> list[str]:
     """A collapsed list of inherited public members, labeled by defining class."""
     rows: list[str] = []
@@ -801,7 +841,7 @@ def render_module(mod: Module, index: dict[str, tuple[str, str]]) -> str:
     lines = [
         "---",
         f"title: {mod.canonical_path}",
-        f"description: API reference for {mod.canonical_path}",
+        f"description: {_yaml_dq(module_description(mod))}",
         "---",
         "import { Code } from '@astrojs/starlight/components';",
         "",
