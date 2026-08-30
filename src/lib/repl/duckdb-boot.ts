@@ -259,7 +259,7 @@ export async function createSession(): Promise<Session> {
           }
         }
         const bytes = await db.runQuery(connId, sql);
-        const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+        const ab = Uint8Array.from(bytes).buffer;
         return { ok: true, buffer: ab };
       } catch (e: unknown) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };

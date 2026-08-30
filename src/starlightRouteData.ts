@@ -18,8 +18,11 @@
  * first Go page, which is no longer anywhere on screen.
  */
 import { defineRouteMiddleware } from '@astrojs/starlight/route-data';
-import type { SidebarEntry, SidebarLink } from '@astrojs/starlight/utils/routing/types';
+import type { StarlightRouteData } from '@astrojs/starlight/route-data';
 import { CONCEPTS, DOCS_ROOT, sectionFor } from './lib/vgi-docs';
+
+type SidebarEntry = StarlightRouteData['sidebar'][number];
+type SidebarLink = Extract<SidebarEntry, { type: 'link' }>;
 
 /** Depth-first list of the links in a sidebar tree, in reading order. */
 function flatten(entries: SidebarEntry[]): SidebarLink[] {

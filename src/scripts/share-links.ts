@@ -1,5 +1,5 @@
 function setupShareLinkButtons(root?: ParentNode) {
-  const scope = root && root.querySelectorAll ? root : document;
+  const scope = root ?? document;
   scope.querySelectorAll<HTMLButtonElement>('.share-link-btn').forEach(button => {
     if (button.dataset.setupComplete) return;
     button.dataset.setupComplete = 'true';

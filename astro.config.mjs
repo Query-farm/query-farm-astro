@@ -12,6 +12,7 @@ import starlight from '@astrojs/starlight';
 // Ground is rock-900 (#1a1512) — the same surface every code block uses.
 // The old theme sat on a dark green that no longer exists in the palette,
 // and its hues lost separation against warm grounds.
+/** @type {import('shiki').ThemeRegistration} */
 const farmTheme = {
   name: 'farm-theme',
   type: 'dark',
