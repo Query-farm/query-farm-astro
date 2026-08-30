@@ -37,7 +37,7 @@ GROUPS: list[dict] = [
     {
         "slug": "scalar",
         "title": "Scalar functions",
-        "blurb": "One row in, one value out — the simplest function shape.",
+        "blurb": "One row in, one value out — the simplest function shape — declared with ArgSpec.",
         "modules": ["function"],
     },
     {
@@ -49,49 +49,49 @@ GROUPS: list[dict] = [
     {
         "slug": "table-in-out",
         "title": "Table-in-out functions",
-        "blurb": "Streaming a relation through, batch by batch.",
+        "blurb": "Streaming a relation through batch by batch, calling emit/emit_with as each one is ready.",
         "modules": ["table_in_out"],
     },
     {
         "slug": "buffering",
         "title": "Buffering functions",
-        "blurb": "Sink, combine, source — for output that depends on the whole input.",
+        "blurb": "Sink, combine, source — for output that depends on the whole input, via TableBufferingFunction.",
         "modules": ["buffering"],
     },
     {
         "slug": "aggregate",
         "title": "Aggregate functions",
-        "blurb": "Per-group accumulation: update, combine, finalize.",
+        "blurb": "Per-group accumulation: aggregate_bind, update, combine, and finalize on BoundAggregate.",
         "modules": ["aggregate"],
     },
     {
         "slug": "copy",
         "title": "COPY formats",
-        "blurb": "Reading and writing your own format through COPY … FROM / TO.",
+        "blurb": "Reading and writing your own format through COPY … FROM / TO, via CopyFromFunction and CopyFromReadContext.",
         "modules": ["copy_from", "copy_to"],
     },
     {
         "slug": "worker",
         "title": "Worker & serving",
-        "blurb": "Building a worker and putting it on a transport.",
+        "blurb": "Building a worker, wiring its state, and putting it on a transport.",
         "modules": ["worker", "transport", "dispatch", "wasm_worker", "register", "resume"],
     },
     {
         "slug": "catalog",
         "title": "Catalogs",
-        "blurb": "Presenting a worker as a database: schemas, tables, views, macros.",
+        "blurb": "Presenting a worker as a database — schemas, tables, views, and macros — as catalog traits implement them.",
         "modules": ["catalog"],
     },
     {
         "slug": "arguments",
         "title": "Arguments",
-        "blurb": "Declaring a signature, and reading the values that arrive.",
+        "blurb": "Declaring a signature, and reading the values that arrive, one arg at a time.",
         "modules": ["arguments", "overload"],
     },
     {
         "slug": "cache-control",
         "title": "Cache control",
-        "blurb": "Advertising a result as reusable by the client.",
+        "blurb": "Advertising a result as reusable by the client, through the CACHE_ETAG_KEY and CACHE_EXPIRES_KEY result metadata.",
         "modules": ["cache_control"],
     },
     {
@@ -103,7 +103,7 @@ GROUPS: list[dict] = [
     {
         "slug": "storage",
         "title": "State storage",
-        "blurb": "State that outlives one call, or crosses worker processes.",
+        "blurb": "State that outlives one call or crosses worker processes, backed by FunctionStorage and FsStorage.",
         "modules": ["storage"],
     },
     {

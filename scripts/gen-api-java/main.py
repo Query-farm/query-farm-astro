@@ -49,13 +49,13 @@ GROUPS: list[dict] = [
     {
         "slug": "table-in-out",
         "title": "Table-in-out functions",
-        "blurb": "Streaming a relation through, batch by batch.",
+        "blurb": "Streaming a relation through batch by batch, via AnnotatedBatch and FinalExecute.",
         "packages": ["tableinout"],
     },
     {
         "slug": "buffering",
         "title": "Buffering functions",
-        "blurb": "Sink, combine, source — for output that depends on the whole input.",
+        "blurb": "Sink, combine, source — for output that depends on the whole input, via BufferingFinalizeProducer.",
         "packages": ["buffering"],
     },
     {
@@ -85,7 +85,7 @@ GROUPS: list[dict] = [
     {
         "slug": "storage",
         "title": "State storage",
-        "blurb": "State that outlives one call, or crosses worker processes.",
+        "blurb": "State that outlives one call or crosses worker processes, threaded through BoundStorage.",
         "packages": ["storage"],
     },
     {
@@ -97,7 +97,7 @@ GROUPS: list[dict] = [
     {
         "slug": "cache-control",
         "title": "Cache control",
-        "blurb": "Advertising a result as reusable by the client.",
+        "blurb": "Advertising a result as reusable by the client, through CacheControl.Builder.",
         "packages": ["cache"],
     },
     {

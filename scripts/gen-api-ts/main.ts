@@ -35,7 +35,7 @@ const GROUPS: Group[] = [
   {
     slug: 'scalar',
     title: 'Scalar functions',
-    blurb: 'One row in, one value out — the simplest function shape.',
+    blurb: 'One row in, one value out — the simplest function shape — declared with defineScalarFunction.',
     files: ['src/functions/scalar'],
   },
   {
@@ -47,31 +47,31 @@ const GROUPS: Group[] = [
   {
     slug: 'table-in-out',
     title: 'Table-in-out functions',
-    blurb: 'Streaming a relation through, batch by batch.',
+    blurb: 'Streaming a relation through batch by batch, with defineRowTransformFunction/defineTableInOutFunction.',
     files: ['src/functions/table-in-out'],
   },
   {
     slug: 'table-buffering',
     title: 'Buffering functions',
-    blurb: 'Sink, combine, source — for output that depends on the whole input.',
+    blurb: 'Sink, combine, source — for output that depends on the whole input, via defineTableBufferingFunction.',
     files: ['src/functions/table-buffering'],
   },
   {
     slug: 'aggregate',
     title: 'Aggregate functions',
-    blurb: 'Per-group accumulation: update, combine, finalize.',
+    blurb: 'Per-group accumulation — update, combine, finalize — configured with AggregateFunctionConfig.',
     files: ['src/functions/aggregate'],
   },
   {
     slug: 'copy',
     title: 'COPY formats',
-    blurb: 'Reading and writing your own format through COPY … FROM / TO.',
+    blurb: 'Reading and writing your own format through COPY … FROM / TO, configured with CopyFromFunctionConfig.',
     files: ['src/functions/copy-from', 'src/functions/copy-to'],
   },
   {
     slug: 'worker',
     title: 'Worker & serving',
-    blurb: 'Building a worker and putting it on a transport.',
+    blurb: 'Building a worker and putting it on a transport, via buildVgiProtocol.',
     files: [
       'src/worker',
       'src/serve-entry',
@@ -85,7 +85,7 @@ const GROUPS: Group[] = [
   {
     slug: 'catalog',
     title: 'Catalogs',
-    blurb: 'Presenting a worker as a database: schemas, tables, views, macros.',
+    blurb: 'Presenting a worker as a database — schemas, tables, views, and macros — configured through the catalog interface.',
     files: [
       'src/catalog/interface',
       'src/catalog/descriptors',
@@ -99,7 +99,7 @@ const GROUPS: Group[] = [
   {
     slug: 'arguments',
     title: 'Arguments',
-    blurb: 'Declaring a signature, and reading the values that arrive.',
+    blurb: 'Declaring a signature, and reading the values that arrive, via ArgumentSpec and Arguments.',
     files: ['src/arguments/arguments', 'src/arguments/argument-spec'],
   },
   {
@@ -142,7 +142,7 @@ const GROUPS: Group[] = [
   {
     slug: 'cache-control',
     title: 'Cache control',
-    blurb: 'Advertising a result as reusable by the client.',
+    blurb: 'Marking a result reusable by the client with the CACHE_ETAG_KEY/CACHE_EXPIRES_KEY metadata constants.',
     files: ['src/cache-control'],
   },
   {
@@ -161,7 +161,7 @@ const GROUPS: Group[] = [
   {
     slug: 'storage',
     title: 'State storage',
-    blurb: 'State that outlives one call, or crosses worker processes.',
+    blurb: 'State that outlives one call or crosses worker processes, read back from BoundStorage after a bind.',
     files: ['src/functions/storage', 'src/functions/storage-cf-do'],
   },
   {

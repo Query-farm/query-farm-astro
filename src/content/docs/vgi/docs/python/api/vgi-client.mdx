@@ -1,6 +1,6 @@
 ---
 title: vgi.client
-description: API reference for vgi.client
+description: "VGI client package for communicating with VGI workers."
 ---
 import { Code } from '@astrojs/starlight/components';
 
@@ -15,6 +15,8 @@ This package provides:
   both function invocation and catalog operations
 - ClientError: Exception raised by Client function operations
 - CatalogClientMixin: Mixin class providing catalog operations
+- AggregateClientMixin: Mixin class providing aggregate invocation
+- AggregateSession / AggregateStreamingSession: Handles on a bound aggregate
 - OutputWriter: Helper for writing output in various formats
 - main: CLI entry point
 
@@ -51,10 +53,469 @@ vgi-client --input data.parquet --function sum_all_columns`} />
 
 <div class="api-class">
 
+<a id="vgi.client.aggregate.AggregateClientMixin"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `AggregateClientMixin`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L534" target="_blank" rel="noopener">source</a>
+
+<p class="api-section">Description</p>
+
+Mixin adding aggregate-function invocation to the VGI [`Client`](/vgi/docs/python/api/vgi-client/#vgi.client.client.Client).
+
+Every aggregate RPC is unary and runs on the client's primary worker
+connection, so ``start()`` (or the context-manager protocol) must have run
+first — same requirement as ``scalar_function`` / ``table_function``.
+
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateClientMixin.aggregate_session"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `aggregate_session`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L577" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>aggregate_session(
+    *,
+    function_name: str,
+    schema_name: str,
+    input_schema: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a> | None = None,
+    arguments: <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments">Arguments</a> | None = None,
+    settings: dict[str, Any] | None = None,
+    secrets: dict[str, Any] | None = None,
+) -&gt; Iterator[<a href="/vgi/docs/python/api/vgi-client/#vgi.client.aggregate.AggregateSession">AggregateSession</a>]</code></pre>
+
+Bind an aggregate and yield a session over its raw RPCs.
+
+The session is destroyed on exit, including on exception, so worker-side
+group state never outlives the ``with`` block.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the aggregate to bind.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Catalog schema that declares the function. A name is unique only within a schema, so this is what identifies the implementation.</dd><dt><code class="api-pname">input_schema</code></dt><dd>Schema of the aggregate's value columns, in declaration order — **without** the <code>__vgi_group_id</code> column, which the driver prepends per call. <code>None</code> for a nullary aggregate.</dd><dt><code class="api-pname">arguments</code></dt><dd>Constant arguments (<a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.ConstParam"><code>ConstParam</code></a> values) for the aggregate. Defaults to empty.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional DuckDB-style settings visible to the function.</dd><dt><code class="api-pname">secrets</code></dt><dd>Optional pre-resolved secret values. Two-phase secret resolution is not available on the aggregate path — the worker rejects a bind that requests scoped secrets.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started or the bind fails.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateClientMixin.aggregate_bind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `aggregate_bind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L629" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>aggregate_bind(
+    *,
+    function_name: str,
+    schema_name: str,
+    input_schema: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a> | None = None,
+    arguments: <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments">Arguments</a> | None = None,
+    settings: dict[str, Any] | None = None,
+    secrets: dict[str, Any] | None = None,
+) -&gt; <a href="/vgi/docs/python/api/vgi-client/#vgi.client.aggregate.AggregateSession">AggregateSession</a></code></pre>
+
+Bind an aggregate function without taking responsibility for teardown.
+
+Prefer :meth:`aggregate_session`, which destroys the session for you.
+This entry point exists for callers that must own the lifetime
+explicitly (e.g. a proxy that hands the ``execution_id`` to another
+process); they must call :meth:`AggregateSession.destroy` themselves.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the aggregate to bind.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Catalog schema that declares the function.</dd><dt><code class="api-pname">input_schema</code></dt><dd>Schema of the aggregate's value columns, in declaration order, without the <code>__vgi_group_id</code> column. <code>None</code> for a nullary aggregate.</dd><dt><code class="api-pname">arguments</code></dt><dd>Constant arguments for the aggregate. Defaults to empty.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional DuckDB-style settings visible to the function.</dd><dt><code class="api-pname">secrets</code></dt><dd>Optional pre-resolved secret values.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>An <a href="/vgi/docs/python/api/vgi-client/#vgi.client.aggregate.AggregateSession"><code>AggregateSession</code></a> carrying the worker's <code>execution_id</code> and resolved output schema.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started or the bind fails.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateClientMixin.aggregate_function"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `aggregate_function`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L691" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>aggregate_function(
+    *,
+    function_name: str,
+    schema_name: str,
+    input: Iterable[<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>] = (),
+    group_by: Sequence[str] = (),
+    arguments: <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments">Arguments</a> | None = None,
+    settings: dict[str, Any] | None = None,
+    secrets: dict[str, Any] | None = None,
+    input_schema: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a> | None = None,
+    finalize_chunk_size: int = DEFAULT_FINALIZE_CHUNK_SIZE,
+) -&gt; <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a></code></pre>
+
+Run an aggregate over ``input`` and return one row per group.
+
+This is the ``SELECT <group_by>, agg(...) FROM t GROUP BY <group_by>``
+shape, driven client-side: group ids are allocated per distinct
+``group_by`` key in first-seen order (DuckDB's hash-aggregate order),
+every batch is pumped through ``aggregate_update``, and the groups are
+finalized in chunks of ``finalize_chunk_size``.
+
+Every input column that is not named in ``group_by`` is passed to the
+aggregate as a value column, in the order it appears in the batch — so
+order your input columns to match the aggregate's declared parameters.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the aggregate to invoke.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Catalog schema that declares the function.</dd><dt><code class="api-pname">input</code></dt><dd>Input batches. All must share one schema. May be empty.</dd><dt><code class="api-pname">group_by</code></dt><dd>Column names to group on. Empty (the default) means a global aggregate, which returns exactly one row even for empty input — matching SQL's <code>SELECT agg(x) FROM empty_table</code>.</dd><dt><code class="api-pname">arguments</code></dt><dd>Constant arguments for the aggregate. Defaults to empty.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional settings visible to the function.</dd><dt><code class="api-pname">secrets</code></dt><dd>Optional pre-resolved secret values.</dd><dt><code class="api-pname">input_schema</code></dt><dd>Value-column schema to bind with when <code>input</code> yields no batches. Ignored once a first batch is seen. Supply it when binding a varargs aggregate over empty input, which otherwise fails its bind-time arity check.</dd><dt><code class="api-pname">finalize_chunk_size</code></dt><dd>Group ids per <code>aggregate_finalize</code> call.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>A <code>RecordBatch</code> of the <code>group_by</code> columns followed by the aggregate's output columns, one row per group, in group-id order.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><code class="api-ptype">ValueError</code></dt><dd>If a <code>group_by</code> column is missing from the input, or the input batches disagree on schema.</dd><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started or an RPC fails.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateClientMixin.aggregate_streaming"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `aggregate_streaming`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L823" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>aggregate_streaming(
+    *,
+    function_name: str,
+    schema_name: str,
+    input_schema: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a>,
+    partition_key_count: int,
+    order_key_count: int = 0,
+    arguments: <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments">Arguments</a> | None = None,
+    settings: dict[str, Any] | None = None,
+    secrets: dict[str, Any] | None = None,
+    output_schema: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a> | None = None,
+) -&gt; Iterator[<a href="/vgi/docs/python/api/vgi-client/#vgi.client.aggregate.AggregateStreamingSession">AggregateStreamingSession</a>]</code></pre>
+
+Open a streaming-partitioned aggregate session and yield it.
+
+The session is closed on exit, including on exception.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the aggregate to open.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Catalog schema that declares the function.</dd><dt><code class="api-pname">input_schema</code></dt><dd>Schema of every chunk. Column order is fixed by the protocol: <code>partition_key_count</code> partition-key columns first, then <code>order_key_count</code> order-key columns, then the aggregate's value columns.</dd><dt><code class="api-pname">partition_key_count</code></dt><dd>How many leading columns are partition keys.</dd><dt><code class="api-pname">order_key_count</code></dt><dd>How many columns after the partition keys are order keys. Informational to the worker.</dd><dt><code class="api-pname">arguments</code></dt><dd>Constant arguments for the aggregate. Defaults to empty.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional settings visible to the function.</dd><dt><code class="api-pname">secrets</code></dt><dd>Optional pre-resolved secret values.</dd><dt><code class="api-pname">output_schema</code></dt><dd>The aggregate's output schema. Resolved with a throwaway <code>aggregate_bind</code> over the value columns when omitted, which is what the DuckDB extension does.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><code class="api-ptype">ValueError</code></dt><dd>If the key counts exceed <code>input_schema</code>'s width.</dd><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started or an RPC fails.</dd></dl></div>
+
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.client.aggregate.AggregateSession"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `AggregateSession`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L146" target="_blank" rel="noopener">source</a>
+
+<p class="api-section">Description</p>
+
+A bound aggregate execution — the raw RPC surface, one method per call.
+
+Obtained from :meth:`AggregateClientMixin.aggregate_session`. Group ids are
+caller-allocated int64s; the worker keys its per-group state on them and
+never invents one. Reuse the same id across ``update`` calls to accumulate
+into one group, exactly as DuckDB reuses the id stamped on a state pointer.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateSession.execution_id"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `execution_id`
+
+<p class="api-atype"><code>bytes</code></p>
+
+Worker-minted identifier for this aggregate execution.
+Scopes every piece of worker-side state, including window partitions.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateSession.output_schema"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `output_schema`
+
+<p class="api-atype"><code><a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a></code></p>
+
+Schema the aggregate's ``finalize`` produces (typically a
+single ``result`` column).
+
+</div>
+
+</div>
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateSession.update"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `update`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L173" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>update(
+    *,
+    group_ids: Sequence[int] | <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Array</a>[Any],
+    batch: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a> | None = None,
+) -&gt; None</code></pre>
+
+Accumulate one chunk of rows into per-group state.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">group_ids</code></dt><dd>One group id per row, parallel to <code>batch</code>'s rows.</dd><dt><code class="api-pname">batch</code></dt><dd>The aggregate's value columns for those rows, in declaration order. <code>None</code> for a nullary aggregate (<code>vgi_count()</code>), where the row count is carried by <code>group_ids</code> alone.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><code class="api-ptype">ValueError</code></dt><dd>If <code>batch</code> and <code>group_ids</code> disagree on row count.</dd><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the RPC fails.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateSession.combine"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `combine`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L216" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>combine(
+    *,
+    source_group_ids: Sequence[int] | <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Array</a>[Any],
+    target_group_ids: Sequence[int] | <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Array</a>[Any],
+) -&gt; None</code></pre>
+
+Merge each source group's state into the paired target group.
+
+Mirrors DuckDB's combine step, where thread-local hash tables are merged
+into the global one.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">source_group_ids</code></dt><dd>Groups whose state is merged *from*. Left as-is.</dd><dt><code class="api-pname">target_group_ids</code></dt><dd>Groups merged *into*, parallel to <code>source_group_ids</code> and the same length.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><code class="api-ptype">ValueError</code></dt><dd>If the two sequences differ in length.</dd><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the RPC fails.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateSession.finalize"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `finalize`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L256" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>finalize(group_ids: Sequence[int] | <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Array</a>[Any]) -&gt; <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a></code></pre>
+
+Produce the result row for each of ``group_ids``, in that order.
+
+A group id that was never updated finalizes to whatever the function
+returns for an absent state — ``NULL`` for SUM/AVG, ``0`` for COUNT.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">group_ids</code></dt><dd>The groups to produce results for, in output order.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>A <code>RecordBatch</code> with :attr:<code>output_schema</code> and one row per group id.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the RPC fails.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateSession.destroy"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `destroy`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L289" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>destroy() -&gt; None</code></pre>
+
+Release every piece of worker state for this execution (best-effort).
+
+Called for you when :meth:`AggregateClientMixin.aggregate_session` exits.
+Like the C++ destructor it never raises: a failure here means leaked
+worker rows, not a wrong answer, and the worker reclaims them on
+execution timeout anyway.
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateSession.window_init"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `window_init`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L321" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>window_init(
+    *,
+    partition_id: int,
+    partition: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>,
+    filter_mask: Sequence[bool] | <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">BooleanArray</a> | None = None,
+    frame_stats: tuple[tuple[int, int], tuple[int, int]] | None = None,
+    all_valid: Sequence[bool] | None = None,
+) -&gt; None</code></pre>
+
+Ship one window partition to the worker so it can be queried by frame.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">partition_id</code></dt><dd>Caller-allocated id for this partition, scoped to the session's <code>execution_id</code>.</dd><dt><code class="api-pname">partition</code></dt><dd>Every input column, every row of the partition, in window order.</dd><dt><code class="api-pname">filter_mask</code></dt><dd>Per-row mask from a <code>FILTER (WHERE ...)</code> clause. <code>None</code> (the default) means no filter.</dd><dt><code class="api-pname">frame_stats</code></dt><dd>DuckDB's per-partition frame bounds, as <code>((begin_delta, end_delta), (begin_delta, end_delta))</code>. <code>None</code> sends zeros, which is what a caller with no frame statistics should do.</dd><dt><code class="api-pname">all_valid</code></dt><dd>One flag per input column, True when the column has no nulls. <code>None</code> means "assume all valid".</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the RPC fails.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateSession.window"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `window`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L369" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>window(
+    *,
+    partition_id: int,
+    rid: int,
+    frames: Frames,
+) -&gt; <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a></code></pre>
+
+Compute the aggregate for one output row of a window partition.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">partition_id</code></dt><dd>The partition previously shipped by :meth:<code>window_init</code>.</dd><dt><code class="api-pname">rid</code></dt><dd>Row index within the partition of the output row being computed.</dd><dt><code class="api-pname">frames</code></dt><dd>The row's subframes as <code>(begin, end)</code> half-open offsets into the partition. One entry normally; two or three for <code>EXCLUDE TIES</code> / <code>EXCLUDE GROUP</code>.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>A one-row <code>RecordBatch</code> with :attr:<code>output_schema</code>.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the RPC fails.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateSession.window_batch"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `window_batch`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L403" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>window_batch(
+    *,
+    partition_id: int,
+    row_idx: int,
+    frames: Sequence[Frames],
+) -&gt; <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a></code></pre>
+
+Compute ``len(frames)`` consecutive window output rows in one RPC.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">partition_id</code></dt><dd>The partition previously shipped by :meth:<code>window_init</code>.</dd><dt><code class="api-pname">row_idx</code></dt><dd>Partition-relative index of the first output row.</dd><dt><code class="api-pname">frames</code></dt><dd>One subframe list per output row, in row order.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>A <code>RecordBatch</code> with :attr:<code>output_schema</code> and <code>len(frames)</code> rows.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the RPC fails.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateSession.window_destroy"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `window_destroy`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L443" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>window_destroy(partition_id: int) -&gt; None</code></pre>
+
+Evict one window partition from worker storage (best-effort).
+
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-class">
+
+<a id="vgi.client.aggregate.AggregateStreamingSession"></a>
+## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `AggregateStreamingSession`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L467" target="_blank" rel="noopener">source</a>
+
+<p class="api-section">Description</p>
+
+An open streaming-partitioned aggregate session.
+
+Obtained from :meth:`AggregateClientMixin.aggregate_streaming`. Each
+:meth:`chunk` returns one output row per input row — the aggregate's value
+at that row's position within its partition.
+
+<p class="api-section">Attributes</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateStreamingSession.execution_id"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `execution_id`
+
+<p class="api-atype"><code>bytes</code></p>
+
+Worker-minted identifier for this streaming session.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateStreamingSession.output_schema"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `output_schema`
+
+<p class="api-atype"><code><a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a></code></p>
+
+Schema of every batch :meth:`chunk` returns.
+
+</div>
+
+</div>
+<p class="api-section">Methods</p>
+
+<div class="api-members">
+
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateStreamingSession.chunk"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `chunk`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L487" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>chunk(batch: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>) -&gt; <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a></code></pre>
+
+Process one input chunk and return its per-row output.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">batch</code></dt><dd>One chunk, matching the <code>input_schema</code> agreed at open time: partition-key columns first, then order-key columns, then the aggregate's value columns.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>A <code>RecordBatch</code> with :attr:<code>output_schema</code> and one row per input row.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the RPC fails.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.aggregate.AggregateStreamingSession.close"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `close`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/aggregate.py#L516" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>close() -&gt; None</code></pre>
+
+End the session and free its worker-side state (best-effort).
+
+
+</div>
+
+</div>
+
+</div>
+
+<div class="api-class">
+
 <a id="vgi.client.catalog_mixin.CatalogClientMixin"></a>
 ## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `CatalogClientMixin`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L89" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L93" target="_blank" rel="noopener">source</a>
 
 <p class="api-section">Description</p>
 
@@ -68,9 +529,11 @@ short-lived ``http_connect`` session reusing the [`Client`](/vgi/docs/python/api
 non-DuckDB use case this mixin supports.
 
 Other attributes expected from [`Client`](/vgi/docs/python/api/vgi-client/#vgi.client.client.Client): ``_transport`` (subprocess,
-http, or tcp), ``_base_url`` (HTTP base URL), ``_tcp_host`` / ``_tcp_port``
-(TCP endpoint), and ``_get_or_create_httpx_client()`` (shared HTTP client
-factory).
+http, tcp, or launch), ``_base_url`` (HTTP base URL), ``_tcp_host`` /
+``_tcp_port`` (TCP endpoint), ``_launch_argv`` / ``_launch_idle_timeout`` /
+``_launch_state_dir`` / ``_launch_socket_path`` (launcher worker
+identity + lifecycle), and ``_get_or_create_httpx_client()`` (shared
+HTTP client factory).
 
 <p class="api-section">Attributes</p>
 
@@ -98,7 +561,7 @@ be split, or an argv sequence taken as-is.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.catalogs"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalogs`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L196" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L227" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>catalogs() -&gt; list[<a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.CatalogInfo">CatalogInfo</a>]</code></pre>
 
@@ -113,7 +576,7 @@ Get list of catalog discovery records from the worker.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.catalog_attach"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalog_attach`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L209" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L240" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>catalog_attach(
     *,
@@ -136,7 +599,7 @@ Attach to a catalog.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.catalog_detach"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalog_detach`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L242" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L273" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>catalog_detach(*, attach_opaque_data: AttachOpaqueData) -&gt; None</code></pre>
 
@@ -151,7 +614,7 @@ Detach from a catalog.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.catalog_create"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalog_create`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L252" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L283" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>catalog_create(
     *,
@@ -171,7 +634,7 @@ Create a new catalog.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.catalog_drop"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalog_drop`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L276" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L307" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>catalog_drop(*, name: str) -&gt; None</code></pre>
 
@@ -186,7 +649,7 @@ Drop a catalog.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.catalog_version"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalog_version`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L286" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L317" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>catalog_version(
     *,
@@ -207,7 +670,7 @@ Get the current catalog version.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.catalog_transaction_begin"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalog_transaction_begin`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L307" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L338" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>catalog_transaction_begin(
     *,
@@ -227,7 +690,7 @@ Begin a new transaction.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.catalog_transaction_commit"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalog_transaction_commit`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L322" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L353" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>catalog_transaction_commit(
     *,
@@ -246,7 +709,7 @@ Commit a transaction.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.catalog_transaction_rollback"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `catalog_transaction_rollback`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L338" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L369" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>catalog_transaction_rollback(
     *,
@@ -265,7 +728,7 @@ Rollback a transaction.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.schemas"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schemas`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L356" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L387" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>schemas(
     *,
@@ -286,7 +749,7 @@ List schemas in the catalog.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.schema_get"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schema_get`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L375" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L406" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>schema_get(
     *,
@@ -308,7 +771,7 @@ Get information about a schema.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.schema_create"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schema_create`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L400" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L431" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>schema_create(
     *,
@@ -330,7 +793,7 @@ Create a new schema.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.schema_drop"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schema_drop`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L428" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L459" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>schema_drop(
     *,
@@ -352,7 +815,7 @@ Drop a schema.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.schema_contents"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `schema_contents`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L506" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L547" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>schema_contents(
     *,
@@ -360,13 +823,40 @@ Drop a schema.
     transaction_opaque_data: TransactionOpaqueData | None = None,
     name: str,
     type: <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.SchemaObjectType">SchemaObjectType</a>,
-) -&gt; Sequence[<a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.TableInfo">TableInfo</a> | <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.ViewInfo">ViewInfo</a> | <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.FunctionInfo">FunctionInfo</a> | <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.MacroInfo">MacroInfo</a>]</code></pre>
+) -&gt; Sequence[<a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.TableInfo">TableInfo</a> | <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.ViewInfo">ViewInfo</a> | <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.FunctionInfo">FunctionInfo</a> | <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.MacroInfo">MacroInfo</a> | <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.IndexInfo">IndexInfo</a>]</code></pre>
 
-List contents of a schema (tables, views, functions, macros).
+List contents of a schema (tables, views, functions, macros, indexes).
 
-<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">attach_opaque_data</code></dt><dd>The attachment ID from catalog_attach.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional transaction ID for transactional reads.</dd><dt><code class="api-pname">name</code></dt><dd>The schema name.</dd><dt><code class="api-pname">type</code></dt><dd>The type of objects to return. Must be a <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.SchemaObjectType"><code>SchemaObjectType</code></a> enum:<br />• <code>SchemaObjectType.TABLE</code>: Return only tables<br />• <code>SchemaObjectType.VIEW</code>: Return only views<br />• <code>SchemaObjectType.SCALAR_FUNCTION</code>: Return only scalar functions<br />• <code>SchemaObjectType.TABLE_FUNCTION</code>: Return only table functions<br />• <code>SchemaObjectType.SCALAR_MACRO</code>: Return only scalar macros<br />• <code>SchemaObjectType.TABLE_MACRO</code>: Return only table macros</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">attach_opaque_data</code></dt><dd>The attachment ID from catalog_attach.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional transaction ID for transactional reads.</dd><dt><code class="api-pname">name</code></dt><dd>The schema name.</dd><dt><code class="api-pname">type</code></dt><dd>The type of objects to return. Must be a <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.SchemaObjectType"><code>SchemaObjectType</code></a> enum:<br />• <code>SchemaObjectType.TABLE</code>: Return only tables<br />• <code>SchemaObjectType.VIEW</code>: Return only views<br />• <code>SchemaObjectType.SCALAR_FUNCTION</code>: Return only scalar functions<br />• <code>SchemaObjectType.TABLE_FUNCTION</code>: Return only table functions<br />• <code>SchemaObjectType.SCALAR_MACRO</code>: Return only scalar macros<br />• <code>SchemaObjectType.TABLE_MACRO</code>: Return only table macros<br />• <code>SchemaObjectType.INDEX</code>: Return only indexes</dd></dl></div>
 
-<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>List of <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.TableInfo"><code>TableInfo</code></a>, <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.ViewInfo"><code>ViewInfo</code></a>, <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.FunctionInfo"><code>FunctionInfo</code></a>, or <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.MacroInfo"><code>MacroInfo</code></a> depending on the type.</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>List of <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.TableInfo"><code>TableInfo</code></a>, <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.ViewInfo"><code>ViewInfo</code></a>, <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.FunctionInfo"><code>FunctionInfo</code></a>, <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.MacroInfo"><code>MacroInfo</code></a>, or <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.IndexInfo"><code>IndexInfo</code></a> depending on the type.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.catalog_mixin.CatalogClientMixin.copy_formats"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `copy_formats`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L614" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>copy_formats(
+    *,
+    attach_opaque_data: AttachOpaqueData,
+    transaction_opaque_data: TransactionOpaqueData | None = None,
+) -&gt; Sequence[<a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.CopyFromFormatInfo">CopyFromFormatInfo</a>]</code></pre>
+
+List the custom ``COPY`` formats this catalog advertises.
+
+Catalog-level rather than schema-scoped, matching the C++ extension,
+which registers one DuckDB ``CopyFunction`` per entry at ATTACH. Each
+entry's ``handler`` is the worker function name to pass to
+``Client.copy_from`` / ``Client.copy_to``, and ``direction`` says which
+of the two it serves (``"from"``, ``"to"``, or ``"both"``).
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">attach_opaque_data</code></dt><dd>The attachment ID from catalog_attach.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional transaction ID for transactional reads.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>List of <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.CopyFromFormatInfo"><code>CopyFromFormatInfo</code></a>. Empty for a catalog with no custom formats, and also for a worker that predates the RPC — the method is additive, so <code>MethodNotImplementedError</code> is read as "advertises none", exactly as the extension reads it during ATTACH.</dd></dl></div>
 
 
 </div>
@@ -375,7 +865,7 @@ List contents of a schema (tables, views, functions, macros).
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_get"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_get`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L562" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L652" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_get(
     *,
@@ -383,11 +873,13 @@ List contents of a schema (tables, views, functions, macros).
     transaction_opaque_data: TransactionOpaqueData | None = None,
     schema_name: str,
     name: str,
+    at_unit: str | None = None,
+    at_value: str | None = None,
 ) -&gt; <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.TableInfo">TableInfo</a> | None</code></pre>
 
 Get information about a table.
 
-<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">attach_opaque_data</code></dt><dd>The attachment ID from catalog_attach.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional transaction ID for transactional reads.</dd><dt><code class="api-pname">schema_name</code></dt><dd>The schema containing the table.</dd><dt><code class="api-pname">name</code></dt><dd>The table name.</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">attach_opaque_data</code></dt><dd>The attachment ID from catalog_attach.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional transaction ID for transactional reads.</dd><dt><code class="api-pname">schema_name</code></dt><dd>The schema containing the table.</dd><dt><code class="api-pname">name</code></dt><dd>The table name.</dd><dt><code class="api-pname">at_unit</code></dt><dd>Optional time travel unit (e.g. 'timestamp', 'version') — the schema at a past point may differ from the live one. <code>None</code> for the live schema.</dd><dt><code class="api-pname">at_value</code></dt><dd>Optional time travel value, paired with <code>at_unit</code>.</dd></dl></div>
 
 <div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd><a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.TableInfo"><code>TableInfo</code></a> for the table, or None if not found.</dd></dl></div>
 
@@ -398,7 +890,7 @@ Get information about a table.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_column_statistics"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_column_statistics`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L590" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L688" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_column_statistics(
     *,
@@ -426,7 +918,7 @@ the inlined copy when present and fall back to this.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_create"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_create`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L625" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L723" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_create(
     *,
@@ -452,7 +944,7 @@ Create a new table.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_drop"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_drop`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L667" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L765" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_drop(
     *,
@@ -475,7 +967,7 @@ Drop a table.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_scan_function_get"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_scan_function_get`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L698" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L796" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_scan_function_get(
     *,
@@ -502,10 +994,49 @@ DuckDB function to call to obtain the table data.
 </div>
 <div class="api-member">
 
+<a id="vgi.client.catalog_mixin.CatalogClientMixin.table_scan_branches_get"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_scan_branches_get`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L838" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>table_scan_branches_get(
+    *,
+    attach_opaque_data: AttachOpaqueData,
+    transaction_opaque_data: TransactionOpaqueData | None = None,
+    schema_name: str,
+    name: str,
+    at_unit: str | None = None,
+    at_value: str | None = None,
+) -&gt; <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.ScanBranchesResult">ScanBranchesResult</a></code></pre>
+
+Get the list of scan branches for a (possibly multi-source) table.
+
+Multi-branch tables compose a logical scan from N physical sources
+(canonical case: Kafka hot tier + Iceberg cold tier). The VGI DuckDB
+extension's optimizer rewrites the placeholder scan into
+``LogicalSetOperation(UNION_ALL, ...)``, one arm per branch — a
+caller of this method is expected to do the equivalent (e.g.
+`pl.concat` over one scan per branch in vgi-polars).
+
+Falls back to :meth:`table_scan_function_get`, wrapped as a
+single-branch [`ScanBranchesResult`](/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.ScanBranchesResult), when the worker raises
+`MethodNotImplementedError` for the additive `catalog_table_scan_
+branches_get` RPC — mirroring exactly how the C++ extension reads
+that same fallback, so a worker written before this RPC existed
+still works, just as a one-branch table.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">attach_opaque_data</code></dt><dd>The attachment ID from catalog_attach.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional transaction ID for transactional reads.</dd><dt><code class="api-pname">schema_name</code></dt><dd>The schema containing the table.</dd><dt><code class="api-pname">name</code></dt><dd>The table name.</dd><dt><code class="api-pname">at_unit</code></dt><dd>Optional time travel unit (e.g., 'timestamp', 'version'). The C++ extension refuses <code>AT(...)</code> on tables with more than one branch at bind time — a worker returning multiple branches should expect this to always be <code>None</code>.</dd><dt><code class="api-pname">at_value</code></dt><dd>Optional time travel value.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd><a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.ScanBranchesResult"><code>ScanBranchesResult</code></a> with one or more <a href="/vgi/docs/python/api/vgi-catalog/#vgi.catalog.catalog_interface.ScanBranch"><code>ScanBranch</code></a> entries plus the union of required DuckDB extensions across all branches.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_comment_set"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_comment_set`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L740" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L914" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_comment_set(
     *,
@@ -528,7 +1059,7 @@ Set or clear the comment on a table.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_rename"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_rename`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L771" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L945" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_rename(
     *,
@@ -551,7 +1082,7 @@ Rename a table.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_column_add"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_column_add`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L802" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L976" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_column_add(
     *,
@@ -575,7 +1106,7 @@ Add a new column to a table.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_column_drop"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_column_drop`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L836" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1010" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_column_drop(
     *,
@@ -600,7 +1131,7 @@ Drop a column from a table.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_column_rename"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_column_rename`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L873" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1047" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_column_rename(
     *,
@@ -624,7 +1155,7 @@ Rename a column.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_column_default_set"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_column_default_set`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L907" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1081" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_column_default_set(
     *,
@@ -648,7 +1179,7 @@ Set the default value expression for a column.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_column_default_drop"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_column_default_drop`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L941" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1115" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_column_default_drop(
     *,
@@ -671,7 +1202,7 @@ Remove the default value from a column.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_column_type_change"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_column_type_change`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L972" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1146" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_column_type_change(
     *,
@@ -695,7 +1226,7 @@ Change the type of a column.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_not_null_drop"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_not_null_drop`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1007" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1181" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_not_null_drop(
     *,
@@ -718,7 +1249,7 @@ Remove NOT NULL constraint from a column.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.table_not_null_set"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_not_null_set`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1038" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1212" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_not_null_set(
     *,
@@ -741,7 +1272,7 @@ Add NOT NULL constraint to a column.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.view_get"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `view_get`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1071" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1245" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>view_get(
     *,
@@ -764,7 +1295,7 @@ Get information about a view.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.view_create"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `view_create`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1099" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1273" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>view_create(
     *,
@@ -787,7 +1318,7 @@ Create a new view.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.view_drop"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `view_drop`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1130" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1304" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>view_drop(
     *,
@@ -810,7 +1341,7 @@ Drop a view.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.view_rename"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `view_rename`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1161" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1335" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>view_rename(
     *,
@@ -833,7 +1364,7 @@ Rename a view.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.view_comment_set"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `view_comment_set`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1192" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1366" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>view_comment_set(
     *,
@@ -856,7 +1387,7 @@ Set or clear the comment on a view.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.macro_get"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `macro_get`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1225" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1399" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>macro_get(
     *,
@@ -879,7 +1410,7 @@ Get information about a macro.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.macro_create"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `macro_create`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1253" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1427" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>macro_create(
     *,
@@ -906,7 +1437,7 @@ Create a new macro.
 <a id="vgi.client.catalog_mixin.CatalogClientMixin.macro_drop"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `macro_drop`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1301" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/catalog_mixin.py#L1475" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>macro_drop(
     *,
@@ -933,9 +1464,9 @@ Drop a macro.
 <a id="vgi.client.client.Client"></a>
 ## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `Client`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L226" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L217" target="_blank" rel="noopener">source</a>
 
-<p class="api-bases">Bases: <code><a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a></code></p>
+<p class="api-bases">Bases: <code><a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a>, <a href="/vgi/docs/python/api/vgi-client/#vgi.client.aggregate.AggregateClientMixin">AggregateClientMixin</a></code></p>
 
 <p class="api-section">Description</p>
 
@@ -958,9 +1489,15 @@ provided by [`CatalogClientMixin`](/vgi/docs/python/api/vgi-client/#vgi.client.c
 open a short-lived connection per call (HTTP) or borrow a pooled
 subprocess worker.
 
+Aggregate invocation (``aggregate_function``, ``aggregate_session``,
+``aggregate_streaming``) comes from [`AggregateClientMixin`](/vgi/docs/python/api/vgi-client/#vgi.client.aggregate.AggregateClientMixin). Custom
+``COPY`` formats reuse the table-function and buffered drivers with a COPY
+context attached — see ``copy_from`` / ``copy_to``, and ``copy_formats()``
+for discovery.
+
 Function invocation (``scalar_function``, ``table_function``,
-``table_in_out_function``) requires ``start()`` — typically via the
-context-manager protocol:
+``table_in_out_function``, ``aggregate_function``) requires ``start()`` —
+typically via the context-manager protocol:
 
 
 <Code lang="python" code={`with Client.from_http("http://host:port", bearer_token="...") as c:
@@ -991,7 +1528,19 @@ shutdown.
 <p class="api-atype"><code>float</code></p>
 
 Seconds to wait for a worker process to exit during
-shutdown.
+shutdown before killing it. A hang guard — teardown never blocks past
+this, and never raises ``TimeoutExpired`` at the caller.
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.client.Client.STDERR_DRAIN_TIMEOUT"></a>
+#### <span class="api-icon api-icon--attribute"></span><span class="api-kind-tag api-kind-tag--attribute">attribute</span> `STDERR_DRAIN_TIMEOUT`
+
+<p class="api-atype"><code>float</code></p>
+
+Seconds to wait for a worker's stderr to finish
+draining before an error message is built from it.
 
 </div>
 <div class="api-member">
@@ -1044,12 +1593,17 @@ with no serializable resume point.
 <a id="vgi.client.client.Client.from_http"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `from_http`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L505" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L633" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>from_http(
     base_url: str,
     *,
     bearer_token: str | None = None,
+    oauth: bool = False,
+    oauth_refresh_token: str | None = None,
+    oauth_flow: Literal['auto', 'device_code', 'pkce'] = 'auto',
+    oauth_timeout_seconds: float = 120.0,
+    oauth_prompt: Literal['none', 'login', 'select_account', 'consent'] = 'none',
     httpx_client: Any | None = None,
     external_location: Any | None = None,
     worker_limit: int | None = None,
@@ -1060,7 +1614,8 @@ Create a [`Client`](/vgi/docs/python/api/vgi-client/#vgi.client.client.Client) b
 
 Canonical entry point for non-DuckDB callers (e.g. a TypeScript port
 browsing catalog contents). Subprocess-specific kwargs are not
-accepted; pool/stderr semantics do not apply.
+accepted; pool/stderr semantics do not apply. See `Client.__init__`
+for what ``oauth``/``oauth_refresh_token``/``oauth_flow`` do.
 
 
 </div>
@@ -1069,7 +1624,7 @@ accepted; pool/stderr semantics do not apply.
 <a id="vgi.client.client.Client.from_tcp"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `from_tcp`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L533" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L672" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>from_tcp(
     host: str,
@@ -1092,10 +1647,45 @@ worker with ``vgi-fixture-worker --tcp [HOST:]PORT``.
 </div>
 <div class="api-member">
 
+<a id="vgi.client.client.Client.from_launch"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `from_launch`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L700" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>from_launch(
+    worker_argv: Sequence[str],
+    *,
+    idle_timeout: float = 300.0,
+    state_dir: str | None = None,
+    socket_path: str | None = None,
+    external_location: Any | None = None,
+    worker_limit: int | None = None,
+    attach_opaque_data: bytes | None = None,
+) -&gt; <a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.Client">Client</a></code></pre>
+
+Create a [`Client`](/vgi/docs/python/api/vgi-client/#vgi.client.client.Client) bound to a launcher-managed warm worker.
+
+Spawns (or reuses) a worker process serving over an ``AF_UNIX``
+socket via ``vgi_rpc.launcher`` — every client across the machine
+pointing at the same ``worker_argv`` shares one warm worker,
+coordinated by a per-command-hash flock, and the worker
+self-terminates after ``idle_timeout`` idle seconds with zero
+connected clients. This is the Python client-side counterpart to the
+VGI DuckDB extension's ``launch:<argv>`` LOCATION scheme. Requires
+the ``vgi-python[launch]`` extra.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">worker_argv</code></dt><dd>The worker command and arguments, as an argv sequence — not a shell string, and not split with <code>shlex.split</code> the way <code>server_path</code> is for <code>transport="subprocess"</code>.</dd><dt><code class="api-pname">idle_timeout</code></dt><dd>Shared worker self-shutdown after this many idle seconds.</dd><dt><code class="api-pname">state_dir</code></dt><dd>Override the launcher's default per-user state directory (lockfiles + sockets).</dd><dt><code class="api-pname">socket_path</code></dt><dd>Explicit socket path, skipping the hash-derived default — every caller passing the same explicit path shares that worker regardless of <code>worker_argv</code> differences.</dd><dt><code class="api-pname">external_location</code></dt><dd>Optional <code>ExternalLocationConfig</code> — see the constructor's docstring.</dd><dt><code class="api-pname">worker_limit</code></dt><dd>Maximum number of parallel worker connections.</dd><dt><code class="api-pname">attach_opaque_data</code></dt><dd>Optional unique identifier for the DuckDB database attachment.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>A <a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.Client"><code>Client</code></a> bound to the launcher-managed worker.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
 <a id="vgi.client.client.Client.get_worker_stderr"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `get_worker_stderr`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L575" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L771" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>get_worker_stderr() -&gt; str</code></pre>
 
@@ -1122,10 +1712,29 @@ to the parent process's stderr and this method returns an empty string.
 </div>
 <div class="api-member">
 
+<a id="vgi.client.client.Client.oauth_identity"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `oauth_identity`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L991" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>oauth_identity() -&gt; Any | None</code></pre>
+
+Return the signed-in OAuth identity's parsed id_token claims.
+
+Returns ``None`` when this client isn't using OAuth, or hasn't
+completed a login yet (the identity is only known once a real
+exchange has happened — calling this before the first request
+never triggers one). See ``vgi_rpc.http.OAuthIdentity`` for the
+fields (``sub``/``email``/``name``/``issuer``/``claims``).
+
+
+</div>
+<div class="api-member">
+
 <a id="vgi.client.client.Client.start"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `start`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L903" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L1213" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>start() -&gt; None</code></pre>
 
@@ -1143,7 +1752,7 @@ called automatically.
 The stderr buffer is cleared when start() is called, so any stderr from
 previous runs is discarded.
 
-<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is already started (call stop() first), or if stdout/stderr pipes fail to be created.</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is already started (call stop() first), or if stdout/stderr pipes fail to be created.</dd></dl></div>
 
 
 </div>
@@ -1152,7 +1761,7 @@ previous runs is discarded.
 <a id="vgi.client.client.Client.stop"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `stop`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L939" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L1251" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>stop(*, force: bool = False) -&gt; int</code></pre>
 
@@ -1182,7 +1791,7 @@ able to cancel it. HTTP and TCP workers are already prompt to close.
 
 <div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>The exit code of the primary worker process. Returns 0 for normal termination, non-zero values indicate errors (a forced stop reports the signal exit code, <code>-9</code> on POSIX). Exit codes from additional workers are logged but not returned.</dd></dl></div>
 
-<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client was not started (call start() first).</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client was not started (call start() first).</dd></dl></div>
 
 
 </div>
@@ -1191,7 +1800,7 @@ able to cancel it. HTTP and TCP workers are already prompt to close.
 <a id="vgi.client.client.Client.server_capabilities"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `server_capabilities`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L1003" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L1321" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>server_capabilities() -&gt; Any</code></pre>
 
@@ -1210,7 +1819,7 @@ via upload URLs (see Phase 4 of the whimsical-mccarthy plan).
 <a id="vgi.client.client.Client.table_in_out_function"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_in_out_function`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L1597" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L2026" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_in_out_function(
     *,
@@ -1221,8 +1830,11 @@ via upload URLs (see Phase 4 of the whimsical-mccarthy plan).
     bind_result_callback: Callable[[<a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse">BindResponse</a>], None] | None = None,
     projection_ids: list[int] | None = None,
     pushdown_filters: bytes | None = None,
+    join_keys: list[<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>] | None = None,
     settings: dict[str, Any] | None = None,
     transaction_opaque_data: bytes | None = None,
+    parent_row_callback: Callable[[list[int]], None] | None = None,
+    has_finalize: bool = True,
 ) -&gt; Generator[<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>]</code></pre>
 
 Invoke a table-in-out function on the worker and stream results.
@@ -1232,7 +1844,7 @@ round-robin across workers using dedicated threads. Output order may not
 match input order in parallel mode. Only the primary worker receives the
 FINALIZE phase and produces final aggregated output.
 
-<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the function to invoke. Must exist in the worker's registry.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Name of the catalog schema that declares the function. Required — a worker may register one name in several schemas, so the (schema, name) pair is what identifies the implementation.</dd><dt><code class="api-pname">input</code></dt><dd>Iterator yielding input <code>RecordBatch</code>es. Must yield at least one batch. The first batch's schema is used to initialize the IPC stream. Raises <a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError"><code>ClientError</code></a> if the iterator is empty.</dd><dt><code class="api-pname">arguments</code></dt><dd>Optional <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments"><code>Arguments</code></a> container with positional and named arguments to pass to the function. Defaults to empty <code>Arguments()</code>.</dd><dt><code class="api-pname">bind_result_callback</code></dt><dd>Optional callback invoked with the <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse"><code>BindResponse</code></a> before processing begins.</dd><dt><code class="api-pname">projection_ids</code></dt><dd>Optional list of column indices for column projection.</dd><dt><code class="api-pname">pushdown_filters</code></dt><dd>Optional byte string containing filter predicates to push down to the function.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional dictionary of settings/pragmas to pass to the function.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional unique identifier for the DuckDB transaction.</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the function to invoke. Must exist in the worker's registry.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Name of the catalog schema that declares the function. Required — a worker may register one name in several schemas, so the (schema, name) pair is what identifies the implementation.</dd><dt><code class="api-pname">input</code></dt><dd>Iterator yielding input <code>RecordBatch</code>es. Must yield at least one batch. The first batch's schema is used to initialize the IPC stream. Raises <a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code>ClientError</code></a> if the iterator is empty.</dd><dt><code class="api-pname">arguments</code></dt><dd>Optional <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments"><code>Arguments</code></a> container with positional and named arguments to pass to the function. Defaults to empty <code>Arguments()</code>.</dd><dt><code class="api-pname">bind_result_callback</code></dt><dd>Optional callback invoked with the <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse"><code>BindResponse</code></a> before processing begins.</dd><dt><code class="api-pname">projection_ids</code></dt><dd>Optional list of column indices for column projection.</dd><dt><code class="api-pname">pushdown_filters</code></dt><dd>Optional byte string containing filter predicates to push down to the function.</dd><dt><code class="api-pname">join_keys</code></dt><dd>Optional serialized join-key batches for semi-join pushdown — one single-column <code>RecordBatch</code> per join-key column, matched worker-side by column name. Same mechanism as :meth:<code>table_function</code>'s <code>join_keys</code>.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional dictionary of settings/pragmas to pass to the function.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional unique identifier for the DuckDB transaction.</dd><dt><code class="api-pname">parent_row_callback</code></dt><dd>Optional callback invoked once per yielded output batch (before finalize), immediately before the yield, with that batch's decoded <code>vgi_rpc.parent_row</code> provenance — <code>parent_rows[i]</code> is the 0-based index into the input batch that produced output row <code>i</code>. Passing this switches on provenance decoding: a batch with no <code>vgi_rpc.parent_row</code> metadata is only accepted when its row count matches the input batch's (raising <a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code>ClientError</code></a> otherwise), since a worker changing row count without provenance is a worker bug for a function that opted into this contract. Intended for blended row-transform functions (<a href="/vgi/docs/python/api/vgi-table_in_out_function/#vgi.table_in_out_function.RowTransformFunction"><code>RowTransformFunction</code></a>, <code>FunctionInfo.input_from_args</code>); leave unset for ordinary table-in-out functions, which have no provenance concept and may legitimately change row count.</dd><dt><code class="api-pname">has_finalize</code></dt><dd>Whether this function declares a FINALIZE stage (<code>FunctionInfo.has_finalize</code>). Defaults to <code>True</code> — every caller before this parameter existed got a FINALIZE-phase <code>init()</code> unconditionally, so this preserves that exactly. Pass <code>False</code> for a function known to have no finalize (every blended <a href="/vgi/docs/python/api/vgi-table_in_out_function/#vgi.table_in_out_function.RowTransformFunction"><code>RowTransformFunction</code></a> — <code>has_finalize</code> is always false for those, enforced at <code>resolve_metadata()</code>) to skip the FINALIZE <code>init()</code> entirely, not just send one expecting an empty reply. Confirmed load-bearing, not cosmetic: some worker SDKs (e.g. the TypeScript one) actively reject an unexpected FINALIZE <code>init()</code> for a function that never advertised <code>has_finalize</code>, rather than silently no-op'ing it — the C++ DuckDB extension avoids this the same way, by conditionally registering <code>in_out_function_final</code> at all.</dd></dl></div>
 
 <div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><code class="api-ptype">`ClientError`</code></dt><dd>If the client is not started, input iterator is empty, input iterator yields non-<code>RecordBatch</code> objects, communication with the worker fails, or the worker returns an unexpected status or exception.</dd></dl></div>
 
@@ -1243,7 +1855,7 @@ FINALIZE phase and produces final aggregated output.
 <a id="vgi.client.client.Client.table_buffering_function"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_buffering_function`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L1717" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L2191" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_buffering_function(
     *,
@@ -1256,6 +1868,8 @@ FINALIZE phase and produces final aggregated output.
     pushdown_filters: bytes | None = None,
     settings: dict[str, Any] | None = None,
     transaction_opaque_data: bytes | None = None,
+    copy_to: CopyToContext | None = None,
+    input_schema: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a> | None = None,
 ) -&gt; Generator[<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>]</code></pre>
 
 Invoke a [`TableBufferingFunction`](/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingFunction) (Sink+Source) and stream results.
@@ -1283,9 +1897,101 @@ primary worker connection (process/combine are unary RPCs); the
 worker buffers all input regardless, so the aggregate result is
 identical to the distributed C++ path.
 
-<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the <a href="/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingFunction"><code>TableBufferingFunction</code></a> to invoke.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Name of the catalog schema that declares the function. Required — a worker may register one name in several schemas, so the (schema, name) pair is what identifies the implementation.</dd><dt><code class="api-pname">input</code></dt><dd>Iterator yielding input <code>RecordBatch</code>es. May be empty — buffering aggregations still produce a result for zero rows.</dd><dt><code class="api-pname">arguments</code></dt><dd>Optional <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments"><code>Arguments</code></a> container. Defaults to empty.</dd><dt><code class="api-pname">bind_result_callback</code></dt><dd>Optional callback invoked with the <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse"><code>BindResponse</code></a> before processing begins.</dd><dt><code class="api-pname">projection_ids</code></dt><dd>Optional column indices for projection.</dd><dt><code class="api-pname">pushdown_filters</code></dt><dd>Optional serialized filter predicates.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional settings/pragmas to pass to the function.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional DuckDB transaction identifier.</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the <a href="/vgi/docs/python/api/vgi-table_buffering_function/#vgi.table_buffering_function.TableBufferingFunction"><code>TableBufferingFunction</code></a> to invoke.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Name of the catalog schema that declares the function. Required — a worker may register one name in several schemas, so the (schema, name) pair is what identifies the implementation.</dd><dt><code class="api-pname">input</code></dt><dd>Iterator yielding input <code>RecordBatch</code>es. May be empty — buffering aggregations still produce a result for zero rows.</dd><dt><code class="api-pname">arguments</code></dt><dd>Optional <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments"><code>Arguments</code></a> container. Defaults to empty.</dd><dt><code class="api-pname">bind_result_callback</code></dt><dd>Optional callback invoked with the <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse"><code>BindResponse</code></a> before processing begins.</dd><dt><code class="api-pname">projection_ids</code></dt><dd>Optional column indices for projection.</dd><dt><code class="api-pname">pushdown_filters</code></dt><dd>Optional serialized filter predicates.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional settings/pragmas to pass to the function.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional DuckDB transaction identifier.</dd><dt><code class="api-pname">copy_to</code></dt><dd>Optional <code>CopyToContext</code> marking this sink as a <code>COPY ... TO</code> write. A <a href="/vgi/docs/python/api/vgi-copy_to_function/#vgi.copy_to_function.CopyToFunction"><code>CopyToFunction</code></a> returns no finalize keys, so the generator yields nothing. Prefer :meth:<code>copy_to</code>, which builds the context and drains for you.</dd><dt><code class="api-pname">input_schema</code></dt><dd>Schema to bind with instead of the first input batch's. Needed when <code>input</code> may be empty and the function still depends on the source schema (a <a href="/vgi/docs/python/api/vgi-copy_to_function/#vgi.copy_to_function.CopyToFunction"><code>CopyToFunction</code></a> writing a header row for an empty COPY).</dd></dl></div>
 
-<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started or any RPC fails.</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started or any RPC fails.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.client.Client.bind"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `bind`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L2442" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>bind(
+    *,
+    function_name: str,
+    schema_name: str,
+    arguments: <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments">Arguments</a> | None = None,
+    function_type: <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.FunctionType">FunctionType</a> = FunctionType.TABLE,
+    settings: dict[str, Any] | None = None,
+    transaction_opaque_data: bytes | None = None,
+) -&gt; <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse">BindResponse</a></code></pre>
+
+Resolve a function's bind response without running init()/process().
+
+Runs only the `bind()` RPC — no `init()`, no worker execution, no
+data produced. This is the schema-discovery primitive `table_function()`/
+`table_in_out_function()`/`scalar_function()` lack a standalone version
+of: their own `bind_result_callback` only fires as a side effect of a
+generator's first `next()`, which has already started `init()` and
+real execution by the time it runs. Prefer the catalog RPCs
+(`Client.table_get`, `Client.schema_contents(type=TABLE_FUNCTION)`)
+when a catalog attach is available — those are equally zero-execution
+and additionally expose pushdown-capability flags this method does
+not. Use this method for a bare (non-catalog) function name, where no
+attach exists to ask instead.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the function to bind. Must exist in the worker's registry.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Name of the catalog schema that declares the function. Required — a worker may register one name in several schemas, so the (schema, name) pair is what identifies the implementation.</dd><dt><code class="api-pname">arguments</code></dt><dd>Optional <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments"><code>Arguments</code></a> container with positional and named arguments to pass to the function. Defaults to empty <code>Arguments()</code>.</dd><dt><code class="api-pname">function_type</code></dt><dd>Which kind of function to bind (<code>FunctionType.TABLE</code>, <code>.SCALAR</code>, or <code>.TABLE_IN_OUT</code>). Defaults to <code>TABLE</code>, the common case for schema discovery.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional dictionary of settings/pragmas — some functions' output schema depends on setting values (see <code>Meta.required_settings</code>).</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional unique identifier for the DuckDB transaction.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd><a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse"><code>BindResponse</code></a> with <code>output_schema</code> and any opaque bind data — no batches, no worker state beyond the bind itself.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started, communication with the worker fails, or the worker returns an exception.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.client.Client.table_function_plan"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_function_plan`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L2514" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>table_function_plan(
+    *,
+    function_name: str,
+    schema_name: str,
+    arguments: <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments">Arguments</a> | None = None,
+    projection_ids: list[int] | None = None,
+    pushdown_filters: bytes | None = None,
+    join_keys: list[<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>] | None = None,
+    settings: dict[str, Any] | None = None,
+    transaction_opaque_data: bytes | None = None,
+    target_split_bytes: int | None = None,
+    min_splits: int | None = None,
+    max_splits_per_response: int | None = None,
+    cursor: bytes | None = None,
+) -&gt; PlanResponse</code></pre>
+
+Plan a table-function scan into named, independently redeemable splits.
+
+Runs `bind()` then `on_plan()` and returns the resulting
+`PlanResponse`, whose `splits` are each individually redeemable by
+:meth:`table_function` via its `split_tokens` argument — from this
+process or, since a split names work rather than describing it ("these
+three files at version 47", not "rows 0-999 of whatever this returns
+now"), any other. Workers that don't opt in via `supports_splits`
+(`FunctionInfo.supports_splits`) inherit a framework default (commonly
+one split for the whole scan) — check that flag first if the caller
+cares whether real parallelism/checkpointing is available versus a
+single degenerate split.
+
+A response's `next_cursors` is normally empty or one entry; more than
+one means the plan is paginated across parallel, disjoint enumeration
+branches — the *caller* is responsible for that disjointness (VGI
+itself does not verify it; see the "Split disjointness is a worker
+contract" note in the VGI extension's own docs). For a single
+sequential caller, following `next_cursors` one at a time (via
+`cursor=`) and concatenating each response's `splits` is always
+correct, whether the plan doled out one cursor or several.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the table function to plan.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Name of the catalog schema that declares the function.</dd><dt><code class="api-pname">arguments</code></dt><dd>Optional <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments"><code>Arguments</code></a> container. Defaults to empty <code>Arguments()</code>.</dd><dt><code class="api-pname">projection_ids</code></dt><dd>Optional list of column indices for projection — threaded into the plan so split sizing can account for it.</dd><dt><code class="api-pname">pushdown_filters</code></dt><dd>Optional byte string of filter predicates, same wire format as :meth:<code>table_function</code>'s.</dd><dt><code class="api-pname">join_keys</code></dt><dd>Optional serialized join-key batches for semi-join pushdown, threaded into split sizing/pruning the same way <code>pushdown_filters</code> is — same wire mechanism as :meth:<code>table_function</code>'s <code>join_keys</code>.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional dictionary of settings/pragmas.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional transaction identifier.</dd><dt><code class="api-pname">target_split_bytes</code></dt><dd>Requested split size — the primary sizing lever; the client can't see per-split cost and will treat returned splits as interchangeable units.</dd><dt><code class="api-pname">min_splits</code></dt><dd>Parallelism floor — ask for at least this many splits even for a small table, so a caller with idle readers has enough units to hand them.</dd><dt><code class="api-pname">max_splits_per_response</code></dt><dd>Pagination cap on this one response (distinct from <code>min_splits</code>, which is a sizing hint, not a pagination control).</dd><dt><code class="api-pname">cursor</code></dt><dd>Resume point from a previous response's <code>next_cursors</code>, or <code>None</code> to start a fresh plan.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd><code>PlanResponse</code> with <code>splits</code> (each an individually redeemable <code>ScanSplit</code>, carrying the <code>token</code> to pass back into <code>table_function(split_tokens=...)</code>) and <code>next_cursors</code> for pagination.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started, communication with the worker fails, or the worker returns an exception.</dd></dl></div>
 
 
 </div>
@@ -1294,7 +2000,7 @@ identical to the distributed C++ path.
 <a id="vgi.client.client.Client.table_function"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_function`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L1956" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L2639" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_function(
     *,
@@ -1304,8 +2010,16 @@ identical to the distributed C++ path.
     bind_result_callback: Callable[[<a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse">BindResponse</a>], None] | None = None,
     projection_ids: list[int] | None = None,
     pushdown_filters: bytes | None = None,
+    join_keys: list[<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>] | None = None,
     settings: dict[str, Any] | None = None,
     transaction_opaque_data: bytes | None = None,
+    copy_from: CopyFromContext | None = None,
+    split_tokens: list[bytes] | None = None,
+    split_execution_id: bytes | None = None,
+    split_init_opaque_data: bytes | None = None,
+    batch_metadata_callback: Callable[[<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">KeyValueMetadata</a> | None], None] | None = None,
+    at_unit: str | None = None,
+    at_value: str | None = None,
 ) -&gt; Generator[<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>]</code></pre>
 
 Invoke a table function (source function) and stream output batches.
@@ -1316,10 +2030,12 @@ results based solely on their arguments.
 
 For parallel processing (max_workers > 1), output is read from all
 workers concurrently using threads. Output order is non-deterministic.
+This is unrelated to (and mutually exclusive in effect with) redeeming
+splits — see ``split_tokens`` below.
 
-<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the function to invoke. Must exist in the worker's registry and be a table function (not table-in-out).</dd><dt><code class="api-pname">schema_name</code></dt><dd>Name of the catalog schema that declares the function. Required — a worker may register one name in several schemas, so the (schema, name) pair is what identifies the implementation.</dd><dt><code class="api-pname">arguments</code></dt><dd>Optional <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments"><code>Arguments</code></a> container with positional and named arguments to pass to the function. Defaults to empty <code>Arguments()</code>.</dd><dt><code class="api-pname">bind_result_callback</code></dt><dd>Optional callback invoked with the <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse"><code>BindResponse</code></a> before processing begins.</dd><dt><code class="api-pname">projection_ids</code></dt><dd>Optional list of column indices for column projection.</dd><dt><code class="api-pname">pushdown_filters</code></dt><dd>Optional byte string containing filter predicates to push down to the function.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional dictionary of settings/pragmas to pass to the function.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional unique identifier for the DuckDB transaction.</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the function to invoke. Must exist in the worker's registry and be a table function (not table-in-out).</dd><dt><code class="api-pname">schema_name</code></dt><dd>Name of the catalog schema that declares the function. Required — a worker may register one name in several schemas, so the (schema, name) pair is what identifies the implementation.</dd><dt><code class="api-pname">arguments</code></dt><dd>Optional <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments"><code>Arguments</code></a> container with positional and named arguments to pass to the function. Defaults to empty <code>Arguments()</code>.</dd><dt><code class="api-pname">bind_result_callback</code></dt><dd>Optional callback invoked with the <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse"><code>BindResponse</code></a> before processing begins.</dd><dt><code class="api-pname">projection_ids</code></dt><dd>Optional list of column indices for column projection.</dd><dt><code class="api-pname">pushdown_filters</code></dt><dd>Optional byte string containing filter predicates to push down to the function.</dd><dt><code class="api-pname">join_keys</code></dt><dd>Optional serialized join-key batches for semi-join pushdown — one single-column <code>RecordBatch</code> per join-key column, matched worker-side by column name (see <code>PushdownFilters.get_join_keys_column</code>). Same wire mechanism DuckDB's own join pushdown into VGI already exercises; <a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.Client"><code>Client</code></a> simply had no public way to set it before this.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional dictionary of settings/pragmas to pass to the function.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional unique identifier for the DuckDB transaction.</dd><dt><code class="api-pname">copy_from</code></dt><dd>Optional <code>CopyFromContext</code> marking this scan as a <code>COPY ... FROM</code> read. Prefer :meth:<code>copy_from</code>, which builds the context for you.</dd><dt><code class="api-pname">split_tokens</code></dt><dd>Redeem these specific split tokens (from a prior :meth:<code>table_function_plan</code> call) instead of an ordinary whole-scan init. Forces single-worker mode for this call — the server's advertised <code>max_workers</code> describes fan-out for reading the whole table, not for one already-named unit of work. To read multiple splits in parallel, drive them through multiple <a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.Client"><code>Client</code></a>/thread instances yourself; to read them sequentially (still sound and replayable, just without concurrency), call this once per split token in a loop.</dd><dt><code class="api-pname">split_execution_id</code></dt><dd>When redeeming a split, the originating <code>PlanResponse.execution_id</code> — echoed on this init so a worker whose splits share cross-process state via <a href="/vgi/docs/python/api/vgi-function_storage/#vgi.function_storage.BoundStorage"><code>BoundStorage</code></a> can find it. <code>None</code> for an ordinary whole-scan init.</dd><dt><code class="api-pname">split_init_opaque_data</code></dt><dd>When redeeming a split, the originating <code>PlanResponse.init_opaque_data</code>, echoed the same way.</dd><dt><code class="api-pname">batch_metadata_callback</code></dt><dd>Optional callback invoked once per yielded batch, before it's yielded, with that batch's <code>custom_metadata</code> (<code>None</code> if it carried none) — e.g. a worker's <code>vgi.cache.*</code> cacheability advertisement (<code>vgi/cache_control.py</code>), which rides <code>AnnotatedBatch.custom_metadata</code> and is otherwise unreachable through this generator's plain <code>pa.RecordBatch</code> yields. Invoked serially from the generator's own consumption loop (even in parallel mode, where multiple worker threads feed one shared queue) — never concurrently with itself.</dd><dt><code class="api-pname">at_unit</code></dt><dd>Optional time travel unit (e.g. 'timestamp', 'version') — scan the table as of a past point rather than live. <code>None</code> for a live scan. Threaded straight into <code>BindRequest.at_unit</code> (the wire protocol has always carried this field; a worker that doesn't support time travel on this function rejects it at bind, the same as any other unsupported bind option).</dd><dt><code class="api-pname">at_value</code></dt><dd>Optional time travel value, paired with <code>at_unit</code>.</dd></dl></div>
 
-<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started, communication with the worker fails, or the worker returns an exception.</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started, communication with the worker fails, or the worker returns an exception.</dd></dl></div>
 
 
 </div>
@@ -1328,7 +2044,7 @@ workers concurrently using threads. Output order is non-deterministic.
 <a id="vgi.client.client.Client.table_scan_resumable"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_scan_resumable`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L2042" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L2784" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_scan_resumable(
     *,
@@ -1358,7 +2074,7 @@ be supplied). When ``None``, a fresh scan starts.
 
 <div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>A <a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ResumableTableScan"><code>ResumableTableScan</code></a> yielding <code>(batch, token)</code> pairs.</dd></dl></div>
 
-<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ResumeUnsupported"><code class="api-ptype">ResumeUnsupported</code></a></dt><dd>If the transport is not HTTP.</dd><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started or the worker errors.</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ResumeUnsupported"><code class="api-ptype">ResumeUnsupported</code></a></dt><dd>If the transport is not HTTP.</dd><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started or the worker errors.</dd></dl></div>
 
 
 </div>
@@ -1367,7 +2083,7 @@ be supplied). When ``None``, a fresh scan starts.
 <a id="vgi.client.client.Client.table_scan_continue"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `table_scan_continue`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L2131" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L2873" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>table_scan_continue(
     *,
@@ -1392,7 +2108,84 @@ token is verified against the caller's auth identity, and routed by the same
 
 <div class="api-meta-block"><p class="api-label">Returns</p><dl class="api-deflist"><dd>A <a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ResumableTableScan"><code>ResumableTableScan</code></a> positioned AFTER the token; <code>next()</code> continues the stream, yielding <code>(batch, token)</code> per call.</dd></dl></div>
 
-<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ResumeUnsupported"><code class="api-ptype">ResumeUnsupported</code></a></dt><dd>If the transport is not HTTP.</dd><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started.</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ResumeUnsupported"><code class="api-ptype">ResumeUnsupported</code></a></dt><dd>If the transport is not HTTP.</dd><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.client.Client.copy_from"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `copy_from`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L3035" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>copy_from(
+    *,
+    function_name: str,
+    schema_name: str,
+    format: str,
+    file_path: str,
+    expected_schema: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a>,
+    arguments: <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments">Arguments</a> | None = None,
+    bind_result_callback: Callable[[<a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse">BindResponse</a>], None] | None = None,
+    projection_ids: list[int] | None = None,
+    pushdown_filters: bytes | None = None,
+    settings: dict[str, Any] | None = None,
+    transaction_opaque_data: bytes | None = None,
+) -&gt; Generator[<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>]</code></pre>
+
+Read a custom ``COPY ... FROM`` format and stream the parsed rows.
+
+A [`CopyFromFunction`](/vgi/docs/python/api/vgi-copy_from_function/#vgi.copy_from_function.CopyFromFunction) is an ordinary producer-mode table function that
+additionally receives a `CopyFromContext`, so this is
+:meth:`table_function` with that context attached — the same shape the
+C++ extension's ``copy_from_bind`` produces.
+
+Discover the ``(format, handler)`` pairs a catalog advertises with
+``client.copy_formats(attach_opaque_data=...)``; ``handler`` is the
+``function_name`` to pass here.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>The reader function (a <a href="/vgi/docs/python/api/vgi-copy_from_function/#vgi.copy_from_function.CopyFromFunction"><code>CopyFromFunction</code></a>) — the <code>handler</code> field of the advertised format.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Catalog schema that declares the function.</dd><dt><code class="api-pname">format</code></dt><dd>The SQL <code>FORMAT</code> identifier the read is running under.</dd><dt><code class="api-pname">file_path</code></dt><dd>Source path from the <code>COPY ... FROM 'path'</code> statement.</dd><dt><code class="api-pname">expected_schema</code></dt><dd>Schema of the COPY target's columns, in target order. The reader must emit batches matching it exactly — DuckDB inserts no cast between the scan and the INSERT.</dd><dt><code class="api-pname">arguments</code></dt><dd>The COPY options, as named <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments"><code>Arguments</code></a>. Defaults to empty, which is valid only when every option has a default.</dd><dt><code class="api-pname">bind_result_callback</code></dt><dd>Optional callback invoked with the <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse"><code>BindResponse</code></a> before reading begins.</dd><dt><code class="api-pname">projection_ids</code></dt><dd>Optional column indices for projection.</dd><dt><code class="api-pname">pushdown_filters</code></dt><dd>Optional serialized filter predicates.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional settings/pragmas to pass to the function.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional DuckDB transaction identifier.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started or an RPC fails.</dd></dl></div>
+
+
+</div>
+<div class="api-member">
+
+<a id="vgi.client.client.Client.copy_to"></a>
+#### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `copy_to`
+
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L3102" target="_blank" rel="noopener">source</a>
+
+<pre class="api-sig"><code>copy_to(
+    *,
+    function_name: str,
+    schema_name: str,
+    format: str,
+    file_path: str,
+    input: Iterator[<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a>],
+    input_schema: <a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">Schema</a> | None = None,
+    arguments: <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments">Arguments</a> | None = None,
+    bind_result_callback: Callable[[<a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse">BindResponse</a>], None] | None = None,
+    settings: dict[str, Any] | None = None,
+    transaction_opaque_data: bytes | None = None,
+) -&gt; None</code></pre>
+
+Write ``input`` to a custom ``COPY ... TO`` format and close it.
+
+A [`CopyToFunction`](/vgi/docs/python/api/vgi-copy_to_function/#vgi.copy_to_function.CopyToFunction) is a buffered Sink+Combine function with no Source
+phase, so this is :meth:`table_buffering_function` with a
+`CopyToContext` attached: every batch is sunk via
+``table_buffering_process`` and the terminal write happens once inside
+``table_buffering_combine``. Returns when the destination is closed.
+
+Unlike the C++ path this drives a single worker connection, so ordered
+writers (``Meta.sink_order_dependent``) see source order for free.
+
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>The writer function (a <a href="/vgi/docs/python/api/vgi-copy_to_function/#vgi.copy_to_function.CopyToFunction"><code>CopyToFunction</code></a>) — the <code>handler</code> field of the advertised format.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Catalog schema that declares the function.</dd><dt><code class="api-pname">format</code></dt><dd>The SQL <code>FORMAT</code> identifier the write is running under.</dd><dt><code class="api-pname">file_path</code></dt><dd>Destination path from the <code>COPY ... TO 'path'</code> statement.</dd><dt><code class="api-pname">input</code></dt><dd>Iterator of source batches. May be empty — the writer's <code>close()</code> still runs and must produce an empty destination.</dd><dt><code class="api-pname">input_schema</code></dt><dd>Source schema to bind with. Required when <code>input</code> may be empty and the writer needs the source column names.</dd><dt><code class="api-pname">arguments</code></dt><dd>The COPY options, as named <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments"><code>Arguments</code></a>. Defaults to empty, which is valid only when every option has a default.</dd><dt><code class="api-pname">bind_result_callback</code></dt><dd>Optional callback invoked with the <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse"><code>BindResponse</code></a> before writing begins.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional settings/pragmas to pass to the function.</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional DuckDB transaction identifier.</dd></dl></div>
+
+<div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code class="api-ptype">ClientError</code></a></dt><dd>If the client is not started or an RPC fails.</dd></dl></div>
 
 
 </div>
@@ -1401,7 +2194,7 @@ token is verified against the caller's auth identity, and routed by the same
 <a id="vgi.client.client.Client.scalar_function"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `scalar_function`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L2274" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L3168" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>scalar_function(
     *,
@@ -1424,7 +2217,7 @@ For parallel processing (max_workers > 1), input batches are distributed
 round-robin across workers using dedicated threads. Output order may not
 match input order in parallel mode.
 
-<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the function to invoke. Must exist in the worker's registry.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Name of the catalog schema that declares the function. Required — a worker may register one name in several schemas, so the (schema, name) pair is what identifies the implementation.</dd><dt><code class="api-pname">input</code></dt><dd>Iterator yielding input <code>RecordBatch</code>es. Must yield at least one batch. The first batch's schema is used to initialize the IPC stream. Raises <a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError"><code>ClientError</code></a> if the iterator is empty.</dd><dt><code class="api-pname">arguments</code></dt><dd>Optional <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments"><code>Arguments</code></a> container with positional and named arguments to pass to the function. Defaults to empty <code>Arguments()</code>.</dd><dt><code class="api-pname">bind_result_callback</code></dt><dd>Optional callback invoked with the <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse"><code>BindResponse</code></a> before processing begins.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional dictionary of settings/pragmas to pass to the function.</dd><dt><code class="api-pname">secrets</code></dt><dd>Optional dictionary of secret name to value pairs. Values can be simple scalars or dicts (for struct-typed secrets).</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional unique identifier for the DuckDB transaction.</dd></dl></div>
+<div class="api-meta-block"><p class="api-label">Parameters</p><dl class="api-deflist"><dt><code class="api-pname">function_name</code></dt><dd>Name of the function to invoke. Must exist in the worker's registry.</dd><dt><code class="api-pname">schema_name</code></dt><dd>Name of the catalog schema that declares the function. Required — a worker may register one name in several schemas, so the (schema, name) pair is what identifies the implementation.</dd><dt><code class="api-pname">input</code></dt><dd>Iterator yielding input <code>RecordBatch</code>es. Must yield at least one batch. The first batch's schema is used to initialize the IPC stream. Raises <a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError"><code>ClientError</code></a> if the iterator is empty.</dd><dt><code class="api-pname">arguments</code></dt><dd>Optional <a href="/vgi/docs/python/api/vgi-arguments/#vgi.arguments.Arguments"><code>Arguments</code></a> container with positional and named arguments to pass to the function. Defaults to empty <code>Arguments()</code>.</dd><dt><code class="api-pname">bind_result_callback</code></dt><dd>Optional callback invoked with the <a href="/vgi/docs/python/api/vgi-invocation/#vgi.invocation.BindResponse"><code>BindResponse</code></a> before processing begins.</dd><dt><code class="api-pname">settings</code></dt><dd>Optional dictionary of settings/pragmas to pass to the function.</dd><dt><code class="api-pname">secrets</code></dt><dd>Optional dictionary of secret name to value pairs. Values can be simple scalars or dicts (for struct-typed secrets).</dd><dt><code class="api-pname">transaction_opaque_data</code></dt><dd>Optional unique identifier for the DuckDB transaction.</dd></dl></div>
 
 <div class="api-meta-block"><p class="api-label">Raises</p><dl class="api-deflist"><dt><code class="api-ptype">`ClientError`</code></dt><dd>If the client is not started, input iterator is empty, input iterator yields non-<code>RecordBatch</code> objects, communication with the worker fails, or the worker returns an unexpected status or exception.</dd></dl></div>
 
@@ -1433,8 +2226,12 @@ match input order in parallel mode.
 
 </div>
 <details class="api-inherited">
-<summary>Inherited members (37)</summary>
+<summary>Inherited members (43)</summary>
 
+- `aggregate_session` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.aggregate.AggregateClientMixin">AggregateClientMixin</a> — Bind an aggregate and yield a session over its raw RPCs.
+- `aggregate_bind` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.aggregate.AggregateClientMixin">AggregateClientMixin</a> — Bind an aggregate function without taking responsibility for teardown.
+- `aggregate_function` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.aggregate.AggregateClientMixin">AggregateClientMixin</a> — Run an aggregate over ``input`` and return one row per group.
+- `aggregate_streaming` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.aggregate.AggregateClientMixin">AggregateClientMixin</a> — Open a streaming-partitioned aggregate session and yield it.
 - `catalogs` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Get list of catalog discovery records from the worker.
 - `catalog_attach` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Attach to a catalog.
 - `catalog_detach` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Detach from a catalog.
@@ -1448,12 +2245,14 @@ match input order in parallel mode.
 - `schema_get` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Get information about a schema.
 - `schema_create` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Create a new schema.
 - `schema_drop` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Drop a schema.
-- `schema_contents` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — List contents of a schema (tables, views, functions, macros).
+- `schema_contents` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — List contents of a schema (tables, views, functions, macros, indexes).
+- `copy_formats` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — List the custom ``COPY`` formats this catalog advertises.
 - `table_get` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Get information about a table.
 - `table_column_statistics` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Fetch a table's column statistics, decoded.
 - `table_create` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Create a new table.
 - `table_drop` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Drop a table.
 - `table_scan_function_get` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Get the scan function for a table.
+- `table_scan_branches_get` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Get the list of scan branches for a (possibly multi-source) table.
 - `table_comment_set` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Set or clear the comment on a table.
 - `table_rename` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Rename a table.
 - `table_column_add` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.catalog_mixin.CatalogClientMixin">CatalogClientMixin</a> — Add a new column to a table.
@@ -1480,10 +2279,10 @@ match input order in parallel mode.
 
 <div class="api-class">
 
-<a id="vgi.client.client.ClientError"></a>
+<a id="vgi.client.errors.ClientError"></a>
 ## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `ClientError`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L114" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/errors.py#L18" target="_blank" rel="noopener">source</a>
 
 <p class="api-bases">Bases: <code>Exception</code></p>
 
@@ -1504,14 +2303,14 @@ empty line.
 
 <div class="api-member">
 
-<a id="vgi.client.client.ClientError.from_rpc_error"></a>
+<a id="vgi.client.errors.ClientError.from_rpc_error"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `from_rpc_error`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L125" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/errors.py#L29" target="_blank" rel="noopener">source</a>
 
-<pre class="api-sig"><code>from_rpc_error(e: <a href="https://vgi-rpc-python.query.farm/" class="api-ext" target="_blank" rel="noopener">RpcError</a>) -&gt; <a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError">ClientError</a></code></pre>
+<pre class="api-sig"><code>from_rpc_error(e: <a href="https://vgi-rpc-python.query.farm/" class="api-ext" target="_blank" rel="noopener">RpcError</a>) -&gt; <a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError">ClientError</a></code></pre>
 
-Create a [`ClientError`](/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError) from an `RpcError`, including remote traceback.
+Create a [`ClientError`](/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError) from an `RpcError`, including remote traceback.
 
 Lead with the user's exception (``error_type: error_message``) so
 the most actionable line is first. The ``Remote traceback`` section
@@ -1632,7 +2431,7 @@ Close the underlying writer if one exists.
 <a id="vgi.client.client.ResumableTableScan"></a>
 ## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `ResumableTableScan`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L151" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L140" target="_blank" rel="noopener">source</a>
 
 <p class="api-section">Description</p>
 
@@ -1657,7 +2456,7 @@ reads are unordered and not resumable from a single token).
 <a id="vgi.client.client.ResumableTableScan.next"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `next`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L170" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L159" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>next() -&gt; tuple[<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">pa</a>.<a href="https://arrow.apache.org/docs/python/" class="api-ext" target="_blank" rel="noopener">RecordBatch</a> | None, bytes | None]</code></pre>
 
@@ -1672,7 +2471,7 @@ Return ``(batch, resume_token)``; ``(None, None)`` at end-of-stream.
 <a id="vgi.client.client.ResumableTableScan.close"></a>
 #### <span class="api-icon api-icon--method"></span><span class="api-kind-tag api-kind-tag--method">method</span> `close`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L181" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L170" target="_blank" rel="noopener">source</a>
 
 <pre class="api-sig"><code>close() -&gt; None</code></pre>
 
@@ -1690,9 +2489,9 @@ Release the underlying stream (no-op over HTTP — stateless).
 <a id="vgi.client.client.ResumeUnsupported"></a>
 ## <span class="api-icon api-icon--class"></span><span class="api-kind-tag api-kind-tag--class">class</span> `ResumeUnsupported`
 
-<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L140" target="_blank" rel="noopener">source</a>
+<a class="api-source" href="https://github.com/Query-farm/vgi-python/blob/main/vgi/client/client.py#L129" target="_blank" rel="noopener">source</a>
 
-<p class="api-bases">Bases: <code><a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError">ClientError</a></code></p>
+<p class="api-bases">Bases: <code><a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError">ClientError</a></code></p>
 
 <p class="api-section">Description</p>
 
@@ -1707,7 +2506,7 @@ instead.
 <details class="api-inherited">
 <summary>Inherited members (1)</summary>
 
-- `from_rpc_error` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError">ClientError</a> — Create a [`ClientError`](/vgi/docs/python/api/vgi-client/#vgi.client.client.ClientError) from an `RpcError`, including remote traceback.
+- `from_rpc_error` <span class="api-kind">method</span> · from <a href="/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError">ClientError</a> — Create a [`ClientError`](/vgi/docs/python/api/vgi-client/#vgi.client.errors.ClientError) from an `RpcError`, including remote traceback.
 
 </details>
 
