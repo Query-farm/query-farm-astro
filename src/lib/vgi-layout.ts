@@ -25,7 +25,7 @@
  * the other has to match.
  */
 
-/** The section measure. Matches /vgi, /haybarn, /products/orchard, /products/cupola. */
+/** The section measure. Matches /vgi and the product pages. */
 export const WRAP = 'mx-auto w-full max-w-[1200px] px-6 sm:px-7';
 
 /**

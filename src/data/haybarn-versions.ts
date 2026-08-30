@@ -8,10 +8,10 @@
 // committed JSON is the offline fallback). To re-point the site at a newer rc,
 // just rebuild — no edit here.
 //
-// Everything downstream — the status page route, the /haybarn/status redirect,
+// Everything downstream — the status page route, the /products/haybarn/status redirect,
 // the hero RC pill, the install commands, the extension package-name suffix —
 // derives from the generated values below. The site features only the single
-// latest version (older /haybarn/status/<v> pages are not generated).
+// latest version (older /products/haybarn/status/<v> pages are not generated).
 
 import generated from './haybarn-versions.generated.json';
 
@@ -24,7 +24,7 @@ export const HAYBARN_VERSION_TAGS: Record<string, string> = {
   [LATEST_HAYBARN_VERSION]: LATEST_TAG,
 };
 
-export const LATEST_STATUS_URL = `/haybarn/status/${LATEST_HAYBARN_VERSION}`;
+export const LATEST_STATUS_URL = `/products/haybarn/status/${LATEST_HAYBARN_VERSION}`;
 
 // Derived display strings for the latest release.
 export const LATEST_DUCKDB_VERSION = LATEST_HAYBARN_VERSION.replace(/^v/, '');         // 1.5.3

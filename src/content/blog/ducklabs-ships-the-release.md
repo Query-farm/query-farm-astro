@@ -20,7 +20,7 @@ heroImage: '/media/posts/ducklabs-ships-the-release/social.png'
 
 I've been asked all day what the [AWS acquisition of DuckLabs](https://www.aboutamazon.com/news/company-news/aws-ducklabs) means. The questions have come from Query Farm customers, other DuckDB extension developers, and DuckDB users. It's been a busy day across Discord, LinkedIn, and email, and I can't reply to everyone individually, so I'm writing my answers here.
 
-I should say up front that I have commercial interests in this. Query Farm builds and ships [DuckDB extensions](https://query.farm/products/extensions), and we publish [Haybarn](https://query.farm/haybarn), a distribution of DuckDB and its extensions. I'll get to what we're doing about all this at the end, but you should know that going in.
+I should say up front that I have commercial interests in this. Query Farm builds and ships [DuckDB extensions](https://query.farm/products/extensions), and we publish [Haybarn](https://query.farm/products/haybarn), a distribution of DuckDB and its extensions. I'll get to what we're doing about all this at the end, but you should know that going in.
 
 I'm optimistic about DuckDB's future, even though most of this post is about my concerns. Those two things aren't in tension. AWS has a real incentive to keep DuckDB open and widely adopted: if DuckDB becomes the default way to query data sitting in object storage, that drives compute onto AWS infrastructure, which is where they make their money. That alignment is genuine, and it's why I'm not worried about the project disappearing or going closed.
 
@@ -100,7 +100,7 @@ That's my read of the data too, from the outside. It's part of why I believe the
 
 ### Haybarn
 
-That unpredictability is part of why Query Farm built [Haybarn](https://query.farm/haybarn), though it isn't where Haybarn started.
+That unpredictability is part of why Query Farm built [Haybarn](https://query.farm/products/haybarn), though it isn't where Haybarn started.
 
 Haybarn began as a reaction to something narrower: DuckDB releases shipping before the community extensions were built against them. You'd upgrade the engine on the strength of the announcement, run `INSTALL`, and discover that your extension wasn't available for your version.
 

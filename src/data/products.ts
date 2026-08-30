@@ -61,7 +61,7 @@ export const platformComponents: ProductTile[] = [
     eyebrow: 'Independent distribution',
     outcome: 'Bring DuckDB into the enterprise.',
     description: 'Same SQL and database files as DuckDB, with faster object-store reads, signed artifacts, build provenance, curated extension defaults, and mirrorable npm / PyPI channels.',
-    href: '/haybarn',
+    href: '/products/haybarn',
     cta: 'Explore Haybarn',
     status: 'available',
   },
