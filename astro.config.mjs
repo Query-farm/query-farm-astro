@@ -82,6 +82,25 @@ export default defineConfig({
       // "| VGI Python" in the <title> of every Go, Rust and Java page. The
       // route middleware narrows this per section where it can.
       title: 'VGI Documentation',
+      head: [
+        {
+          tag: 'script',
+          attrs: {
+            async: true,
+            src: 'https://www.googletagmanager.com/gtag/js?id=G-EZ01WJETLF',
+          },
+        },
+        {
+          tag: 'script',
+          content: `
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+
+            gtag('config', 'G-EZ01WJETLF');
+          `,
+        },
+      ],
       // Match the site's code styling: the retuned farm Shiki theme, instead of
       // Expressive Code's default light/dark pair. One theme, deliberately —
       // code always sits on rock-900 in BOTH docs themes (DESIGN_BRIEF §3), so
