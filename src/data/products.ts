@@ -56,7 +56,7 @@ export const platformComponents: ProductTile[] = [
     status: 'preview',
   },
   {
-    img: '/haybarn/haybarn-mark.svg',
+    img: '/products/haybarn/haybarn-mark.svg',
     title: 'Haybarn',
     eyebrow: 'Independent distribution',
     outcome: 'Bring DuckDB into the enterprise.',
