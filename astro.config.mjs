@@ -101,6 +101,11 @@ export default defineConfig({
             gtag('config', 'G-EZ01WJETLF');
           `,
         },
+        // Starlight's own default already emits `shortcut icon -> /favicon.svg`;
+        // add the ICO fallback + apple-touch-icon so docs pages match the rest
+        // of the site's BaseLayout.astro <head> exactly.
+        { tag: 'link', attrs: { rel: 'icon', href: '/favicon.ico', sizes: '32x32' } },
+        { tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' } },
       ],
       // Match the site's code styling: the retuned farm Shiki theme, instead of
       // Expressive Code's default light/dark pair. One theme, deliberately —
