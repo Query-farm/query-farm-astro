@@ -5,6 +5,7 @@ pubDate: 2026-08-30
 author: "Rusty Conover"
 tags: ["DuckDB", "VGI", "SQL", "Performance"]
 draft: true
+heroImage: "/media/posts/duckdb-lateral-join-api-superpower/social.png"
 leadVisual:
   src: "/blog/duckdb-lateral-join-api-superpower/lateral-bezier-flow.svg"
   alt: ""
