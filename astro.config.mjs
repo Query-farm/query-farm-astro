@@ -8,6 +8,12 @@ import sitemap from '@astrojs/sitemap';
 import react from '@astrojs/react';
 import starlight from '@astrojs/starlight';
 
+// GA4 property for query.farm; kept in sync with BaseLayout.astro, which
+// can't be imported from here. Emit the tag only for production builds —
+// `astro dev` sets NODE_ENV=development, `astro build` sets production.
+const GA_MEASUREMENT_ID = 'G-EZ01WJETLF';
+const GA_ENABLED = process.env.NODE_ENV === 'production';
+
 // Shiki theme, retuned for the Strata Sun palette (see DESIGN_BRIEF.md).
 // Ground is rock-900 (#1a1512) — the same surface every code block uses.
 // The old theme sat on a dark green that no longer exists in the palette,
@@ -84,23 +90,30 @@ export default defineConfig({
       // route middleware narrows this per section where it can.
       title: 'VGI Documentation',
       head: [
-        {
-          tag: 'script',
-          attrs: {
-            async: true,
-            src: 'https://www.googletagmanager.com/gtag/js?id=G-EZ01WJETLF',
-          },
-        },
-        {
-          tag: 'script',
-          content: `
-            window.dataLayer = window.dataLayer || [];
-            function gtag(){dataLayer.push(arguments);}
-            gtag('js', new Date());
+        // Analytics, mirroring BaseLayout.astro: only in a production build,
+        // and only off a real host. `astro dev` never emits this, and the
+        // hostname check stops `npm run preview` (a production build served
+        // from localhost) from reporting local traffic to the live property.
+        ...(GA_ENABLED
+          ? [
+              {
+                tag: 'script',
+                content: `
+            if (!/^(localhost|127\\.0\\.0\\.1|\\[::1\\])$/.test(location.hostname)) {
+              window.dataLayer = window.dataLayer || [];
+              window.gtag = function gtag(){ dataLayer.push(arguments); };
+              gtag('js', new Date());
+              gtag('config', '${GA_MEASUREMENT_ID}');
 
-            gtag('config', 'G-EZ01WJETLF');
+              var gaTag = document.createElement('script');
+              gaTag.async = true;
+              gaTag.src = 'https://www.googletagmanager.com/gtag/js?id=${GA_MEASUREMENT_ID}';
+              document.head.appendChild(gaTag);
+            }
           `,
-        },
+              },
+            ]
+          : []),
         // Starlight's own default already emits `shortcut icon -> /favicon.svg`;
         // add the ICO fallback + apple-touch-icon so docs pages match the rest
         // of the site's BaseLayout.astro <head> exactly.
