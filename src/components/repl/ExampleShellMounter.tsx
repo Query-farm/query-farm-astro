@@ -224,8 +224,8 @@ function isOnDarkGround(el: HTMLElement): boolean {
  *  corners and border for as long as the bar is there. */
 function findOrCreateToolbar(pre: HTMLElement): { bar: HTMLElement; cleanup: () => void } {
   const prev = pre.previousElementSibling as HTMLElement | null;
-  if (prev && (prev.classList.contains("code-block-toolbar") || prev.querySelector(":scope > .copy-button"))) {
-    const controls = prev.querySelector<HTMLElement>(":scope > .code-block-controls");
+  const controls = prev?.querySelector<HTMLElement>(":scope > .code-block-controls") ?? null;
+  if (prev && (prev.classList.contains("code-block-toolbar") || controls)) {
     return { bar: controls ?? prev, cleanup: () => {} };
   }
 
@@ -248,7 +248,7 @@ function findOrCreateToolbar(pre: HTMLElement): { bar: HTMLElement; cleanup: () 
     // Code always sits on rock-900; the bar above it is rock-950 with a
     // rock-800 rule, matching the .panel-head shape on the dark side.
     background: "#100d0a",
-    border: `1px solid ${preStyle.borderTopColor || "#2a2420"}`,
+    border: "1px solid #2a2420",
     borderBottom: "1px solid #2a2420",
     // Inherit the block's own top rounding and top margin, so the pair reads as
     // one box sitting where the code block used to sit.
