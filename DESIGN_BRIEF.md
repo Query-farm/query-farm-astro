@@ -288,6 +288,36 @@ one broken extension hid the state of all the others. Crashes are now reported
 per-extension and the sweep completes. Use `--no-isolate` for the old
 behaviour. These are pre-existing C++ crashes, unrelated to the redesign.
 
+**Topic contours on /blog (a Family E amendment).** Family E's "card strips
+only" now covers a second device: a bundle of generated contour lines, drawn
+per topic. `src/lib/blog-curves.ts` sums two sines at incommensurate
+frequencies, samples them, and converts through Catmull-Rom to cubic béziers,
+so paths are real `C` segments and C1-continuous. The seed is the post's
+primary tag via FNV-1a, so a topic draws the identical figure on every surface
+— the same "same topic, same colour" contract `blog-topics.ts` already sets,
+extended from hue to form. Colours still come from `topicBands`.
+
+This exists to answer the thumbnail question. Every peer blog (MotherDuck,
+ClickHouse, DuckDB, Fly.io, Tinybird) leads each entry with an image, and
+nearly all of those images are brand-templated plates that carry no
+information at thumbnail size while taxing every future post. A generated mark
+gives the index the same scanability at zero authoring cost, and it stays
+honest: it encodes a category rather than depicting the post.
+
+**`amplitude` is a required knob, not a constant.** Lines may converge but must
+never cross — crossing contours read as a mistake — so swing is capped as a
+fraction of the gap between neighbours. The usable value depends entirely on
+the surface's aspect ratio: the first version put 7 lines in a 76px band, and
+the non-crossing cap held amplitude so low the bundle rendered as a stack of
+straight wires. A long shallow band needs ~3 lines at `amplitude={1}` before it
+reads as curved at all. Tune it per surface and look at it.
+
+**The /blog lead is a card, and the archive is a list.** The old lead was
+unbounded prose on the page ground with a 12.5px CTA — less clickable than the
+three bordered cards ranked beneath it. Both surfaces now use one stretched
+link (`after:absolute after:inset-0`) rather than a nested control, so each
+entry is one target with one tab stop.
+
 ---
 
 ## 11. Reference implementation

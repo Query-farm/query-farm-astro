@@ -1,10 +1,10 @@
 ---
 import PageLayout from '../../layouts/PageLayout.astro';
 import PageHead from '../../components/ui/PageHead.astro';
-import PostCard from '../../components/blog/PostCard.astro';
-import SqlKeywordText from '../../components/blog/SqlKeywordText.astro';
+import PostListItem from '../../components/blog/PostListItem.astro';
+import FeaturedPost from '../../components/blog/FeaturedPost.astro';
 import NewsletterForm from '../../components/forms/NewsletterForm.astro';
-import { getCollection } from 'astro:content';
+import { getCollection, render } from 'astro:content';
 import { getTagGroups } from '../../lib/blog-tags';
 
 // Get all blog posts
@@ -19,19 +19,11 @@ const readingTime = (body: string | undefined) =>
 
 const [featured, ...rest] = publishedPosts;
 
-const featuredMeta = featured
-  ? {
-      topic: featured.data.tags[0],
-      minutes: readingTime(featured.body),
-      date: featured.data.pubDate.toLocaleDateString('en-US', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-        timeZone: 'UTC',
-      }),
-      iso: featured.data.pubDate.toISOString().slice(0, 10),
-    }
-  : null;
+// The lead card's contents list is the post's own H2s — no new authoring, and
+// it stays correct as the post is edited.
+const featuredHeadings = featured
+  ? (await render(featured)).headings.filter(h => h.depth === 2).map(h => ({ text: h.text }))
+  : [];
 
 // Unique tags, deduped on slug (so "DuckDB"/"duckdb" collapse to one chip) and
 // each linking to its archive at /blog/tags/<slug>.
@@ -48,7 +40,7 @@ const ART_BANDS = ['bg-pipe-1', 'bg-pipe-2', 'bg-pipe-3', 'bg-pipe-4', 'bg-pipe-
 
 const SITE_ORIGIN = 'https://query.farm';
 const description =
-  'Latest updates, releases, and insights from the Query.Farm team about DuckDB, data infrastructure, and modern analytics.';
+  'Deep dives on DuckDB extensions, Arrow transport, and the failure modes that only show up in production — written by the people who build them.';
 const jsonLd = [
   {
     '@context': 'https://schema.org',
@@ -83,45 +75,27 @@ const jsonLd = [
 >
   <PageHead
     title="Notes from the farm"
-    lede="Release notes, product thinking, and technical write-ups — mostly about DuckDB extensions, Arrow transport, and what breaks at scale."
+    lede="Deep dives on DuckDB extensions, Arrow transport, and the failure modes that only show up in production — written by the people who build them."
   />
 
   <div class="section-container">
-    {/* No artwork on this page for now: the only candidates were the posts'
+    {/* No thumbnails here on purpose. The only candidates were the posts'
         social cards (cropped past recognition) and crops of their own figures,
-        which read as decoration out of context. Type and the topic strip carry
-        the page instead. */}
-    {featured && featuredMeta && (
-      <article class="border-b border-soil-300 pt-8 pb-10">
-        <div class="max-w-[62ch]">
-          <div class="flex flex-wrap items-baseline gap-x-3.5 gap-y-1.5 text-[13px] font-medium text-soil-500">
-            <span class="text-sun-700">Featured</span>
-            {featuredMeta.topic && <span>{featuredMeta.topic}</span>}
-            <span class="qf-figure">{featuredMeta.minutes} min read</span>
-            <time datetime={featuredMeta.iso} class="qf-figure">{featuredMeta.date}</time>
-          </div>
-
-          <h2 class="mt-3 text-[clamp(1.75rem,3.8vw,2.75rem)] tracking-[-0.028em]">
-            <a href={`/blog/${featured.id}`} class="no-underline transition-colors hover:text-link">
-              <SqlKeywordText text={featured.data.title} />
-            </a>
-          </h2>
-
-          <p class="mt-3 max-w-[58ch] text-[17.5px] leading-relaxed text-soil-700">
-            <SqlKeywordText text={featured.data.description} />
-          </p>
-
-          <div class="mt-5">
-            <a
-              href={`/blog/${featured.id}`}
-              class="inline-block rounded-lg border border-soil-900 px-4 py-2 text-[12.5px] font-medium no-underline transition hover:-translate-y-px hover:border-link hover:text-link motion-reduce:hover:translate-y-0"
-            >
-              Read the post →
-            </a>
-          </div>
-        </div>
-
-      </article>
+        which read as decoration out of context. Each post's topic contour
+        (TopicCurves) does the work a thumbnail would, and costs nothing per
+        post to author. */}
+    {featured && (
+      <div class="pt-8 pb-2">
+        <FeaturedPost
+          title={featured.data.title}
+          excerpt={featured.data.description}
+          date={featured.data.pubDate}
+          tags={featured.data.tags}
+          slug={featured.id}
+          readingTime={readingTime(featured.body)}
+          headings={featuredHeadings}
+        />
+      </div>
     )}
 
     {showTagFilter && (
@@ -147,19 +121,22 @@ const jsonLd = [
     )}
 
     {rest.length > 0 && (
-      <div class="grid grid-cols-1 gap-4 pt-8 pb-5 md:grid-cols-2 lg:grid-cols-3">
-        {rest.map(post => (
-          <PostCard
-            title={post.data.title}
-            excerpt={post.data.description}
-            date={post.data.pubDate}
-            author={post.data.author}
-            tags={post.data.tags}
-            slug={post.id}
-            heroImage={post.data.heroImage}
-            readingTime={readingTime(post.body)}
-          />
-        ))}
+      <div class="pt-10 pb-5">
+        {/* Not "More from the farm" — the page is already titled "Notes from
+            the farm", and echoing it here says nothing the position doesn't. */}
+        <h2 class="qf-eyebrow border-b border-soil-300 pb-3 text-soil-500">Earlier posts</h2>
+        <div class="divide-y divide-soil-200">
+          {rest.map(post => (
+            <PostListItem
+              title={post.data.title}
+              excerpt={post.data.description}
+              date={post.data.pubDate}
+              tags={post.data.tags}
+              slug={post.id}
+              readingTime={readingTime(post.body)}
+            />
+          ))}
+        </div>
       </div>
     )}
 
