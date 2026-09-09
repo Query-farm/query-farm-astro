@@ -83,3 +83,16 @@ npx playwright test tests/haybarn-extensions
 The browser checks cover complete listing, existing Query Farm destinations,
 Pagefind discovery, combined filters, shareable URLs, no-JavaScript category
 navigation, reference contents, the sample download, and mobile overflow.
+
+## Link previews
+
+The directory, categories, installation guide, and independent extension pages
+have individual 1200 × 630 sharing cards. Page titles and descriptions come from
+`src/data/haybarn-extensions/sharing.mjs`, which the image generator also reads.
+The shared layout emits canonical URLs, Open Graph and Twitter metadata, and
+content hashes on image URLs so updated artwork gets a fresh preview URL.
+Regenerate and commit the images after changing the page copy or categories:
+
+```sh
+npm run generate:og-haybarn-extensions
+```

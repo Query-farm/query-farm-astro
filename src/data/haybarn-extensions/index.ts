@@ -3,6 +3,7 @@ import importedDocs from './docs.generated.json';
 import sheetreaderInventory from './inventories/sheetreader.json';
 import gsheetsInventory from './inventories/gsheets.json';
 import { categories, categoryIds, searchAliases } from './taxonomy.mjs';
+import { referencePages } from './sharing.mjs';
 import { publicExtensions } from '../extensions';
 
 export { categories };
@@ -18,8 +19,8 @@ export const catalog = {
 export const directoryPath = '/products/haybarn/extensions';
 export const categoryPath = (id: string) => `${directoryPath}/category/${id}`;
 export const prototypes = {
-  sheetreader: { name: 'SheetReader', icon: 'file-xls', docsUrl: 'https://github.com/polydbms/sheetreader-duckdb#usage--parameters', inventory: sheetreaderInventory, docs: importedDocs.sheetreader },
-  gsheets: { name: 'Google Sheets', icon: 'table', docsUrl: 'https://duckdb-gsheets.com', inventory: gsheetsInventory, docs: importedDocs.gsheets },
+  sheetreader: { ...referencePages.sheetreader, docsUrl: 'https://github.com/polydbms/sheetreader-duckdb#usage--parameters', inventory: sheetreaderInventory, docs: importedDocs.sheetreader },
+  gsheets: { ...referencePages.gsheets, docsUrl: 'https://duckdb-gsheets.com', inventory: gsheetsInventory, docs: importedDocs.gsheets },
 };
 export type PrototypeName = keyof typeof prototypes;
 export type Availability = { version: string; platform: string; bytes: number; etag: string | null; modifiedAt: string | null };
