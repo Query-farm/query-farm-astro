@@ -70,6 +70,15 @@ shared Query Farm header and Haybarn navigation. See
 [HAYBARN_FUNCTIONS.md](HAYBARN_FUNCTIONS.md) for routes, search scopes, release
 updates, WASM hosting, and verification commands.
 
+## Haybarn community extensions
+
+The discovery directory at `/products/haybarn/extensions` lists confirmed
+published Haybarn builds. Query Farm extensions reuse their existing pages;
+independent reference prototypes use shared documentation components and
+inventories captured from loaded extensions. See
+[HAYBARN_EXTENSIONS.md](HAYBARN_EXTENSIONS.md) for data sources, refresh commands,
+search behavior, and verification.
+
 ## Deployment
 
 `.github/workflows/deploy.yml` validates the site before deploying it to

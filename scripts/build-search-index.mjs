@@ -8,6 +8,7 @@
 // index is a build failure so deployment cannot silently drop documentation.
 import * as pagefind from 'pagefind';
 import { indexHaybarnFunctions } from './haybarn-functions/search-index.mjs';
+import { indexHaybarnExtensions } from './haybarn-extensions/search-index.mjs';
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -114,6 +115,7 @@ async function main() {
   }
 
   await indexHaybarnFunctions(index);
+  await indexHaybarnExtensions(index);
   const result = await index.writeFiles({ outputPath: join(DIST, 'pagefind') });
   if (result.errors?.length) throw new Error(result.errors.join('\n'));
   console.log(`[search] indexed dist/ + ${recordCount} function records across ${extSlugs.length} extensions`);

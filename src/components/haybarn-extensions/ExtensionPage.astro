@@ -1,0 +1,122 @@
+---
+import PageLayout from '../../layouts/PageLayout.astro';
+import HaybarnSubNav from '../sections/HaybarnSubNav.astro';
+import ExtensionHero from '../products/ExtensionHero.astro';
+import DuckDBExtensionFunctionDoc from '../docs/DuckDBExtensionFunctionDoc.astro';
+import DuckDBExtensionPragmaDoc from '../docs/DuckDBExtensionPragmaDoc.astro';
+import CodeBlock from '../ui/CodeBlock.astro';
+import QueryResult from '../docs/QueryResult.astro';
+import ExtensionKindIcon from '../docs/ExtensionKindIcon.astro';
+import { categories, categoryPath, directoryPath, extensions, platformLabel, prototypes, type PrototypeName } from '../../data/haybarn-extensions';
+import type { FunctionDocData } from '../../data/extension-types';
+
+interface Props { name: PrototypeName; }
+const { name } = Astro.props;
+const extension = extensions.find(entry => entry.name === name)!;
+const prototype = prototypes[name];
+const { inventory, docs } = prototype;
+const version = inventory.engine.library_version.replace(/^v/, '');
+const availability = extension.availability.filter(item => item.version === version);
+const parametersDocs = docs.parameters as Record<string, { description: string; default?: string }>;
+const sourceSections = docs.sections as Record<string, string[]>;
+const splitExamples = (sql: string) => sql.split(/\n\s*\n/).filter(block => /\b(SELECT|FROM|COPY|CREATE)\b/i.test(block));
+const readExamples = splitExamples(sourceSections.Read?.[0] ?? '');
+const describeParameter = (parameter: string) => {
+  if (parametersDocs[parameter]) return parametersDocs[parameter].description;
+  if (parameter === 'col0') return name === 'sheetreader' ? 'Path to the Excel workbook.' : 'Spreadsheet URL or spreadsheet ID.';
+  const example = readExamples.find(block => new RegExp(`\\b${parameter}\\s*=`).test(block));
+  return example?.split('\n').filter(line => /^\s*--/.test(line)).map(line => line.replace(/^\s*--\s*/, '')).join(' ') ?? '';
+};
+const functions: FunctionDocData[] = inventory.functions.map(fn => ({
+  id: fn.function_name, name: fn.function_name, type: fn.function_type as 'table',
+  categories: [], description: fn.description || '',
+  parameters: fn.parameters.map((parameter, index) => ({
+    name: parameter, type: fn.parameter_types[index],
+    paramType: fn.named_parameters.includes(parameter) ? 'named' as const : 'positional' as const,
+    description: describeParameter(parameter),
+    ...(parametersDocs[parameter]?.default && /^(true|false|\d+|".*")$/.test(parametersDocs[parameter].default!) ? { default: parametersDocs[parameter].default } : {}),
+  })),
+  returnsTableDynamic: true,
+  returns: name === 'sheetreader' ? 'Columns and types are determined from the selected worksheet. Use `types` to specify the column types.' : 'Columns are determined from the selected sheet or range. Use `all_varchar` to read all values as text.',
+  examples: fn.examples.map(code => ({ code, description: '' })),
+}));
+const summary = name === 'sheetreader'
+  ? 'Read Excel workbooks as SQL tables. Choose a worksheet, handle header rows, and control column types.'
+  : 'Read and write Google Sheets with SQL. Join a spreadsheet to your data or send query results back to a sheet.';
+const exampleOutput = name === 'sheetreader' ? { columns: ['product', 'revenue'], rows: [['Coffee', '540'], ['Tea', '180']] } : null;
+const specimen = `SELECT product, sum(revenue) AS revenue\nFROM sheetreader('sales.xlsx', sheet_name = 'Sales', has_header = true)\nGROUP BY product\nORDER BY revenue DESC;`;
+const toc = [
+  { id: 'install', title: 'Install' },
+  ...(name === 'gsheets' ? [{ id: 'authentication', title: 'Connect your account' }] : []),
+  { id: 'functions', title: 'Arguments & returns' },
+  { id: 'examples', title: 'Examples' },
+  ...(name === 'gsheets' ? [{ id: 'write', title: 'Write to a sheet' }] : []),
+  { id: 'availability', title: 'Available in Haybarn' },
+];
+---
+
+<PageLayout title={`${prototype.name} extension for Haybarn`} description={summary} ogImage="/og/haybarn.jpg" jsonLd={{ '@context': 'https://schema.org', '@type': 'SoftwareApplication', name: prototype.name, description: summary, applicationCategory: 'DeveloperApplication', url: `https://query.farm${directoryPath}/${name}`, codeRepository: extension.repository, license: extension.license }}>
+  <HaybarnSubNav />
+  <ExtensionHero name={prototype.name} description={summary} containerClass="section-container" />
+  <div class="community-extension section-container">
+    <aside class="extension-sidebar" data-pagefind-ignore>
+      <a class="back-link" href={directoryPath}>← Community extensions</a>
+      <nav aria-label="On this page">{toc.map(item => <a href={`#${item.id}`}>{item.title}</a>)}</nav>
+      <div class="maintainer-info"><span>Maintained by</span><a href={`https://github.com/${extension.publisher}`}>{extension.publisher}</a><span>{extension.license}</span></div>
+      <a class="docs-link" href={prototype.docsUrl}>Developer documentation ↗</a>
+      <a class="docs-link" href={extension.repository}>Source on GitHub ↗</a>
+    </aside>
+    <div class="extension-body">
+      <div class="extension-category-links" data-pagefind-ignore>{extension.categories.map(id => <a href={categoryPath(id)}>{categories.find(category => category.id === id)?.name}</a>)}</div>
+      <section id="install"><h2>Install</h2><CodeBlock code={`INSTALL ${name} FROM community;\nLOAD ${name};`} tryable={false} /></section>
+      {name === 'gsheets' && <section id="authentication"><h2>Connect your account</h2><p>Run this in your local Haybarn session to sign in with Google. You need access to the spreadsheet you want to query.</p><CodeBlock code="CREATE SECRET (TYPE gsheet);" tryable={false} /><p>For a pipeline or application, the extension also supports access tokens and service account keys. Follow the <a href={`${prototype.docsUrl}/#authenticate`}>developer’s authentication instructions</a>.</p><div class="registered-secret"><ExtensionKindIcon kind="secret" /><span>Secret type <code>{inventory.secret_types[0]?.type}</code> · default provider <code>{inventory.secret_types[0]?.default_provider}</code></span></div></section>}
+      <section id="functions"><h2>Arguments & returns</h2>{functions.map(fn => <DuckDBExtensionFunctionDoc {...fn} headingLevel="h3" />)}<p class="reference-source">Signatures from Haybarn {version}; explanations from the <a href={docs.parameterSource}>developer documentation</a>.</p></section>
+      <section id="examples"><h2>{name === 'sheetreader' ? 'Query an Excel workbook' : 'Read a spreadsheet'}</h2>
+        {name === 'sheetreader' ? <>
+          <p><a href="/products/haybarn/extensions/examples/sales.xlsx" download>Download the sample workbook</a> into your working directory. Its <code>Sales</code> worksheet contains product revenue that you can group with SQL.</p>
+          <CodeBlock code={specimen} tryable={false} />
+          <QueryResult {...exampleOutput!} />
+          <p>This build requires XLSX text cells to use shared strings. Inline string cells are not supported.</p>
+          <h3>Choose how the workbook is read</h3><CodeBlock code={sourceSections['Usage & Parameters'][0]} tryable={false} /><p class="reference-source">Example from <a href={docs.source}>SheetReader’s documentation</a>. Replace <code>data.xlsx</code> with your workbook.</p>
+        </> : <>
+          <p>Use the full spreadsheet URL or its ID. These examples use the spreadsheet from the developer’s documentation; substitute one your account can access.</p>
+          {readExamples.filter(block => /spreadsheet by full URL\n|no header row|specific range/.test(block)).map(block => <CodeBlock code={block.trim()} tryable={false} />)}
+        </>}
+      </section>
+      {name === 'gsheets' && <section id="write"><h2>Write query results to a sheet</h2><p>The extension also supports <code>COPY … TO</code> with <code>FORMAT gsheet</code>. The destination spreadsheet must already exist. Replace <code>&lt;table_name&gt;</code> and the destination ID with your own.</p><CodeBlock code={splitExamples(sourceSections.Write[0])[0]} tryable={false} /><p>See the <a href={`${prototype.docsUrl}/#write`}>write options</a> for appending data, selecting a range, and controlling overwrite behavior.</p></section>}
+      {inventory.settings.length > 0 && <section id="settings"><h2>Settings</h2>{inventory.settings.map((setting: any) => <DuckDBExtensionPragmaDoc name={setting.name} description={setting.description} default={setting.value} valueType={setting.input_type} type="string" />)}</section>}
+      <section id="availability"><h2>Available in Haybarn</h2><p>This reference uses the published build for Haybarn {version}.</p><div class="availability-grid">{availability.map(item => <span>{platformLabel(item.platform)}</span>)}</div>{name === 'gsheets' && <p>Google Sheets is used from a native Haybarn session. Its published builds do not include WASM.</p>}{name === 'sheetreader' && <p>The example above is checked with native Haybarn. A WASM binary is published; this page does not yet offer a verified browser example.</p>}</section>
+    </div>
+  </div>
+</PageLayout>
+
+<style>
+  .community-extension { display:grid; grid-template-columns:210px minmax(0,1fr); gap:45px; padding-top:35px; padding-bottom:75px; }
+  .extension-sidebar { font-size:14px; align-self:start; }
+  .back-link { display:block; color:var(--color-link); margin-bottom:22px; }
+  .extension-sidebar nav { display:grid; gap:2px; border-left:1px solid var(--color-soil-300); padding-left:16px; }
+  .extension-sidebar nav a { display:block; padding:8px 0; color:var(--color-soil-700); text-decoration:none; }
+  .extension-sidebar nav a:hover { color:var(--color-link); }
+  .maintainer-info { display:grid; gap:5px; margin:26px 0 18px; color:var(--color-soil-500); font-size:13px; }
+  .maintainer-info a { color:var(--color-soil-900); font-size:16px; }
+  .docs-link { display:block; margin-top:12px; color:var(--color-link); }
+  .extension-body { min-width:0; }
+  .extension-category-links { display:flex; gap:15px; margin-bottom:26px; font-size:14px; }
+  .extension-category-links a { color:var(--color-link); text-decoration:underline; text-underline-offset:4px; }
+  .extension-body section { margin-bottom:42px; scroll-margin-top:145px; }
+  .extension-body h2 { font-family:var(--font-display); font-size:30px; font-weight:600; margin-bottom:17px; color:var(--color-soil-900); }
+  .extension-body h3 { font-family:var(--font-display); font-size:23px; margin:25px 0 15px; }
+  .extension-body p { font-size:17px; line-height:1.65; color:var(--color-soil-700); margin-bottom:17px; }
+  .extension-body p a { color:var(--color-link); text-decoration:underline; text-underline-offset:3px; }
+  .extension-body p code { font-size:.86em; background:var(--color-soil-100); border-radius:3px; padding:1px 4px; overflow-wrap:anywhere; }
+  .extension-body :global(.code-block-wrapper) { margin-bottom:20px; }
+  .extension-body :global(.fnblock .text-sm) { font-size:16px; }
+  .extension-body :global(.fnblock h3) { font-size:18px; overflow-wrap:anywhere; }
+  .extension-body :global(.fnblock code) { font-size:14px; }
+  .extension-body :global(.fnblock .language-sql) { font-size:15px; }
+  .extension-body .reference-source { font-size:13px; color:var(--color-soil-500); margin-top:12px; }
+  .registered-secret { display:flex; align-items:center; gap:10px; padding:12px 15px; border:1px solid var(--color-soil-300); border-radius:6px; font-size:14px; }
+  .availability-grid { display:flex; flex-wrap:wrap; gap:9px; margin:16px 0; }
+  .availability-grid span { border:1px solid var(--color-soil-300); border-radius:5px; padding:7px 10px; font-size:13px; }
+  @media(max-width:750px) { .community-extension { display:flex; flex-direction:column; gap:25px; padding-top:24px; } .extension-sidebar nav { display:flex; flex-wrap:wrap; gap:6px 18px; padding:0; border:0; } .extension-sidebar .maintainer-info { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:17px 0 0; } .extension-sidebar .docs-link { display:inline-block; margin-right:14px; font-size:13px; } .extension-body h2 { font-size:27px; } .extension-body section { scroll-margin-top:190px; } }
+</style>
