@@ -1,0 +1,68 @@
+---
+import Layout from '@haybarn/layouts/Layout.astro';
+import Playground from '@haybarn/components/Playground.astro';
+import OverloadReference from '@haybarn/components/OverloadReference.astro';
+import ReleaseBadges from '@haybarn/components/ReleaseBadges.astro';
+import InlineDescription from '@haybarn/components/InlineDescription.astro';
+import FunctionKind from '@haybarn/components/FunctionKind.astro';
+import FunctionKindIcon from '@haybarn/components/FunctionKindIcon.astro';
+import FunctionTranslations from '@haybarn/components/FunctionTranslations.astro';
+import UpstreamDocs from '@haybarn/components/UpstreamDocs.astro';
+import SQLSource from '@haybarn/components/SQLSource.astro';
+import { runnableExamplesFor, exampleSource } from '@haybarn/lib/examples';
+import { translationsFor } from '@haybarn/lib/translations';
+import { functionKinds } from '@haybarn/data/function-kinds';
+import { snapshots, getFunctions, getFunction, functionUrl, catalogUrl, categoryUrl, categoryInfo, type Snapshot, type FunctionDoc } from '@haybarn/lib/catalog';
+import { recipesFor } from '@haybarn/data/recipes';
+import { catalogExamples, overloadId } from '@haybarn/lib/reference';
+import { signatureParts } from '@haybarn/lib/arguments';
+import { isOperatorName, referenceName } from '../../../scripts/haybarn-functions/notation.mjs';
+interface Props { snapshot: Snapshot; fn: FunctionDoc; }
+const { snapshot, fn } = Astro.props;
+const category = categoryInfo(fn.category);
+const operator = isOperatorName(fn.name);
+const displayKinds = operator ? ['operator'] : fn.kinds;
+const recipes = recipesFor(fn.name);
+const examples = runnableExamplesFor(fn.name);
+const setupExamples = catalogExamples(fn).filter(example => !examples.some(runnable => runnable.original === example.original));
+const translations = translationsFor(fn.name);
+const leadExample = examples[0];
+const definitions = [...new Set(fn.overloads.map(row => row.macro_definition).filter((text): text is string => Boolean(text)))];
+const labelDefinitions = fn.kinds.length > 1 || definitions.length > 1;
+---
+<Layout title={`${referenceName(fn.name)} reference`} description={fn.description || `${fn.name} signatures, examples, and availability in ${snapshot.label}.`} active="catalog" snapshot={snapshot} functionName={fn.name} wide>
+  <div class="breadcrumbs"><a href={catalogUrl(snapshot)}>Functions</a><span>/</span><a href={categoryUrl(fn.category, snapshot)}>{category.name}</a><span>/</span><span>{fn.name}</span></div>
+  <div class="reference-grid"><article class="function-article">
+    <header class="function-heading">
+      <div class="function-identity">
+        <span class={`function-kind-mark ${functionKinds[displayKinds[0]]?.color ?? category.color}`}><FunctionKindIcon kind={displayKinds[0]} /></span>
+        <div><div class="function-badges"><a class={`category-label ${category.color}`} href={categoryUrl(fn.category, snapshot)}>{category.name}</a>{displayKinds.map(kind => <FunctionKind kind={kind} />)}</div><h1>{referenceName(fn.name)}</h1></div>
+      </div>
+      {fn.description && <p class="function-description" data-catalog-description><InlineDescription text={fn.description} /></p>}
+      {fn.aliases.length > 0 && <p class="alias-note">Alias of {fn.aliases.map(name => { const target = getFunction(snapshot, name); return target ? <a href={functionUrl(snapshot, target)}><code>{referenceName(name)}</code></a> : <code>{referenceName(name)}</code>; })}</p>}
+    </header>
+    <OverloadReference fn={fn} snapshot={snapshot} />
+    {leadExample && <section id="examples" class="function-example-lead">
+      <div class="section-heading"><h2>Example</h2>{examples.length > 1 && <a class="text-link" href="#more-examples">{examples.length - 1} more ↓</a>}</div>
+      <Playground sql={leadExample.sql} title={`${fn.name} example`} source={exampleSource(leadExample.source)} />
+    </section>}
+    {examples.length > 1 && <section id="more-examples" class="doc-section"><h2>More examples</h2>
+      {examples.slice(1).map((example, i) => <div class="doc-example"><Playground sql={example.sql} title={`${fn.name} example ${i + 2}`} source={exampleSource(example.source)} /></div>)}
+    </section>}
+    {setupExamples.length > 0 && <section id="catalog-examples" class="doc-section"><h2>Catalog examples</h2>
+      {setupExamples.map(example => <SQLSource sql={example.sql} />)}
+    </section>}
+    {recipes.length > 0 && <section id="recipes" class="doc-section"><h2>In a query</h2>
+      {recipes.map(recipe => <div class="doc-example"><h3>{recipe.title}</h3><p>{recipe.description}</p><Playground sql={recipe.sql} title={recipe.title} source="Guide recipe" /></div>)}
+    </section>}
+    {definitions.length > 0 && <section id="definition" class="doc-section"><h2>Definition</h2>{definitions.map(definition => <div class="macro-definition">
+      {labelDefinitions && fn.overloads.filter(row => row.macro_definition === definition).map(row => <div class="signature-group-heading">
+        <h3><a href={`#${overloadId(row)}`}><code>{fn.name}({signatureParts(row, snapshot, false, true).join(', ')})</code></a></h3><FunctionKind kind={row.function_type} />
+      </div>)}
+      <SQLSource sql={definition} />
+    </div>)}</section>}
+    <UpstreamDocs fn={fn} />
+    <FunctionTranslations name={fn.name} engine={snapshot.engine} />
+    <ReleaseBadges name={fn.name} />
+  </article><aside class="page-toc"><p class="eyebrow">ON THIS PAGE</p><a href="#signatures">{operator ? 'Operands & returns' : 'Arguments & returns'}</a>{leadExample && <a href="#examples">Example</a>}{examples.length > 1 && <a href="#more-examples">More examples</a>}{recipes.length > 0 && <a href="#recipes">In a query</a>}{definitions.length > 0 && <a href="#definition">Definition</a>}<a href="#duckdb-docs">DuckDB documentation</a>{translations.length > 0 && <a href="#other-engines">In other engines</a>}</aside></div>
+</Layout>

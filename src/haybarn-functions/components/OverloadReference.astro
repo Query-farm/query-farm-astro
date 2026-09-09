@@ -1,0 +1,60 @@
+---
+import { type FunctionDoc, type Snapshot } from '../lib/catalog';
+import { overloadGroups, overloadId } from '../lib/reference';
+import { argumentLayout, signatureParts } from '../lib/arguments';
+import InlineDescription from './InlineDescription.astro';
+import FunctionKind from './FunctionKind.astro';
+import Signature from './Signature.astro';
+import { isOperatorName, operatorNotation } from '../../../scripts/haybarn-functions/notation.mjs';
+
+interface Props { fn: FunctionDoc; snapshot: Snapshot; }
+const { fn, snapshot } = Astro.props;
+const groups = overloadGroups(fn);
+const shownDescriptions = new Set([fn.description]);
+let number = 0;
+const operator = isOperatorName(fn.name);
+const references = groups.map(group => {
+    const descriptions = [...new Set(group.rows.flatMap(row => [row.description, row.comment]).filter((text): text is string => Boolean(text)))].filter(text => !shownDescriptions.has(text));
+    descriptions.forEach(text => shownDescriptions.add(text));
+    const rows = group.rows.map(row => ({ row, layout: argumentLayout(row, snapshot), number: ++number }));
+    const layout = rows[0].layout;
+    const variadic = Boolean(rows[0].row.varargs);
+    const notation = operatorNotation(rows[0].row);
+    const named = new Map<string, { name: string; type: string | null; overloads: { id: string; number: number }[] }>();
+    for (const item of rows) for (const arg of item.layout.named) {
+      const key = JSON.stringify([arg.name, arg.type]);
+      if (!named.has(key)) named.set(key, { ...arg, overloads: [] });
+      named.get(key)!.overloads.push({ id: overloadId(item.row), number: item.number });
+    }
+    const namedTypesVary = [...named.values()].some(arg => arg.overloads.length !== rows.length);
+    const matrix = layout.positional.length <= 5 && (group.kind !== 'table' || layout.source);
+    return { group, descriptions, rows, layout, variadic, notation, named, namedTypesVary, matrix };
+});
+---
+<section id="signatures" class="doc-section signature-reference">
+  <div class="section-heading"><h2 id="arguments">{operator ? 'Operands & returns' : 'Arguments & returns'}</h2>{fn.overloads.length > 1 && <span class="muted">{fn.overloads.length} overloads</span>}</div>
+  {references.map(({ group, descriptions, rows, layout, variadic, notation, named, namedTypesVary, matrix }) => (
+    <section class="signature-group" aria-label={`${group.kind} argument form`}>
+      <div class="signature-group-heading"><h3><code>{notation ? notation.expression : <Fragment>{fn.name}<span>(</span><span class="argument-name">{signatureParts(rows[0].row, snapshot, false, true).join(', ')}</span><span>)</span></Fragment>}</code></h3><FunctionKind kind={operator ? 'operator' : group.kind} /></div>
+      {descriptions.map(description => <p class="overload-description" data-catalog-description><InlineDescription text={description} /></p>)}
+      {matrix ? <div class="signature-matrix-scroll"><table class="signature-matrix"><thead><tr>
+        <th scope="col"><span class="sr-only">Overload link</span></th>
+        {layout.positional.map((arg, i) => <th scope="col"><code>{notation?.operands[i] ?? arg.name}</code></th>)}
+        {variadic && <th scope="col" class="varargs-cell">… <span>Varargs</span></th>}
+        <th scope="col" class="return-cell">Returns</th>
+      </tr></thead><tbody>{rows.map(item => <tr id={overloadId(item.row)} data-overload={overloadId(item.row)}>
+        <th scope="row"><a class="overload-anchor" href={`#${overloadId(item.row)}`} aria-label={`Link to overload ${item.number}`}><span class="anchor-hash">#</span>{String(item.number).padStart(2, '0')}</a></th>
+        {item.layout.positional.map(arg => <td><code class="argument-type">{arg.type ?? 'unknown'}</code></td>)}
+        {variadic && <td class="varargs-cell"><code>{item.row.varargs}</code></td>}
+        <td class="return-cell"><span aria-hidden="true" class="return-arrow">→</span><code>{item.row.return_type ?? (item.row.function_type.includes('table') ? 'TABLE' : 'unknown')}</code></td>
+      </tr>)}</tbody></table></div> : <div class="long-signatures">{rows.map(item => <div class="long-signature" id={overloadId(item.row)} data-overload={overloadId(item.row)}><a class="overload-anchor" href={`#${overloadId(item.row)}`} aria-label={`Link to overload ${item.number}`}>#{String(item.number).padStart(2, '0')}</a><Signature row={item.row} snapshot={snapshot} /></div>)}</div>}
+      {variadic && <p class="argument-call-note"><code>…</code> accepts a variable number of arguments of the type shown.</p>}
+      {named.size > 0 && <div class="named-arguments">
+        <h4>Named arguments</h4><p class="argument-call-note">Pass these after positional arguments, using <code>name := value</code>.</p>
+        <div class="signature-matrix-scroll"><table class="signature-matrix named-argument-table"><thead><tr><th scope="col">Argument</th><th scope="col">Type</th>{namedTypesVary && <th scope="col">Overloads</th>}</tr></thead><tbody>
+          {[...named.values()].map(arg => <tr data-named-argument={arg.name}><th scope="row"><code>{arg.name}<span class="named-operator"> :=</span></code></th><td><code>{arg.type ?? 'unknown'}</code></td>{namedTypesVary && <td>{arg.overloads.map(overload => <a href={`#${overload.id}`}>#{overload.number} </a>)}</td>}</tr>)}
+        </tbody></table></div>
+      </div>}
+    </section>
+  ))}
+</section>

@@ -1,5 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import { searchDevPlugin } from './scripts/search-dev.mjs';
+import { defaultSnapshotId } from './src/haybarn-functions/data/haybarn-release.mjs';
 
 import tailwindcss from '@tailwindcss/vite';
 import icon from 'astro-icon';
@@ -97,7 +99,7 @@ export default defineConfig({
         ...(GA_ENABLED
           ? [
               {
-                tag: 'script',
+                tag: /** @type {const} */ ('script'),
                 content: `
             if (!/^(localhost|127\\.0\\.0\\.1|\\[::1\\])$/.test(location.hostname)) {
               window.dataLayer = window.dataLayer || [];
@@ -525,6 +527,11 @@ export default defineConfig({
     sitemap({
       filter: page => {
         const { pathname } = new URL(page);
+        // Current release archives resolve to the stable reference canonical;
+        // older release references keep their own indexable URLs.
+        const currentArchive = `/products/haybarn/functions/releases/${defaultSnapshotId}`;
+        if (pathname === currentArchive || pathname.startsWith(currentArchive + '/')) return false;
+        if (pathname.startsWith('/products/haybarn/functions/compare/')) return false;
         // Blog tag archives: a tag holding one post carries robots noindex
         // (src/lib/blog-tags.ts).
         if (pathname.startsWith('/blog/tags/')) return false;
@@ -553,7 +560,7 @@ export default defineConfig({
     }
   },
   vite: {
-    plugins: [tailwindcss()],
+    plugins: [tailwindcss(), searchDevPlugin()],
     server: {
        allowedHosts: [
         '340ce136a669.ngrok-free.app', // your ngrok host

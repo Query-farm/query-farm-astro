@@ -1,0 +1,83 @@
+---
+import Layout from '@haybarn/layouts/Layout.astro';
+import FunctionKind from '@haybarn/components/FunctionKind.astro';
+import InlineDescription from '@haybarn/components/InlineDescription.astro';
+import CatalogSignatures from '@haybarn/components/CatalogSignatures.astro';
+import { functionKinds } from '@haybarn/data/function-kinds';
+import { translationSearchTerms } from '@haybarn/lib/translations';
+import { compareFunctionNames } from '@haybarn/lib/function-order';
+import { isOperatorName } from '../../../scripts/haybarn-functions/notation.mjs';
+import { snapshots, getFunctions, functionUrl, type Snapshot } from '@haybarn/lib/catalog';
+interface Props { snapshot: Snapshot; }
+const { snapshot } = Astro.props;
+const functions = getFunctions(snapshot).map(fn => ({ ...fn, displayKinds: isOperatorName(fn.name) ? ['operator'] : fn.kinds })).sort((a, b) => compareFunctionNames(a.name, b.name));
+const kinds = [...new Set(functions.flatMap(fn => fn.displayKinds))].sort((a, b) => (functionKinds[a]?.label ?? a).localeCompare(functionKinds[b]?.label ?? b));
+const description = 'Explore SQL functions for cleaning text, working with dates, transforming lists, and reading files. Open a function to understand its inputs and results, see examples, and experiment with SQL in your browser.';
+---
+<Layout title="Functions" {description} active="catalog" snapshot={snapshot} wide>
+  <div class="page-heading catalog-heading"><h1>Functions</h1><p>{description}</p></div>
+  <form class="catalog-filters" id="catalog-filters" role="search">
+    <div class="search-field"><span aria-hidden="true">⌕</span><label class="sr-only" for="function-search">Filter functions</label><input id="function-search" name="q" type="search" placeholder="Filter by name, argument, description, or type…" autocomplete="off" /></div>
+    <div class="filter-row"><label>Kind<select id="kind-filter" name="kind"><option value="">Every kind</option>{kinds.map(kind => <option value={kind}>{functionKinds[kind]?.label ?? kind}</option>)}</select></label><button class="clear-filters" type="button" id="clear-filters">Clear filters</button></div>
+  </form>
+  <div class="catalog-count"><span id="result-count" role="status">{functions.length} functions</span></div>
+  <div class="function-list" id="function-list">
+    {functions.map(fn => <a class="function-row" href={functionUrl(snapshot, fn)} data-function-row data-name={fn.name} data-category={fn.category} data-kinds={fn.displayKinds.join(' ')} data-search={[fn.name, fn.description, ...fn.aliases, ...translationSearchTerms(fn.name), ...fn.overloads.flatMap(o => [o.return_type, ...o.parameter_types, ...o.parameters]), fn.category].join(' ').toLowerCase()}>
+      <div class="function-row-name"><CatalogSignatures {fn} {snapshot} /><div class="function-row-kinds">{fn.displayKinds.map(kind => <FunctionKind kind={kind} />)}</div></div>
+      {fn.description && <p><InlineDescription text={fn.description} /></p>}
+    </a>)}
+  </div>
+  <div class="empty-state" id="empty-state" hidden><span aria-hidden="true">⌕</span><h2>No functions found.</h2><p>Try a shorter name, a data type like VARCHAR, or clear your filters.</p></div>
+</Layout>
+<style>
+  .catalog-heading { margin-bottom: 26px; }
+  .catalog-heading h1 { margin-bottom: 14px; }
+  .catalog-heading > p { max-width: 780px; margin-bottom: 0; }
+</style>
+<script>
+  import { compareFunctionNames } from '@haybarn/lib/function-order';
+  const form = document.querySelector<HTMLFormElement>('#catalog-filters')!;
+  const input = document.querySelector<HTMLInputElement>('#function-search')!;
+  const kind = document.querySelector<HTMLSelectElement>('#kind-filter')!;
+  const rows = [...document.querySelectorAll<HTMLAnchorElement>('[data-function-row]')];
+  const categories = new Set(rows.map(row => row.dataset.category));
+  let category = '';
+  function readUrl() {
+    const params = new URLSearchParams(location.search);
+    input.value = params.get('q') ?? '';
+    const requestedCategory = params.get('category') ?? '';
+    category = categories.has(requestedCategory) ? requestedCategory : '';
+    kind.value = params.get('kind') ?? '';
+    if (params.get('focus') === 'search') input.focus();
+  }
+  function render(updateUrl = true) {
+    const terms = input.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    const query = input.value.toLowerCase().trim();
+    const rank = (row: HTMLAnchorElement) => !query ? 0 : row.dataset.name === query ? 0 : row.dataset.name!.startsWith(query) ? 1 : row.dataset.name!.includes(query) ? 2 : 3;
+    const ordered = [...rows].sort((a, b) => rank(a) - rank(b) || compareFunctionNames(a.dataset.name!, b.dataset.name!));
+    document.querySelector('#function-list')!.append(...ordered);
+    let count = 0;
+    for (const row of ordered) {
+      const match = (!category || row.dataset.category === category) &&
+        (!kind.value || row.dataset.kinds!.split(' ').includes(kind.value)) &&
+        terms.every(term => row.dataset.search!.includes(term));
+      if (match) count++;
+      row.hidden = !match;
+    }
+    document.querySelector('#result-count')!.textContent = `${count.toLocaleString()} ${count === 1 ? 'function' : 'functions'}`;
+    document.querySelector<HTMLElement>('#empty-state')!.hidden = count !== 0;
+    if (updateUrl) {
+      const params = new URLSearchParams();
+      if (input.value) params.set('q', input.value);
+      if (category) params.set('category', category);
+      if (kind.value) params.set('kind', kind.value);
+      history.replaceState(null, '', `${location.pathname}${params.size ? `?${params}` : ''}`);
+    }
+    document.querySelectorAll<HTMLAnchorElement>('.category-nav').forEach(link => link.classList.toggle('active', new URL(link.href).searchParams.get('category') === category));
+  }
+  form.addEventListener('submit', event => event.preventDefault());
+  form.addEventListener('input', () => render());
+  document.querySelector('#clear-filters')!.addEventListener('click', () => { form.reset(); category = ''; render(); input.focus(); });
+  window.addEventListener('popstate', () => { readUrl(); render(false); });
+  readUrl(); render(false);
+</script>

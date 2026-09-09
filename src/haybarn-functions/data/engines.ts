@@ -1,0 +1,18 @@
+export const engineLogos: Record<string, string> = {
+  postgres: '/products/haybarn/functions/engines/postgresql.png',
+  duckdb: '/products/haybarn/functions/engines/duckdb.svg',
+  haybarn: '/products/haybarn/haybarn-mark.svg',
+  bigquery: '/products/haybarn/functions/engines/bigquery.svg',
+  clickhouse: '/products/haybarn/functions/engines/clickhouse.svg',
+  exasol: '/products/haybarn/functions/engines/exasol.png',
+  hive: '/products/haybarn/functions/engines/hive.svg',
+  mysql: '/products/haybarn/functions/engines/mysql.svg',
+  oracle: '/products/haybarn/functions/engines/oracle.svg',
+  presto: '/products/haybarn/functions/engines/presto.svg',
+  snowflake: '/products/haybarn/functions/engines/snowflake.svg',
+  spark: '/products/haybarn/functions/engines/spark.svg',
+  spark2: '/products/haybarn/functions/engines/spark.svg',
+  sqlite: '/products/haybarn/functions/engines/sqlite.svg',
+  trino: '/products/haybarn/functions/engines/trino.svg',
+  tsql: '/products/haybarn/functions/engines/tsql.svg',
+};

@@ -1,0 +1,139 @@
+---
+import { snapshots, defaultSnapshot, compareSnapshots, getFunctions, getFunction, catalogUrl, categories, type Snapshot, type Overload } from '../lib/catalog';
+import { compareFunctionNames } from '../lib/function-order';
+import FunctionChange from './FunctionChange.astro';
+interface Props { from: Snapshot; to: Snapshot; }
+const { from, to } = Astro.props;
+const diff = compareSnapshots(from, to) as {
+  added: { name: string }[];
+  removed: { name: string }[];
+  changed: { name: string; addedSignatures: Overload[]; removedSignatures: Overload[] }[];
+};
+const groups = [
+  { id: 'changed', title: 'Changed signatures', note: 'Only the overloads that differ are shown.', entries: diff.changed.map(change => ({ fn: getFunction(to, change.name)!, snapshot: to, before: change.removedSignatures, after: change.addedSignatures })) },
+  { id: 'added', title: 'Additional functions', note: `Present in ${to.label}, absent from ${from.label}.`, entries: diff.added.map(change => ({ fn: getFunction(to, change.name)!, snapshot: to, before: [] as Overload[], after: [] as Overload[] })) },
+  { id: 'removed', title: 'Absent functions', note: `Present in ${from.label}, absent from ${to.label}.`, entries: diff.removed.map(change => ({ fn: getFunction(from, change.name)!, snapshot: from, before: [] as Overload[], after: [] as Overload[] })) },
+].filter(group => group.entries.length);
+for (const group of groups) group.entries.sort((a, b) => compareFunctionNames(a.fn.name, b.fn.name));
+const changedCount = groups.reduce((total, group) => total + group.entries.length, 0);
+const matching = getFunctions(to).length - diff.added.length - diff.changed.length;
+const filterCategories = categories.filter(category => groups.some(group => group.entries.some(entry => entry.fn.category === category.id)));
+const differentRuntime = Boolean(from.runtime) !== Boolean(to.runtime);
+const differentExtensions = JSON.stringify([...from.requestedExtensions].sort()) !== JSON.stringify([...to.requestedExtensions].sort());
+---
+<section class="comparison" aria-label="Compare function changes">
+  <form class="compare-controls">
+    <label>From<select name="from" id="compare-from">{snapshots.map(s => <option value={s.id} selected={s.id === from.id}>{s.label}{s.id === defaultSnapshot.id ? ' (current)' : ''}</option>)}</select></label>
+    <span aria-hidden="true">→</span>
+    <label>To<select name="to" id="compare-to">{snapshots.map(s => <option value={s.id} selected={s.id === to.id}>{s.label}{s.id === defaultSnapshot.id ? ' (current)' : ''}</option>)}</select></label>
+    <button class="button primary" type="submit">Compare <span aria-hidden="true">↗</span></button>
+  </form>
+  <p class="compare-message" role="status"></p>
+  <p class="comparison-summary">{matching.toLocaleString()} {matching === 1 ? 'function has' : 'functions have'} matching recorded signatures.{changedCount === 0 && ' No function or signature differences were found.'}</p>
+  {groups.length > 1 && <nav class="change-jumps" aria-label="Changes in this comparison">{groups.map(group => <a href={`#${group.id}`}>{group.title} <span>{group.entries.length}</span></a>)}</nav>}
+  <p class="comparison-context">{differentRuntime && 'Availability can differ between native and WASM builds. '}Catalog differences do not establish when a function was introduced or removed.{differentExtensions && ` Requested extensions also differ: ${from.requestedExtensions.join(', ')} → ${to.requestedExtensions.join(', ')}.`}</p>
+
+  {changedCount > 0 && <Fragment>
+    <form class="change-filters" role="search" aria-label="Filter function changes" hidden>
+      <label class="change-search">Find a function<input type="search" name="q" id="change-search" placeholder="Name, argument, or type…" autocomplete="off" /></label>
+      <label hidden={filterCategories.length < 2}>Category<select name="category" id="change-category"><option value="">All categories</option>{filterCategories.map(category => <option value={category.id}>{category.name}</option>)}</select></label>
+      <button class="clear-filters" type="reset">Clear filters</button>
+    </form>
+    <p class="change-result-count" role="status" hidden></p>
+    {groups.map(group => <section id={group.id} class="change-group" data-change-group>
+      <div class="change-group-heading"><h2>{group.title}</h2><span data-group-count>{group.entries.length}</span></div>
+      <p class="change-group-note">{group.note}</p>
+      {group.entries.map(entry => <FunctionChange {...entry} {from} {to} change={group.id} />)}
+    </section>)}
+    <div class="empty-state" id="change-empty" hidden><h2>No matching function changes.</h2><p>Try another name or clear your filters.</p></div>
+  </Fragment>}
+  <div class="comparison-catalogs"><span>Full reference</span><a href={catalogUrl(from)}>{from.label} ↗</a><a href={catalogUrl(to)}>{to.label} ↗</a></div>
+</section>
+
+<script>
+  const comparison = document.querySelector<HTMLElement>('.comparison')!;
+  const form = comparison.querySelector<HTMLFormElement>('.compare-controls')!;
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const from = comparison.querySelector<HTMLSelectElement>('#compare-from')!.value;
+    const to = comparison.querySelector<HTMLSelectElement>('#compare-to')!.value;
+    if (from === to) { comparison.querySelector('.compare-message')!.textContent = 'Choose two different releases to compare.'; return; }
+    location.href = `/products/haybarn/functions/compare/${from}/${to}/${location.search}`;
+  });
+  const filters = comparison.querySelector<HTMLFormElement>('.change-filters');
+  if (filters) {
+    const input = filters.querySelector<HTMLInputElement>('#change-search')!;
+    const category = filters.querySelector<HTMLSelectElement>('#change-category')!;
+    const rows = [...comparison.querySelectorAll<HTMLElement>('[data-function-change]')];
+    const groups = [...comparison.querySelectorAll<HTMLElement>('[data-change-group]')];
+    const status = comparison.querySelector<HTMLElement>('.change-result-count')!;
+    const empty = comparison.querySelector<HTMLElement>('#change-empty')!;
+    const readUrl = () => {
+      const params = new URLSearchParams(location.search);
+      input.value = params.get('q') ?? '';
+      category.value = params.get('category') ?? '';
+      if (category.selectedIndex < 0) category.value = '';
+    };
+    const render = (updateUrl = true) => {
+      const terms = input.value.toLowerCase().trim().split(/\s+/).filter(Boolean);
+      let count = 0;
+      for (const row of rows) {
+        const matches = (!category.value || row.dataset.category === category.value) && terms.every(term => row.dataset.search!.includes(term));
+        row.hidden = !matches;
+        if (matches) count++;
+      }
+      for (const group of groups) {
+        const visible = group.querySelectorAll('[data-function-change]:not([hidden])').length;
+        group.hidden = visible === 0;
+        group.querySelector('[data-group-count]')!.textContent = String(visible);
+        const jump = comparison.querySelector<HTMLAnchorElement>(`.change-jumps a[href="#${group.id}"]`);
+        if (jump) { jump.hidden = visible === 0; jump.querySelector('span')!.textContent = String(visible); }
+      }
+      status.hidden = !input.value && !category.value;
+      status.textContent = `${count} of ${rows.length} function changes`;
+      empty.hidden = count !== 0;
+      if (updateUrl) {
+        const url = new URL(location.href);
+        for (const [key, value] of [['q', input.value], ['category', category.value]]) {
+          if (value) url.searchParams.set(key, value); else url.searchParams.delete(key);
+        }
+        history.replaceState(null, '', url);
+      }
+    };
+    filters.hidden = false;
+    filters.addEventListener('submit', event => event.preventDefault());
+    filters.addEventListener('input', () => render());
+    filters.addEventListener('reset', event => { event.preventDefault(); input.value = ''; category.value = ''; render(); input.focus(); });
+    window.addEventListener('popstate', () => { readUrl(); render(false); });
+    readUrl(); render(false);
+  }
+</script>
+
+<style>
+  .comparison-summary { margin: 24px 0 12px; font-size: var(--text-body); }
+  .change-jumps { display: flex; flex-wrap: wrap; gap: 12px 25px; }
+  .change-jumps a { color: var(--green); font-size: var(--text-base); }
+  .change-jumps span { margin-left: 6px; font-variant-numeric: tabular-nums; }
+  .change-jumps a:hover, .comparison-catalogs a:hover { text-decoration: underline; text-underline-offset: 4px; }
+  .comparison-context { margin: 15px 0 28px; max-width: 850px; color: var(--muted); font-size: var(--text-sm); line-height: 1.8; }
+  .change-filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 15px; padding: 22px 0; border-block: 1px solid var(--line); }
+  .change-filters label { display: flex; flex-direction: column; gap: 7px; font-size: var(--text-sm); }
+  .change-search { flex: 1; min-width: 200px; }
+  .change-filters input, .change-filters select { width: 100%; min-width: 0; padding: 11px 12px; border: 1px solid #cfc6b3; border-radius: 3px; background: var(--paper-light); color: var(--ink); font-size: var(--text-base); }
+  .change-filters button { padding: 12px 0; }
+  .change-result-count { margin: 15px 0 0; color: var(--muted); font-size: var(--text-sm); }
+  .change-group { margin-top: 30px; scroll-margin-top: 16px; }
+  .change-group-heading { display: flex; align-items: baseline; gap: 12px; }
+  .change-group-heading h2 { margin: 0; font-size: 29px; }
+  .change-group-heading span { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .change-group-note { margin: 8px 0 20px; color: var(--muted); font-size: var(--text-base); }
+  .comparison-catalogs { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px 22px; margin-top: 35px; padding-top: 22px; border-top: 1px solid var(--line); font-size: var(--text-base); }
+  .comparison-catalogs span { color: var(--muted); }
+  .comparison-catalogs a { color: var(--green); }
+  @media (max-width: 600px) {
+    .change-filters label { flex-basis: 100%; min-width: 0; }
+    .change-filters { gap: 12px; }
+    .change-filters button { padding-bottom: 0; }
+    .change-group-heading h2 { font-size: 26px; }
+  }
+</style>

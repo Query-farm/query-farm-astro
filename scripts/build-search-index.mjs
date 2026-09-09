@@ -4,9 +4,10 @@
 // data-pagefind-ignore in the HTML), so without these custom records the deep
 // content of large extensions (stochastic, datasketches, …) would be missing.
 //
-// Best-effort: any failure warns and exits 0 so a deploy still ships the site
-// (search just degrades — the widget handles a missing index gracefully).
+// A shared index serves separate company and Haybarn search scopes. A failed
+// index is a build failure so deployment cannot silently drop documentation.
 import * as pagefind from 'pagefind';
+import { indexHaybarnFunctions } from './haybarn-functions/search-index.mjs';
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -57,7 +58,18 @@ async function main() {
 
   // 1) Crawl the built HTML (everything except data-pagefind-ignore'd regions:
   //    nav, footer, and the function reference — those come from custom records).
-  await index.addDirectory({ path: DIST });
+  // References are indexed from their structured exports, once per release.
+  // Guide pages carry their own search scope; the landing page also belongs
+  // to general site search. Avoid indexing archive copies or catalog lists.
+  for (const path of await readdir(DIST, { recursive: true })) {
+    if (!path.endsWith('.html')) continue;
+    const content = await readFile(join(DIST, path), 'utf8');
+    if (content.includes('data-haybarn-guide')) {
+      if (!content.includes('data-haybarn-search-page')) continue;
+    }
+    const result = await index.addHTMLFile({ url: '/' + path.replace(/index\.html$/, ''), content });
+    if (result.errors?.length) throw new Error(result.errors.join('\n'));
+  }
 
   // 2) One custom record per (extension, function name).
   let recordCount = 0;
@@ -101,14 +113,17 @@ async function main() {
     }
   }
 
-  await index.writeFiles({ outputPath: join(DIST, 'pagefind') });
+  await indexHaybarnFunctions(index);
+  const result = await index.writeFiles({ outputPath: join(DIST, 'pagefind') });
+  if (result.errors?.length) throw new Error(result.errors.join('\n'));
   console.log(`[search] indexed dist/ + ${recordCount} function records across ${extSlugs.length} extensions`);
 }
 
 try {
   await main();
 } catch (err) {
-  console.warn(`[search] index build failed (${err?.message ?? err}); site ships without search`);
+  console.error(`[search] index build failed: ${err?.message ?? err}`);
+  process.exitCode = 1;
 } finally {
   try { await pagefind.close(); } catch { /* ignore */ }
 }

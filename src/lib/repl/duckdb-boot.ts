@@ -8,8 +8,8 @@
 // exactly the lightweight, few-threads behavior we want for an embedded demo
 // shell.
 //
-// The wasm binary and worker script are loaded from jsDelivr rather than bundled
-// or committed (they are ~32 MB each). createWorker() fetches the cross-origin
+// The wasm binary and worker script use the shared, version-pinned CDN bundle
+// configuration. createWorker() fetches the cross-origin
 // worker script and wraps it in a same-origin blob URL so `new Worker(...)` is
 // allowed; the wasm module is fetched with permissive CORS.
 //
@@ -25,13 +25,7 @@
 // not something a private `:memory:` database gets for free.
 
 import * as duckdb from "@haybarn/haybarn-wasm";
-
-// Pin to the installed @haybarn/haybarn-wasm version so the JS API surface and
-// the CDN-hosted wasm/worker artifacts stay in lockstep. Bump both together.
-const HAYBARN_WASM_VERSION = "1.5.5-rc2";
-// unpkg, not jsDelivr: the package's unpacked size (168 MB as of rc13) exceeds
-// jsDelivr's 150 MB limit, which makes it 403 every file in the package.
-const CDN = `https://unpkg.com/@haybarn/haybarn-wasm@${HAYBARN_WASM_VERSION}/dist`;
+import { haybarnBundles } from './haybarn-bundles';
 
 export interface QueryResult {
   ok: boolean;
@@ -69,21 +63,7 @@ export function ensureEngine(): Promise<Engine> {
 }
 
 async function boot(): Promise<Engine> {
-  const BUNDLES: duckdb.DuckDBBundles = {
-    mvp: {
-      mainModule: `${CDN}/duckdb-mvp.wasm`,
-      mainWorker: `${CDN}/duckdb-browser-mvp.worker.js`,
-    },
-    eh: {
-      mainModule: `${CDN}/duckdb-eh.wasm`,
-      mainWorker: `${CDN}/duckdb-browser-eh.worker.js`,
-    },
-    // Intentionally no `coi` bundle: the page is not cross-origin isolated, so
-    // selectBundle() would never choose it anyway. Omitting it keeps the shell
-    // strictly single-threaded.
-  };
-
-  const bundle = await duckdb.selectBundle(BUNDLES);
+  const bundle = await duckdb.selectBundle(haybarnBundles);
   const worker = await duckdb.createWorker(bundle.mainWorker!);
   const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
   const db = new duckdb.AsyncDuckDB(logger, worker);

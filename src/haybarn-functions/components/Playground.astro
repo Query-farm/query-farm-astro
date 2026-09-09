@@ -1,0 +1,119 @@
+---
+import { wasmVersion } from '../data/settings';
+import { highlightSQL } from '../lib/sql-highlight';
+interface Props { sql: string; title?: string; compact?: boolean; source?: string; }
+const { sql, title = 'Try it yourself', compact = false, source = 'Guide recipe' } = Astro.props;
+const id = `sql-${crypto.randomUUID()}`;
+---
+<sql-playground class:list={['playground', { compact }]} data-original={sql}>
+  <div class="editor-toolbar"><span><span class="editor-dot" aria-hidden="true"></span>{title}</span><div><span class="editor-language">SQL</span><button type="button" data-copy aria-label="Copy SQL">Copy</button><button type="button" data-reset aria-label="Reset SQL">Reset</button></div></div>
+  <label class="sr-only" for={id}>{title} SQL editor</label>
+  <div class="editor-body"><span class="line-numbers" aria-hidden="true">{sql.split('\n').map((_, i) => <span>{i + 1}</span>)}</span><div class="code-input"><pre class="sql-highlight" aria-hidden="true"><code>{highlightSQL(sql).map(token => <span class={token.kind ? `sql-${token.kind}` : undefined}>{token.text}</span>)}</code></pre><textarea id={id} spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby={`${id}-hint`} rows={Math.max(5, sql.split('\n').length)}>{sql}</textarea></div></div>
+  <div class="editor-bottom"><span id={`${id}-hint`}>Haybarn WASM <span class="wasm-pin">{wasmVersion}</span><span class="editor-local"> · In your browser</span></span><div><button type="button" class="stop-query" data-stop hidden>Stop</button><button type="button" class="run-query" data-run><span aria-hidden="true">▷</span> Run query <kbd>⌘ ↵</kbd></button></div></div>
+  <div class="result-area" aria-live="polite" aria-atomic="false"><p class="result-status">{source} <span>·</span> Run to view results.</p><div class="result-table-wrap"></div></div>
+</sql-playground>
+<script>
+  import type { AsyncDuckDBConnection } from '@haybarn/haybarn-wasm';
+  import { wasmVersion } from '../data/settings';
+  import { highlightSQL } from '../lib/sql-highlight';
+  class SqlPlayground extends HTMLElement {
+    private conn?: AsyncDuckDBConnection;
+    private runId = 0;
+    private busy = false;
+    private cleanup?: () => void;
+    connectedCallback() {
+      const editor = this.querySelector('textarea')!;
+      const highlight = this.querySelector<HTMLElement>('.sql-highlight')!;
+      const run = this.querySelector<HTMLButtonElement>('[data-run]')!;
+      const stop = this.querySelector<HTMLButtonElement>('[data-stop]')!;
+      const status = this.querySelector<HTMLElement>('.result-status')!;
+      const results = this.querySelector<HTMLElement>('.result-table-wrap')!;
+      const original = this.dataset.original!;
+      const updateLines = () => {
+        highlight.querySelector('code')!.replaceChildren(...highlightSQL(editor.value).map(token => {
+          const span = document.createElement('span'); span.textContent = token.text; span.className = token.kind ? `sql-${token.kind}` : ''; return span;
+        }));
+        this.querySelector('.line-numbers')!.replaceChildren(...editor.value.split('\n').map((_, i) => {
+          const span = document.createElement('span'); span.textContent = String(i + 1); return span;
+        }));
+        editor.rows = Math.min(20, Math.max(5, editor.value.split('\n').length));
+      };
+      const setBusy = (value: boolean) => {
+        this.busy = value; run.disabled = value; stop.hidden = !value;
+        this.setAttribute('aria-busy', String(value));
+      };
+      const resetHandler = () => {
+        this.conn = undefined; this.runId++;
+        if (this.busy) { status.textContent = 'Engine stopped. Run again to start a fresh session.'; setBusy(false); }
+      };
+      document.addEventListener('engine-reset', resetHandler);
+      this.cleanup = () => document.removeEventListener('engine-reset', resetHandler);
+      const execute = async () => {
+        if (this.busy || !editor.value.trim()) return;
+        const token = ++this.runId;
+        setBusy(true); results.replaceChildren(); this.classList.remove('has-error');
+        status.textContent = this.conn ? 'Running query…' : 'Loading Haybarn WASM… The first run downloads the engine (about 44 MB).';
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const engine = await import('../lib/engine');
+          if (token !== this.runId) return;
+          timer = setTimeout(() => {
+            if (token === this.runId) { void engine.resetEngine(); status.textContent = 'Stopped after 60 seconds. Try a smaller query, then run again.'; }
+          }, 60_000);
+          if (!this.conn) {
+            const session = await engine.createConnection();
+            if (token !== this.runId) { void session.conn.close(); return; }
+            this.conn = session.conn;
+          }
+          status.textContent = 'Running query…';
+          const start = performance.now();
+          // Query runs in the worker, so the editor and Stop control remain responsive.
+          const result = await this.conn.query(editor.value);
+          if (token !== this.runId) return;
+          const elapsed = performance.now() - start;
+          const table = document.createElement('table');
+          const head = table.createTHead().insertRow();
+          for (const field of result.schema.fields) {
+            const th = document.createElement('th'); th.scope = 'col'; th.textContent = field.name;
+            const type = document.createElement('small'); type.textContent = field.type.toString(); th.append(type); head.append(th);
+          }
+          const body = table.createTBody();
+          for (let i = 0; i < Math.min(result.numRows, 100); i++) {
+            const row = body.insertRow();
+            result.schema.fields.forEach((_field, j) => {
+              const column = result.getChildAt(j)!;
+              const value = column.get(i);
+              const cell = row.insertCell(); cell.textContent = engine.formatColumnValue(column, i);
+              if (value === null) cell.className = 'null-value';
+            });
+          }
+          results.append(table);
+          status.textContent = `${result.numRows.toLocaleString()} ${result.numRows === 1 ? 'row' : 'rows'} · ${elapsed < 1000 ? `${elapsed.toFixed(1)} ms` : `${(elapsed / 1000).toFixed(2)} s`}${result.numRows > 100 ? ' · Showing the first 100 rows' : ''} · Haybarn WASM ${wasmVersion}`;
+        } catch (error) {
+          if (token !== this.runId) return;
+          this.classList.add('has-error');
+          status.textContent = error instanceof Error ? error.message : String(error);
+        } finally {
+          clearTimeout(timer);
+          if (token === this.runId) setBusy(false);
+        }
+      };
+      editor.addEventListener('input', updateLines);
+      editor.addEventListener('scroll', () => { highlight.scrollTop = editor.scrollTop; highlight.scrollLeft = editor.scrollLeft; });
+      run.addEventListener('click', execute);
+      editor.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void execute(); }
+      });
+      this.querySelector('[data-reset]')!.addEventListener('click', () => { editor.value = original; updateLines(); editor.focus(); });
+      this.querySelector<HTMLButtonElement>('[data-copy]')!.addEventListener('click', async event => {
+        const button = event.currentTarget as HTMLButtonElement;
+        try { await navigator.clipboard.writeText(editor.value); button.textContent = 'Copied'; }
+        catch { button.textContent = 'Select to copy'; editor.select(); }
+        setTimeout(() => { button.textContent = 'Copy'; }, 1500);
+      });
+      stop.addEventListener('click', async () => { const engine = await import('../lib/engine'); await engine.resetEngine(); });
+    }
+    disconnectedCallback() { this.cleanup?.(); this.runId++; if (this.conn) void this.conn.close(); }
+  }
+  if (!customElements.get('sql-playground')) customElements.define('sql-playground', SqlPlayground);
+</script>
