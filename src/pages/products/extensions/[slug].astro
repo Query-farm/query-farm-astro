@@ -95,6 +95,30 @@ const firstSentence = (s: string): string => {
   return (m ? m[0] : s).trim();
 };
 
+// Search and social descriptions are plain text, even though extension copy
+// supports inline Markdown. Keep the long-form metadata for the page itself;
+// the head gets one focused sentence that always identifies the product as a
+// DuckDB extension and remains useful when a result snippet is truncated.
+const plainText = (s: string): string => s
+  .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+  .replace(/`([^`]+)`/g, '$1')
+  .replace(/(\*\*|__|~~)(.*?)\1/g, '$2')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const extensionSeoDescription = (displayName: string, description: string): string => {
+  const prefix = `${displayName} is a DuckDB extension from Query.Farm. `;
+  const summary = plainText(firstSentence(description));
+  const full = `${prefix}${summary}`;
+  if (full.length <= 160) return full;
+
+  // A few opening sentences continue into a long qualification after an em
+  // dash. Preserve the useful first clause rather than shipping a 200+ character
+  // description that will almost always be cut mid-thought in previews.
+  const firstClause = summary.split(/\s+[—–]\s+|;\s+/)[0].replace(/[.,;:!?]+$/, '');
+  return `${prefix}${firstClause}.`;
+};
+
 // Helper to map items to extension content format
 const mapToContent = <T extends { id?: string; name: string; category?: string; description?: string }>(
   items: T[],
@@ -255,6 +279,7 @@ const installFrom = installSource === 'community'
 // these do nothing visible in the in-page REPL (the extension is already loaded
 // there), so the block must not get a "Try it in your browser" button.
 const installSql = `INSTALL ${metadata.name} ${installFrom};\nLOAD ${metadata.name};`;
+const seoDescription = extensionSeoDescription(metadata.displayName, metadata.description);
 
 // ── Page header ──────────────────────────────────────────────────────────
 const listing = getExtensionById(extensionId);
@@ -324,9 +349,8 @@ const jsonLd = [
 
 <PageLayout
   title={`${metadata.displayName} — DuckDB Extension`}
-  description={metadata.description}
+  description={seoDescription}
   ogImage={resolvedOgImage}
-  ogType="article"
   jsonLd={jsonLd}
 >
   <ExtensionsSubNav
@@ -350,6 +374,7 @@ const jsonLd = [
   <!-- Page header — mark, name, badges, lede, loads. -->
   <ExtensionHero
     name={metadata.displayName}
+    eyebrow="DuckDB Extension"
     description={firstSentence(metadata.description)}
     badges={headerBadges}
     loads={loadCount}
