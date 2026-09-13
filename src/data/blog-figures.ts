@@ -34,6 +34,27 @@ const HAYBARN = '#c08e2f';
 const REFERENCE = '#446f22';
 
 export const BLOG_FIGURES: Record<string, BlogFigure> = {
+  'one-query-one-arrow-stream-adbc-duckdb-2': {
+    title: 'DuckDB finished these PostgreSQL queries 10–11× faster',
+    subtitle:
+      'Whole-query pushdown returned the finished result through ADBC instead of transferring rows for DuckDB to process locally. Median wall-clock time; lower is better.',
+    rowHeader: 'Workload',
+    series: [
+      { label: 'Pushdown (ms)', color: REFERENCE, unit: ' ms' },
+      { label: 'Local plan (ms)', color: HAYBARN, unit: ' ms' },
+    ],
+    noteLabel: 'Result',
+    precision: 0,
+    rows: [
+      { label: 'Grouped aggregate', values: [369, 3702], note: 'Pushdown 10.0× faster' },
+      { label: 'Selective join + aggregate', values: [187, 2131], note: 'Pushdown 11.4× faster' },
+    ],
+    source:
+      'Median of nine interleaved runs after one warm-up. DuckDB and PostgreSQL ran on the same AWS Graviton host; see the reproduction appendix.',
+    sparkLabel: 'Pushdown versus local query time',
+    sparkRows: 2,
+  },
+
   'duckdb-community-extensions-distribution': {
     title: 'One extension, built nine ways',
     subtitle:
