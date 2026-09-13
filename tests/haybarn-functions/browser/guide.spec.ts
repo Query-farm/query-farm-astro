@@ -211,6 +211,7 @@ test('mobile navigation, search shortcut, and layout work without horizontal ove
   await page.getByRole('button', { name: 'Toggle function navigation' }).click();
   await expect(page.locator('#sidebar')).toBeVisible();
   await page.locator('#sidebar').getByRole('link', { name: /All functions/ }).click();
+  await expect(page).toHaveURL(catalog);
   await expect(page.getByRole('searchbox')).toBeVisible();
   await page.keyboard.press('/');
   await expect(page.getByRole('dialog', { name: 'Search functions' })).toBeVisible();
