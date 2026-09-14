@@ -32,7 +32,7 @@ export function exportManifest() {
   return {
     schemaVersion: apiVersion,
     defaultSnapshot: defaultSnapshot.id,
-    resources: { guide: '/products/haybarn/functions/agents/', discovery: '/products/haybarn/functions/llms.txt', functionSchema: '/products/haybarn/functions/api/v1/function.schema.json' },
+    resources: { guide: '/products/haybarn/functions/agents/', discovery: '/products/haybarn/functions/llms.txt', functionSchema: '/products/haybarn/functions/api/v1/function.schema.json', search: '/products/haybarn/functions/api/v1/search.json' },
     browserRuntime: { engine: 'haybarn-wasm', packageVersion: wasmVersion, matchesDocumentationSnapshot: defaultSnapshot.runtime?.packageVersion === wasmVersion },
     interpretation,
     snapshots: snapshots.map(snapshot => ({ ...snapshotMetadata(snapshot), functionCount: getFunctions(snapshot).length,
@@ -184,6 +184,7 @@ export function discoveryMarkdown() {
     ...interpretation.map(note => `- ${note}`), '', '## Start here', '',
     '- [Agent guide](/products/haybarn/functions/agents/index.md): Fetch workflow, endpoint contract, and interpretation rules.',
     '- [Release manifest](/products/haybarn/functions/api/v1/releases.json): Snapshot provenance, type-searchable indexes, and comparison URLs.',
+    '- [Function search](/products/haybarn/functions/api/v1/search.json?q=list_transform): Server-side search across signatures, arguments, examples, and translations. Pass release=all to include every snapshot.',
     '- [Function JSON schema](/products/haybarn/functions/api/v1/function.schema.json): Version 1 function document contract.', '',
     '## Snapshot indexes', '', ...snapshots.map(snapshot => `- [${snapshot.label}](${indexMarkdownUrl(snapshot)}): Function names, descriptions, and links to individual Markdown references.`), '',
     '## Optional', '', '- [Source notices](/third-party-notices.txt): Engine and documentation licensing.', ''].join('\n');
@@ -196,7 +197,7 @@ Start at /products/haybarn/functions/llms.txt or /products/haybarn/functions/api
 ## Retrieval workflow
 
 1. GET /products/haybarn/functions/api/v1/releases.json. Select the snapshot for the target engine and build; use its source ID and loaded extensions to assess applicability.
-2. GET the snapshot's index URL. Match the name or alias, or search description, inputTypes, and returnTypes locally. These are static files: query parameters do not perform server-side search.
+2. GET /products/haybarn/functions/api/v1/search.json?q=TERM&release=SNAPSHOT to search signatures, arguments, examples, and translations, or fetch the snapshot's full index URL and match locally. Use release=all only when cross-release results are wanted.
 3. Follow the function's links.json for structured metadata or links.markdown for prose and SQL. Each overload includes a stable id and a human reference URL with the same fragment.
 4. Read the selected overload's catalog fields and callingConvention. A function can have multiple kinds and arities. Raw table parameter arrays are alphabetical; callingConvention separates positional and named arguments using recorded binder evidence. Variadic types come from catalog.varargs. Defaults, minimum variadic counts and special named variadic behavior remain unknown.
 5. For a migration, follow a comparison URL in the manifest. Inspect addedSignatures and removedSignatures for the specific function; description-only changes are not signature changes.
@@ -205,7 +206,7 @@ Start at /products/haybarn/functions/llms.txt or /products/haybarn/functions/api
 
 All responses are generated from the same snapshots used by the HTML reference. schemaVersion is 1. The function schema is at /products/haybarn/functions/api/v1/function.schema.json. Function overload catalog fields preserve duckdb_functions() names, arrays, and nulls. Editorial guidance lives under editorial. Examples under examples originate in the engine catalog; verification: null means no execution evidence is recorded in the export.
 
-The browser runtime is Haybarn WASM ${wasmVersion}. Exported docs and comparisons are read-only static resources. There is no HTTP SQL execution endpoint and no authentication requirement.
+The browser runtime is Haybarn WASM ${wasmVersion}. Exported docs, comparisons, and search are read-only resources generated from committed snapshots at the edge. There is no HTTP SQL execution endpoint and no authentication requirement.
 
 ## Interpretation
 
@@ -216,6 +217,7 @@ ${interpretation.map(note => `- ${note}`).join('\n')}
 - [Discovery](/products/haybarn/functions/llms.txt)
 - [Release manifest](/products/haybarn/functions/api/v1/releases.json)
 - [Function schema](/products/haybarn/functions/api/v1/function.schema.json)
+- [Function search](/products/haybarn/functions/api/v1/search.json?q=list_transform)
 - [Default catalog](${indexJsonUrl(defaultSnapshot)})
 - [Example function](${functionJsonUrl(defaultSnapshot, getFunction(defaultSnapshot, 'list_transform')!)})
 `;

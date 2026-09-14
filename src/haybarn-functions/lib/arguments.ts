@@ -1,5 +1,6 @@
 import type { Overload, Snapshot } from './catalog';
 import { overloadId } from '../../../scripts/haybarn-functions/catalog.mjs';
+import { bindingModules } from '../data/bindings.generated';
 
 interface BindingCapture {
   snapshot: string;
@@ -13,7 +14,7 @@ export interface Argument {
   mode: 'positional' | 'named' | null;
   position: number | null;
 }
-const captures = Object.values(import.meta.glob<{ default: BindingCapture }>('../data/bindings/*.json', { eager: true })).map(module => module.default);
+const captures = bindingModules as BindingCapture[];
 
 export function argumentLayout(row: Overload, snapshot?: Snapshot) {
   const capture = snapshot && captures.find(capture => capture.snapshot === snapshot.id && capture.binarySha256 === snapshot.binarySha256);

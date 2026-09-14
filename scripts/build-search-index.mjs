@@ -114,7 +114,7 @@ async function main() {
     }
   }
 
-  await indexHaybarnFunctions(index);
+  await indexHaybarnFunctions();
   await indexHaybarnExtensions(index);
   const result = await index.writeFiles({ outputPath: join(DIST, 'pagefind') });
   if (result.errors?.length) throw new Error(result.errors.join('\n'));

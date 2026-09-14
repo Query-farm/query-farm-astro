@@ -19,7 +19,7 @@ npm run dev       # local server at http://localhost:4321
 npm run check     # Astro and TypeScript diagnostics
 npm run build     # deterministic production build plus Pagefind index
 npm run validate  # current CI gate: deterministic production build
-npm run preview   # serve dist/ locally
+npm run preview   # serve dist/ plus Pages Functions locally
 ```
 
 `npm run build` consumes only files committed to the repository. It does not
@@ -81,11 +81,14 @@ search behavior, and verification.
 
 ## Deployment
 
-`.github/workflows/deploy.yml` validates the site before deploying it to
-Cloudflare Pages. Pushes to `main` publish production; pull requests receive a
-preview deployment. The workflow requires the `CLOUDFLARE_API_TOKEN` and
+`.github/workflows/deploy.yml` validates the site before deploying static Astro
+assets and the machine-readable Haybarn routes to Cloudflare Pages. Pushes to
+`main` publish production; pull requests receive Pages preview deployments.
+The workflow requires the `CLOUDFLARE_API_TOKEN` and
 `CLOUDFLARE_ACCOUNT_ID` repository secrets.
 
 CI checks Astro types, the function catalogs, the combined build, exported
 references, and browser behavior before deployment. Browser tests execute the
 real pinned WASM package and serve its artifacts locally for deterministic CI.
+The dynamic JSON, Markdown, and search routes are Pages Functions. The remaining
+HTML and assets stay on Pages' static path and do not invoke a Function.

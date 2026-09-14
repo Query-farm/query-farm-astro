@@ -20,6 +20,7 @@ source revision and are not presented as execution-verified equivalents.
 | Playground | `/products/haybarn/playground/` |
 | Function changes | `/products/haybarn/function-changes/` |
 | Release manifest | `/products/haybarn/functions/api/v1/releases.json` |
+| Function search | `/products/haybarn/functions/api/v1/search.json?q=<term>&release=<release-or-all>` |
 | Agent discovery | `/products/haybarn/functions/llms.txt` |
 
 The current function and catalog URLs follow the package pin. Explicit release
@@ -33,23 +34,40 @@ pages supply their own titles, descriptions, and Haybarn sharing image.
 
 ## Search
 
-One Pagefind index at `/pagefind/` serves two search experiences:
+Pagefind and the Pages Function search endpoint serve separate concerns:
 
 - Query Farm search includes `kind:page`, plus existing extension records
   (`kind:function`) when explicitly enabled. It excludes individual Haybarn
   function references even when that extension-function checkbox is enabled.
   The Haybarn guide landing page remains discoverable.
-- Function search requires `scope:haybarn`, with the page's release and guide
-  pages selected by default. Readers can explicitly include other releases.
-  Function records contain all overloads, arguments, examples, macro bodies,
-  aliases, and dialect translations. Reference HTML copies are not indexed
-  again, so each function has one search record per snapshot.
+- Function records are searched by the read-only Pages Function endpoint, with
+  the page's release selected by default. Readers can explicitly include other
+  releases. Compact search records contain overloads, arguments, examples,
+  macro bodies, aliases, and dialect translations. They are generated once
+  into the Function bundle rather than multiplied into Pagefind fragments.
+- Haybarn guide prose remains in Pagefind under `scope:haybarn` and
+  `snapshot:guide`. Browser search combines those guide and function results.
 
 The shared header opens company search. The Haybarn subnavigation and sidebar
 open function search. `Cmd/Ctrl+K` and `/` open function search while inside the
 guide. The dialogs have separate IDs and keyboard ownership. Development
 serves the latest built index; run `npm run build` after changing searchable
-content. Indexing failures fail the build.
+content. Search generation and indexing failures fail the build.
+
+## Pages Function delivery
+
+Astro still renders human-facing pages as static assets. Versioned function
+JSON, Markdown, comparisons, indexes, and deterministic search are generated
+by narrowly routed files under `functions/` using the shared machine-resource
+renderer. Ordinary HTML and asset requests stay on Pages' free static path.
+The build intentionally omits the per-function JSON and Markdown files, so
+adding a snapshot does not add thousands of deployable assets.
+
+`npm run check:pages-functions` compiles the Pages Functions without deploying
+them. The custom `public/_routes.json` limits invocations to machine resources.
+`npm run preview` runs Pages with its Functions locally; the browser suite uses
+a lightweight equivalent server so it does not have to hash the full static
+tree before every test run.
 
 ## Updating the browser release
 

@@ -38,6 +38,32 @@ function engine() {
   return pagefind;
 }
 
+async function functionMatches(query: string): Promise<SearchMatch[]> {
+  if (kind === 'Guide') return [];
+  const parameters = new URLSearchParams({
+    q: query,
+    release: allReleases.checked ? 'all' : dialog.dataset.snapshot!,
+    limit: '100',
+  });
+  const response = await fetch(`/products/haybarn/functions/api/v1/search.json?${parameters}`);
+  if (!response.ok) throw new Error(`Function search failed: ${response.status}`);
+  const payload = await response.json() as { results: SearchDocument[] };
+  return payload.results.map((document, index) => ({
+    id: `function-${index}-${document.url}`,
+    async data() { return document; },
+  }));
+}
+
+async function guideMatches(query: string): Promise<SearchMatch[]> {
+  if (kind === 'Function') return [];
+  const filters: Record<string, string | { any: string[] }> = {
+    scope: 'haybarn',
+    snapshot: 'guide',
+  };
+  const response = await (await engine()).search(query, { filters });
+  return response.results;
+}
+
 function openSearch(query?: string) {
   document.querySelector('#site-search-modal')?.classList.add('hidden');
   document.querySelector('#site-search-open')?.setAttribute('aria-expanded', 'false');
@@ -161,13 +187,10 @@ async function search(token = ++generation) {
   scope.textContent = allReleases.checked ? 'All captured releases' : currentScope;
   if (!query) { searchStatus.textContent = 'Search descriptions, arguments, SQL examples, and guides.'; return; }
   searchStatus.textContent = 'Searching…';
-  const filters: Record<string, string | { any: string[] }> = { scope: 'haybarn' };
-  if (!allReleases.checked) filters.snapshot = { any: [dialog.dataset.snapshot!, 'guide'] };
-  if (kind) filters.kind = kind;
   try {
-    const response = await (await engine()).search(query, { filters });
+    const [functions, guides] = await Promise.all([functionMatches(query), guideMatches(query)]);
     if (token !== generation || !dialog.open) return;
-    matches = response.results;
+    matches = [...functions, ...guides];
     await appendResults(token);
   } catch { failed(token); }
 }

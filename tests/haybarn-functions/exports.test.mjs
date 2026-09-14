@@ -4,9 +4,14 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import Ajv2020 from 'ajv/dist/2020.js';
 import { signatureKey, overloadId, groupFunctions, compareSnapshots } from '../../scripts/haybarn-functions/catalog.mjs';
+import { renderMachineResource } from '../../src/haybarn-functions/lib/machine-resources.ts';
 
-const readJson = url => JSON.parse(readFileSync(resolve('dist', `.${url}`), 'utf8'));
-const readText = url => readFileSync(resolve('dist', `.${url}`), 'utf8');
+const builtPath = url => resolve('dist', `.${url}`);
+const readText = url => existsSync(builtPath(url))
+  ? readFileSync(builtPath(url), 'utf8')
+  : renderMachineResource(url)?.body ?? (() => { throw new Error(`Missing resource: ${url}`); })();
+const readJson = url => JSON.parse(readText(url));
+const resourceExists = url => existsSync(builtPath(url)) || renderMachineResource(url)?.status === 200;
 const manifest = readJson('/products/haybarn/functions/api/v1/releases.json');
 const schema = readJson('/products/haybarn/functions/api/v1/function.schema.json');
 const validate = new Ajv2020({ strict: true, allErrors: true }).compile(schema);
@@ -89,14 +94,47 @@ test('discovery and all snapshot indexes link to generated resources', () => {
   assert.ok(discovery.includes('/products/haybarn/functions/agents/index.md'));
   for (const snapshot of manifest.snapshots) {
     assert.ok(discovery.includes(snapshot.markdownIndex));
-    assert.ok(existsSync(resolve('dist', `.${snapshot.markdownIndex}`)));
+    assert.ok(resourceExists(snapshot.markdownIndex));
     const index = readJson(snapshot.index);
     for (const fn of index.functions) {
       assert.ok(Array.isArray(fn.inputTypes));
       assert.ok(Array.isArray(fn.returnTypes));
-      for (const path of [fn.links.json, fn.links.markdown, `${fn.links.html}index.html`]) assert.ok(existsSync(resolve('dist', `.${path}`)), path);
+      for (const path of [fn.links.json, fn.links.markdown, `${fn.links.html}index.html`]) assert.ok(resourceExists(path), path);
     }
   }
+});
+
+test('high-cardinality machine routes are rendered by Pages Functions rather than static assets', () => {
+  const snapshot = manifest.snapshots.find(item => item.id === manifest.defaultSnapshot);
+  const index = readJson(snapshot.index);
+  const fn = index.functions.find(item => item.name === 'regexp_extract');
+  assert.equal(existsSync(builtPath(snapshot.index)), false);
+  assert.equal(existsSync(builtPath(fn.links.json)), false);
+  assert.equal(existsSync(builtPath(fn.links.markdown)), false);
+  assert.equal(renderMachineResource(fn.links.json).status, 200);
+  assert.equal(renderMachineResource(fn.links.markdown).headers['Content-Signal'], 'search=yes, ai-input=yes, ai-train=no');
+  const search = JSON.parse(renderMachineResource('/products/haybarn/functions/api/v1/search.json?q=name_list').body);
+  assert.ok(search.results.some(result => result.meta.title === 'regexp_extract'));
+  assert.equal(renderMachineResource('/products/haybarn/functions/api/v1/not-a-release/functions.json').status, 404);
+});
+
+test('site discovery covers VGI and publishes the explicit AI usage policy', () => {
+  const root = readText('/llms.txt');
+  assert.ok(root.includes('https://query.farm/vgi/llms.txt'));
+  assert.ok(root.includes('https://query.farm/products/haybarn/extensions/catalog.json'));
+  const vgi = readText('/vgi/llms.txt');
+  for (const section of ['Concepts', 'C#', 'Go', 'Java', 'Python', 'Rust', 'TypeScript']) assert.ok(vgi.includes(`## ${section}`));
+  assert.ok(readText('/robots.txt').includes('Content-Signal: search=yes, ai-input=yes, ai-train=no'));
+  assert.ok(readText('/_headers').includes('Content-Signal: search=yes, ai-input=yes, ai-train=no'));
+});
+
+test('Pages invokes Functions only for machine-resource routes', () => {
+  const routes = readJson('/_routes.json');
+  assert.deepEqual(routes.exclude, []);
+  assert.ok(routes.include.includes('/products/haybarn/functions/api/v1/*/functions/*.json'));
+  assert.ok(routes.include.includes('/products/haybarn/functions/releases/*/*/index.md'));
+  assert.ok(!routes.include.includes('/*'));
+  assert.ok(!routes.include.includes('/products/haybarn/functions/releases/*'));
 });
 
 test('general comparisons have a utility category across releases with different catalog tags', () => {

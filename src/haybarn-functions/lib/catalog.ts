@@ -1,5 +1,6 @@
 import { groupFunctions, compareSnapshots, signatureKey } from '../../../scripts/haybarn-functions/catalog.mjs';
 import { defaultSnapshotId } from '../data/settings';
+import { snapshotModules } from '../data/snapshots.generated';
 import { signatureParts } from './arguments';
 import { operatorNotation } from '../../../scripts/haybarn-functions/notation.mjs';
 
@@ -46,8 +47,9 @@ export interface FunctionDoc {
   kinds: string[];
   aliases: string[];
 }
-const modules = import.meta.glob<{ default: Snapshot }>('../data/snapshots/*.json', { eager: true });
-export const snapshots: Snapshot[] = Object.values(modules).map(m => m.default).sort((a, b) =>
+// Explicit imports make this shared catalog portable across Astro/Vite and the
+// Cloudflare Pages Function bundle. The generated module is refreshed before builds.
+export const snapshots: Snapshot[] = (snapshotModules as Snapshot[]).sort((a, b) =>
   a.id === defaultSnapshotId ? -1 : b.id === defaultSnapshotId ? 1 :
   a.engine === b.engine ? b.engineVersion.localeCompare(a.engineVersion, undefined, { numeric: true }) : a.engine === 'haybarn' ? -1 : 1);
 export const defaultSnapshot = snapshots.find(s => s.id === defaultSnapshotId)!;
