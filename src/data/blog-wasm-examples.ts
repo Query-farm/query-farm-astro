@@ -6,7 +6,7 @@ export interface BlogWasmExamples {
 }
 
 const BLOG_WASM_EXAMPLES: Record<string, BlogWasmExamples> = {
-  'duckdb-lateral-join-api-superpower': {
+  'call-an-api-from-every-row-in-duckdb': {
     extensionName: 'VGI',
     installSource: 'community',
     setupSql:
