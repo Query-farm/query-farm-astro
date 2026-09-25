@@ -3,9 +3,16 @@ export interface BlogWasmExamples {
   installSource: string;
   setupSql?: string;
   controls: 'below' | 'toolbar';
+  codeBlockSelector?: string;
 }
 
 const BLOG_WASM_EXAMPLES: Record<string, BlogWasmExamples> = {
+  'http-caching-duckdb-vgi': {
+    extensionName: 'VGI',
+    installSource: 'community',
+    controls: 'below',
+    codeBlockSelector: '#yfinance-cache-example pre[data-language="sql"]',
+  },
   'call-an-api-from-every-row-in-duckdb': {
     extensionName: 'VGI',
     installSource: 'community',

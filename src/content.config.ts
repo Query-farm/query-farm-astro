@@ -15,6 +15,7 @@ const blog = defineCollection({
     author: z.string().default('Query.Farm Team'),
     tags: z.array(z.string()).default([]),
     draft: z.boolean().default(false),
+    showTableOfContents: z.boolean().default(true),
     heroImage: z.string().optional(),
     leadVisual: z.object({
       src: z.string(),

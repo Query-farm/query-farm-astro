@@ -359,6 +359,8 @@ interface Props {
   /** Raw check-fixtures.sql for this extension, run once per session to seed
    *  the sample tables the examples reference. Null when the extension has none. */
   fixtures?: string | null;
+  /** Restrict runnable controls when an article also contains illustrative SQL. */
+  codeBlockSelector?: string;
 }
 
 export default function ExampleShellMounter({
@@ -366,6 +368,7 @@ export default function ExampleShellMounter({
   installSource,
   fixtures,
   controls = "below",
+  codeBlockSelector = 'pre[data-language="sql"]',
 }: Props) {
   const [shells, setShells] = useState<OpenShell[]>([]);
 
@@ -376,7 +379,7 @@ export default function ExampleShellMounter({
 
     const attachExamples = (root: ParentNode = document) => {
       root
-      .querySelectorAll<HTMLElement>('pre[data-language="sql"]')
+      .querySelectorAll<HTMLElement>(codeBlockSelector)
       .forEach((pre) => {
         if (pre.dataset[ATTACHED] === "true") return;
         const sql = getSql(pre);
@@ -512,7 +515,7 @@ export default function ExampleShellMounter({
       cleanupByBlock.forEach(cleanup => cleanup());
       cleanupByBlock.clear();
     };
-  }, [extensionName, installSource, fixtures, controls]);
+  }, [extensionName, installSource, fixtures, controls, codeBlockSelector]);
 
   return (
     <>
