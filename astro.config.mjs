@@ -137,7 +137,7 @@ export default defineConfig({
           borderRadius: '0.5rem',
           borderColor: 'transparent',
           codeFontFamily: "'JetBrains Mono', 'Fira Code', ui-monospace, monospace",
-          uiFontFamily: "'Commissioner', ui-sans-serif, system-ui, sans-serif",
+          uiFontFamily: "'Noto Sans', ui-sans-serif, system-ui, sans-serif",
         },
       },
       // The site already builds a unified Pagefind index in postbuild over all

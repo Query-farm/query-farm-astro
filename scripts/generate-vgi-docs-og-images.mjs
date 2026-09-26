@@ -58,7 +58,7 @@ function card({ name, tagline, icon }) {
         width: `${WIDTH}px`,
         height: `${HEIGHT}px`,
         backgroundColor: COLORS.soilPaper,
-        fontFamily: 'Commissioner',
+        fontFamily: 'Noto Sans',
       },
       children: [
         { type: 'div', props: { style: { display: 'flex', width: '100%', height: '10px', backgroundColor: COLORS.sun700 } } },
@@ -90,7 +90,7 @@ function card({ name, tagline, icon }) {
                                 borderRadius: '9999px',
                                 backgroundColor: '#efe9db', // --color-soil-100
                                 color: COLORS.soil700,
-                                fontFamily: 'Commissioner',
+                                fontFamily: 'Noto Sans',
                                 fontWeight: 600,
                                 fontSize: '16px',
                                 letterSpacing: '0.02em',
@@ -128,7 +128,7 @@ function card({ name, tagline, icon }) {
                                 display: 'flex',
                                 marginTop: '26px',
                                 maxWidth: '620px',
-                                fontFamily: 'Commissioner',
+                                fontFamily: 'Noto Sans',
                                 fontWeight: 400,
                                 fontSize: '28px',
                                 lineHeight: 1.45,
@@ -150,7 +150,7 @@ function card({ name, tagline, icon }) {
               {
                 type: 'div',
                 props: {
-                  style: { display: 'flex', fontFamily: 'Commissioner', fontWeight: 500, fontSize: '19px', color: COLORS.soil600 },
+                  style: { display: 'flex', fontFamily: 'Noto Sans', fontWeight: 500, fontSize: '19px', color: COLORS.soil600 },
                   children: 'query.farm/vgi/docs',
                 },
               },

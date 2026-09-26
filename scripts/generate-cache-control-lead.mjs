@@ -77,7 +77,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="720" height="228" vi
   ${duckdbMark}
   <image x="603" y="82.6" width="80" height="58.8" href="data:image/png;base64,${vgiEmblem}"/>
 
-  <g font-family="Commissioner, system-ui, sans-serif" text-anchor="middle">
+  <g font-family="Noto Sans, system-ui, sans-serif" text-anchor="middle">
     <text x="377" y="102" fill="${colors.green}" stroke="${colors.paper}" stroke-width="5" paint-order="stroke" stroke-linejoin="round" font-size="10" font-weight="500" letter-spacing="1.5">REUSE</text>
     <g fill="${colors.ink}" font-size="12">
       <text x="64" y="213">DuckDB</text>

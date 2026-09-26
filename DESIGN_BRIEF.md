@@ -17,7 +17,7 @@ Branch: `feat/strata-sun-redesign`
 | Wordmark | **Petrona**, wght 700, slightly tighter tracking than headings (`.qf-wordmark`) |
 | Wordmark dot | The `.` in Query.Farm is **`sun-700`** on light, **`sun-400`** on dark |
 | Display / headings | **Petrona** wght 600, `letter-spacing: -0.022em` |
-| Body | **Commissioner** 300 |
+| Body | **Noto Sans** 400 (replaced Commissioner 300 — see §10) |
 | Code | **JetBrains Mono** (already in the project) |
 
 Band count reduces with size: **4 bands** at display → **3** at ~22px → **2** at 16px.
@@ -42,15 +42,20 @@ set tighter than the old spec assumed.
 
 ## 2. Figures — the rule that is easy to get wrong
 
-> **Figures come from Commissioner, always tabular. Petrona sets words.**
+> **Figures come from Noto Sans, tabular by default. Petrona sets words.**
 
-The rule survived the Fraunces → Petrona swap unchanged, because the defect is the same in both:
-their figures are drawn for character, not data, and **neither family ships a tabular set**, so
-right-aligned numeric columns do not line up. On a page listing every extension by load count
-that is a defect, not a preference.
+The display faces draw figures for character, not data: Fraunces had no tabular set, and
+Petrona's is behind the `tnum` feature, off by default. Right-aligned numeric columns in them do
+not line up, which on a page listing every extension by load count is a defect, not a
+preference. So every figure sets in the sans.
+
+The sans must actually have tabular figures. **Commissioner, the sans until 2026-09, had none**
+(no `tnum`, upstream included), which this rule wrongly assumed; `tabular-nums` silently did
+nothing, and columns drifted by several pixels. Noto Sans is tabular by default, and its bold
+figures are as wide as its regular ones, so a bold total row lines up too (§10).
 
 The inverse is equally a violation and is easier to commit by accident: **`.qf-figure` never goes
-on prose.** It forces Commissioner 500 with `tabular-nums` and `-0.035em` tracking — a treatment
+on prose.** It forces Noto Sans 500 with `tabular-nums` and `-0.01em` tracking — a treatment
 designed for a right-aligned numeric column. Applied to a sentence containing no digits it just
 sets that sentence in the wrong face.
 
@@ -193,8 +198,9 @@ local `font-family: 'Petrona', …` rules pin the face and should use
 `font-display` instead, so the next swap doesn't strand them the way this one
 stranded `.qf-faq-summary`.
 
-§2 is unaffected in substance: neither family ships a tabular set, so figures
-still come from Commissioner. The rule now also states its inverse explicitly,
+§2 is unaffected in substance: neither display face gives tabular figures by
+default, so figures still come from the sans (then Commissioner; see the Noto Sans
+entry below). The rule now also states its inverse explicitly,
 because applying `.qf-figure` to prose turned out to be the more common error.
 
 **`/consulting` moved from Family E to Family D (§6).** It was filed as editorial
@@ -261,7 +267,7 @@ Family B pages that keep a page header keep the hairband.
 route digits to another family without a `unicode-range` `@font-face`, which
 needs a font URL we don't control (fonts arrive via the Google Fonts CSS
 import). Body, tables, definition lists and all `.stat-value`/`.load-count`
-selectors are pinned to Commissioner. A prose *heading* containing a version
+selectors are pinned to the sans. A prose *heading* containing a version
 number is the one place a Fraunces numeral still renders.
 
 **Committed artwork.** The D2 diagram sources in `src/diagrams/` were re-cut to
@@ -317,6 +323,20 @@ unbounded prose on the page ground with a 12.5px CTA — less clickable than the
 three bordered cards ranked beneath it. Both surfaces now use one stretched
 link (`after:absolute after:inset-0`) rather than a nested control, so each
 entry is one target with one tab stop.
+
+---
+
+**Noto Sans replaced Commissioner (2026-09).** Cupola's report tables showed the
+problem first: right-aligned columns drifted 3–6px at the decimal point. Commissioner has
+no tabular figures at all, upstream included, so `tabular-nums` did nothing, and §2's
+"Commissioner, always tabular" had never been true. Noto Sans was chosen from 30 candidates
+measured for data work: tabular figures on by default with bold as wide as regular, a
+slashed zero, oldstyle figures, true italics (Commissioner had only an oblique), Greek and
+Cyrillic, and weights 100–900. Body moved from 300 to 400: Noto Sans is sturdier, and 400
+matches Cupola, which switched in 0.4.180. Figure tracking went from `-0.035em` to
+`-0.01em`, since Noto Sans' figures are spaced for tables already. Links stay at 400; the
+underline, not weight, sets them apart (§3). Generated OG cards and the media kit's shields
+were rebuilt in Noto Sans (`scripts/og-images/fonts/`, `scripts/media-kit/make-shields.py`).
 
 ---
 

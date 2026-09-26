@@ -172,7 +172,7 @@ Matching the key still relies on the function author's promise that the output c
 A finer-grained cache can help when only some inputs repeat, but the client must assemble cached and newly computed results into the right output. For an eligible correlated table-in/out call, it first checks whether the whole input chunk is cached. If that misses and per-value caching is enabled, it can gather the values it already has and send only the missing tuples to the worker. Scalar calls use the per-value tier without a whole-chunk cache.
 
 <figure role="img" aria-label="Flow for one input chunk: probe the whole-chunk key; on a hit, replay one cached batch. On a miss, deduplicate to K distinct tuples, probe K per-value slots; if all hit, gather from the arena; otherwise ship only the missing tuples to the worker, store the results, and scatter back to the full chunk." style="margin:2.25rem 0">
-<svg viewBox="0 0 760 424" width="100%" style="max-width:700px;height:auto;font-family:Commissioner,system-ui,sans-serif">
+<svg viewBox="0 0 760 424" width="100%" style="max-width:700px;height:auto;font-family:'Noto Sans',system-ui,sans-serif">
   <defs>
     <marker id="fa" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#5d4632"/></marker>
     <marker id="fg" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#45632f"/></marker>

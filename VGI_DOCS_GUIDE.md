@@ -225,9 +225,9 @@ from the GitHub API **at build time** and baked in (falls back to no count offli
 Palette: **Strata Sun** (see `DESIGN_BRIEF.md`). Light = soil-50 paper / soil-900 ink / **sun-700**
 accent (the only gold that carries text on a light ground); dark = rock-950 ground / cream text /
 **sun-400** accent. Fonts: Fraunces (display, with `opsz` tracking each heading level),
-Commissioner (body, 300), JetBrains Mono (code + all eyebrow labels). **Code always sits on
+Noto Sans (body, 400), JetBrains Mono (code + all eyebrow labels). **Code always sits on
 rock-900 `#1a1512` in both themes** — Expressive Code is configured with a single theme for exactly
-that reason. Figures are Commissioner, tabular (brief §2). Per-kind API colours: class = field
+that reason. Figures are Noto Sans, tabular by default (brief §2). Per-kind API colours: class = field
 green, function = violet, method = blue, attribute = gold, each cut twice for light/dark.
 
 Two things that deliberately do **not** follow the theme, because their artwork is committed with

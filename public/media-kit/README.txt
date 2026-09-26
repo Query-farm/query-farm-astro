@@ -8,7 +8,7 @@ CONTENTS
 logo/       Strata Sun mark (SVG/PNG) + wordmark lockups (light, dark, and
             a single adaptive SVG that follows the viewer's OS/browser theme)
 products/   Illustrated marks for Haybarn, VGI, Rowfence, Cupola
-shields/    Compact embeddable status badges (Commissioner font embedded,
+shields/    Compact embeddable status badges (Noto Sans font embedded,
             system-sans fallback, safe on GitHub)
 
 

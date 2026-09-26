@@ -27,9 +27,9 @@ const FONT_DIR = fileURLToPath(new URL('./fonts/', import.meta.url));
 const FONT_FILES = {
   'Petrona:600': 'Petrona-600.ttf',
   'Petrona:700': 'Petrona-700.ttf',
-  'Commissioner:400': 'Commissioner-400.ttf',
-  'Commissioner:500': 'Commissioner-500.ttf',
-  'Commissioner:600': 'Commissioner-600.ttf',
+  'Noto Sans:400': 'NotoSans-400.ttf',
+  'Noto Sans:500': 'NotoSans-500.ttf',
+  'Noto Sans:600': 'NotoSans-600.ttf',
 };
 
 // Loaded once and reused across every card in a generator run.
@@ -80,7 +80,7 @@ const MARK_SVG = fileDataUri(fileURLToPath(new URL('../../public/media-kit/logo/
  * public/media-kit/logo/wordmark-light.svg (Petrona 700, the "." in sun-700)
  * — rather than embedding that SVG's <text> directly, which would ask resvg
  * to lay out a nested SVG's text with its own font resolution instead of the
- * Petrona/Commissioner files loaded for this render.
+ * Petrona/Noto Sans files loaded for this render.
  */
 export function wordmark({ size = 'lg' } = {}) {
   const dims = size === 'lg' ? { mark: 46, fontSize: 38, gap: '16px' } : { mark: 30, fontSize: 22, gap: '12px' };

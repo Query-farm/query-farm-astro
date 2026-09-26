@@ -22,7 +22,7 @@ function glyph(name) {
 }
 
 function card({ name, description, label, icon }) {
-  return div({ width: WIDTH, height: HEIGHT, flexDirection: 'column', backgroundColor: COLORS.soilPaper, fontFamily: 'Commissioner' }, [
+  return div({ width: WIDTH, height: HEIGHT, flexDirection: 'column', backgroundColor: COLORS.soilPaper, fontFamily: 'Noto Sans' }, [
     div({ height: 8, width: '100%', backgroundColor: COLORS.sun700 }),
     div({ flex: 1, padding: '54px 72px', flexDirection: 'column', justifyContent: 'space-between' }, [
       div({ alignItems: 'center', justifyContent: 'space-between' }, [
