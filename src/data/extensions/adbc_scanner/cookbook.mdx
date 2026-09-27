@@ -1,132 +1,63 @@
-There are two ways to use the extension. Pick by what you're doing:
+The examples below use the runtime-command API described in Technical Details. Install the SQLite ADBC driver and its manifest before running examples with `driver: 'sqlite'`; alternatively use its shared-library path.
 
-- **Catalog mode (`ATTACH ... TYPE adbc`)** — read-only, but the remote database appears as a normal DuckDB catalog with automatic projection and filter pushdown. Best for plain SELECT-style analytics.
-- **Function mode (`adbc_connect` + `adbc_scan` / `adbc_execute` / `adbc_insert`)** — full read/write access including DDL, DML, and bulk Arrow-native inserts. Best when you need to mutate the remote, run server-side SQL, or hold a long-lived connection.
-
-Both can coexist in the same session.
-
-## Attach a remote database (catalog mode)
+## Create and query a SQLite table
 
 ```sql
--- PostgreSQL via the postgresql ADBC driver. libpq reads its credentials
--- from the URI (postgresql://user:pass@host/db), so embed them there
--- rather than passing username/password as separate ATTACH parameters.
-ATTACH 'postgresql://reader:secret@localhost/analytics' AS pg (
-  TYPE adbc,
-  driver 'postgresql'
+SET VARIABLE conn = (SELECT adbc_connect({'driver': 'sqlite', 'uri': ':memory:'}));
+CALL adbc_execute(getvariable('conn')::BIGINT, 'CREATE TABLE users(id INTEGER, name TEXT)');
+CALL adbc_execute(getvariable('conn')::BIGINT, 'INSERT INTO users VALUES (1, ''Alice''), (2, ''Bob'')');
+
+-- SQLite requires explicit result columns for arbitrary SQL.
+SELECT * FROM adbc_scan(
+  getvariable('conn')::BIGINT,
+  'SELECT id, name FROM users WHERE id = ?',
+  params := row(1),
+  columns := {'id': 'BIGINT', 'name': 'VARCHAR'}
 );
 
--- Query as if it were a local DuckDB catalog
-SELECT user_id, COUNT(*) AS events
-FROM pg.public.activity
-WHERE ts >= CURRENT_DATE - 7
-GROUP BY user_id;
+-- Scanning a named table can obtain its schema from table metadata.
+SELECT * FROM adbc_scan_table(getvariable('conn')::BIGINT, 'users');
+SELECT * FROM adbc_schema(getvariable('conn')::BIGINT, 'users');
+CALL adbc_disconnect(getvariable('conn')::BIGINT);
 ```
 
-```sql
--- SQLite file via the sqlite driver
-ATTACH '/data/app.db' AS local_app (TYPE adbc, driver 'sqlite');
-SHOW TABLES FROM local_app.main;
-```
-
-Catalog mode is read-only — see [Catalogs](#storage-extensions) for the full parameter list. Reach for function mode below when you need to write.
-
-## Open a connection (function mode)
+## Bulk insert from a DuckDB query
 
 ```sql
--- By driver name (driver manifest must be installed)
-SET VARIABLE conn = (SELECT adbc_connect({
-  'driver': 'sqlite',
-  'uri':    ':memory:'
-}));
-
--- Or by explicit driver path
-SET VARIABLE conn = (SELECT adbc_connect({
-  'driver': '/path/to/libadbc_driver_sqlite.dylib',
-  'uri':    '/data/app.db'
-}));
-
--- PostgreSQL with credentials
-SET VARIABLE conn = (SELECT adbc_connect({
-  'driver':   'postgresql',
-  'uri':      'postgresql://localhost:5432/analytics',
-  'username': 'reader',
-  'password': :pg_password
-}));
-```
-
-Stash the connection handle in a SQL variable and reuse it across statements.
-
-## Query
-
-```sql
--- Run any SELECT
-SELECT * FROM adbc_scan(getvariable('conn')::BIGINT,
-                        'SELECT * FROM orders WHERE created_at > now() - INTERVAL 1 DAY');
-```
-
-```sql
--- Or stream a whole table by name
-SELECT * FROM adbc_scan_table(getvariable('conn')::BIGINT, 'orders');
-```
-
-Result is a normal DuckDB table — JOIN against local tables, persist with CTAS, re-export.
-
-## Mutation
-
-```sql
--- DDL
-SELECT adbc_execute(getvariable('conn')::BIGINT,
-                    'CREATE TABLE users(id INT, name TEXT)');
-
--- DML
-SELECT adbc_execute(getvariable('conn')::BIGINT,
-                    'INSERT INTO users VALUES (1, ''Alice'')');
-
--- Bulk insert from a DuckDB query — Arrow-native, no row-format conversion.
--- adbc_insert is a TABLE function, so it goes in the FROM clause.
+SET VARIABLE conn = (SELECT adbc_connect({'driver': 'sqlite', 'uri': ':memory:'}));
 SELECT * FROM adbc_insert(
   getvariable('conn')::BIGINT,
   'users',
-  (SELECT id, name FROM staging_users)
+  (SELECT * FROM (VALUES (1::BIGINT, 'Alice'), (2::BIGINT, 'Bob')) AS source(id, name)),
+  mode := 'create'
 );
+SELECT * FROM adbc_scan_table(getvariable('conn')::BIGINT, 'users');
+CALL adbc_disconnect(getvariable('conn')::BIGINT);
 ```
 
-## Transactions
+## Commit and roll back
 
 ```sql
-SELECT adbc_set_autocommit(getvariable('conn')::BIGINT, FALSE);
-
-SELECT adbc_execute(getvariable('conn')::BIGINT, 'INSERT INTO orders VALUES (...)');
-SELECT adbc_execute(getvariable('conn')::BIGINT, 'UPDATE inventory SET qty = qty - 1 WHERE sku = ''X''');
-
-SELECT adbc_commit(getvariable('conn')::BIGINT);
--- or adbc_rollback on error
+SET VARIABLE conn = (SELECT adbc_connect({'driver': 'sqlite', 'uri': ':memory:'}));
+CALL adbc_execute(getvariable('conn')::BIGINT, 'CREATE TABLE users(id INTEGER, name TEXT)');
+CALL adbc_set_autocommit(getvariable('conn')::BIGINT, false);
+CALL adbc_execute(getvariable('conn')::BIGINT, 'INSERT INTO users VALUES (1, ''Alice'')');
+CALL adbc_commit(getvariable('conn')::BIGINT);
+CALL adbc_execute(getvariable('conn')::BIGINT, 'INSERT INTO users VALUES (2, ''Bob'')');
+CALL adbc_rollback(getvariable('conn')::BIGINT);
+CALL adbc_set_autocommit(getvariable('conn')::BIGINT, true);
+SELECT * FROM adbc_scan_table(getvariable('conn')::BIGINT, 'users'); -- Alice only
+CALL adbc_disconnect(getvariable('conn')::BIGINT);
 ```
 
-## Inspect the remote schema
+## Attach an existing SQLite file for analytics
 
+Replace the path with a SQLite file containing your application tables. Each `:memory:` connection has its own database; use a file when independent connections need to share data.
+
+{/* check: skip requires an existing SQLite application database */}
 ```sql
--- All tables
-SELECT * FROM adbc_tables(getvariable('conn')::BIGINT);
+ATTACH '/data/app.db' AS local_app (TYPE adbc, READ_ONLY, driver 'sqlite');
+SHOW TABLES FROM local_app.main;
+SELECT * FROM local_app.main.users;
+DETACH local_app;
 ```
-
-```sql
--- Columns of a specific table (filters are named parameters)
-SELECT * FROM adbc_columns(getvariable('conn')::BIGINT, table_name := 'orders');
-```
-
-```sql
--- Full Arrow schema of a query without running it
-SELECT * FROM adbc_schema(getvariable('conn')::BIGINT, 'SELECT * FROM orders');
-```
-
-Useful for building dynamic dashboards or schema-driven ETL pipelines.
-
-## Disconnect
-
-```sql
-SELECT adbc_disconnect(getvariable('conn')::BIGINT);
-```
-
-Connections are also cleaned up when the DuckDB process exits, but explicit disconnect is good hygiene.

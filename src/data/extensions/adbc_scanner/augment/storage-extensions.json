@@ -3,13 +3,13 @@
     "id": "adbc",
     "name": "adbc",
     "category": "ADBC Catalog",
-    "description": "Attach an [ADBC](https://arrow.apache.org/adbc/)-driven database as a DuckDB catalog. Once attached, DuckDB sees the remote schemas and tables as local objects — projection and filter pushdown happen automatically, and the executor pulls Arrow batches straight from the driver. Use this when you want a database-style interface; for ad-hoc reads / writes / arbitrary SQL, the [`adbc_scan`](#adbc_scan), [`adbc_execute`](#adbc_execute), and [`adbc_insert`](#adbc_insert) functions stay available alongside.",
+    "description": "Attach an ADBC database as a DuckDB catalog with table discovery, supported projection/filter pushdown, and Arrow result streams. Use READ_ONLY for analytics and a separate command handle for CALL adbc_execute and transactions. Catalog connections are separate from explicit handles; fresh queries see committed changes according to backend isolation. CALL adbc_clear_cache refreshes metadata after remote DDL.",
     "parameters": [
       {
         "name": "driver",
         "type": "VARCHAR",
-        "required": true,
-        "description": "Driver identifier — a registered name (e.g. `'sqlite'`, `'postgresql'`), an absolute path to a `libadbc_driver_*` shared library, or a manifest name resolved via the ADBC search paths."
+        "required": false,
+        "description": "Driver name resolved through installed manifests, or shared-library path. Required unless supplied by a secret or profile."
       },
       {
         "name": "entrypoint",
@@ -35,20 +35,22 @@
         "type": "INTEGER",
         "required": false,
         "description": "Hint for the number of rows per Arrow batch when scanning. Larger values reduce per-batch overhead at the cost of memory."
+      },
+      {
+        "name": "secret",
+        "type": "VARCHAR",
+        "required": false,
+        "description": "Name of an ADBC secret containing driver and connection options."
       }
     ],
     "examples": [
       {
-        "description": "Attach a PostgreSQL database via the postgresql ADBC driver",
-        "code": "-- libpq pulls credentials from the URI; ATTACH parameters don't interpolate bind variables.\nATTACH 'postgresql://reader:secret@localhost/mydb' AS pg (\n  TYPE adbc,\n  driver 'postgresql'\n);\n\n-- Query as if it were local — projection + filter pushdown happen automatically\nSELECT user_id, COUNT(*) AS events\nFROM pg.public.activity\nWHERE ts >= CURRENT_DATE - 7\nGROUP BY user_id;"
+        "description": "Attach PostgreSQL for analytics (requires a configured database and authentication)",
+        "code": "ATTACH 'postgresql://reader@localhost/analytics' AS pg (\n  TYPE adbc, READ_ONLY, driver 'postgresql'\n);\nSELECT user_id, COUNT(*) AS events\nFROM pg.public.activity\nWHERE ts >= CURRENT_DATE - 7\nGROUP BY user_id;\nDETACH pg;"
       },
       {
-        "description": "Attach a SQLite database file via the sqlite ADBC driver",
-        "code": "ATTACH '/data/app.db' AS local_app (\n  TYPE adbc,\n  driver 'sqlite'\n);\n\nSHOW TABLES FROM local_app.main;"
-      },
-      {
-        "description": "Attach using an explicit driver-library path (skips manifest resolution)",
-        "code": "ATTACH 'snowflake://account.snowflakecomputing.com' AS sf (\n  TYPE adbc,\n  driver '/opt/adbc/lib/libadbc_driver_snowflake.dylib',\n  username :sf_user,\n  password :sf_password,\n  use_manifests 'false'\n);"
+        "description": "Read an existing SQLite application database (replace the path)",
+        "code": "ATTACH '/data/app.db' AS local_app (TYPE adbc, READ_ONLY, driver 'sqlite');\nSHOW TABLES FROM local_app.main;\nDETACH local_app;"
       }
     ]
   }

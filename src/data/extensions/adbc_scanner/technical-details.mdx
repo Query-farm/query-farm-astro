@@ -1,74 +1,72 @@
-## Attaching as a catalog (recommended)
+## API version and migration
 
-Most users want the catalog interface. One [`ATTACH`](https://duckdb.org/docs/sql/statements/attach) and the remote database appears as an ordinary DuckDB catalog — schemas, tables, projection and filter pushdown, all without writing any `adbc_*` function calls:
+These examples target the runtime-command API on the [v1.5 branch](https://github.com/Query-farm/adbc_scanner/tree/v1.5), introduced in [8da3971](https://github.com/Query-farm/adbc_scanner/commit/8da3971840c19b1c3a63dff62e901cadffb84b73). An older community package may still expose the previous scalar API. Use a build containing that change; installing from the community repository alone does not establish the source revision.
+
+The following commands are table functions. Replace their old `SELECT adbc_…(...)` form with a standalone `CALL`:
+
+| Command | Result column |
+| --- | --- |
+| `CALL adbc_execute(handle, sql)` | `rows_affected BIGINT`, or `NULL` when the driver does not report a count |
+| `CALL adbc_disconnect(handle)` | `success BOOLEAN` |
+| `CALL adbc_set_autocommit(handle, enabled)` | `success BOOLEAN` |
+| `CALL adbc_commit(handle)` | `success BOOLEAN` |
+| `CALL adbc_rollback(handle)` | `success BOOLEAN` |
+| `CALL adbc_clear_cache()` | `cleared BOOLEAN` |
+
+Commands run during execution. Binding, `PREPARE`, and ordinary `EXPLAIN` do not perform these operations; `EXPLAIN ANALYZE` executes the statement. Each prepared execution runs the command again. Keep commands as standalone statements: filters and joins can skip execution when commands are embedded in relational queries. This is not an exactly-once guarantee across network retries. The optimizer can remain enabled.
+
+## Connections and concurrency
+
+`adbc_connect` remains a scalar function returning an opaque `BIGINT` handle. Store it once in a SQL variable and reuse it. Each evaluated call creates a distinct connection; do not call it for every row of a query.
 
 ```sql
--- libpq reads credentials from the URI itself, not separate options.
-ATTACH 'postgresql://reader:secret@localhost/analytics' AS pg (
-  TYPE adbc,
-  driver 'postgresql'
+SET VARIABLE conn = (SELECT adbc_connect({'driver': 'sqlite', 'uri': ':memory:'}));
+CALL adbc_execute(getvariable('conn')::BIGINT, 'CREATE TABLE users(id INTEGER, name TEXT)');
+CALL adbc_disconnect(getvariable('conn')::BIGINT);
+```
+
+Handles belong to the DuckDB client connection that created them. They cannot be shared with another client connection or reused after disconnect. Closing that DuckDB connection also cleans up its handles.
+
+An explicit handle permits one active operation at a time. Overlapping operations on the same handle fail promptly; use independent handles for concurrent work. An attached ADBC catalog uses pooled connections and can support multiple scans, including joins against its own tables. Transactions on an explicit handle do not include the catalog's separate connections.
+
+## Result schemas without executing SQL during planning
+
+`adbc_scan` asks the driver for `AdbcStatementExecuteSchema` metadata. It never falls back to executing the query merely to discover its columns. For drivers without that method, including the SQLite ADBC driver, supply `columns`:
+
+```sql
+SET VARIABLE conn = (SELECT adbc_connect({'driver': 'sqlite', 'uri': ':memory:'}));
+SELECT * FROM adbc_scan(
+  getvariable('conn')::BIGINT,
+  'SELECT 1 AS id, ''Alice'' AS name',
+  columns := {'id': 'BIGINT', 'name': 'VARCHAR'}
 );
-
-SELECT user_id, COUNT(*)
-FROM pg.public.activity
-WHERE ts >= CURRENT_DATE - 7
-GROUP BY user_id;
+CALL adbc_disconnect(getvariable('conn')::BIGINT);
 ```
 
-The full parameter list and more examples live in the [Catalogs](#storage-extensions) section. Catalog mode is **read-only** — for DDL, DML, transactions, or bulk Arrow-native inserts, drop down to function mode below.
+Declare the complete result in its remote column order, even when an outer DuckDB query selects only a subset. SQLite integer results map to `BIGINT`. The extension validates the runtime column count and checks types before converting the first nonempty batch.
 
-## Function mode (when you need to write)
+`adbc_scan_table` obtains table metadata through `AdbcConnectionGetTableSchema`, then executes a generated `SELECT` with supported projection and filter pushdown. It also accepts a `columns` override. `adbc_schema(handle, table_name)` describes a **table**, not an arbitrary SQL query. Metadata discovery can contact the backend during planning.
 
-When you need to mutate the remote, run server-side SQL, or do Arrow-native bulk inserts, [`adbc_connect`](#adbc_connect) returns a `BIGINT` handle that points at a driver-managed connection. Stash it in a [SQL variable](https://duckdb.org/docs/sql/statements/set_variable) so you can reuse it across statements:
+## Read-only catalogs and shared databases
 
-```sql
-SET VARIABLE conn = (SELECT adbc_connect({'driver': 'postgresql', 'uri': :pg_uri}));
-```
+Use `ATTACH ... (TYPE adbc, READ_ONLY, ...)` for read-only analytics. Schemas and tables appear under the attachment name. See the cookbook for a file-backed SQLite example.
 
-The handle is opaque — don't compute on it, just pass it back into the other `adbc_*` functions. Connections are cleaned up when the DuckDB process exits, but call [`adbc_disconnect`](#adbc_disconnect) explicitly when you're done — it releases the driver's connection-pool slot immediately rather than waiting for process teardown.
+`READ_ONLY` restricts writes through that DuckDB attachment. It does not revoke the underlying user's write permissions or make separate command handles read-only. Catalog write support without `READ_ONLY` is limited and driver-dependent; use `CALL adbc_execute` for remote SQL and explicit transaction control.
 
-## Performance
+Fresh catalog queries can see another client's committed changes according to the backend's transaction isolation. Data changes do not require reconnection or a cache clear. After remote DDL changes tables or columns, run `CALL adbc_clear_cache()` in each DuckDB client whose catalog metadata needs refreshing. This clears schema/table metadata for attached ADBC catalogs; it does not reload driver libraries or flush connection pools. It returns `false` when there are no attached ADBC catalogs.
 
-The extension passes [Arrow record batches](https://arrow.apache.org/docs/format/Columnar.html#format-record-batches) straight from the driver into DuckDB's vectorized executor with no transposition. Compared to a row-format client (ODBC, JDBC, libpq), three things change:
+## Driver options and secrets
 
-- **No serialize/deserialize per row.** Each batch is a contiguous block of columns the driver hands DuckDB by pointer; DuckDB reads it in place.
-- **Streaming.** Results start producing rows as the first batch arrives — `LIMIT` short-circuits the upstream query if the driver supports it, just like reading a Parquet file. Applies to both catalog mode (via the table-scan path) and [`adbc_scan`](#adbc_scan).
-- **Push-down depends on the driver.** In catalog mode, DuckDB pushes projections and filter predicates into the driver automatically; the driver and the remote database decide what to do with them. In function mode, push-down only goes as far as the SQL string you hand to [`adbc_scan`](#adbc_scan). Use [`EXPLAIN`](https://duckdb.org/docs/guides/meta/explain) on the *remote* database (via [`adbc_execute`](#adbc_execute)) when shape matters.
+Pass driver options directly in the `adbc_connect` STRUCT or `ATTACH` options. Strings and booleans use the string option setter, integers use the int64 setter, floating-point values use the double setter, and BLOBs use the bytes setter. Nested option structures are rejected. Use numeric SQL values for options that require numeric setters, rather than quoted numbers.
 
-For [`adbc_insert`](#adbc_insert), the same applies in reverse: DuckDB hands the driver Arrow batches it produced from your `SELECT`, so a `SELECT * FROM big_table` doesn't materialize as rows on the way out.
+Use an ADBC secret to reuse connection details. Its `EXTRA_OPTIONS` map contains string values; supply options requiring numeric or binary setters directly at connection or attachment time. Passwords and values from `EXTRA_OPTIONS` are redacted in DuckDB's secret display. Other fields, including `uri`, are not automatically redacted, so avoid embedding credentials there. Secret display redaction does not redact SQL text containing credentials from application logs or query history.
 
-## Securing credentials
+Drivers load as native shared libraries into DuckDB. Install a driver manifest to resolve names such as `sqlite`, or provide the library path and, when needed, its entrypoint. Installing a Python driver package alone does not guarantee that a manifest is available to DuckDB. Load only libraries you trust.
 
-Connection options are plain SQL values, so anything you pass inline is visible in query logs and the catalog. The recommended pattern is parameterizing through [SQL variables](https://duckdb.org/docs/sql/statements/set_variable) seeded from the environment, so the literal credential never appears in any cached SQL plan:
+## Arrow streaming and performance
 
-```sql
--- Catalog mode — libpq pulls user/pass from the URI directly. The URI
--- itself is a string literal (no `:bind_var` interpolation in ATTACH),
--- so build it elsewhere if you need to compose it from secrets.
-ATTACH 'postgresql://reader:secret@localhost/analytics' AS pg (
-  TYPE adbc,
-  driver 'postgresql'
-);
+ADBC presents results as Arrow batches, which the extension pulls into DuckDB. The driver's underlying network protocol and conversion costs depend on the backend; ADBC does not promise an Arrow wire protocol or zero serialization end to end.
 
--- Function mode
-SET VARIABLE conn = (SELECT adbc_connect({
-  'driver':   'postgresql',
-  'uri':      'postgresql://localhost:5432/analytics',
-  'username': 'reader',
-  'password': :pg_password
-}));
-```
+Catalog scans and `adbc_scan_table` can push supported projections and filters into generated SQL. For arbitrary `adbc_scan` queries, put remote filtering in the SQL you send. Batch-size hints and early stream termination depend on driver support. Use a result-returning scan, with the appropriate schema, when inspecting a remote `EXPLAIN` result; `adbc_execute` returns an affected-row count rather than query rows.
 
-`getenv` runs at parse time, so the literal password never appears in the cached SQL plan.
-
-import Callout from '../../../components/docs/Callout.astro';
-
-<Callout type="warning" title="ADBC drivers are arbitrary native code">
-Drivers loaded by name resolve through the ADBC manifest search path; drivers loaded by absolute path skip that. In either case, the driver runs in DuckDB's address space with the user's privileges. **Only load drivers you trust.** In a multi-tenant or hosted DuckDB environment, treat both `ATTACH ... (TYPE adbc, ...)` and [`adbc_connect`](#adbc_connect) the same way you'd treat `LOAD` — restrict them to roles that already have arbitrary-code-execution authority. See the [ADBC driver list](https://arrow.apache.org/adbc/current/driver/) for vetted upstream drivers.
-</Callout>
-
-## Compared to alternatives
-
-- **DuckDB's [`postgres_scanner`](https://duckdb.org/docs/extensions/postgres) / [`mysql_scanner`](https://duckdb.org/docs/extensions/mysql) / [`sqlite_scanner`](https://duckdb.org/docs/extensions/sqlite)** — purpose-built per-database extensions, often faster for the database they target. Reach for ADBC Scanner when no purpose-built extension exists, when you need a single client surface across many backends, or when you specifically want Arrow-end-to-end (e.g., for Snowflake or BigQuery).
-- **[`airport`](/products/extensions/airport)** — the same Arrow-end-to-end principle but over [Arrow Flight](https://arrow.apache.org/docs/format/Flight.html) instead of ADBC. Use it when the upstream is Flight-native; use this when the upstream is a database with an [ADBC driver](https://arrow.apache.org/adbc/current/driver/).
-- **[Python `pyarrow.flight` / `adbc_driver_*`](https://pypi.org/project/adbc-driver-manager/) + DataFrames** — much heavier setup; you give up DuckDB's vectorized execution against the streamed data and re-introduce row-format conversion at the DataFrame boundary.
+`adbc_insert` passes DuckDB query results to the driver's Arrow ingestion API. Ingestion modes and transaction behavior depend on that driver's capabilities.
