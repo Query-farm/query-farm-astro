@@ -75,4 +75,14 @@ export const platformComponents: ProductTile[] = [
     cta: 'Explore Cupola',
     status: 'available',
   },
+  {
+    img: '/grainlift/grainlift-mark.svg',
+    title: 'Grainlift',
+    eyebrow: 'Databases & services through ADBC',
+    outcome: 'Proxy databases or build ADBC services.',
+    description: 'Proxy existing database drivers or build new data services in Rust, Go, Python, and TypeScript. One ADBC client interface, Arrow-native results, and VGI-RPC underneath.',
+    href: '/products/grainlift',
+    cta: 'Explore Grainlift',
+    status: 'preview',
+  },
 ];

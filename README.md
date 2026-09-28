@@ -25,6 +25,13 @@ npm run preview   # serve dist/ plus Pages Functions locally
 `npm run build` consumes only files committed to the repository. It does not
 fetch or rewrite release, usage, or binary-size data.
 
+The Grainlift product prototype is at `/products/grainlift`. Its landing page
+uses the shared site layout, product navigation, and design tokens; its catalog
+entry lives in `src/data/products.ts`. It presents database proxying and custom
+ADBC services, with an interactive architecture diagram and benchmark explorer.
+Framework links lead to source repositories and runnable examples. Benchmark
+provenance and illustration details are in `design/grainlift.md`.
+
 ## Generated data
 
 Each extension under `src/data/extensions/<slug>/` has two inputs:
