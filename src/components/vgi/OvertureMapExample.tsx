@@ -25,29 +25,27 @@ const LEAFLET_CSS = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css
 const LEAFLET_JS = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js";
 const ARROW_CDN = "https://cdn.jsdelivr.net/npm/apache-arrow@18.1.0/+esm";
 
-// One color per real categories.primary value this query can return (see
+// One color per real taxonomy.primary value this query can return (see
 // vgi/index.astro's mapExample doc comment) — chosen for mutual contrast
 // against each other and against OSM's tan/white/green basemap, not tied to
 // any color already meaningful elsewhere on this page (sun-400 gold,
 // field green). Anything unexpected falls back to a neutral gray rather
 // than silently vanishing or throwing.
 const CATEGORY_COLORS: Record<string, string> = {
-  church_cathedral: "#7c3aed",
-  catholic_church: "#dc2626",
-  baptist_church: "#2563eb",
-  pentecostal_church: "#ea580c",
-  evangelical_church: "#0d9488",
-  episcopal_church: "#db2777",
-  anglican_church: "#ca8a04",
+  christian_place_of_worship: "#7c3aed",
+  roman_catholic_place_of_worship: "#dc2626",
+  baptist_place_of_worship: "#2563eb",
+  methodist_place_of_worship: "#ea580c",
+  jehovahs_witness_place_of_worship: "#0d9488",
+  anglican_or_episcopal_place_of_worship: "#ca8a04",
 };
 const CATEGORY_LABELS: Record<string, string> = {
-  church_cathedral: "Church / cathedral",
-  catholic_church: "Catholic",
-  baptist_church: "Baptist",
-  pentecostal_church: "Pentecostal",
-  evangelical_church: "Evangelical",
-  episcopal_church: "Episcopal",
-  anglican_church: "Anglican",
+  christian_place_of_worship: "Church (unspecified)",
+  roman_catholic_place_of_worship: "Catholic",
+  baptist_place_of_worship: "Baptist",
+  methodist_place_of_worship: "Methodist",
+  jehovahs_witness_place_of_worship: "Jehovah's Witness",
+  anglican_or_episcopal_place_of_worship: "Anglican / Episcopal",
 };
 const FALLBACK_COLOR = "#8a7f70";
 function colorFor(category: string): string {
