@@ -12,6 +12,8 @@ const blog = defineCollection({
     title: z.string(),
     description: z.string(),
     pubDate: z.coerce.date(),
+    // Set only for a substantive editorial update, never from the build clock.
+    updatedDate: z.coerce.date().optional(),
     author: z.string().default('Query.Farm Team'),
     tags: z.array(z.string()).default([]),
     draft: z.boolean().default(false),
@@ -23,6 +25,9 @@ const blog = defineCollection({
       width: z.number().int().positive(),
       height: z.number().int().positive(),
     }).optional(),
+  }).refine(({ pubDate, updatedDate }) => !updatedDate || updatedDate >= pubDate, {
+    message: 'updatedDate must not precede pubDate',
+    path: ['updatedDate'],
   }),
 });
 

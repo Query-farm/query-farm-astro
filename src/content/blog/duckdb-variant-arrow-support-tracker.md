@@ -2,6 +2,7 @@
 title: "DuckDB VARIANT and Arrow: What Works Today"
 description: "DuckDB 2.0 brings VARIANT to SQL, storage, and Parquet. Direct Arrow interchange is close, but support still differs across C++, Python, Go, Rust, and Java."
 pubDate: 2026-09-13
+heroImage: '/media/posts/duckdb-variant-arrow-support-tracker/social.png'
 author: "Rusty Conover"
 tags: ["DuckDB", "Arrow", "VARIANT", "Interoperability"]
 draft: false

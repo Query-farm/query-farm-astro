@@ -46,6 +46,16 @@ export const onRequest = defineRouteMiddleware((context) => {
   const isDocsHome = path === DOCS_ROOT || path === DOCS_ROOT.slice(0, -1);
   if (!section && !isDocsHome) return;
 
+  const robots = route.head.find((tag) => tag.tag === 'meta' && tag.attrs?.name === 'robots');
+  if (robots?.attrs) {
+    const content = String(robots.attrs.content ?? '');
+    if (!/\bnoindex\b/i.test(content) && !/max-image-preview:/i.test(content)) {
+      robots.attrs.content = [content, 'max-image-preview:large'].filter(Boolean).join(', ');
+    }
+  } else {
+    route.head.push({ tag: 'meta', attrs: { name: 'robots', content: 'max-image-preview:large' } });
+  }
+
   const canonical = route.head.find((tag) => tag.tag === 'link' && tag.attrs?.rel === 'canonical');
   const canonicalURL = new URL(String(canonical?.attrs?.href ?? path), SITE_ORIGIN);
   route.head.push({

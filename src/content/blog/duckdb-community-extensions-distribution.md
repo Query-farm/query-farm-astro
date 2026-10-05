@@ -2,6 +2,7 @@
 title: "Building DuckDB's Community Extensions, Faster and More Consistently"
 description: "Every DuckDB engine release needs its community extensions rebuilt before they install. With data from 1,400+ PRs and a full-catalogue rebuild, we make the case for treating the catalogue as a distribution — and show Haybarn rebuilds it ~2.4× faster."
 pubDate: 2026-06-18
+heroImage: '/media/posts/duckdb-community-extensions-distribution/social.png'
 author: 'Query.Farm Team'
 tags: ['Distribution', 'Performance', 'Haybarn']
 ---
