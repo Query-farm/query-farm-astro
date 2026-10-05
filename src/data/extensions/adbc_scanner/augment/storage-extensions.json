@@ -3,13 +3,19 @@
     "id": "adbc",
     "name": "adbc",
     "category": "ADBC Catalog",
-    "description": "Attach an ADBC database as a DuckDB catalog with table discovery, supported projection/filter pushdown, and Arrow result streams. Use READ_ONLY for analytics and a separate command handle for CALL adbc_execute and transactions. Catalog connections are separate from explicit handles; fresh queries see committed changes according to backend isolation. CALL adbc_clear_cache refreshes metadata after remote DDL.",
+    "description": "Attach an ADBC database as a DuckDB catalog with table discovery, supported projection/filter pushdown, and Arrow result streams. The alias is also the first argument of every adbc_* function; DETACH disconnects. BEGIN … COMMIT groups catalog writes with adbc_execute and adbc_insert, and READ_ONLY rejects all of them. CALL adbc_clear_cache refreshes metadata after remote DDL. Pass http(s) URIs (e.g. Trino) as the uri option rather than the ATTACH path, which DuckDB would treat as a remote file.",
     "parameters": [
       {
         "name": "driver",
         "type": "VARCHAR",
         "required": false,
         "description": "Driver name resolved through installed manifests, or shared-library path. Required unless supplied by a secret or profile."
+      },
+      {
+        "name": "uri",
+        "type": "VARCHAR",
+        "required": false,
+        "description": "Connection URI passed to the driver, overriding the ATTACH path. Use it for `http://`/`https://` URIs."
       },
       {
         "name": "entrypoint",
@@ -21,7 +27,13 @@
         "name": "search_paths",
         "type": "VARCHAR",
         "required": false,
-        "description": "Extra colon-separated directories to look in for ADBC manifest (`*.toml`) files, in addition to the platform defaults."
+        "description": "Extra colon-separated directories to look in for ADBC driver manifests (`*.toml`) and connection profiles, in addition to the platform defaults."
+      },
+      {
+        "name": "profile",
+        "type": "VARCHAR",
+        "required": false,
+        "description": "Name of an ADBC connection profile supplying the driver and options. Equivalent to an ATTACH path of `profile://<name>`."
       },
       {
         "name": "use_manifests",
@@ -40,10 +52,14 @@
         "name": "secret",
         "type": "VARCHAR",
         "required": false,
-        "description": "Name of an ADBC secret containing driver and connection options."
+        "description": "Name of an ADBC secret containing driver and connection options. Without it, a secret whose scope prefixes the ATTACH path's URI is used automatically."
       }
     ],
     "examples": [
+      {
+        "description": "Attach a SQLite file, then commit and roll back remote writes",
+        "code": "ATTACH 'users.sqlite' AS db (TYPE adbc, driver 'sqlite');\nCALL adbc_execute('db', 'DROP TABLE IF EXISTS users');\nCALL adbc_execute('db', 'CREATE TABLE users(id INTEGER, name TEXT)');\nBEGIN;\nCALL adbc_execute('db', 'INSERT INTO users VALUES (1, ''Alice'')');\nCOMMIT;\nBEGIN;\nCALL adbc_execute('db', 'INSERT INTO users VALUES (2, ''Bob'')');\nROLLBACK;\nSELECT * FROM adbc_scan_table('db', 'users'); -- Alice only\nDETACH db;"
+      },
       {
         "description": "Attach PostgreSQL for analytics (requires a configured database and authentication)",
         "code": "ATTACH 'postgresql://reader@localhost/analytics' AS pg (\n  TYPE adbc, READ_ONLY, driver 'postgresql'\n);\nSELECT user_id, COUNT(*) AS events\nFROM pg.public.activity\nWHERE ts >= CURRENT_DATE - 7\nGROUP BY user_id;\nDETACH pg;"
@@ -51,6 +67,10 @@
       {
         "description": "Read an existing SQLite application database (replace the path)",
         "code": "ATTACH '/data/app.db' AS local_app (TYPE adbc, READ_ONLY, driver 'sqlite');\nSHOW TABLES FROM local_app.main;\nDETACH local_app;"
+      },
+      {
+        "description": "Attach through a connection profile (requires mydb.toml in a profile search path)",
+        "code": "ATTACH 'profile://mydb' AS mydb (TYPE adbc);\nSELECT * FROM adbc_info('mydb');\nDETACH mydb;"
       }
     ]
   }

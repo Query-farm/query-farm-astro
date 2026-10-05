@@ -1,65 +1,92 @@
 ## API version and migration
 
-These examples target the runtime-command API on the [v1.5 branch](https://github.com/Query-farm/adbc_scanner/tree/v1.5), introduced in [8da3971](https://github.com/Query-farm/adbc_scanner/commit/8da3971840c19b1c3a63dff62e901cadffb84b73). An older community package may still expose the previous scalar API. Use a build containing that change; installing from the community repository alone does not establish the source revision.
+These examples target the attached-database API on the [v1.5 branch](https://github.com/Query-farm/adbc_scanner/tree/v1.5), introduced in [7e5210c](https://github.com/Query-farm/adbc_scanner/commit/7e5210c2802687c694a2d9114a42e2c04a3c3138). An older community package may still expose the previous connection-handle API. Installing from the community repository alone does not establish the source revision.
 
-The following commands are table functions. Replace their old `SELECT adbc_…(...)` form with a standalone `CALL`:
+Every `adbc_*` function now takes the alias of an `ATTACH … (TYPE adbc)` database instead of a `BIGINT` connection handle. `adbc_connect`, `adbc_disconnect`, `adbc_commit`, `adbc_rollback`, and `adbc_set_autocommit` are removed:
+
+| Previous | Replacement |
+| --- | --- |
+| `SET VARIABLE conn = (SELECT adbc_connect({'driver': 'sqlite', 'uri': 'x.db'}))` | `ATTACH 'x.db' AS db (TYPE adbc, driver 'sqlite')` |
+| `adbc_connect({'profile': 'mydb'})` | `ATTACH 'profile://mydb' AS db (TYPE adbc)` |
+| `adbc_connect({'secret': 's'})` / URI scope lookup | `ATTACH … (TYPE adbc, secret 's')` / the ATTACH path's URI |
+| `adbc_scan(getvariable('conn')::BIGINT, sql)` | `adbc_scan('db', sql)` (likewise every `adbc_*` function) |
+| `CALL adbc_set_autocommit(conn, false)` … `CALL adbc_commit(conn)` | `BEGIN` … `COMMIT` |
+| `CALL adbc_rollback(conn)` | `ROLLBACK` |
+| `CALL adbc_disconnect(conn)` | `DETACH db` |
+| `SELECT adbc_execute(...)` | `CALL adbc_execute('db', sql)` |
+| `SELECT adbc_clear_cache()` | `CALL adbc_clear_cache()` |
+
+An unknown alias, or one naming a non-ADBC database, fails at bind with the alias in the message. Aliases resolve case-insensitively, like any catalog name. Scans, inserts, and metadata calls resolve the alias again at execution, so a prepared statement fails after `DETACH` and follows whatever transaction is current when it runs.
+
+## Runtime commands
+
+`adbc_execute` and `adbc_clear_cache` are table functions run with a standalone `CALL`:
 
 | Command | Result column |
 | --- | --- |
-| `CALL adbc_execute(handle, sql)` | `rows_affected BIGINT`, or `NULL` when the driver does not report a count |
-| `CALL adbc_disconnect(handle)` | `success BOOLEAN` |
-| `CALL adbc_set_autocommit(handle, enabled)` | `success BOOLEAN` |
-| `CALL adbc_commit(handle)` | `success BOOLEAN` |
-| `CALL adbc_rollback(handle)` | `success BOOLEAN` |
-| `CALL adbc_clear_cache()` | `cleared BOOLEAN` |
+| `CALL adbc_execute('db', sql)` | `rows_affected BIGINT`, or `NULL` when the driver does not report a count |
+| `CALL adbc_clear_cache()` | `cleared BOOLEAN`, false when no ADBC catalogs are attached |
 
-Commands run during execution. Binding, `PREPARE`, and ordinary `EXPLAIN` do not perform these operations; `EXPLAIN ANALYZE` executes the statement. Each prepared execution runs the command again. Keep commands as standalone statements: filters and joins can skip execution when commands are embedded in relational queries. This is not an exactly-once guarantee across network retries. The optimizer can remain enabled.
+Commands run during execution. Binding, `PREPARE`, and ordinary `EXPLAIN` do not perform them; `EXPLAIN ANALYZE` executes the statement. Each prepared execution runs the command again. Keep commands as standalone statements: filters and joins can skip execution when commands are embedded in relational queries. This is not an exactly-once guarantee across network retries.
 
-## Connections and concurrency
-
-`adbc_connect` remains a scalar function returning an opaque `BIGINT` handle. Store it once in a SQL variable and reuse it. Each evaluated call creates a distinct connection; do not call it for every row of a query.
+## Transactions and connections
 
 ```sql
-SET VARIABLE conn = (SELECT adbc_connect({'driver': 'sqlite', 'uri': ':memory:'}));
-CALL adbc_execute(getvariable('conn')::BIGINT, 'CREATE TABLE users(id INTEGER, name TEXT)');
-CALL adbc_disconnect(getvariable('conn')::BIGINT);
+ATTACH 'users.sqlite' AS db (TYPE adbc, driver 'sqlite');
+CALL adbc_execute('db', 'CREATE TABLE IF NOT EXISTS users(id INTEGER, name TEXT)');
+BEGIN;
+CALL adbc_execute('db', 'INSERT INTO users VALUES (1, ''Alice'')');
+COMMIT;
+DETACH db;
 ```
 
-Handles belong to the DuckDB client connection that created them. They cannot be shared with another client connection or reused after disconnect. Closing that DuckDB connection also cleans up its handles.
+Inside an explicit `BEGIN … COMMIT`, `adbc_execute` and `adbc_insert` use the attachment's write connection with autocommit disabled, so they commit or roll back together with writes made through the catalog (`INSERT INTO db.…`). Once the transaction has written, reads (`adbc_scan`, `adbc_scan_table`, the metadata functions) see its uncommitted writes. A driver that cannot disable autocommit fails the first write in the transaction rather than silently autocommitting. These transactions control the remote ADBC connection; local DuckDB writes and remote writes are not one distributed transaction.
 
-An explicit handle permits one active operation at a time. Overlapping operations on the same handle fail promptly; use independent handles for concurrent work. An attached ADBC catalog uses pooled connections and can support multiple scans, including joins against its own tables. Transactions on an explicit handle do not include the catalog's separate connections.
+Outside an explicit transaction, the `adbc_*` functions use the attachment's own connection in autocommit, so session state such as a temporary table created by `adbc_insert` or a `SET` run by `adbc_execute` is visible to later calls. Writes to an attachment made with `READ_ONLY` are rejected, in or out of a transaction.
+
+The write connection is separate from the attachment's own, so a SQLite `:memory:` attachment gives a transaction an empty database of its own; use a file.
+
+Only one operation may use an ADBC connection at a time, and overlap fails promptly rather than waiting on a lock. A query that needs two simultaneous `adbc_*` scans of one database, such as a self-join, should attach it twice. Scans of attached tables (`db.schema.table`) lease their own pooled connections and are not limited this way.
 
 ## Result schemas without executing SQL during planning
 
 `adbc_scan` asks the driver for `AdbcStatementExecuteSchema` metadata. It never falls back to executing the query merely to discover its columns. For drivers without that method, including the SQLite ADBC driver, supply `columns`:
 
 ```sql
-SET VARIABLE conn = (SELECT adbc_connect({'driver': 'sqlite', 'uri': ':memory:'}));
+ATTACH ':memory:' AS db (TYPE adbc, driver 'sqlite');
 SELECT * FROM adbc_scan(
-  getvariable('conn')::BIGINT,
+  'db',
   'SELECT 1 AS id, ''Alice'' AS name',
   columns := {'id': 'BIGINT', 'name': 'VARCHAR'}
 );
-CALL adbc_disconnect(getvariable('conn')::BIGINT);
+DETACH db;
 ```
 
 Declare the complete result in its remote column order, even when an outer DuckDB query selects only a subset. SQLite integer results map to `BIGINT`. The extension validates the runtime column count and checks types before converting the first nonempty batch.
 
-`adbc_scan_table` obtains table metadata through `AdbcConnectionGetTableSchema`, then executes a generated `SELECT` with supported projection and filter pushdown. It also accepts a `columns` override. `adbc_schema(handle, table_name)` describes a **table**, not an arbitrary SQL query. Metadata discovery can contact the backend during planning.
+`adbc_scan_table` obtains table metadata through `AdbcConnectionGetTableSchema`, then executes a generated `SELECT` with supported projection and filter pushdown. It also accepts a `columns` override. `adbc_schema('db', table_name)` describes a **table**, not an arbitrary SQL query. Metadata discovery can contact the backend during planning.
+
+Remote tables expose no `rowid` column. A query that needs no columns, such as `count(*)`, reads the first real column instead.
 
 ## Read-only catalogs and shared databases
 
 Use `ATTACH ... (TYPE adbc, READ_ONLY, ...)` for read-only analytics. Schemas and tables appear under the attachment name. See the cookbook for a file-backed SQLite example.
 
-`READ_ONLY` restricts writes through that DuckDB attachment. It does not revoke the underlying user's write permissions or make separate command handles read-only. Catalog write support without `READ_ONLY` is limited and driver-dependent; use `CALL adbc_execute` for remote SQL and explicit transaction control.
+`READ_ONLY` rejects writes through that attachment, including `adbc_execute` and `adbc_insert`. It does not revoke the underlying database user's write permissions. Catalog write support without `READ_ONLY` is driver-dependent; `CALL adbc_execute` runs any remote SQL.
 
-Fresh catalog queries can see another client's committed changes according to the backend's transaction isolation. Data changes do not require reconnection or a cache clear. After remote DDL changes tables or columns, run `CALL adbc_clear_cache()` in each DuckDB client whose catalog metadata needs refreshing. This clears schema/table metadata for attached ADBC catalogs; it does not reload driver libraries or flush connection pools. It returns `false` when there are no attached ADBC catalogs.
+Each SQLite `:memory:` connection is its own database, and catalog scans use pooled connections separate from the attachment's own. Use a file when catalog queries (`db.main.users`) need to see tables created with `adbc_execute`.
+
+Fresh catalog queries can see another client's committed changes according to the backend's transaction isolation. Data changes do not require reattaching or a cache clear. After remote DDL changes tables or columns, run `CALL adbc_clear_cache()` in each DuckDB client whose catalog metadata needs refreshing. This clears schema/table metadata for attached ADBC catalogs; it does not reload driver libraries or flush connection pools.
+
+DuckDB treats an `http://` or `https://` ATTACH path as a remote file and asks for the httpfs extension. Pass such URIs (Trino's, for example) as the `uri` option instead: `ATTACH '' AS tr (TYPE adbc, driver 'trino', uri 'http://host:8080')`.
 
 ## Driver options and secrets
 
-Pass driver options directly in the `adbc_connect` STRUCT or `ATTACH` options. Strings and booleans use the string option setter, integers use the int64 setter, floating-point values use the double setter, and BLOBs use the bytes setter. Nested option structures are rejected. Use numeric SQL values for options that require numeric setters, rather than quoted numbers.
+Pass driver options as `ATTACH` options. VARCHAR and BOOLEAN values use the string option setter, integers the int64 setter, FLOAT/DOUBLE the double setter, and BLOBs the bytes setter. Nested option structures are rejected. Use numeric SQL values for options that require numeric setters, rather than quoted numbers. `ATTACH` option names are lowercased, so a driver option whose name needs uppercase letters has to come from a secret's `EXTRA_OPTIONS` or a connection profile.
 
-Use an ADBC secret to reuse connection details. Its `EXTRA_OPTIONS` map contains string values; supply options requiring numeric or binary setters directly at connection or attachment time. Passwords and values from `EXTRA_OPTIONS` are redacted in DuckDB's secret display. Other fields, including `uri`, are not automatically redacted, so avoid embedding credentials there. Secret display redaction does not redact SQL text containing credentials from application logs or query history.
+Use an ADBC secret to reuse connection details. `SCOPE` may be omitted when the secret has a non-empty `URI`; the URI then becomes its lookup scope, so `ATTACH '<that uri>' AS db (TYPE adbc)` finds it. An explicit `SCOPE` can match a different or broader prefix, and a secret with neither is rejected. Its `EXTRA_OPTIONS` map contains string values; supply options requiring numeric or binary setters directly as `ATTACH` options. Passwords and values from `EXTRA_OPTIONS` are redacted in DuckDB's secret display. Other fields, including `uri`, are not, so avoid embedding credentials there. Secret display redaction does not redact SQL text containing credentials from application logs or query history.
+
+`adbc_insert` accepts driver-specific statement options through `options := {...}` (a STRUCT or MAP), applied after the target table and mode. Keys `adbc_insert` sets itself are rejected; unknown keys surface the driver's error.
 
 Drivers load as native shared libraries into DuckDB. Install a driver manifest to resolve names such as `sqlite`, or provide the library path and, when needed, its entrypoint. Installing a Python driver package alone does not guarantee that a manifest is available to DuckDB. Load only libraries you trust.
 
@@ -69,4 +96,4 @@ ADBC presents results as Arrow batches, which the extension pulls into DuckDB. T
 
 Catalog scans and `adbc_scan_table` can push supported projections and filters into generated SQL. For arbitrary `adbc_scan` queries, put remote filtering in the SQL you send. Batch-size hints and early stream termination depend on driver support. Use a result-returning scan, with the appropriate schema, when inspecting a remote `EXPLAIN` result; `adbc_execute` returns an affected-row count rather than query rows.
 
-`adbc_insert` passes DuckDB query results to the driver's Arrow ingestion API. Ingestion modes and transaction behavior depend on that driver's capabilities.
+`adbc_insert` and `INSERT` / `CREATE TABLE AS` into an attached catalog pass DuckDB query results to the driver's Arrow ingestion API through a bounded producer queue. Stream binding and execution run together on the consumer thread, so drivers that read their input during `BindStream` can ingest without blocking. Ingestion modes and transaction behavior depend on that driver's capabilities.

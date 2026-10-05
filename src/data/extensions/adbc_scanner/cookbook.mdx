@@ -1,58 +1,78 @@
-The examples below use the runtime-command API described in Technical Details. Install the SQLite ADBC driver and its manifest before running examples with `driver: 'sqlite'`; alternatively use its shared-library path.
+The examples below use the attached-database API described in Technical Details. Install the SQLite ADBC driver and its manifest before running examples with `driver 'sqlite'`; alternatively use its shared-library path.
 
 ## Create and query a SQLite table
 
 ```sql
-SET VARIABLE conn = (SELECT adbc_connect({'driver': 'sqlite', 'uri': ':memory:'}));
-CALL adbc_execute(getvariable('conn')::BIGINT, 'CREATE TABLE users(id INTEGER, name TEXT)');
-CALL adbc_execute(getvariable('conn')::BIGINT, 'INSERT INTO users VALUES (1, ''Alice''), (2, ''Bob'')');
+ATTACH ':memory:' AS db (TYPE adbc, driver 'sqlite');
+CALL adbc_execute('db', 'CREATE TABLE users(id INTEGER, name TEXT)');
+CALL adbc_execute('db', 'INSERT INTO users VALUES (1, ''Alice''), (2, ''Bob'')');
 
 -- SQLite requires explicit result columns for arbitrary SQL.
 SELECT * FROM adbc_scan(
-  getvariable('conn')::BIGINT,
+  'db',
   'SELECT id, name FROM users WHERE id = ?',
   params := row(1),
   columns := {'id': 'BIGINT', 'name': 'VARCHAR'}
 );
 
 -- Scanning a named table can obtain its schema from table metadata.
-SELECT * FROM adbc_scan_table(getvariable('conn')::BIGINT, 'users');
-SELECT * FROM adbc_schema(getvariable('conn')::BIGINT, 'users');
-CALL adbc_disconnect(getvariable('conn')::BIGINT);
+SELECT * FROM adbc_scan_table('db', 'users');
+SELECT * FROM adbc_schema('db', 'users');
+DETACH db;
 ```
 
 ## Bulk insert from a DuckDB query
 
 ```sql
-SET VARIABLE conn = (SELECT adbc_connect({'driver': 'sqlite', 'uri': ':memory:'}));
+ATTACH ':memory:' AS db (TYPE adbc, driver 'sqlite');
 SELECT * FROM adbc_insert(
-  getvariable('conn')::BIGINT,
+  'db',
   'users',
   (SELECT * FROM (VALUES (1::BIGINT, 'Alice'), (2::BIGINT, 'Bob')) AS source(id, name)),
   mode := 'create'
 );
-SELECT * FROM adbc_scan_table(getvariable('conn')::BIGINT, 'users');
-CALL adbc_disconnect(getvariable('conn')::BIGINT);
+SELECT * FROM adbc_scan_table('db', 'users');
+DETACH db;
 ```
 
 ## Commit and roll back
 
+DuckDB's own `BEGIN`, `COMMIT`, and `ROLLBACK` control the remote transaction. Use a file: the transaction writes on a separate connection, and each SQLite `:memory:` connection is its own database.
+
 ```sql
-SET VARIABLE conn = (SELECT adbc_connect({'driver': 'sqlite', 'uri': ':memory:'}));
-CALL adbc_execute(getvariable('conn')::BIGINT, 'CREATE TABLE users(id INTEGER, name TEXT)');
-CALL adbc_set_autocommit(getvariable('conn')::BIGINT, false);
-CALL adbc_execute(getvariable('conn')::BIGINT, 'INSERT INTO users VALUES (1, ''Alice'')');
-CALL adbc_commit(getvariable('conn')::BIGINT);
-CALL adbc_execute(getvariable('conn')::BIGINT, 'INSERT INTO users VALUES (2, ''Bob'')');
-CALL adbc_rollback(getvariable('conn')::BIGINT);
-CALL adbc_set_autocommit(getvariable('conn')::BIGINT, true);
-SELECT * FROM adbc_scan_table(getvariable('conn')::BIGINT, 'users'); -- Alice only
-CALL adbc_disconnect(getvariable('conn')::BIGINT);
+ATTACH 'users.sqlite' AS db (TYPE adbc, driver 'sqlite');
+CALL adbc_execute('db', 'DROP TABLE IF EXISTS users');
+CALL adbc_execute('db', 'CREATE TABLE users(id INTEGER, name TEXT)');
+BEGIN;
+CALL adbc_execute('db', 'INSERT INTO users VALUES (1, ''Alice'')');
+COMMIT;
+BEGIN;
+CALL adbc_execute('db', 'INSERT INTO users VALUES (2, ''Bob'')');
+ROLLBACK;
+SELECT * FROM adbc_scan_table('db', 'users'); -- Alice only
+DETACH db;
+```
+
+## Mix catalog writes and remote SQL in one transaction
+
+Catalog writes (`INSERT INTO app.main.…`) and `adbc_execute` commit or roll back together. The seed row matters for SQLite: its driver reports column types from stored values, so an empty table's `TEXT` column would describe itself as an integer.
+
+```sql
+ATTACH 'app.sqlite' AS app (TYPE adbc, driver 'sqlite');
+CALL adbc_execute('app', 'DROP TABLE IF EXISTS messages');
+CALL adbc_execute('app', 'CREATE TABLE messages (id INTEGER, body TEXT)');
+CALL adbc_execute('app', 'INSERT INTO messages VALUES (1, ''hello'')');
+BEGIN;
+CALL adbc_execute('app', 'INSERT INTO messages VALUES (2, ''pending'')');
+INSERT INTO app.main.messages VALUES (3, 'also pending');
+ROLLBACK; -- discards both writes
+SELECT * FROM app.main.messages; -- only the seed row
+DETACH app;
 ```
 
 ## Attach an existing SQLite file for analytics
 
-Replace the path with a SQLite file containing your application tables. Each `:memory:` connection has its own database; use a file when independent connections need to share data.
+Replace the path with a SQLite file containing your application tables. Each `:memory:` connection has its own database; use a file when catalog queries need to see the same data.
 
 {/* check: skip requires an existing SQLite application database */}
 ```sql
