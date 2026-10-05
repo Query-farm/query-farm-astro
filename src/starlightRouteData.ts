@@ -20,6 +20,7 @@
 import { defineRouteMiddleware } from '@astrojs/starlight/route-data';
 import type { StarlightRouteData } from '@astrojs/starlight/route-data';
 import { CONCEPTS, DOCS_ROOT, sectionFor } from './lib/vgi-docs';
+import { breadcrumbData, serializeJsonLd } from './lib/breadcrumbs';
 
 const SITE_ORIGIN = 'https://query.farm';
 
@@ -44,6 +45,14 @@ export const onRequest = defineRouteMiddleware((context) => {
   const section = sectionFor(path);
   const isDocsHome = path === DOCS_ROOT || path === DOCS_ROOT.slice(0, -1);
   if (!section && !isDocsHome) return;
+
+  const canonical = route.head.find((tag) => tag.tag === 'link' && tag.attrs?.rel === 'canonical');
+  const canonicalURL = new URL(String(canonical?.attrs?.href ?? path), SITE_ORIGIN);
+  route.head.push({
+    tag: 'script',
+    attrs: { type: 'application/ld+json' },
+    content: serializeJsonLd(breadcrumbData(canonicalURL, route.entry.data.title)),
+  });
 
   const top = route.sidebar;
   const concepts = top.find((e) => e.type === 'group' && e.label === CONCEPTS.group);
