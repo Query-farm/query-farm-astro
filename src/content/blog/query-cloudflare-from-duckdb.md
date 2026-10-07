@@ -178,6 +178,13 @@ For more space to work, [open the example queries in Cupola][cupola-demo], a bro
 
 The link connects to the same shared database and opens five commented queries in a new editor tab: product revenue, the product list, sales by city, visitor notes, and the next reset time. Place your cursor in a query and click **Run** to execute it. No sign-in is required.
 
+<figure>
+  <a href="/blog/query-cloudflare-from-duckdb/cupola-demo.webp">
+    <img src="/blog/query-cloudflare-from-duckdb/cupola-demo.webp" alt="Cupola connected to the shop database, with four tables in the sidebar, commented SQL examples in the editor, and six rows of product revenue results below." width="2560" height="1760" loading="lazy" decoding="async" />
+  </a>
+  <figcaption>The shared demo in Cupola, with the product revenue query's results below the editor. <a href="/blog/query-cloudflare-from-duckdb/cupola-demo.webp">View full size</a>.</figcaption>
+</figure>
+
 Add a note here, then query `visitor_notes` in Cupola to see it there. `grainlift_execute` runs the statement directly in the remote database, so this `INSERT` uses SQLite syntax:
 
 <div class="grainlift-demo">
