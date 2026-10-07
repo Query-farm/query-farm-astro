@@ -212,6 +212,8 @@ test('mobile navigation, search shortcut, and layout work without horizontal ove
   await expect(page.locator('#sidebar')).toBeVisible();
   await page.locator('#sidebar').getByRole('link', { name: /All functions/ }).click();
   await expect(page).toHaveURL(catalog);
+  // The catalog can render before its deferred search module handles shortcuts.
+  await page.waitForLoadState('load');
   await expect(page.getByRole('searchbox')).toBeVisible();
   await page.keyboard.press('/');
   await expect(page.getByRole('dialog', { name: 'Search functions' })).toBeVisible();
