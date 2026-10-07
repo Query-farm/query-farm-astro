@@ -188,6 +188,9 @@ export interface Session {
  *  since nothing DETACHes on close) fail with "database with name already
  *  exists" even though each has its own private session. */
 function attachAliasOf(sql: string): string | null {
+  // Some examples intentionally share a remote catalog. Honor DuckDB's
+  // idempotent attach instead of detaching it under another running shell.
+  if (/^\s*ATTACH\s+(?:DATABASE\s+)?IF\s+NOT\s+EXISTS\b/i.test(sql)) return null;
   const m = /^\s*ATTACH\b[\s\S]*?\bAS\s+["']?([A-Za-z_][A-Za-z0-9_]*)["']?/i.exec(sql);
   return m ? m[1] : null;
 }

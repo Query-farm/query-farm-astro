@@ -24,6 +24,11 @@ const blog = defineCollection({
       alt: z.string(),
       width: z.number().int().positive(),
       height: z.number().int().positive(),
+      mobile: z.object({
+        src: z.string(),
+        width: z.number().int().positive(),
+        height: z.number().int().positive(),
+      }).optional(),
     }).optional(),
   }).refine(({ pubDate, updatedDate }) => !updatedDate || updatedDate >= pubDate, {
     message: 'updatedDate must not precede pubDate',

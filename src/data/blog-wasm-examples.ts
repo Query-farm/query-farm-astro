@@ -7,6 +7,14 @@ export interface BlogWasmExamples {
 }
 
 const BLOG_WASM_EXAMPLES: Record<string, BlogWasmExamples> = {
+  'query-cloudflare-from-duckdb': {
+    extensionName: 'grainlift',
+    installSource: 'community',
+    setupSql:
+      "ATTACH IF NOT EXISTS 'grainlift+https://grainlift-cloudflare-public.rusty-bb6.workers.dev' AS shop (TYPE grainlift, target 'demo');",
+    controls: 'below',
+    codeBlockSelector: '.grainlift-demo pre[data-language="sql"]',
+  },
   'http-caching-duckdb-vgi': {
     extensionName: 'VGI',
     installSource: 'community',
