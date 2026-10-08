@@ -19,6 +19,7 @@ const blog = defineCollection({
     draft: z.boolean().default(false),
     showTableOfContents: z.boolean().default(true),
     heroImage: z.string().optional(),
+    heroImageAlt: z.string().optional(),
     leadVisual: z.object({
       src: z.string(),
       alt: z.string(),
