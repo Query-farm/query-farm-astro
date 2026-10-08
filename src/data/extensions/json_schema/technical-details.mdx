@@ -7,17 +7,17 @@ Validate every row of a JSON column against a schema in a single `SELECT`:
 ```sql
 SELECT
   COUNT(*)                                                         AS total,
-  COUNT(*) FILTER (WHERE     json_schema_validate(:schema, payload)) AS valid,
-  COUNT(*) FILTER (WHERE NOT json_schema_validate(:schema, payload)) AS invalid
+  COUNT(*) FILTER (WHERE     COALESCE(TRY(json_schema_validate(:schema, payload)), false)) AS valid,
+  COUNT(*) FILTER (WHERE NOT COALESCE(TRY(json_schema_validate(:schema, payload)), false)) AS invalid
 FROM events;
 ```
 
-[`json_schema_validate`](#json_schema_validate) returns a plain `BOOLEAN`, so it composes with `WHERE`, `CASE`, and aggregate `FILTER` clauses the way every other DuckDB predicate does — no UDF setup, no detour through Python, no extra round-trip.
+[`json_schema_validate`](#json_schema_validate) returns `TRUE` on success and raises an error on failure. The wrapper above converts failures and SQL `NULL` inputs to `FALSE` for counting. Validate the schema separately outside `TRY` first: `TRY` catches invalid-schema errors as well as nonconforming data.
 
 <Callout type="note" title="Best fit, scoped honestly">
 This extension is built on the [pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator) C++ library. Its **primary target is [JSON Schema draft-07](https://json-schema.org/draft-07/json-schema-release-notes)**; newer drafts ([2019-09](https://json-schema.org/specification-links#2019-09) / [2020-12](https://json-schema.org/draft/2020-12/schema)) work for the keywords the underlying validator supports — test the keywords you actually use.
 
-The validation result is a `BOOLEAN`. There is **no structured per-keyword failure report** today. There is also **no `$ref` resolver** for external files or HTTP — inline any `$ref` targets into the schema document you pass in.
+Successful validation returns `TRUE`; failures raise a textual exception. There is **no structured per-keyword failure report** today. There is also **no `$ref` resolver** for external files or HTTP — inline any `$ref` targets into the schema document you pass in.
 
 For application-grade validation with detailed error reports, keep [ajv](https://ajv.js.org/) / [Pydantic](https://docs.pydantic.dev/latest/concepts/json_schema/) / [jsonschema](https://python-jsonschema.readthedocs.io/) at the API layer. This extension is the right tool when you want the gate to live in SQL — at ingest, in CI, or as part of an audit.
 </Callout>

@@ -1,0 +1,68 @@
+{
+  "title": "Rhai",
+  "subtitle": "Evaluate expressions and rules stored as text",
+  "intro": "Run Rhai expressions inside a query, pass row values as JSON context, and read a typed success or error result. Useful for configurable business rules, small transformations, and scripts that need local variables or branching.",
+  "flow": [
+    "Script text",
+    "Row context",
+    "JSON result"
+  ],
+  "referenceTitle": "SQL entry point + Rhai syntax",
+  "reference": [
+    {
+      "name": "evalexpr_rhai(script)",
+      "description": "Evaluate a script without row context."
+    },
+    {
+      "name": "evalexpr_rhai(script, context)",
+      "description": "Expose a JSON object as context inside the script."
+    },
+    {
+      "name": ".ok",
+      "description": "JSON result on success; NULL when the script fails."
+    },
+    {
+      "name": ".error",
+      "description": "Error text on failure; NULL when the script succeeds."
+    },
+    {
+      "name": "context.field",
+      "description": "Read a field supplied by the SQL query."
+    },
+    {
+      "name": "let / if / fn",
+      "description": "Bind variables, branch, and define helpers inside scripts."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Keep the boundary explicit",
+      "body": "The result is UNION(ok JSON, error VARCHAR). Cast .ok to a SQL type before arithmetic or joins. Inspect .error to distinguish a failed script from a successful JSON null."
+    },
+    {
+      "title": "Use it where rules change",
+      "body": "Scripts run per row. Keep routine transformations in native SQL; use Rhai when stored rules or branching improve clarity. A constant script can reuse its parsed expression while context changes."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Evaluate and cast",
+      "sql": "SELECT evalexpr_rhai(\n  'fn sq(x) { x * x } sq(context.n)',\n  {'n': 7}\n).ok::INTEGER AS square;\n-- 49",
+      "caption": "Define helpers in the script; return its final expression.",
+      "mode": "local"
+    },
+    {
+      "title": "Apply one rule to each row",
+      "sql": "SELECT salary, evalexpr_rhai(\n  'context.salary >= 100000',\n  {'salary': salary}\n).ok::BOOLEAN AS eligible\nFROM (VALUES (80000), (120000)) t(salary);\n-- false, true",
+      "caption": "Use a constant rule with a different JSON context for each row.",
+      "mode": "local"
+    },
+    {
+      "title": "Read a failure without losing the query",
+      "sql": "SELECT evalexpr_rhai('1 / 0').error;\n-- Runtime error text",
+      "caption": "A failing Rhai expression returns the error arm.",
+      "mode": "local"
+    }
+  ],
+  "assertions": "SELECT CASE WHEN evalexpr_rhai('fn sq(x) { x * x } sq(context.n)', {'n':7}).ok::INTEGER = 49 AND evalexpr_rhai('1 / 0').ok IS NULL AND evalexpr_rhai('1 / 0').error IS NOT NULL THEN true ELSE error('Rhai result/error contract failed') END;"
+}

@@ -1,0 +1,25 @@
+{
+  "title": "Radio",
+  "subtitle": "Live channel messages meet relational queries.",
+  "intro": "Subscribe to WebSocket or Redis Pub/Sub endpoints, query buffered messages, and queue replies from DuckDB. The subscription URL identifies the feed throughout its lifecycle, while background I/O keeps network activity separate from buffer scans.",
+  "flow": ["Live channel", "Memory buffer", "DuckDB rows"],
+  "referenceTitle": "Subscription lifecycle",
+  "reference": [
+    {"name": "CALL radio_subscribe(url)", "description": "Open a feed; receive_message_capacity tunes its buffer size."},
+    {"name": "radio_subscriptions()", "description": "Inspect active feeds and transmission success or failure counters."},
+    {"name": "radio_received_messages()", "description": "Read buffered messages across all subscriptions."},
+    {"name": "radio_subscription_received_messages(url)", "description": "Read the buffer for one subscription URL."},
+    {"name": "CALL radio_listen(first, wait)", "description": "Wait for arrivals, bounded by an INTERVAL timeout."},
+    {"name": "CALL radio_transmit_message(…)", "description": "Queue URL, channel, BLOB payload, attempt count and retry interval."},
+    {"name": "CALL radio_unsubscribe(url)", "description": "Close a feed using the exact subscription URL."}
+  ],
+  "notes": [
+    {"title": "A buffer is not durable storage", "body": "Subscriptions and messages live in process memory. Capacity limits can evict older messages; process exit discards state. Persist records you need in a DuckDB table and define deduplication around subscription_id and message_id."},
+    {"title": "Payloads and delivery", "body": "message is a BLOB. Use decode(message) for UTF-8 text, then JSON functions if appropriate. Transmit calls queue work; check subscription counters for delivery progress. A queued message does not imply successful delivery."}
+  ],
+  "examples": [
+    {"title": "Subscribe, wait and inspect", "sql": "SET VARIABLE feed = 'ws://localhost:8765/';\nCALL radio_subscribe(getvariable('feed'));\nCALL radio_listen(true, INTERVAL '5 seconds');\nSELECT receive_time, channel,\n       decode(message) AS text\nFROM radio_received_messages()\nWHERE subscription_url = getvariable('feed')\nORDER BY receive_time DESC\nLIMIT 20;", "caption": "Requires a WebSocket endpoint on localhost:8765 that emits UTF-8 text messages.", "mode": "external", "reason": "Requires a configured WebSocket server and waits for network messages."},
+    {"title": "Queue a reply and inspect delivery", "sql": "CALL radio_transmit_message(\n  getvariable('feed'), 'main',\n  '{\"type\":\"ack\"}'::BLOB,\n  3, INTERVAL '500 milliseconds'\n);\nSELECT transmit_successes, transmit_failures\nFROM radio_subscriptions();", "caption": "Poll until delivery completes before calling radio_unsubscribe. Your server defines channel semantics.", "mode": "external", "reason": "Sends a message to the configured endpoint and requires delivery inspection."},
+    {"title": "Check the extension build", "sql": "SELECT radio_version();", "caption": "Local diagnostic; no subscription is opened.", "mode": "local"}
+  ]
+}

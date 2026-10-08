@@ -1,0 +1,68 @@
+{
+  "title": "MiniJinja",
+  "subtitle": "Render Jinja-style templates directly from SQL",
+  "intro": "Turn JSON context into rendered text using familiar Jinja variables, filters, loops, and conditions. Generate one HTML fragment, message, or configuration block per row while keeping the source data and rendering query together.",
+  "flow": [
+    "Template",
+    "JSON context",
+    "Rendered text"
+  ],
+  "referenceTitle": "SQL entry points + template syntax",
+  "reference": [
+    {
+      "name": "minijinja_render(template, ...)",
+      "description": "Render a template with optional named settings."
+    },
+    {
+      "name": "minijinja_render_with_context",
+      "description": "Pass template, per-row JSON context, then options."
+    },
+    {
+      "name": "autoescape := false",
+      "description": "Disable HTML escaping for plain text and other non-HTML output."
+    },
+    {
+      "name": "{{ value | upper }}",
+      "description": "Interpolate a value and apply a filter."
+    },
+    {
+      "name": "{% for x in items %}",
+      "description": "Loop through context items; finish with endfor."
+    },
+    {
+      "name": "{% if condition %}",
+      "description": "Choose content using if / elif / else / endif."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Choose the output format",
+      "body": "HTML autoescape is enabled by default: B&O renders as B&amp;O. Keep it for HTML, or pass autoescape := false for plain text. Escaping for SQL, JSON, and shell syntax is a separate concern."
+    },
+    {
+      "title": "Keep values in the context",
+      "body": "Use minijinja_render_with_context for JSON built from row columns. Keep templates trusted. If generating SQL, bind untrusted data through prepared statements; template interpolation is not a substitute for SQL parameters."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Render a message per row",
+      "sql": "SELECT minijinja_render_with_context(\n  'Hello {{ name | upper }}!',\n  json_object('name', name)\n) AS message\nFROM (VALUES ('Ada'), ('Grace')) t(name);\n-- Hello ADA! / Hello GRACE!",
+      "caption": "Each row supplies its own context to the same template.",
+      "mode": "local"
+    },
+    {
+      "title": "Loop through a list",
+      "sql": "SELECT minijinja_render_with_context(\n  '{% for x in xs %}{{ x }}' ||\n  '{% if not loop.last %}, {% endif %}' ||\n  '{% endfor %}',\n  '{\"xs\":[\"A\",\"B\",\"C\"]}'\n);\n-- A, B, C",
+      "caption": "loop.last makes separators conditional without a trailing comma.",
+      "mode": "local"
+    },
+    {
+      "title": "Render unescaped plain text",
+      "sql": "SELECT minijinja_render(\n  '{{ v }}', '{\"v\":\"B&O\"}',\n  autoescape := false\n);\n-- B&O",
+      "caption": "Omit the option for HTML output: B&amp;O.",
+      "mode": "local"
+    }
+  ],
+  "assertions": "SELECT CASE WHEN minijinja_render('Hello {{ name | upper }}!', '{\"name\":\"Ada\"}') = 'Hello ADA!' AND minijinja_render('{{ v }}', '{\"v\":\"B&O\"}') = 'B&amp;O' AND minijinja_render('{{ v }}', '{\"v\":\"B&O\"}', autoescape := false) = 'B&O' AND minijinja_render_with_context('{% for x in xs %}{{ x }}{% if not loop.last %}, {% endif %}{% endfor %}', '{\"xs\":[\"A\",\"B\",\"C\"]}') = 'A, B, C' THEN true ELSE error('MiniJinja result mismatch') END;"
+}

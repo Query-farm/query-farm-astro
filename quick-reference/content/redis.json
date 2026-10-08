@@ -1,0 +1,25 @@
+{
+  "title": "Redis",
+  "subtitle": "Read hot data. Analyze it with SQL.",
+  "intro": "Query Redis strings, hashes and lists from DuckDB, or snapshot operational data into local tables for analysis. Every Redis call selects a named DuckDB secret, keeping connection details separate from the data-access expression.",
+  "flow": ["Redis keys", "SQL functions", "Local analysis"],
+  "referenceTitle": "Useful Redis operations",
+  "reference": [
+    {"name": "redis_get(key, secret)", "description": "Read a string; redis_set writes a key and value."},
+    {"name": "redis_hget(key, field, secret)", "description": "Read one hash field; redis_hset writes a field value."},
+    {"name": "redis_hgetall(key, secret)", "description": "Return a table with field and value columns."},
+    {"name": "redis_lrange_table(key, start, stop, secret)", "description": "Return list positions and values; stop = -1 includes the end."},
+    {"name": "redis_scan(cursor, pattern, count, secret)", "description": "Return cursor:keys_csv; repeat until the returned cursor is zero."},
+    {"name": "redis_hscan_over_scan(pattern, fields, n, secret)", "description": "Stream key, field and value rows from matching hashes."},
+    {"name": "redis_exists(key, secret)", "description": "Check existence; redis_type reports the stored value type."}
+  ],
+  "notes": [
+    {"title": "Choose table-shaped results", "body": "Use redis_hgetall and redis_lrange_table for relational results. Scalar redis_mget and redis_lrange return comma-separated strings. Missing string or hash fields can return an empty string; check existence when that distinction matters."},
+    {"title": "Scope scans and connections", "body": "Prefer cursor-based SCAN over KEYS on large keyspaces. A scan is not a transactionally consistent snapshot while Redis changes. The documented transport is single-node plain TCP; configure the connection and network boundary accordingly."}
+  ],
+  "examples": [
+    {"title": "Name the connection", "sql": "CREATE SECRET quickref_redis (\n  TYPE redis,\n  host 'localhost',\n  port '6379'\n);", "caption": "For a local Redis server; add its required password to the secret configuration.", "mode": "local"},
+    {"title": "Read a hash as rows", "sql": "SELECT field, value\nFROM redis_hgetall(\n  'user:42', 'quickref_redis'\n);", "caption": "Requires the server and a Redis hash at user:42.", "mode": "external", "reason": "Connects to Redis and reads an existing hash."},
+    {"title": "Snapshot matching hashes", "sql": "CREATE TABLE users_snapshot AS\nSELECT key, field, value\nFROM redis_hscan_over_scan(\n  'user:*', '*', 100, 'quickref_redis'\n);\nSELECT key, count(*) AS fields\nFROM users_snapshot\nGROUP BY key;", "caption": "Use a pattern containing only hashes. Subsequent analysis reads the local snapshot.", "mode": "external", "reason": "Requires a running Redis server and matching hash keys."}
+  ]
+}

@@ -2,7 +2,7 @@ import Callout from '../../../components/docs/Callout.astro';
 
 ## What you can do with one query
 
-The shortest path from "I need a primary key default" to "rows that already sort by insert time":
+The shortest path from "I need a primary key default" to "rows with time-sortable identifiers":
 
 ```sql
 CREATE TABLE events (
@@ -13,7 +13,7 @@ CREATE TABLE events (
 INSERT INTO events(payload) VALUES ('{"type":"login"}');
 INSERT INTO events(payload) VALUES ('{"type":"click"}');
 
--- Insertion order, no separate created_at column
+-- Sort by the timestamp-bearing ID
 SELECT id,
        tsid_to_timestamp(id) AS created_at,
        payload
@@ -21,7 +21,7 @@ FROM events
 ORDER BY id;
 ```
 
-[`tsid()`](#tsid) returns a 32-character hex [`VARCHAR`](https://duckdb.org/docs/stable/sql/data_types/text) whose leading bits are a high-resolution timestamp. Plain string compare gives you time order — no special operator, no `created_at` join. [`tsid_to_timestamp`](#tsid_to_timestamp) decodes the leading bits back to a [`TIMESTAMP`](https://duckdb.org/docs/stable/sql/data_types/timestamp) when you need the wall-clock value.
+[`tsid()`](#tsid) returns a 32-character hex [`VARCHAR`](https://duckdb.org/docs/stable/sql/data_types/text) whose leading bits are a high-resolution timestamp. String comparison sorts by the embedded generation-time prefix; it does not guarantee insertion or commit order across concurrent producers. [`tsid_to_timestamp`](#tsid_to_timestamp) decodes the leading bits back to a [`TIMESTAMP`](https://duckdb.org/docs/stable/sql/data_types/timestamp) when you need the wall-clock value.
 
 <Callout type="warning" title="TSIDs reveal creation time — by design, and that's a tradeoff">
 The headline feature is also the headline caveat: the timestamp embedded in a TSID is recoverable by anyone holding the ID. That's perfect for an internal primary key, an audit log, or a server-side pagination cursor. It's a leak when the ID surfaces externally — a public order URL, a referral link, a webhook payload — and the creation moment is competitively or personally sensitive (signup time, account age, when an order was placed).
@@ -45,28 +45,21 @@ Pick [`tsid()`](#tsid) when you want UUIDv7-shaped behavior **inside SQL today**
 
 The reference TSID concept also lives in non-DuckDB form as [`f4b6a3/tsid-creator`](https://github.com/f4b6a3/tsid-creator) on the JVM and similar libraries in other ecosystems; the rendering produced by this extension is library-specific, so don't assume cross-ecosystem parsing without testing.
 
-## Why time-sortable IDs help the index
+## Sorting and storage
 
-A B-tree primary-key index on a UUIDv4 column scatters writes uniformly across the tree — every insert touches a different page, page splits cascade, and the cache works against you. A time-sortable ID concentrates writes at one end (the most recent leaf), so:
-
-- New rows append next to each other in physical layout
-- Recent-first pagination (`ORDER BY id DESC LIMIT N`) hits a small hot range
-- Bulk loads compact better — adjacent rows tend to be adjacent in time
-
-This is the same argument that drove [UUIDv7](https://datatracker.ietf.org/doc/html/rfc9562) into RFC 9562. TSID brings the property to DuckDB SQL without the client-side generator.
+A timestamp prefix makes ID-based pagination possible with `ORDER BY id` and a last-seen-ID cursor. It does not physically cluster a DuckDB table or guarantee smaller indexes, compression, or faster inserts. Measure those properties on your data and storage layout.
 
 ## Bulk generation and ordering
 
-Inside one query, parallel evaluation of [`tsid()`](#tsid) can produce IDs in non-deterministic order — same wall-clock millisecond, different threads, different sub-millisecond entropy. Pass a per-row seed to keep them strictly increasing:
+`tsid()` takes no arguments; there is no seed overload. Parallel calls can be evaluated in a different order from the input rows. Sort the generated values explicitly when needed:
 
 ```sql
--- Strictly increasing within the query
 SELECT tsid() AS id
 FROM range(1000)
 ORDER BY id;
 ```
 
-The seed pins the sub-millisecond bits, so the timestamp prefix dominates ordering and the IDs sort cleanly. For one-off inserts (`DEFAULT tsid()` on a primary key), you don't need a seed — there's only one call per row.
+This sorts the output by ID. It does not make generation deterministic or guarantee strict insertion order across threads, processes, or clock changes. Keep an explicit sequence or application timestamp when that ordering is part of your data contract.
 
 ## When to keep `uuid()` instead
 

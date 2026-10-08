@@ -1,0 +1,68 @@
+{
+  "title": "Bitfilters",
+  "subtitle": "Compact membership checks for large sets.",
+  "intro": "Aggregate hashed keys into a compact BLOB, then probe it to reject definite nonmembers. Use an exact check for candidates that survive the filter.",
+  "flow": [
+    "Hash keys",
+    "Build filter",
+    "Probe & verify"
+  ],
+  "referenceTitle": "Core SQL surface",
+  "reference": [
+    {
+      "name": "xor8_filter(hash)",
+      "description": "Aggregate UBIGINT hashes into a static XOR filter."
+    },
+    {
+      "name": "xor8_filter_contains(filter, hash)",
+      "description": "Return whether a key might be in the set."
+    },
+    {
+      "name": "xor16_filter / xor16_filter_contains",
+      "description": "Use wider fingerprints for fewer false positives."
+    },
+    {
+      "name": "binary_fuse8_filter / binary_fuse16_filter",
+      "description": "Alternative static filters with matching _contains probes."
+    },
+    {
+      "name": "quotient_filter(q, r, hash)",
+      "description": "Build a quotient filter; q and r control capacity and precision."
+    },
+    {
+      "name": "quotient_filter_contains(filter, hash)",
+      "description": "Probe a quotient filter with the same hash representation."
+    }
+  ],
+  "notes": [
+    {
+      "title": "A positive is only a candidate",
+      "body": "Keep an exact join or membership predicate after probing. False positives are expected; correctly built filters retain inserted keys."
+    },
+    {
+      "title": "Hash consistently",
+      "body": "Use the same function, seed and SQL input type when building and probing. Treat DuckDB hash() as version-dependent; persist its version or choose an explicit hash algorithm."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Build once",
+      "sql": "CREATE TABLE known_filter AS\nSELECT xor8_filter(hash(i)) AS f\nFROM range(1000) AS t(i);",
+      "caption": "Constructors aggregate rows; the result is a BLOB you can persist.",
+      "mode": "local"
+    },
+    {
+      "title": "Probe candidates",
+      "sql": "SELECT i, xor8_filter_contains(f, hash(i))\n  AS maybe_known\nFROM known_filter, range(995, 1005) AS t(i);",
+      "caption": "Inserted keys return true. An unseen key can also return true.",
+      "mode": "local"
+    },
+    {
+      "title": "Confirm the match",
+      "sql": "SELECT i\nFROM known_filter, range(995, 1005) AS t(i)\nWHERE xor8_filter_contains(f, hash(i))\n  AND i IN (SELECT range FROM range(1000));",
+      "caption": "The final exact predicate returns only IDs 995 through 999.",
+      "mode": "local"
+    }
+  ],
+  "assertions": "SELECT CASE WHEN (SELECT bool_and(xor8_filter_contains(f,hash(i))) FROM known_filter,range(1000)t(i)) THEN true ELSE error('false negative') END;"
+}

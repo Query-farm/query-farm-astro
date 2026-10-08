@@ -22,12 +22,12 @@ Most real workloads point validation at a `JSON` column instead of a literal:
 ```sql
 SELECT
   COUNT(*)                                                         AS total,
-  COUNT(*) FILTER (WHERE     json_schema_validate(:schema, payload)) AS valid,
-  COUNT(*) FILTER (WHERE NOT json_schema_validate(:schema, payload)) AS invalid
+  COUNT(*) FILTER (WHERE     COALESCE(TRY(json_schema_validate(:schema, payload)), false)) AS valid,
+  COUNT(*) FILTER (WHERE NOT COALESCE(TRY(json_schema_validate(:schema, payload)), false)) AS invalid
 FROM events;
 ```
 
-[`json_schema_validate`](#json_schema_validate) returns `BOOLEAN`, so it slots into `FILTER` aggregates and `WHERE` clauses without a wrapper.
+[`json_schema_validate`](#json_schema_validate) returns `TRUE` for valid data and raises an error for invalid data. `TRY` turns errors into `NULL`; `COALESCE(..., false)` counts errors and SQL `NULL` inputs as invalid. Validate the schema once outside `TRY` before processing rows, because `TRY` also catches invalid-schema errors. Here `:schema` and `:event_schema` stand for schema values supplied by your application.
 
 ## Lint the schema before deploying
 
@@ -42,12 +42,12 @@ SELECT json_schema_validate_schema('{
 -- TRUE
 ```
 
-[`json_schema_validate_schema`](#json_schema_validate_schema) catches typos in the schema itself — useful as a CI step before a contract update lands. Run it across a registry table to find any bad entries:
+[`json_schema_validate_schema`](#json_schema_validate_schema) checks whether the validator can load a schema, raising on errors. It is not exhaustive meta-schema validation and may accept unsupported keyword values. To find entries that fail to load without aborting the registry scan:
 
 ```sql
 SELECT name, version
 FROM schema_registry
-WHERE NOT json_schema_validate_schema(definition);
+WHERE NOT COALESCE(TRY(json_schema_validate_schema(definition)), false);
 ```
 
 ## Quality-gate filter at ingest
@@ -57,13 +57,13 @@ Reject non-conforming payloads at the boundary; tee the rest into a quarantine t
 ```sql
 INSERT INTO events_clean
 SELECT * FROM events_raw
-WHERE     json_schema_validate(:event_schema, payload);
+WHERE     COALESCE(TRY(json_schema_validate(:event_schema, payload)), false);
 ```
 
 ```sql
 INSERT INTO events_quarantine
 SELECT * FROM events_raw
-WHERE NOT json_schema_validate(:event_schema, payload);
+WHERE NOT COALESCE(TRY(json_schema_validate(:event_schema, payload)), false);
 ```
 
 ## Compute a defaults patch
@@ -106,7 +106,7 @@ Build a clean enriched table in one step — validate, then enrich:
 CREATE TABLE events_enriched AS
 SELECT json_schema_update(:schema, payload) AS payload
 FROM events_raw
-WHERE json_schema_validate(:schema, payload);
+WHERE COALESCE(TRY(json_schema_validate(:schema, payload)), false);
 ```
 
 ## Validate JSON files on ingest
@@ -115,8 +115,8 @@ Pair with DuckDB's [`read_json_auto`](https://duckdb.org/docs/data/json/loading_
 
 ```sql
 SELECT *
-FROM read_json_auto('events/*.json')
-WHERE json_schema_validate(:schema, to_json(*));
+FROM read_json_auto('events/*.json') AS event
+WHERE COALESCE(TRY(json_schema_validate(:schema, to_json(event))), false);
 ```
 
 For records arriving as already-typed JSON columns, pass the column directly without the `to_json` wrap.
@@ -127,8 +127,9 @@ Keep the schema out of query text by binding it as a SQL variable — handy when
 
 ```sql
 SET VARIABLE event_schema = (SELECT definition FROM schema_registry WHERE name = 'events.v3');
+SELECT json_schema_validate_schema(getvariable('event_schema'));
 
 SELECT COUNT(*) AS valid
 FROM events
-WHERE json_schema_validate(:event_schema, payload);
+WHERE COALESCE(TRY(json_schema_validate(getvariable('event_schema'), payload)), false);
 ```

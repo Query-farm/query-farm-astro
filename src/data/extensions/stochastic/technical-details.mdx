@@ -77,3 +77,22 @@ SELECT dist_binomial_pdf(10, 1.5, 5);
 | Block maxima / rare-event tails | **Extreme Value** |
 | Robust regression / sparse priors | **Laplace** |
 | Inverse-transform sampling, dice, random index | **Uniform (Real)**, **Uniform (Integer)** |
+
+## Integer uniform and Pareto compatibility
+
+The [October 7, 2026 `v1.5` source fix](https://github.com/Query-farm/stochastic/commit/abdab24201d911501b924744c13c30739b4f6c28) makes the `uniform_int` analytical functions agree with integer sampling on the inclusive interval `[min, max]`. Community packages may lag this source change. Earlier builds, including `234c881`, used continuous-uniform formulas and truncated several moments.
+
+```sql
+SELECT dist_uniform_int_pdf(1, 6, 3) AS mass,
+       dist_uniform_int_cdf(1, 6, 3) AS cumulative,
+       dist_uniform_int_mean(1, 6) AS mean,
+       dist_uniform_int_variance(1, 6) AS variance;
+-- Corrected: 1/6, 0.5, 3.5, 35/12
+-- Older affected builds: 0.2, 0.4, 3, 2
+```
+
+In corrected builds, mean, variance, standard deviation, and median return `DOUBLE`; sample, quantile, and mode remain `BIGINT`. The median is the midpoint; the quantile is the smallest supported integer whose mathematical CDF reaches the exact binary `DOUBLE` probability. There is no boundary tolerance: for example, `0.1::DOUBLE` is slightly greater than one tenth, so `dist_uniform_int_quantile(1, 10, 0.1)` returns 2. Every supported integer is a mode, and `_mode` returns `min` as a representative. The discrete hazard is `P(X = x) / P(X >= x)`, so it equals 1 at `max`; above `max` it raises an error.
+
+Bounds retain their `DOUBLE` SQL signature but must be finite integers representable by `BIGINT`, with `min <= max`. Values outside the exact integer precision of `DOUBLE` are subject to argument rounding; use smaller bounds when exact integer endpoints matter. Equal bounds define a constant draw with zero variance; standardized moments (skewness and kurtosis) are undefined and raise errors.
+
+Pareto positional arguments remain **`(scale, shape)`**, with the minimum supported value equal to `scale`. The fix corrects older catalog labels `[shape, minimum]` without reordering SQL arguments. For example, `dist_pareto_mean(1, 3)` is 1.5. Both parameters must be positive and finite.

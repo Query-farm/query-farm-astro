@@ -1,66 +1,108 @@
 ## What this is for
 
-When a query filters on **multiple columns at once** — `lat AND lon`, `time AND symbol_id`, `(altitude, lat, lon, time)` — sorting Parquet by any single column doesn't help much. Sorting by *both* needs a 1D ordering that keeps multi-dimensional neighbors together. That's a **space-filling curve** like Hilbert or Morton.
+Lindel computes Hilbert and Morton sort keys from multi-dimensional numeric arrays. Ordering rows by one of these keys can group related coordinates when writing Parquet, helping readers use min/max statistics for multi-column predicates. The benefit depends on the data, coordinate transform, and row-group size.
 
-Use Lindel as the `ORDER BY` when writing Parquet. The result: row groups have tight bounding boxes in every input dimension, so DuckDB / Athena / Trino / Spark / Snowflake can skip whole row groups whose stats don't match the predicate.
+## Prepare latitude and longitude
 
-This is the same optimization Databricks calls "Z-Order" (Morton) and now defaults to "Liquid Clustering" (Hilbert).
-
-## Hilbert-order rows
-
-Compute one Hilbert key per row and `ORDER BY` it — points close in `(lat, lon)` stay adjacent in the result:
+For valid latitude in `[-90, 90]` and longitude in `[-180, 180]`, shift both ranges above zero and quantize to six decimal places before casting to unsigned integers:
 
 ```sql
-SELECT lat, lon, hilbert_encode([lat, lon]::DOUBLE[2]) AS hilbert
+SELECT lat, lon, hilbert_encode([
+  round((lat + 90) * 1e6),
+  round((lon + 180) * 1e6)
+]::UINTEGER[2]) AS hilbert
 FROM source
 ORDER BY hilbert;
 ```
 
-To persist that layout, wrap the same ordering in a write — `COPY (SELECT * FROM source ORDER BY hilbert_encode([lat, lon]::DOUBLE[2])) TO 'spatial.parquet' (FORMAT PARQUET)`. Rows close in `(lat, lon)` end up close in the file, so bounding-box queries (`WHERE lat BETWEEN ... AND lon BETWEEN ...`) skip irrelevant row groups.
+The offsets matter: casting a negative coordinate directly to `UINTEGER` fails. The scale sets angular precision, not uniform distance in meters. Direct `DOUBLE` encoding is supported, but it uses floating-point bit patterns without normalizing numeric distance.
 
-For 4D — say flight history `(lat, lon, alt, time)` — pass all four dimensions to the encoder:
+## Write the sorted layout to Parquet
 
 ```sql
-SELECT lat, lon, alt, time, hilbert_encode([lat, lon, alt, time]::INTEGER[4]) AS hilbert
-FROM flights
-ORDER BY hilbert;
+COPY (
+  SELECT * FROM source
+  ORDER BY hilbert_encode([
+    round((lat + 90) * 1e6),
+    round((lon + 180) * 1e6)
+  ]::UINTEGER[2])
+) TO 'spatial.parquet' (FORMAT PARQUET);
 ```
 
-## Morton (Z-order) — faster, slightly weaker
-
-Same recipe, swap the function:
+Query the original columns normally:
 
 ```sql
-SELECT time, symbol_id, morton_encode([time, symbol_id]::INTEGER[2]) AS morton
+SELECT * FROM 'spatial.parquet'
+WHERE lat BETWEEN 40 AND 41
+  AND lon BETWEEN -74 AND -73;
+```
+
+A reader can skip a row group when its statistics cannot match the predicates. Curve sorting can improve that pruning; it does not guarantee tight bounds for every group or column. Benchmark with enough rows to produce multiple row groups.
+
+## Use up to four 32-bit dimensions
+
+All components must share one array element type. Four `UINTEGER` coordinates produce a 128-bit `UHUGEINT` key:
+
+```sql
+SELECT hilbert_encode([10, 20, 30, 40]::UINTEGER[4]) AS hilbert;
+```
+
+For inputs with different units, choose a consistent scaling and offset for each dimension before encoding. Four `DOUBLE` dimensions are not supported: their combined width exceeds 128 bits.
+
+## Try Morton / Z-order
+
+Use the same prepared coordinates with `morton_encode`:
+
+```sql
+SELECT lat, lon, morton_encode([
+  round((lat + 90) * 1e6),
+  round((lon + 180) * 1e6)
+]::UINTEGER[2]) AS morton
 FROM source
 ORDER BY morton;
 ```
 
-When in doubt: Hilbert. Pick Morton only when encoding throughput is the bottleneck and you can tolerate slightly larger row-group bounding boxes.
+Morton interleaves bits and has a simpler mapping than Hilbert. Compare encoding time and the resulting query performance before choosing an ordering.
 
-## Decode for sanity-checking
+## Decode unsigned, signed, or floating-point values
+
+Use the same curve to decode, and match the dimension count and type flags:
 
 ```sql
 SELECT hilbert_decode(
-  hilbert_encode([10, 20]::INTEGER[2]),
-  /* num_elements   */ 2,
-  /* return_float   */ false,
+  hilbert_encode([10, 20]::UINTEGER[2]),
+  /* num_elements    */ 2,
+  /* return_float    */ false,
   /* return_unsigned */ true
-) AS roundtrip;
+) AS unsigned_roundtrip;
 -- [10, 20]
 ```
 
+```sql
+SELECT hilbert_decode(
+  hilbert_encode([-10, 20]::INTEGER[2]), 2, false, false
+) AS signed_roundtrip;
+-- [-10, 20]
+```
+
+```sql
+SELECT morton_decode(
+  morton_encode([-1.5, 2.25]::DOUBLE[2]), 2, true, false
+) AS float_roundtrip;
+-- [-1.5, 2.25]
+```
+
+Preserve the key's original SQL type when storing or decoding it. The integer width and dimension count determine the decoded component width. Decoding recovers the values passed to the encoder; it does not undo any earlier quantization or offsets.
+
+Community build `6435106` rejects one-dimensional signed-integer decoding. The [v1.5 source fix `a92ec61`](https://github.com/Query-farm/lindel/commit/a92ec61) (extension version `2026100701`) supports signed round-trips in one dimension and restores four-dimensional 8-bit decoding. Older installed community binaries may still have these limitations.
+
 ## Type coverage
 
-Both encoders accept:
+| Element type | Dimensions |
+|---|---|
+| `TINYINT`, `UTINYINT` | 1–16 |
+| `SMALLINT`, `USMALLINT` | 1–8 |
+| `INTEGER`, `UINTEGER`, `FLOAT` | 1–4 |
+| `BIGINT`, `UBIGINT`, `DOUBLE` | 1–2 |
 
-- Any signed or unsigned integer (TINYINT through HUGEINT).
-- FLOAT or DOUBLE.
-
-Output type is the smallest unsigned integer that fits the bit width × number of dimensions. For `[INTEGER, INTEGER]` (32×2 = 64 bits) you get `UBIGINT`; for `[DOUBLE, DOUBLE]` (64×2 = 128 bits) you get `UHUGEINT`.
-
-## Why this works
-
-Parquet stores per-row-group min/max statistics. A predicate like `WHERE lat BETWEEN 40 AND 41` lets the reader skip any row group whose `lat` range doesn't overlap. With single-column sorting that works for one column at a time. With Hilbert/Morton sorting, **every** input column gets tight per-row-group bounds, so multi-column predicates each contribute to skipping.
-
-Performance gains depend on the data and query pattern. The Delta Lake / Databricks blog posts linked in the README report 5–100× speedups for multi-column range queries; in DuckDB you'll see similar with the right data.
+The result is the smallest unsigned integer type that fits the combined bits, up to `UHUGEINT`. `HUGEINT` and `UHUGEINT` are not supported input element types. Use fixed-size arrays with explicit casts, and handle `NULL` coordinates before encoding.

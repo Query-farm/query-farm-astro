@@ -1,0 +1,58 @@
+{
+  "title": "JSON Schema",
+  "subtitle": "Validate JSON contracts and apply declared defaults",
+  "intro": "Check JSON documents against a schema inside SQL, then fill missing properties from schema defaults. Useful at ingest and during audits. Invalid documents raise errors in this build, so choose strict validation or a deliberate TRY wrapper.",
+  "flow": [
+    "Schema + JSON",
+    "Validate",
+    "Patch or enrich"
+  ],
+  "referenceTitle": "Core SQL surface",
+  "reference": [
+    {
+      "name": "json_schema_validate(schema, data)",
+      "description": "Return TRUE on success; raise an error on invalid data."
+    },
+    {
+      "name": "json_schema_validate_schema(schema)",
+      "description": "Check schema acceptance; invalid schemas can raise errors."
+    },
+    {
+      "name": "json_schema_patch(schema, data)",
+      "description": "Return JSON Patch operations for missing defaults."
+    },
+    {
+      "name": "json_schema_update(schema, data)",
+      "description": "Return the document with defaults applied."
+    },
+    {
+      "name": "TRY(expression)",
+      "description": "DuckDB wrapper: convert runtime validation errors into NULL."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Make validation policy explicit",
+      "body": "Plain validation aborts on nonconforming input. COALESCE(TRY(json_schema_validate(...)), false) gives a filterable flag. Lint your schema first: TRY also hides malformed schemas, so a bad contract could otherwise mark every row invalid."
+    },
+    {
+      "title": "Draft and defaults",
+      "body": "The validator primarily targets draft-07. Test the keywords your contract uses and keep reference targets within the schema. Defaults are applied by patch/update; a successful validate call alone does not rewrite the original JSON."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Flag valid and invalid rows",
+      "sql": "SELECT payload, coalesce(try(\n  json_schema_validate(\n    '{\"type\":\"integer\"}', payload\n  )), false) AS valid\nFROM (VALUES ('5'::JSON), ('\"five\"'::JSON))\n  t(payload);\n-- 5: true; \"five\": false",
+      "caption": "TRY preserves the query when a row violates the schema.",
+      "mode": "local"
+    },
+    {
+      "title": "Fill a missing property",
+      "sql": "SET VARIABLE schema = '{\n  \"type\":\"object\",\n  \"properties\":{\n    \"retries\":{\"type\":\"integer\",\"default\":3}\n  }\n}';\nSELECT json_schema_validate_schema(\n  getvariable('schema'));\nSELECT json_schema_update(\n  getvariable('schema'), '{}');\n-- {\"retries\":3}\nSELECT json_schema_patch(\n  getvariable('schema'), '{}');",
+      "caption": "The patch contains an add operation at /retries with value 3.",
+      "mode": "local"
+    }
+  ],
+  "assertions": "SELECT CASE WHEN json_schema_validate('{\"type\":\"integer\"}', '5') AND TRY(json_schema_validate('{\"type\":\"integer\"}', '\"five\"')) IS NULL AND (json_schema_update(getvariable('schema'), '{}')->>'retries') = '3' AND (json_schema_patch(getvariable('schema'), '{}')->>'$[0].op') = 'add' THEN true ELSE error('JSON Schema contract mismatch') END;"
+}

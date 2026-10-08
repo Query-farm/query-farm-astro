@@ -1,0 +1,268 @@
+QUICK-REFERENCE PREPARATION: VERIFIED FINDINGS
+Recorded and reproduced: October 7, 2026
+
+Scope: DuckDB CLI v1.5.6 on macOS 15.6.1, arm64. Community extension build
+identifiers below come from duckdb_extensions(). These are observations of
+these builds, not claims about every release or platform. Each SQL block
+starts in a fresh in-memory connection; load already-installed extensions.
+The observations below preserve the original reproductions against older
+community builds. Implementation fixes have since been committed and pushed
+to each repository's v1.5 branch; see the resolution record at the end.
+The PDFs and authored website docs now describe the fixes while identifying
+older affected builds. See validation.json for tested revisions, local-build
+SHA-256 provenance, guide-example coverage and external-service deferrals.
+
+VERIFIED IMPLEMENTATION / COMPATIBILITY ISSUES
+
+1. STOCHASTIC: integer sampling disagrees with analytical functions
+   Build: 234c881. Classification: likely correctness bug.
+
+   LOAD stochastic;
+   SELECT dist_uniform_int_pdf(1,6,3), dist_uniform_int_cdf(1,6,3),
+          dist_uniform_int_mean(1,6), dist_uniform_int_variance(1,6);
+
+   Observed: 0.2, 0.4, 3, 2.
+   Expected for a discrete uniform draw from integers 1 through 6:
+   1/6, 1/2, 3.5, 35/12. The local implementation in
+   stochastic/src/distribution_uniform_int.cpp uses
+   std::uniform_int_distribution for sampling and Boost's continuous uniform
+   distribution for analytical functions. Mean and variance additionally
+   return BIGINT, truncating fractional results. The mismatch affects the
+   uniform_int family; this is not evidence that all 22 families are wrong.
+   Guide mitigation: explicitly flag the analytical mismatch and use 1.0/6
+   for a fair die's probability mass.
+
+2. HASHFUNCS: advertised canonical XXH3-128 digest swaps 64-bit halves
+   Build: 0dec806. Classification: verified interoperability bug relative to
+   the documented promise to match canonical xxHash/Python hex digests.
+
+   LOAD hashfuncs;
+   SELECT xxh3_128_hex('hello');
+
+   Observed: c779cfaa5e523818b5e9c1ad071b3e7f
+   Independent comparison (no newline in the input):
+     printf %s hello | xxhsum -H128
+   Observed canonical digest: b5e9c1ad071b3e7fc779cfaa5e523818
+   The extension formats low64 before high64; canonical xxHash formats
+   high64 before low64. The local hashfuncs/src/hashfuncs_extension.cpp
+   explicitly formats the reversed order while describing it as canonical.
+   Scope: directly reproduced for the unseeded string 'hello'; seeded and
+   other input overloads were not exhaustively tested. The UHUGEINT result's
+   to_hex output has the same ordering in this build, so switching to that
+   overload is not a demonstrated workaround.
+   Guide mitigation: swap the 16-character halves for canonical interchange.
+
+3. GEOSILO: documented spatial-first load order fails
+   Builds: geosilo d088741; spatial 04270fe.
+   Classification: verified extension compatibility / registration issue.
+
+   LOAD spatial;
+   LOAD geosilo;
+
+   Observed: GeoSilo initialization raises
+     Scalar Function with name "ST_GeometryType" already exists!
+   Expected under the site's documented spatial-first setup: both load.
+   Scope: load-order-specific. In a fresh connection, LOAD geosilo followed
+   by LOAD spatial succeeds; that only establishes successful loading, not
+   correctness of every combined spatial operation. GeoSilo alone also
+   passes the guide's native-GEOMETRY storage and measurement examples.
+   Guide mitigation: use geosilo alone for the printed examples on 1.5.6.
+
+4. LINDEL: signed one-dimensional decode rejects its own encoded key
+   Build: 6435106. Classification: likely correctness bug / unsupported path.
+
+   LOAD lindel;
+   SELECT hilbert_decode(hilbert_encode([-1]::INTEGER[1]),1,false,false);
+
+   Observed: Invalid Input Error: Expected one of the following types:
+     UINTEGER, USMALLINT, UTINYINT, UBIGINT, UHUGEINT
+   Replacing both hilbert functions with morton functions produces the same
+   error. Expected round trip for this signed one-dimensional input: [-1].
+   Controls that succeed: unsigned UINTEGER[1] with flags false,true, and
+   signed INTEGER[2] with flags false,false. This is distinct from the now
+   corrected site claims about bit-pattern encoding, supported widths and
+   unsigned casts of negative coordinates.
+   Guide/site mitigation: disclose the signed one-dimensional limitation.
+
+5. FUZZYCOMPLETE: loading after preloaded autocomplete does not activate it
+   Build: 9746833. Classification: verified activation limitation and
+   documentation mismatch; source explicitly makes this a current limitation.
+
+   SELECT function_oid FROM duckdb_functions()
+     WHERE function_name='sql_auto_complete';
+   LOAD fuzzycomplete;
+   SELECT function_oid FROM duckdb_functions()
+     WHERE function_name='sql_auto_complete';
+   SELECT extension_name, loaded FROM duckdb_extensions()
+     WHERE extension_name IN ('autocomplete','fuzzycomplete');
+
+   Observed: the function OID is unchanged (20625 in the reproduction),
+   while both extensions report loaded=true. CLI 1.5.6 already loads stock
+   autocomplete. Local fuzzycomplete/src/fuzzycomplete_extension.cpp only
+   registers its function if autocomplete is not loaded. This contradicts
+   the site's "last one loaded wins" and replacement claims. The SQL result
+   alone would not establish implementation identity; source confirms it.
+   Scope: preloaded-provider behavior; interactive Tab was not automated.
+   Guide mitigation: inspect the provider and do not equate LOAD success
+   with fuzzy-completion activation.
+
+6. INFLECTOR: a common irregular singular is unchanged
+   Build: ac9b69f. Classification: verified behavior; likely linguistic
+   correctness gap, with intended upstream inflection rules still to confirm.
+
+   LOAD inflector;
+   SELECT inflector_to_plural('person'), inflector_to_singular('people');
+
+   Observed: people, people. Expected for the ordinary plural of person:
+   people, person. English inflection is context-dependent; this narrow test
+   does not establish how all irregular words should be handled.
+   Guide mitigation: warn that inflection is not always reversible.
+
+DOCUMENTATION, API METADATA AND BUILD MISMATCHES
+
+- Stochastic Pareto parameter labels (234c881):
+    LOAD stochastic;
+    SELECT dist_pareto_mean(1,3);
+    SELECT parameters FROM duckdb_functions()
+      WHERE function_name='dist_pareto_mean';
+  Observed: mean=1.5, labels=[shape, minimum]. Runtime order is (scale, shape),
+  consistent with the local sampling and Boost distribution constructors.
+  The result 1.5 is correct for scale=1, shape=3. Fix labels/documentation
+  before considering any incompatible change to established positional SQL.
+  The Stochastic PDF uses the effective runtime order and calls out the labels.
+
+- JSON Schema validation (20cc158):
+    LOAD json_schema;
+    SELECT json_schema_validate('{"type":"integer"}', '"five"');
+  Observed: Invalid Input Error, "unexpected instance type"; not FALSE as
+  some site prose claims. This alone does not establish an implementation
+  defect. The guide uses COALESCE(TRY(json_schema_validate(...)), false),
+  and notes that TRY also hides malformed-schema errors.
+
+- MiniJinja row context (a4e836b):
+    LOAD minijinja;
+    SELECT minijinja_render('Hello {{ name }}', json_object('name',name))
+    FROM (VALUES ('Ada'),('Grace')) t(name);
+  Observed: Binder Error, "argument is not foldable". Existing row-based
+  site examples use the wrong entry point. Use minijinja_render_with_context
+  for a context constructed from columns; the guide executes that pattern.
+
+- ADBC Scanner API generation (installed 7a21dda):
+    LOAD adbc_scanner;
+    SELECT function_name,parameter_types FROM duckdb_functions()
+      WHERE function_name IN ('adbc_scan','adbc_scan_table','adbc_connect');
+  Observed: adbc_scan and adbc_scan_table take BIGINT handles as their first
+  argument. The newer source revision 7e5210c introduces the ATTACH API used
+  in the guide. This is a build/API mismatch, not a verified connector defect.
+  Driver-backed examples remain explicitly deferred until a matching build
+  and separately installed driver are available.
+
+- Shellfs gzip export (4f724fc):
+    LOAD shellfs;
+    COPY (SELECT 1 AS n) TO '| gzip > /tmp/example.csv.gz'
+      (FORMAT CSV, HEADER);
+  Observed in an isolated temporary-directory reproduction: one gzip
+  decompression still begins with gzip magic bytes 1f8b; a second produces
+  CSV "n\n1\n". DuckDB detects compression from the destination string, then
+  the shell command compresses again. The guide adds COMPRESSION UNCOMPRESSED
+  to COPY when gzip owns compression. This is an example/integration pitfall,
+  not proof of a Shellfs implementation error.
+
+- TSID optional seed (21457c7):
+    LOAD tsid;
+    SELECT tsid('example');
+  Observed: no matching overload; the catalog offers only tsid() -> VARCHAR.
+  Website descriptions of an optional seed and its ordering guarantees do
+  not match the installed API. The guide uses tsid() and avoids promising
+  strict global insertion order from concurrent generation.
+
+RESOLUTION: OCTOBER 7, 2026
+
+Committed and pushed to origin/v1.5 after building against DuckDB 1.5.6:
+
+- GeoSilo e6aaca0fc2784a35a967dd044761483a8b3bda86
+  https://github.com/Query-farm/geosilo/commit/e6aaca0fc2784a35a967dd044761483a8b3bda86
+  Merge all 12 shared ST_* overloads while retaining Spatial's implementations.
+  Both load orders and native GEOMETRY/GEOSILO behavior checked: 120 assertions.
+
+- Fuzzycomplete 8b89b19bbed0c7338a2a5e1dfc08eea88290e0ee
+  https://github.com/Query-farm/fuzzycomplete/commit/8b89b19bbed0c7338a2a5e1dfc08eea88290e0ee
+  Replace the preloaded sql_auto_complete provider. Eleven behavior checks
+  cover keyword/table matching and suggestion offsets. A separate f7a54f0
+  commit fixes native CMake builds selecting an installed WASM Rust target.
+
+- Lindel a92ec610a08ab0dc6c428a2b387e9d03b397e118
+  https://github.com/Query-farm/lindel/commit/a92ec610a08ab0dc6c428a2b387e9d03b397e118
+  Correct signed 1D decoding, restore 4D byte-coordinate decoding, and reject
+  invalid FLOAT dimensions. 178 checks cover supported coordinate types and
+  dimensions, integer limits, floating-point special values, flags and NULLs.
+  CI caught missing loop separators in the new SQLLogicTest file. Follow-up
+  6f8501a9213852286053946981f23b467a45bcd6 fixes all 11 separators:
+  https://github.com/Query-farm/lindel/commit/6f8501a9213852286053946981f23b467a45bcd6
+  The actual C++ SQLLogicTest parser reproduces the original failure and
+  accepts the repaired file and expanded loops. All 178 runtime checks pass
+  again after the follow-up; implementation code is unchanged.
+
+- Inflector 8628623f7084daeb3ae5e3abbc4a40ba4850b2f3
+  https://github.com/Query-farm/inflector/commit/8628623f7084daeb3ae5e3abbc4a40ba4850b2f3
+  Add people/person and children/child inverse rules, including compounds and
+  conventional casing. 127 SQL checks plus a 5,000-row FFI check pass.
+
+- Stochastic abdab24201d911501b924744c13c30739b4f6c28
+  https://github.com/Query-farm/stochastic/commit/abdab24201d911501b924744c13c30739b4f6c28
+  Inclusive discrete-uniform analytics, DOUBLE moments, integral-bound checks,
+  exact large-range quantiles, and NULL support/range handling. Pareto labels
+  now match the unchanged (scale, shape) runtime order. All 22 SQL suites pass
+  (587 records), plus an independent exact-rational quantile oracle covering
+  3,938 cases / 7,876 ordinary and complement results. Website overrides also
+  correct the older generated Pareto labels, examples and uniform return types.
+
+- Hashfuncs 4353c073900c1ebbe8c39d1ee440e1a7a7f7738e + 741f1cfd28826aa63d1d28f1216a7d7cf39b2849
+  https://github.com/Query-farm/hashfuncs/commit/4353c073900c1ebbe8c39d1ee440e1a7a7f7738e
+  Canonical hex output across seeded/unseeded VARCHAR/BLOB overloads; fix NULL
+  and dictionary-vector handling in hex output. Keep numeric UHUGEINT results
+  unchanged for stored-key compatibility. All 32 SQL records and independent
+  xxHash reference vectors pass. Hex consumers must account for the corrected
+  representation; numeric to_hex remains the legacy layout.
+  Follow-up: https://github.com/Query-farm/hashfuncs/commit/741f1cfd28826aa63d1d28f1216a7d7cf39b2849
+  Fix the same NULL/selection defect in shared numeric hash helpers. Final
+  suites pass 49 records. Independent comparison of 3,629,696 values across
+  eight algorithms and fourteen input types confirms valid numeric hashes
+  are unchanged, including seeded/unseeded and selected-vector cases.
+  Changed-file formatting checks pass; repository-wide formatting checks have
+  preexisting failures in untouched files.
+
+Documentation corrections also pushed to v1.5:
+  JSON Schema a745dbf — fail-fast validation and safe boolean filtering.
+  MiniJinja afa3be3 — use the explicit context entry point for column values.
+  Shellfs fd80ab0 — disable automatic compression when gzip owns compression.
+  TSID 186b60f — zero-argument API and generation-time versus insertion order.
+The corresponding authored website docs are updated, including safe mixed-row
+patch/update examples and quoted timestamps in MiniJinja-generated SQL.
+64 executable documentation snippets pass on DuckDB 1.5.6; external endpoints
+and user-supplied scripts remain deferred. JSON Schema's schema-check function
+only verifies that its validator can load the schema; it is not exhaustive
+meta-schema validation (e.g. it accepts some unsupported keyword values).
+
+ADBC Scanner's old installed BIGINT API versus newer ATTACH API remains a build
+mismatch, not an implementation defect. The website already explicitly labels
+that migration; no source change or incompatible API rollback was needed.
+
+Published community binaries are not changed by these branch pushes. The six
+fixed PDFs are checked against locally built v1.5 artifacts and marked as source
+builds. Source fixes have regression tests committed in their repositories;
+passing those tests is not an exhaustive validation of every extension feature.
+
+FINAL WEBSITE / PDF VERIFICATION
+All 71 local guide examples pass; all 32 PDFs and the 34-page collection pass
+page-count, geometry, column, font, text and link checks. The six changed guides
+were visually reviewed. Website type checking and the complete static build pass;
+merged Pareto parameter labels, uniform moment return types, MiniJinja context
+references and all 32 PDF links/assets were verified. Website documentation,
+Typst sources, rendered PDFs and validation records are kept together in this
+repository; the extension changes above are committed/pushed to their v1.5 branches.
+
+At the initial extension-fix handoff, cross-platform GitHub pipelines for the commits
+are queued or running; they have not all finished. Lindel's earlier test-file
+parser failure was corrected and checked with the actual C++ parser as recorded
+above. No community-extension catalog pin or publication was changed manually.

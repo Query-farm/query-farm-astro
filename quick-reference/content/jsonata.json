@@ -1,0 +1,68 @@
+{
+  "title": "JSONata",
+  "subtitle": "Query and reshape JSON with compact expressions",
+  "intro": "Filter nested arrays, construct output objects, and aggregate values within a JSON document. JSONata keeps these transformations in one SQL expression and returns JSON that can be cast, extracted, or expanded by DuckDB.",
+  "flow": [
+    "JSON document",
+    "JSONata expression",
+    "New JSON shape"
+  ],
+  "referenceTitle": "SQL entry point + expression syntax",
+  "reference": [
+    {
+      "name": "jsonata(expr, data)",
+      "description": "Evaluate an expression against a JSON document."
+    },
+    {
+      "name": "jsonata(expr, data, bindings)",
+      "description": "Bind JSON object keys as $variables in the expression."
+    },
+    {
+      "name": "Account.Name",
+      "description": "Follow nested fields using dotted paths."
+    },
+    {
+      "name": "items[price > $limit]",
+      "description": "Filter array members by a predicate."
+    },
+    {
+      "name": "{\"total\": $sum(prices)}",
+      "description": "Construct an output object with an aggregate."
+    },
+    {
+      "name": "[expression]",
+      "description": "Use array construction when a stable array shape matters."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Bind values, keep expressions stable",
+      "body": "Pass thresholds and other parameters through the bindings object instead of concatenating them into the expression. Its keys omit the dollar sign: {\"limit\": 100} is read as $limit inside JSONata."
+    },
+    {
+      "title": "Pay attention to result shape",
+      "body": "JSONata sequences can collapse to a single value. Wrap a projection in array construction when downstream SQL expects JSON[]. The function returns JSON; cast numbers explicitly or use DuckDB JSON extractors for strings."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Filter with a bound threshold",
+      "sql": "SELECT jsonata(\n  '[items[price > $limit].id]',\n  '{\"items\":[{\"id\":\"A\",\"price\":20},' ||\n  '{\"id\":\"B\",\"price\":120}]}',\n  '{\"limit\":100}'\n);\n-- [\"B\"]",
+      "caption": "The outer brackets preserve an array for one matching item.",
+      "mode": "local"
+    },
+    {
+      "title": "Build a summary object",
+      "sql": "SELECT jsonata(\n  '{\"customer\": name, \"total\": $sum(prices)}',\n  '{\"name\":\"Ada\",\"prices\":[12,18,5]}'\n);\n-- {\"customer\":\"Ada\",\"total\":35}",
+      "caption": "Construct several output fields without unpacking the document.",
+      "mode": "local"
+    },
+    {
+      "title": "Return a SQL number",
+      "sql": "SELECT jsonata('$sum(prices)',\n  '{\"prices\":[12,18,5]}'\n)::INTEGER AS total;\n-- 35",
+      "caption": "Cast the JSON result before joining or doing typed SQL arithmetic.",
+      "mode": "local"
+    }
+  ],
+  "assertions": "SELECT CASE WHEN jsonata('[items[price > $limit].id]', '{\"items\":[{\"id\":\"A\",\"price\":20},{\"id\":\"B\",\"price\":120}]}', '{\"limit\":100}')::VARCHAR = '[\"B\"]' AND jsonata('$sum(prices)', '{\"prices\":[12,18,5]}')::INTEGER = 35 THEN true ELSE error('JSONata result mismatch') END;"
+}

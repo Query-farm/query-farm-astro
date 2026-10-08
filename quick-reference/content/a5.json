@@ -1,0 +1,77 @@
+{
+  "title": "A5",
+  "subtitle": "Equal-area cells for geographic data.",
+  "intro": "Turn longitude and latitude into pentagonal cell IDs for grouping, joining, and geographic rollups. A5 uses equal-area cells at each resolution, with integer IDs and functions for hierarchy, neighborhoods, and geometry conversion.",
+  "flow": [
+    "Longitude / latitude",
+    "A5 cell ID",
+    "Group / join / roll up"
+  ],
+  "referenceTitle": "Core SQL surface",
+  "reference": [
+    {
+      "name": "a5_lonlat_to_cell(lon,lat,res)",
+      "description": "Map longitude, latitude in degrees to a UBIGINT cell ID."
+    },
+    {
+      "name": "a5_cell_to_lonlat(cell)",
+      "description": "Return the cell center as [longitude, latitude], not the original point."
+    },
+    {
+      "name": "a5_cell_to_parent(cell,res)",
+      "description": "Find a coarser ancestor for hierarchical rollups."
+    },
+    {
+      "name": "a5_cell_area(res)",
+      "description": "Return equal cell area in square meters at a resolution."
+    },
+    {
+      "name": "a5_grid_disk(cell,k)",
+      "description": "Return cells within k edge steps, including the center cell."
+    },
+    {
+      "name": "a5_cell_to_geometry(cell)",
+      "description": "Produce a native GEOMETRY polygon for mapping."
+    },
+    {
+      "name": "a5_geometry_to_cells(geom,res)",
+      "description": "Cover geometry with a compacted list of cell IDs."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Coordinates and identifiers",
+      "body": "Pass longitude first, latitude second, in degrees. Resolutions run from 0 to 30; larger values mean smaller cells. Preserve IDs as UBIGINT or use a5_u64_to_hex when exporting to systems with limited integer precision."
+    },
+    {
+      "title": "Render at one resolution",
+      "body": "a5_geometry_to_cells returns compacted coverage. Uncompact with a5_uncompact(cells, res) before drawing cell polygons together. Native GEOMETRY output works without spatial; load spatial only when you need its additional geometry functions."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Encode New York City",
+      "sql": "SELECT a5_lonlat_to_cell(\n  -74.0060, 40.7128, 15\n) AS cell;\nSELECT a5_cell_area(15) AS area_m2;",
+      "caption": "Cell 2742821848331845632; area ≈31,669 m².",
+      "mode": "local"
+    },
+    {
+      "title": "Count observations by cell",
+      "sql": "WITH points(lon,lat) AS (VALUES\n  (-74.0060,40.7128), (-74.0061,40.7129),\n  (-73.9857,40.7484)\n)\nSELECT a5_lonlat_to_cell(lon,lat,15) AS cell,\n       count(*) AS n\nFROM points\nGROUP BY cell;",
+      "caption": "Equal-resolution cell IDs are ordinary grouping and join keys.",
+      "mode": "local"
+    },
+    {
+      "title": "Roll up and draw a cell",
+      "sql": "WITH p AS (\n  SELECT a5_lonlat_to_cell(\n    -74.0060,40.7128,15) AS cell\n)\nSELECT a5_cell_to_parent(cell,10) AS parent,\n       a5_cell_to_geometry(cell) AS polygon\nFROM p;",
+      "caption": "The parent is a hierarchy key; the polygon is native GEOMETRY.",
+      "mode": "local"
+    }
+  ],
+  "dependencies": [],
+  "assertions": [
+    "SELECT CASE WHEN a5_lonlat_to_cell(-74.0060,40.7128,15)=2742821848331845632::UBIGINT AND abs(a5_cell_area(15)-31669.04205949599)<1e-7 THEN true ELSE error('A5 NYC cell or area mismatch') END;",
+    "SELECT CASE WHEN a5_get_resolution(a5_cell_to_parent(a5_lonlat_to_cell(-74.0060,40.7128,15),10))=10 AND typeof(a5_cell_to_geometry(a5_lonlat_to_cell(-74.0060,40.7128,15)))='GEOMETRY' THEN true ELSE error('A5 hierarchy or geometry mismatch') END;",
+    "SELECT CASE WHEN a5_hex_to_u64(a5_u64_to_hex(a5_lonlat_to_cell(-74.0060,40.7128,15)))=a5_lonlat_to_cell(-74.0060,40.7128,15) THEN true ELSE error('A5 hex roundtrip mismatch') END;"
+  ]
+}

@@ -6,13 +6,13 @@ MiniJinja is a Rust port of Jinja2 — same syntax, same semantics, fast embedde
 
 ```sql
 -- Flat
-SELECT minijinja_render('{{ name }}', '{"name":"Alice"}');
+SELECT minijinja_render_with_context('{{ name }}', '{"name":"Alice"}');
 -- 'Alice'
 ```
 
 ```sql
 -- Nested
-SELECT minijinja_render(
+SELECT minijinja_render_with_context(
   'Hello {{ user.name }}, {{ user.messages }} new messages',
   '{"user":{"name":"Alice","messages":5}}'
 );
@@ -21,7 +21,7 @@ SELECT minijinja_render(
 ## Loops
 
 ```sql
-SELECT minijinja_render(
+SELECT minijinja_render_with_context(
   'Items: {% for x in items %}{{ x.name }}{% if not loop.last %}, {% endif %}{% endfor %}',
   '{"items":[{"name":"Apple"},{"name":"Banana"},{"name":"Cherry"}]}'
 );
@@ -33,7 +33,7 @@ SELECT minijinja_render(
 ## Conditionals
 
 ```sql
-SELECT minijinja_render(
+SELECT minijinja_render_with_context(
   '{% if user.admin %}Admin{% else %}User{% endif %}: {{ user.name }}',
   '{"user":{"name":"Alice","admin":true}}'
 );
@@ -44,11 +44,11 @@ SELECT minijinja_render(
 
 ```sql
 -- upper, lower, title, length, default, etc.
-SELECT minijinja_render('{{ name | upper }}', '{"name":"alice"}');  -- 'ALICE'
+SELECT minijinja_render_with_context('{{ name | upper }}', '{"name":"alice"}');  -- 'ALICE'
 ```
 
 ```sql
-SELECT minijinja_render(
+SELECT minijinja_render_with_context(
   'Total: {{ items | length }}',
   '{"items":[1,2,3,4,5]}'
 );
@@ -60,13 +60,13 @@ SELECT minijinja_render(
 By default, special HTML characters in context values are escaped:
 
 ```sql
-SELECT minijinja_render('{{ v }}', '{"v":"B&O"}');
+SELECT minijinja_render_with_context('{{ v }}', '{"v":"B&O"}');
 -- 'B&amp;O'
 ```
 
 ```sql
 -- Disable when generating non-HTML content (configs, scripts, etc.)
-SELECT minijinja_render('{{ v }}', '{"v":"B&O"}', autoescape := false);
+SELECT minijinja_render_with_context('{{ v }}', '{"v":"B&O"}', autoescape := false);
 -- 'B&O'
 ```
 
@@ -76,7 +76,7 @@ A common pattern — render one template per database row using the row's column
 
 ```sql
 SELECT email,
-       minijinja_render(
+       minijinja_render_with_context(
          '<h1>Hi {{ name }}!</h1><p>You have {{ unread }} new messages.</p>',
          json_object('name', name, 'unread', unread_count)
        ) AS html_body
@@ -84,15 +84,16 @@ FROM users
 WHERE unread_count > 0;
 ```
 
-The `json_object(...)` builds the context inline from columns.
+The `json_object(...)` builds the context inline from columns. Use `minijinja_render_with_context` for this: `minijinja_render` requires its additional arguments to be constant expressions.
 
 ## Generate dynamic SQL
 
 ```sql
 WITH plan AS (
-  SELECT minijinja_render(
-    'SELECT {{ cols | join(", ") }} FROM {{ table }} WHERE created_at > {{ since }}',
-    '{"cols":["id","name"],"table":"users","since":"2026-01-01"}'
+  SELECT minijinja_render_with_context(
+    'SELECT {{ cols | join(", ") }} FROM {{ table }} WHERE created_at > TIMESTAMP ''{{ since }}''',
+    '{"cols":["id","name"],"table":"users","since":"2026-01-01"}',
+    autoescape := false
   ) AS sql
 )
 SELECT sql FROM plan;
@@ -103,7 +104,7 @@ SELECT sql FROM plan;
 ## Generate config files / IaC
 
 ```sql
-SELECT minijinja_render(
+SELECT minijinja_render_with_context(
   'server {
     listen 80;
     server_name {{ host }};

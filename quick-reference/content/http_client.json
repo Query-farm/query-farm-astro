@@ -1,0 +1,25 @@
+{
+  "title": "HTTP Client",
+  "subtitle": "Small HTTP requests, directly from DuckDB.",
+  "intro": "Fetch HTTP resources or submit JSON and form bodies from a SQL expression. Responses arrive as a JSON envelope containing status, reason and body, ready to inspect or save in a local table.",
+  "flow": ["HTTP request", "JSON envelope", "SQL projection"],
+  "referenceTitle": "Requests & response fields",
+  "reference": [
+    {"name": "http_get(url)", "description": "Fetch a response; a three-argument overload accepts maps."},
+    {"name": "http_head(url)", "description": "Request response metadata without downloading the body."},
+    {"name": "http_post(url, headers, json)", "description": "Send a JSON body; headers are MAP(VARCHAR, VARCHAR)."},
+    {"name": "http_post_form(url, headers, params)", "description": "Send form fields supplied as a VARCHAR-to-VARCHAR map."},
+    {"name": "response->>'status'", "description": "Read the HTTP status; cast to INTEGER for comparisons."},
+    {"name": "response->>'body'", "description": "Extract the body string; cast to JSON when appropriate."}
+  ],
+  "notes": [
+    {"title": "Materialize responses", "body": "Requests are synchronous and buffer the response. Save responses to a table before repeated analysis. Deduplicate input keys for enrichment: a function evaluation can trigger a network call, and SQL evaluation order is not a request scheduler."},
+    {"title": "Inspect status before parsing", "body": "A body can be HTML, plain text or JSON. Check status and expected content before casting it. Endpoint authentication, retries and rate limits belong in the surrounding workflow; do not assume an HTTP error is a successful API result."}
+  ],
+  "examples": [
+    {"title": "Fetch once, inspect locally", "sql": "CREATE TEMP TABLE response AS\nSELECT http_get('https://example.com/') AS r;\nSELECT (r->>'status')::INTEGER AS status,\n       r->>'reason' AS reason,\n       r->>'body' AS body\nFROM response;", "caption": "Requires network access. The example.com response is HTML, so keep body as text.", "mode": "external", "reason": "Performs an outbound HTTPS request."},
+    {"title": "POST a JSON document", "sql": "SELECT http_post(\n  'https://api.example.com/events',\n  MAP {'content-type': 'application/json'},\n  '{\"event\":\"ready\",\"rows\":42}'::JSON\n);", "caption": "Replace the URL with your POST endpoint and add required authentication headers.", "mode": "external", "reason": "Requires a configured HTTP endpoint and sends data to it."},
+    {"title": "Decode a JSON response body", "sql": "WITH r AS (\n  SELECT '{\"status\":200,\n    \"body\":\"{\\\"count\\\":42}\"}'::JSON AS v\n)\nSELECT ((v->>'body')::JSON)->>'count' AS n\nFROM r;", "caption": "Offline envelope fixture; returns the text value 42.", "mode": "local"}
+  ],
+  "assertions": "SELECT CASE WHEN ((('{\"body\":\"{\\\"count\\\":42}\"}'::JSON->>'body')::JSON)->>'count') = '42' THEN true ELSE error('HTTP envelope decode failed') END;"
+}

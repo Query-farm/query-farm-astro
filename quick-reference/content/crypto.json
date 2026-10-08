@@ -1,0 +1,64 @@
+{
+  "title": "Crypto",
+  "subtitle": "Digests, message authentication & random bytes.",
+  "intro": "Compute cryptographic digests and HMACs directly from SQL values. Use secure random bytes for tokens and salts, or aggregate values in a specified order for reproducible checksums.",
+  "flow": [
+    "SQL values",
+    "Hash / HMAC",
+    "BLOB or hex"
+  ],
+  "referenceTitle": "Core SQL surface",
+  "reference": [
+    {
+      "name": "crypto_hash(algorithm, value)",
+      "description": "Return a digest as BLOB; algorithm is a string."
+    },
+    {
+      "name": "crypto_hmac(algorithm, key, message)",
+      "description": "Authenticate a message with a secret key; returns BLOB."
+    },
+    {
+      "name": "crypto_random_bytes(length)",
+      "description": "Generate the requested number of cryptographically secure random bytes."
+    },
+    {
+      "name": "crypto_hash_agg(algorithm, value ORDER BY ...)",
+      "description": "Aggregate values into a digest with explicit input order."
+    },
+    {
+      "name": "to_hex(blob) / lower(text)",
+      "description": "Format binary digests as printable lowercase hexadecimal."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Choose the algorithm explicitly",
+      "body": "Common names include blake3, blake2b-512, sha2-256, sha2-512 and sha3-256. MD5 and SHA-1 are legacy choices, unsuitable for collision-resistant security."
+    },
+    {
+      "title": "A checksum needs a data contract",
+      "body": "Specify row order, input types and serialization. A digest of one field is not automatically an unambiguous digest of a whole row. Fast hashes are a separate hashfuncs extension."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Hash a string",
+      "sql": "SELECT lower(to_hex(\n  crypto_hash('sha2-256', 'hello')\n)) AS digest;",
+      "caption": "SHA-256 returns 32 bytes, rendered here as 64 hex characters.",
+      "mode": "local"
+    },
+    {
+      "title": "Authenticate a message",
+      "sql": "SELECT lower(to_hex(crypto_hmac(\n  'sha2-256', 'example-key', 'message'\n))) AS signature;",
+      "caption": "Argument order is algorithm, key, message. Replace the example key.",
+      "mode": "local"
+    },
+    {
+      "title": "Bytes & ordered aggregates",
+      "sql": "SELECT octet_length(crypto_random_bytes(32));\n\nSELECT to_hex(crypto_hash_agg(\n  'sha2-256', s ORDER BY s\n)) AS digest\nFROM (VALUES ('A'), ('B')) AS t(s);",
+      "caption": "ORDER BY belongs inside the aggregate call for reproducible ordering.",
+      "mode": "local"
+    }
+  ],
+  "assertions": "SELECT CASE WHEN lower(to_hex(crypto_hash('sha2-256','hello')))='2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824' AND octet_length(crypto_random_bytes(32))=32 AND lower(to_hex(crypto_hmac('sha2-256','example-key','message')))='1f2911120d44895ac2ef32a5546d4591bca63c8874b25bb2d3085b62f6c084b8' THEN true ELSE error('crypto outputs') END;"
+}

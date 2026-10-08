@@ -1,0 +1,15 @@
+{
+  "lindel": {
+    "encode": "SELECT\n  hilbert_encode([10, 20]::UINTEGER[2]) AS h,\n  morton_encode([10, 20]::UINTEGER[2]) AS m;\n-- h = 884, m = 408 (both UBIGINT)",
+    "roundtrip": "SELECT hilbert_decode(\n  hilbert_encode([10, 20]::UINTEGER[2]),\n  2, false, true\n) AS point;\n-- [10, 20]",
+    "parquet": "COPY (\n  SELECT x, y\n  FROM (VALUES (3, 5), (1, 1), (7, 0),\n               (2, 6), (5, 3), (0, 4))\n       AS points(x, y)\n  ORDER BY\n    hilbert_encode([x, y]::UINTEGER[2])\n) TO 'points.parquet' (FORMAT PARQUET);",
+    "filter": "SELECT * FROM 'points.parquet'\nWHERE x BETWEEN 1 AND 3\n  AND y BETWEEN 1 AND 6;"
+  },
+  "stochastic": {
+    "normal": "SELECT dist_normal_quantile(0, 1, 0.95);\n-- 1.6448536269514729\nSELECT dist_normal_cdf(0, 1, 1.96);\n-- approximately 0.975",
+    "tails": "-- P(X >= 5), Poisson(rate = 2.5)\nSELECT dist_poisson_cdf_complement(2.5, 4);\n-- 0.10882198108584878\n\n-- P(X <= 5), Binomial(n = 10, p = 0.3)\nSELECT dist_binomial_cdf(10, 0.3, 5);\n-- 0.9526510126000001",
+    "monte_carlo": "WITH draws AS MATERIALIZED (\n  SELECT\n    dist_uniform_real_sample(-1, 1) AS x,\n    dist_uniform_real_sample(-1, 1) AS y\n  FROM range(100000)\n)\nSELECT 4.0 * AVG(\n  (x*x + y*y <= 1)::INTEGER\n) AS pi_estimate\nFROM draws;",
+    "synthetic": "CREATE TABLE synthetic_users AS\nSELECT\n  i AS user_id,\n  dist_normal_sample(170, 8)\n    AS height_cm,\n  dist_poisson_sample(3.5) AS sessions,\n  dist_bernoulli_sample(0.12)\n    AS converted\nFROM range(10000) AS t(i);",
+    "inspect": "SELECT function_name, parameters\nFROM duckdb_functions()\nWHERE function_name LIKE 'dist_normal_%'\nORDER BY function_name;"
+  }
+}

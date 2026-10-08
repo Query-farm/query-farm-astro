@@ -87,3 +87,26 @@ WHERE xor8_filter_contains(f.filter, xxh3_64(e.email));
 ```
 
 The combination gives you sub-microsecond probabilistic set-membership at SQL speed — `INSTALL hashfuncs FROM community; INSTALL bitfilters FROM community;` and you have everything in one DuckDB session.
+
+## XXH3-128 compatibility across builds
+
+The [October 7, 2026 `v1.5` source fix](https://github.com/Query-farm/hashfuncs/commit/4353c073900c1ebbe8c39d1ee440e1a7a7f7738e) corrects `xxh3_128_hex` to the canonical **high64 then low64** order for both strings and blobs, with or without a seed. Community packages may lag this source change. Check the installed behavior before exchanging digests:
+
+```sql
+SELECT xxh3_128_hex('hello') AS digest;
+-- Corrected: b5e9c1ad071b3e7fc779cfaa5e523818
+-- Older builds (including 0dec806): c779cfaa5e523818b5e9c1ad071b3e7f
+```
+
+Previously stored hex digests from affected builds need their two 16-character halves exchanged **once** to match the corrected output. Do not keep applying that workaround to corrected digests.
+
+The numeric `xxh3_128` functions retain their historical `UHUGEINT` layout so existing numeric keys remain stable. Their printed hex is not canonical: convert it explicitly when interchanging with another implementation.
+
+```sql
+WITH h AS (
+  SELECT lower(printf('%032x', xxh3_128('hello'))) AS legacy_hex
+)
+SELECT substr(legacy_hex, 17, 16) || substr(legacy_hex, 1, 16) AS canonical_hex
+FROM h;
+-- b5e9c1ad071b3e7fc779cfaa5e523818
+```

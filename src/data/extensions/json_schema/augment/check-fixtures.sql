@@ -26,7 +26,7 @@ SELECT * FROM (VALUES
 
 -- Source / sink / quarantine tables for the validation-and-routing recipes.
 -- Payloads are intentionally varied — some valid against a typical "object
--- with id" schema, some not — so `json_schema_validate` returns mixed rows.
+-- with id" schema, some not — so the documented TRY wrapper produces both valid and invalid rows.
 CREATE OR REPLACE TABLE events AS
 SELECT * FROM (VALUES
   (1, '{"id": 1, "type": "click", "ts": "2026-04-28T12:00:00Z"}'::JSON),

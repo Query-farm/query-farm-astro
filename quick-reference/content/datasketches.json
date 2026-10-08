@@ -1,0 +1,72 @@
+{
+  "title": "Apache DataSketches",
+  "subtitle": "Approximate answers from compact aggregate state.",
+  "intro": "Build sketches over rows, persist their typed state, and query estimates later. Select a family for distinct counts, quantiles or frequent items; merge states to summarize partitions.",
+  "flow": [
+    "Rows",
+    "Sketch state",
+    "Merge / estimate"
+  ],
+  "referenceTitle": "Core SQL surface",
+  "reference": [
+    {
+      "name": "datasketch_hll / datasketch_cpc",
+      "description": "Approximate distinct-count sketches; query with _estimate."
+    },
+    {
+      "name": "datasketch_theta",
+      "description": "Distinct-count sketch with union, intersection and difference."
+    },
+    {
+      "name": "datasketch_kll",
+      "description": "Quantile sketch; query with _quantile, _rank, _cdf or _pmf."
+    },
+    {
+      "name": "datasketch_quantiles / datasketch_req",
+      "description": "Alternative quantile families with different error behavior."
+    },
+    {
+      "name": "datasketch_tdigest",
+      "description": "Compact distribution summary for quantile estimates."
+    },
+    {
+      "name": "datasketch_frequent_items",
+      "description": "Track frequent strings or numbers and their estimated counts."
+    },
+    {
+      "name": "datasketch_hll_union(lg_k, sketch)",
+      "description": "Aggregate compatible HLL states before estimating the union."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Merge states, not estimates",
+      "body": "Adding daily distinct estimates double-counts people present on multiple days. Merge compatible sketches first, then ask for the final estimate."
+    },
+    {
+      "title": "Match accuracy to the workload",
+      "body": "lg_k controls HLL size; k controls KLL capacity. Larger settings use more memory. Quantile rank error is not an absolute error bound on the returned value."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Count distinct values",
+      "sql": "SELECT datasketch_hll_estimate(\n  datasketch_hll(12, i % 1000)\n) AS distinct_values\nFROM range(10000) AS t(i);",
+      "caption": "An approximate count of 1,000 distinct values from 10,000 input rows.",
+      "mode": "local"
+    },
+    {
+      "title": "Estimate p50 and p95",
+      "sql": "WITH agg AS (\n  SELECT datasketch_kll(200, i::DOUBLE) AS s\n  FROM range(10000) AS t(i)\n)\nSELECT datasketch_kll_quantile(s, 0.50, true)\n         AS p50,\n       datasketch_kll_quantile(s, 0.95, true)\n         AS p95\nFROM agg;",
+      "caption": "The trailing true requests inclusive search. Input type determines sketch type.",
+      "mode": "local"
+    },
+    {
+      "title": "Inspect retained state",
+      "sql": "SELECT datasketch_kll_n(\n  datasketch_kll(200, i::DOUBLE)\n) AS input_count\nFROM range(10000) AS t(i);",
+      "caption": "The sketch tracks the number of input items, independently of its retained sample.",
+      "mode": "local"
+    }
+  ],
+  "assertions": "SELECT CASE WHEN datasketch_kll_n(datasketch_kll(200,i::DOUBLE))=10000 THEN true ELSE error('sketch count') END FROM range(10000)t(i);"
+}

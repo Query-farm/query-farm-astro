@@ -6,7 +6,7 @@ The shortest path from "rows in a table" to "rendered HTML, one body per row":
 
 ```sql
 SELECT email,
-       minijinja_render(
+       minijinja_render_with_context(
          '<h1>Hi {{ name }}!</h1><p>You have {{ unread }} new messages.</p>',
          json_object('name', name, 'unread', unread_count)
        ) AS html_body
@@ -14,7 +14,7 @@ FROM users
 WHERE unread_count > 0;
 ```
 
-[`minijinja_render`](#minijinja_render) compiles the template, binds the [`json_object`](https://duckdb.org/docs/sql/functions/json) context, and returns the rendered string. The template body is plain [Jinja2 syntax](https://jinja.palletsprojects.com/en/stable/templates/) — anything that renders correctly under Python's Jinja2 for these basic features should render the same way here.
+[`minijinja_render_with_context`](#minijinja_render_with_context) compiles the template, binds the [`json_object`](https://duckdb.org/docs/sql/functions/json) context, and returns the rendered string. The template body is plain [Jinja2 syntax](https://jinja.palletsprojects.com/en/stable/templates/) — anything that renders correctly under Python's Jinja2 for these basic features should render the same way here.
 
 <Callout type="note" title="Trusted templates only">
 MiniJinja interpolation is **not** parameter-safe against SQL injection. If you template SQL strings (the dynamic-SQL pattern), the template body and the values flowing through `{{ ... }}` must come from a source you trust. For untrusted user input, render the SQL **shape** with MiniJinja and bind values through prepared-statement parameters.
@@ -24,7 +24,7 @@ Autoescape is on by default for HTML output (`B&O` becomes `B&amp;O`). Pass `aut
 
 ## Architecture
 
-A single scalar function backed by the [`minijinja`](https://docs.rs/minijinja/) Rust crate — Armin Ronacher's [MiniJinja](https://github.com/mitsuhiko/minijinja), a small Jinja2-compatible engine with strict Python-Jinja2 semantics. Each call compiles the template, binds the JSON context, and returns the rendered text. There is no `ATTACH`, no secrets, no template registry — the function surface is one name plus a couple of optional named arguments.
+Two scalar entry points use the [`minijinja`](https://docs.rs/minijinja/) Rust crate: `minijinja_render(template, ...options)` for rendering without context, and `minijinja_render_with_context(template, context, ...options)` for JSON context. Use the latter for both literals and per-row context columns. Optional named arguments must be constant expressions; passing a context column to `minijinja_render` fails during binding.
 
 The template argument is a `VARCHAR` literal or column. The context argument is any DuckDB `JSON` value — a literal string, [`json_object(...)`](https://duckdb.org/docs/sql/functions/json), or a JSON column. Inside the template you address fields with normal Jinja syntax: `{{ user.name }}`, `{% for x in items %}`, `{{ items | length }}`, `{% if user.admin %}…{% endif %}`.
 

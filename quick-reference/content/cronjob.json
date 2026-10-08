@@ -1,0 +1,68 @@
+{
+  "title": "Cronjob",
+  "subtitle": "Schedule recurring SQL in a live DuckDB process.",
+  "intro": "Register SQL with a six-field cron expression, inspect jobs and cancel by ID. The scheduler lives inside the DuckDB process, making it useful for short-lived local automation.",
+  "flow": [
+    "SQL + schedule",
+    "Live scheduler",
+    "Inspect / cancel"
+  ],
+  "referenceTitle": "Core SQL surface",
+  "reference": [
+    {
+      "name": "cron(sql, schedule)",
+      "description": "Register a query; returns the job ID as VARCHAR."
+    },
+    {
+      "name": "cron_jobs()",
+      "description": "Table function listing scheduled jobs and their status."
+    },
+    {
+      "name": "cron_delete(job_id)",
+      "description": "Cancel a job using the ID returned by cron."
+    },
+    {
+      "name": "second minute hour day month weekday",
+      "description": "Six fields: seconds come first, unlike five-field system cron."
+    },
+    {
+      "name": "0 */5 * * * *",
+      "description": "Every five minutes, at second zero."
+    },
+    {
+      "name": "0 0 2 * * *",
+      "description": "Daily at 02:00:00 in the scheduler environment."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Keep the process alive",
+      "body": "The scheduler stops when DuckDB exits. Register jobs again after a restart; this is not a persistent system service or a replacement for an external orchestrator."
+    },
+    {
+      "title": "Keep and use the returned ID",
+      "body": "Do not assume a job will always be task_0. Store the returned identifier and use it for cancellation. A successful registration does not establish that the scheduled SQL will succeed."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Register a job",
+      "sql": "CREATE TEMP TABLE scheduled AS\nSELECT cron(\n  'SELECT 42', '0 */5 * * * *'\n) AS job_id;",
+      "caption": "The example retains the actual ID so cancellation remains reliable.",
+      "mode": "local"
+    },
+    {
+      "title": "Inspect jobs",
+      "sql": "SELECT * FROM cron_jobs();",
+      "caption": "Review schedule and status while the same DuckDB process remains running.",
+      "mode": "local"
+    },
+    {
+      "title": "Cancel the registered job",
+      "sql": "SELECT cron_delete(job_id) AS removed\nFROM scheduled;",
+      "caption": "Cancel the example job when finished; no future execution remains scheduled.",
+      "mode": "local"
+    }
+  ],
+  "assertions": "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM cron_jobs() j JOIN scheduled s USING (job_id)) THEN true ELSE error('scheduled job was not removed') END;"
+}

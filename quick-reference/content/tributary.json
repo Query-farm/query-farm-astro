@@ -1,0 +1,24 @@
+{
+  "title": "Tributary",
+  "subtitle": "Query Kafka topics from DuckDB.",
+  "intro": "Read Kafka topic messages as rows with topic, partition, offset and BLOB payload columns. Discover cluster metadata, decode application payloads, and materialize a local table for joins and repeatable downstream analysis.",
+  "flow": ["Kafka topic", "Message rows", "SQL analysis"],
+  "referenceTitle": "Reads & client configuration",
+  "reference": [
+    {"name": "tributary_scan_topic(topic, …)", "description": "Read a topic as metadata columns and raw message bytes."},
+    {"name": "tributary_metadata(…)", "description": "Inspect broker and topic arrays without scanning a topic."},
+    {"name": "tributary_version()", "description": "Identify the loaded extension build."},
+    {"name": "\"bootstrap.servers\"", "description": "Named parameter listing Kafka bootstrap host:port addresses."},
+    {"name": "\"group.id\"", "description": "Choose a dedicated consumer group for the analysis."},
+    {"name": "\"enable.auto.commit\"", "description": "Set to 'false' when analytics must not auto-commit offsets."},
+    {"name": "\"security.protocol\"", "description": "Configure PLAINTEXT, SSL or SASL transport for your broker."}
+  ],
+  "notes": [
+    {"title": "Read the payload deliberately", "body": "Quote the offset column as \"offset\". message is a BLOB; decode(message) interprets UTF-8, and JSON extraction requires valid JSON payloads. Broker client options use quoted librdkafka names, including their dots."},
+    {"title": "Plan the read", "body": "Use a dedicated consumer group and restrict the topic, partition and offset range for ad-hoc work. This is a consumer interface; publishing belongs in a producer. Community package availability varies by DuckDB version and platform."}
+  ],
+  "examples": [
+    {"title": "Discover topics", "sql": "SELECT unnest(topics).name AS topic\nFROM tributary_metadata(\n  \"bootstrap.servers\" := 'localhost:9092'\n);", "caption": "Requires a compatible Tributary build and a Kafka broker on localhost:9092.", "mode": "external", "reason": "Requires compatible extension build and Kafka broker metadata access."},
+    {"title": "Snapshot a partition range", "sql": "CREATE TABLE topic_snapshot AS\nSELECT partition, \"offset\", message\nFROM tributary_scan_topic('events',\n  \"bootstrap.servers\" := 'localhost:9092',\n  \"group.id\" := 'quick-reference',\n  \"enable.auto.commit\" := 'false'\n)\nWHERE partition = 0\n  AND \"offset\" BETWEEN 0 AND 99;\nSELECT \"offset\",\n       decode(message)::JSON->>'user_id' AS id\nFROM topic_snapshot;", "caption": "Assumes events contains UTF-8 JSON messages. Add broker authentication when required.", "mode": "external", "reason": "Requires Kafka topic access and consumes messages from the configured broker."}
+  ]
+}

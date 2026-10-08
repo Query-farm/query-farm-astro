@@ -1,0 +1,58 @@
+{
+  "title": "TSID",
+  "subtitle": "Generate sortable IDs and recover their timestamps",
+  "intro": "Create time-prefixed identifiers as 32-character hexadecimal strings and recover their embedded timestamps. Use them as internal keys, recent-first sort values, or pagination cursors when generation time is useful alongside a compact textual identifier.",
+  "flow": [
+    "Generate ID",
+    "Store as VARCHAR",
+    "Sort or decode"
+  ],
+  "referenceTitle": "Core SQL patterns",
+  "reference": [
+    {
+      "name": "tsid()",
+      "description": "Generate a new identifier as a 32-character VARCHAR."
+    },
+    {
+      "name": "tsid_to_timestamp(id)",
+      "description": "Decode generation time as a timezone-free UTC TIMESTAMP."
+    },
+    {
+      "name": "DEFAULT tsid()",
+      "description": "Generate an ID when an INSERT omits the column."
+    },
+    {
+      "name": "ORDER BY id DESC",
+      "description": "List IDs in descending time-prefix order."
+    },
+    {
+      "name": "WHERE id < cursor",
+      "description": "Continue descending pagination from the last returned ID."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Generation time is not event time",
+      "body": "The embedded timestamp records ID generation. Keep a separate event timestamp if events arrive late or describe earlier activity. Concurrent generation and clock changes also mean ID order is not a global transaction-order guarantee."
+    },
+    {
+      "title": "Treat the format as its own type",
+      "body": "Store these IDs as VARCHAR and decode them with tsid_to_timestamp. This extension’s format is library-specific; do not assume compatibility with UUID, ULID, or other TSID libraries. Anyone holding an ID can recover its generation time."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Generate keys automatically",
+      "sql": "CREATE TEMP TABLE events (\n  id VARCHAR DEFAULT tsid() PRIMARY KEY,\n  action VARCHAR\n);\nINSERT INTO events(action) VALUES\n  ('login'), ('click'), ('logout');\nSELECT id, tsid_to_timestamp(id) AS created_utc\nFROM events\nORDER BY id;",
+      "caption": "The default generates one ID for each inserted row.",
+      "mode": "local"
+    },
+    {
+      "title": "Page through recent IDs",
+      "sql": "SELECT * FROM events\nORDER BY id DESC LIMIT 2;\n\nSET VARIABLE cursor = (\n  SELECT id FROM events\n  ORDER BY id DESC LIMIT 1 OFFSET 1\n);\nSELECT * FROM events\nWHERE id < getvariable('cursor')\nORDER BY id DESC LIMIT 2;",
+      "caption": "Run after the first example; the cursor comes from the previous page’s last row.",
+      "mode": "local"
+    }
+  ],
+  "assertions": "SELECT CASE WHEN count(*)=3 AND count(DISTINCT id)=3 AND bool_and(regexp_full_match(id, '[0-9a-f]{32}')) AND bool_and(abs(epoch(tsid_to_timestamp(id)) - epoch(current_timestamp)) < 300) THEN true ELSE error('TSID generation contract failed') END FROM events; SELECT CASE WHEN count(*)=1 THEN true ELSE error('TSID cursor pagination failed') END FROM events WHERE id < getvariable('cursor');"
+}

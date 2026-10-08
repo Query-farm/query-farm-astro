@@ -1,0 +1,25 @@
+{
+  "title": "HTTP Server",
+  "subtitle": "Serve a DuckDB connection through HTTP.",
+  "intro": "Start an HTTP listener inside a DuckDB process and query it from an HTTP client. Send SQL in a POST body, receive JSON results, and keep the process running for the lifetime of the service.",
+  "flow": ["HTTP client", "SQL request", "DuckDB result"],
+  "referenceTitle": "Server calls & HTTP contract",
+  "reference": [
+    {"name": "httpserve_start(host, port, auth)", "description": "Start the in-process listener with one shared credential."},
+    {"name": "httpserve_stop()", "description": "Stop the listener; call start again to change settings."},
+    {"name": "POST /", "description": "Put SQL in the request body to execute it."},
+    {"name": "GET /?q=…", "description": "Pass URL-encoded SQL as a query parameter."},
+    {"name": "GET /ping", "description": "Unauthenticated liveness endpoint."},
+    {"name": "default_format=JSONEachRow", "description": "Return newline-delimited JSON objects, one per result row."},
+    {"name": "default_format=JSONCompact", "description": "Return metadata, row arrays and query statistics."}
+  ],
+  "notes": [
+    {"title": "Choose the authentication mode", "body": "An auth value containing user:pass selects HTTP Basic; a shared key uses X-API-Key. An empty string disables authentication. The listener speaks HTTP: use a TLS proxy for access beyond a trusted local environment."},
+    {"title": "Scope the DuckDB process", "body": "Clients can submit SQL using the served connection's capabilities. Bind to localhost for development; configure DuckDB permissions and filesystem access for deployment. Read-only database access alone is not a complete SQL sandbox. Keep the process alive."}
+  ],
+  "examples": [
+    {"title": "Start a local listener", "sql": "SELECT httpserve_start(\n  'localhost', 9999, 'replace-this-key'\n);", "caption": "Run in a dedicated DuckDB process and leave it open. Replace the example key.", "mode": "manual", "reason": "Intentionally starts a network listener and requires process lifecycle management."},
+    {"title": "Read from another DuckDB", "sql": "INSTALL httpfs;\nLOAD httpfs;\nCREATE SECRET quickref_http (\n  TYPE HTTP,\n  SCOPE 'http://localhost:9999/',\n  EXTRA_HTTP_HEADERS MAP {\n    'X-API-Key': 'replace-this-key'\n  }\n);\nSELECT * FROM read_json_auto(\n  'http://localhost:9999/?q=SELECT%2042'\n  || '&default_format=JSONEachRow'\n);", "caption": "Use a second process after the listener starts; the matching key is required.", "mode": "external", "reason": "Requires the listener and matching credentials from the first example."},
+    {"title": "Stop from the serving process", "sql": "SELECT httpserve_stop();", "caption": "The listener also stops when its DuckDB process exits.", "mode": "manual", "reason": "Operate on the listener explicitly started in the first example."}
+  ]
+}

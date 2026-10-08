@@ -1,0 +1,78 @@
+{
+  "title": "GeoSilo",
+  "subtitle": "Compact geometry with explicit precision.",
+  "intro": "Store geometries as scaled integer coordinates with delta encoding. GeoSilo provides a GEOSILO column type, direct measurements and bounds, and explicit encode/decode functions for BLOB pipelines. Choose precision before comparing storage size or query performance.",
+  "flow": [
+    "Native GEOMETRY",
+    "Scale + delta encode",
+    "Store / inspect / decode"
+  ],
+  "referenceTitle": "Core SQL surface",
+  "reference": [
+    {
+      "name": "GEOSILO('EPSG:3857')",
+      "description": "Typed geometry storage with CRS metadata and automatic coordinate scale."
+    },
+    {
+      "name": "geosilo_encode(geom[,scale])",
+      "description": "Encode GEOMETRY to BLOB with automatic or explicit integer scale."
+    },
+    {
+      "name": "geosilo_decode(blob)",
+      "description": "Decode BLOB or GEOSILO to a native GEOMETRY value."
+    },
+    {
+      "name": "geosilo_metadata(blob)",
+      "description": "Inspect geometry_type, vertex_type, and scale without decoding the geometry."
+    },
+    {
+      "name": "ST_Area / ST_Perimeter",
+      "description": "Measure GEOSILO polygons directly; results use the coordinate system’s units."
+    },
+    {
+      "name": "ST_XMin / ST_XMax",
+      "description": "Read X bounds; ST_YMin and ST_YMax provide the Y bounds."
+    },
+    {
+      "name": "ST_GeometryType / ST_NPoints",
+      "description": "Inspect the geometry kind and count of vertices."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Precision follows the scale",
+      "body": "Encoding rounds coordinates onto a grid with spacing 1/scale. A scale of 100 keeps hundredths of a coordinate unit. Projected-meter defaults use 100; degrees default to 10⁷. CRS labeling does not transform coordinates."
+    },
+    {
+      "title": "Spatial compatibility",
+      "body": "Fixed v1.5 builds merge shared ST_* overloads, so either extension can load first. These examples pass with spatial loaded first on DuckDB 1.5.6. Older GeoSilo d088741 collides with spatial 04270fe; upgrade or use geosilo alone."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Store a projected polygon",
+      "sql": "CREATE TABLE plots (\n  geom GEOSILO('EPSG:3857')\n    USING COMPRESSION zstd\n);\nINSERT INTO plots VALUES (\n  'POLYGON((0 0,10 0,10 10,0 10,0 0))'\n    ::GEOMETRY\n);",
+      "caption": "Inserting GEOMETRY automatically encodes it for the typed column.",
+      "mode": "local"
+    },
+    {
+      "title": "Inspect and measure directly",
+      "sql": "SELECT ST_Area(geom) AS area,\n       ST_Perimeter(geom) AS perimeter,\n       geosilo_metadata(geom) AS metadata\nFROM plots;",
+      "caption": "Area 100; perimeter 40; integer scale 100. These are planar measurements.",
+      "mode": "local"
+    },
+    {
+      "title": "Set a scale for a BLOB pipeline",
+      "sql": "WITH encoded AS (\n  SELECT geosilo_encode(\n    'POINT(1.234 2.345)'::GEOMETRY,100\n  ) AS blob\n)\nSELECT geosilo_decode(blob)::VARCHAR AS wkt\nFROM encoded;",
+      "caption": "Returns POINT (1.23 2.35): decoding retains the chosen quantization.",
+      "mode": "local"
+    }
+  ],
+  "dependencies": [
+    "spatial"
+  ],
+  "assertions": [
+    "SELECT CASE WHEN ST_Area(geom)=100 AND ST_Perimeter(geom)=40 AND (geosilo_metadata(geom)).scale=100 THEN true ELSE error('GeoSilo polygon measurements or scale mismatch') END FROM plots;",
+    "SELECT CASE WHEN geosilo_decode(geosilo_encode('POINT(1.234 2.345)'::GEOMETRY,100))::VARCHAR='POINT (1.23 2.35)' THEN true ELSE error('GeoSilo explicit scale mismatch') END;"
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "title": "Marisa",
+  "subtitle": "Static dictionaries with fast prefix lookup.",
+  "intro": "Build a compact MARISA trie from a column of strings. Store the trie as a BLOB and use it for exact membership, autocomplete, or prefix-rule matching.",
+  "flow": [
+    "String column",
+    "Trie BLOB",
+    "Lookup / prefix"
+  ],
+  "referenceTitle": "Core SQL surface",
+  "reference": [
+    {
+      "name": "marisa_trie(text)",
+      "description": "Aggregate a column of strings into one trie BLOB."
+    },
+    {
+      "name": "marisa_lookup(trie, text)",
+      "description": "Test exact membership; returns BOOLEAN."
+    },
+    {
+      "name": "marisa_predictive(trie, prefix, limit)",
+      "description": "Return stored strings that begin with the supplied prefix."
+    },
+    {
+      "name": "marisa_common_prefix(trie, text, limit)",
+      "description": "Return stored strings that are prefixes of the supplied text."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Two directions of prefix search",
+      "body": "Predictive search expands a short input into longer dictionary entries. Common-prefix search finds shorter stored rules matching the start of a longer input."
+    },
+    {
+      "title": "Build for a static set",
+      "body": "Rebuild the aggregate when the dictionary changes. Normalize case and whitespace before both construction and querying if those differences should be ignored."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Build a dictionary",
+      "sql": "CREATE TABLE dictionary AS\nSELECT marisa_trie(name) AS trie\nFROM (VALUES ('Alice'), ('Megan'),\n             ('Melissa')) AS t(name);",
+      "caption": "One result row stores the entire dictionary.",
+      "mode": "local"
+    },
+    {
+      "title": "Lookup & autocomplete",
+      "sql": "SELECT marisa_lookup(trie, 'Alice') AS found,\n       marisa_predictive(trie, 'Me', 10)\n         AS suggestions\nFROM dictionary;",
+      "caption": "found is true; suggestions includes Megan and Melissa.",
+      "mode": "local"
+    },
+    {
+      "title": "Match stored prefixes",
+      "sql": "WITH rules AS (\n  SELECT marisa_trie(s) AS trie\n  FROM (VALUES ('U'), ('US'), ('USA')) t(s)\n)\nSELECT marisa_common_prefix(trie, 'USA', 10)\nFROM rules;",
+      "caption": "The matching rules are U, US and USA; the limit caps the result count.",
+      "mode": "local"
+    }
+  ],
+  "assertions": "SELECT CASE WHEN (SELECT marisa_lookup(trie,'Alice') AND NOT marisa_lookup(trie,'Unknown') AND len(marisa_predictive(trie,'Me',10))=2 FROM dictionary) THEN true ELSE error('trie lookup') END;"
+}

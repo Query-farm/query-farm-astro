@@ -1,0 +1,25 @@
+{
+  "title": "WebMacro",
+  "subtitle": "Share SQL macros through a trusted URL.",
+  "intro": "Load a DuckDB macro definition from an HTTP or HTTPS endpoint and call it in ordinary SQL. Use reviewed, versioned SQL files to distribute reusable scalar expressions and table queries across notebooks and applications.",
+  "flow": ["SQL at a URL", "Load definition", "Call the macro"],
+  "referenceTitle": "Loading & macro lifecycle",
+  "reference": [
+    {"name": "load_macro_from_url(url)", "description": "Fetch and register a macro; return a status string."},
+    {"name": "CREATE MACRO name(args) AS expression", "description": "Define a scalar macro in the hosted SQL file."},
+    {"name": "CREATE MACRO name(args) AS TABLE …", "description": "Define a table macro called from a FROM clause."},
+    {"name": "CREATE OR REPLACE MACRO …", "description": "Let reloading replace a previously registered definition."},
+    {"name": "duckdb_functions()", "description": "Inspect registered macros with function_type = 'macro'."},
+    {"name": "DROP MACRO name", "description": "Remove a loaded macro with DuckDB's ordinary lifecycle command."}
+  ],
+  "notes": [
+    {"title": "The SQL file is executable code", "body": "Load only reviewed SQL from a trusted host. The extension's keyword checks are not a sandbox. Use HTTPS and immutable revision URLs when reproducibility matters; a branch URL can change after review."},
+    {"title": "Load dependencies first", "body": "Each call fetches its URL again. There is no dependency resolver: load prerequisite macros before dependents, and load required extensions before use. Plain GET is the interface; private hosts need an accessible or presigned URL."}
+  ],
+  "examples": [
+    {"title": "Prepare a reusable definition", "sql": "CREATE OR REPLACE MACRO normalize_tag(s)\nAS lower(trim(s));\nSELECT normalize_tag('  Farm  ') AS tag;\n-- Result: farm", "caption": "Test locally, then publish the CREATE statement as normalize_tag.sql on your host.", "mode": "local"},
+    {"title": "Load the hosted SQL", "sql": "SELECT load_macro_from_url(\n  'https://example.com/normalize_tag.sql'\n);\nSELECT normalize_tag('  Farm  ') AS tag;", "caption": "Replace the placeholder URL with the trusted SQL file prepared above.", "mode": "external", "reason": "Requires a trusted hosted SQL macro and fetches executable SQL from it."},
+    {"title": "Inspect and remove a macro", "sql": "SELECT function_name, macro_definition\nFROM duckdb_functions()\nWHERE function_type = 'macro'\n  AND function_name = 'normalize_tag';\nDROP MACRO normalize_tag;", "caption": "After creation or loading, it behaves like an ordinary DuckDB macro.", "mode": "local"}
+  ],
+  "assertions": "CREATE OR REPLACE MACRO normalize_tag(s) AS lower(trim(s)); SELECT CASE WHEN normalize_tag('  Farm  ') = 'farm' THEN true ELSE error('Macro normalization failed') END; DROP MACRO normalize_tag;"
+}

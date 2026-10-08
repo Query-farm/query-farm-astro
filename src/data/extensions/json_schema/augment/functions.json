@@ -21,8 +21,8 @@
         "description": "The JSON value to validate. Pass a column of type `JSON`, a struct literal, or a string cast with `::JSON`."
       }
     ],
-    "returns": "BOOLEAN — `TRUE` if the value conforms, `FALSE` otherwise.",
-    "description": "Validate a JSON value against a JSON Schema. Returns a plain `BOOLEAN`, so it composes naturally with `WHERE`, `CASE`, and `COUNT(*) FILTER (...)`.\n\nThis function does **not** return structured error detail — it answers conformance only. For a full per-keyword failure report, validate at the application layer with ajv / Pydantic / jsonschema and use this function as the coarse SQL gate.",
+    "returns": "BOOLEAN — TRUE for conforming data; raises an error for nonconforming data or an invalid schema. SQL NULL inputs propagate NULL.",
+    "description": "Validate a JSON value against a JSON Schema. Validation failures raise an error; they do not return FALSE. For row filtering or valid/invalid counts, use COALESCE(TRY(json_schema_validate(schema, payload)), false). This treats SQL NULL as invalid too. Validate the schema separately first: TRY also catches malformed-schema errors. The function reports a textual exception, not a structured per-keyword report.",
     "examples": [
       {
         "description": "Validate a single document",
@@ -30,11 +30,11 @@
       },
       {
         "description": "Filter a column on schema conformance",
-        "code": "INSERT INTO events_clean\nSELECT * FROM events_raw\nWHERE json_schema_validate(:schema, payload);"
+        "code": "INSERT INTO events_clean\nSELECT * FROM events_raw\nWHERE COALESCE(TRY(json_schema_validate(:schema, payload)), false);"
       },
       {
         "description": "Aggregate valid / invalid counts",
-        "code": "SELECT\n  COUNT(*)                                                         AS total,\n  COUNT(*) FILTER (WHERE     json_schema_validate(:schema, payload)) AS valid,\n  COUNT(*) FILTER (WHERE NOT json_schema_validate(:schema, payload)) AS invalid\nFROM events;"
+        "code": "SELECT\n  COUNT(*)                                                         AS total,\n  COUNT(*) FILTER (WHERE     COALESCE(TRY(json_schema_validate(:schema, payload)), false)) AS valid,\n  COUNT(*) FILTER (WHERE NOT COALESCE(TRY(json_schema_validate(:schema, payload)), false)) AS invalid\nFROM events;"
       }
     ],
     "relatedFunctions": [
@@ -56,11 +56,11 @@
         "name": "schema",
         "type": "JSON",
         "paramType": "positional",
-        "description": "The candidate [JSON Schema](https://json-schema.org/) document. Will be checked against the validator's meta-schema."
+        "description": "Candidate JSON Schema. The function asks the validator to load it; this is not exhaustive validation against the JSON Schema meta-schema."
       }
     ],
-    "returns": "BOOLEAN — `TRUE` if the schema is well-formed, `FALSE` otherwise.",
-    "description": "Lint a JSON Schema before applying it. Catches typos and structural mistakes that would otherwise cause every `json_schema_validate` call to fail at runtime.\n\nA reasonable habit: gate schema deployments through this function in CI, the same way you'd run a YAML or SQL linter.",
+    "returns": "BOOLEAN — TRUE if the schema is accepted; raises an error if it is invalid. SQL NULL propagates NULL.",
+    "description": "Check that the validator can load a JSON Schema. An invalid schema raises an error, making this useful as a deployment gate. Use COALESCE(TRY(json_schema_validate_schema(definition)), false) when auditing a registry and you want invalid entries flagged instead of aborting the query. Successful loading is not exhaustive meta-schema validation; some unsupported or misspelled keyword values may be accepted.",
     "examples": [
       {
         "description": "Lint a schema before deploying",
@@ -68,7 +68,7 @@
       },
       {
         "description": "Find any malformed schemas in a registry table",
-        "code": "SELECT name, version\nFROM schema_registry\nWHERE NOT json_schema_validate_schema(definition);"
+        "code": "SELECT name, version\nFROM schema_registry\nWHERE NOT COALESCE(TRY(json_schema_validate_schema(definition)), false);"
       }
     ],
     "relatedFunctions": [
@@ -98,15 +98,15 @@
       }
     ],
     "returns": "JSON — a [JSON Patch (RFC 6902)](https://datatracker.ietf.org/doc/html/rfc6902) array of `add` operations that, when applied, fill in the missing defaults.",
-    "description": "Compute the JSON Patch (RFC 6902) diff that would bring `json_data` into conformance with the `default` values declared by the schema. Returns the patch — does **not** apply it (use `json_schema_update` for the in-place variant).\n\nUse the patch when you want to log or audit which fields were synthesized, or when you need to apply the same diff to multiple downstream representations of the document.",
+    "description": "Compute the JSON Patch (RFC 6902) diff that would bring `json_data` into conformance with the `default` values declared by the schema. Returns the patch — does **not** apply it (use `json_schema_update` for the in-place variant).\n\nUse the patch when you want to log or audit which fields were synthesized, or when you need to apply the same diff to multiple downstream representations of the document. The function also validates the document and raises on invalid values; defaults do not repair type mismatches. Use TRY for an audit column that should return NULL on errors, and validate the schema separately first.",
     "examples": [
       {
         "description": "Generate a patch for a partial document",
         "code": "SELECT json_schema_patch('{\n  \"$schema\": \"https://json-schema.org/draft-07/schema\",\n  \"type\": \"object\",\n  \"properties\": {\n    \"id\":   {\"type\": \"integer\", \"default\": 5},\n    \"name\": {\"type\": \"string\"}\n  }\n}', {'name': 'George'}) AS patch;\n-- [{\"op\":\"add\",\"path\":\"/id\",\"value\":5}]"
       },
       {
-        "description": "Materialize patches alongside the original payload for auditing",
-        "code": "SELECT\n  payload,\n  json_schema_patch(:schema, payload) AS defaults_patch\nFROM events_raw;"
+        "description": "Audit patches; NULL marks input or schema errors",
+        "code": "SELECT\n  payload,\n  TRY(json_schema_patch(:schema, payload)) AS defaults_patch\nFROM events_raw;"
       }
     ],
     "relatedFunctions": [
@@ -137,7 +137,7 @@
       }
     ],
     "returns": "JSON — the input value with missing defaults filled in.",
-    "description": "Apply the schema's `default` values inline. Equivalent to running `json_schema_patch` and applying the resulting patch — but in a single function call you can use directly in a `SELECT` projection.\n\nThis is the function to reach for when you want enriched JSON, not a diff.",
+    "description": "Apply the schema's `default` values inline. Equivalent to running `json_schema_patch` and applying the resulting patch — but in a single function call you can use directly in a `SELECT` projection.\n\nThis is the function to reach for when you want enriched JSON, not a diff. The function also validates the document and raises on invalid values; defaults do not repair type mismatches. Use TRY for an audit column that should return NULL on errors, and validate the schema separately first.",
     "examples": [
       {
         "description": "Fill in a missing default",
@@ -145,7 +145,7 @@
       },
       {
         "description": "Build a clean table with defaults applied",
-        "code": "CREATE TABLE events_enriched AS\nSELECT json_schema_update(:schema, payload) AS payload\nFROM events_raw\nWHERE json_schema_validate(:schema, payload);"
+        "code": "CREATE TABLE events_enriched AS\nSELECT json_schema_update(:schema, payload) AS payload\nFROM events_raw\nWHERE COALESCE(TRY(json_schema_validate(:schema, payload)), false);"
       }
     ],
     "relatedFunctions": [

@@ -1,0 +1,68 @@
+{
+  "title": "QuickJS",
+  "subtitle": "Bring JavaScript expressions into DuckDB queries",
+  "intro": "Evaluate a JavaScript expression, call a function with SQL arguments, or expand an array into rows. Use the embedded QuickJS engine for transformations that benefit from JavaScript control flow, string methods, or JSON reshaping.",
+  "flow": [
+    "SQL arguments",
+    "JavaScript",
+    "Text / JSON / rows"
+  ],
+  "referenceTitle": "Core SQL surface",
+  "reference": [
+    {
+      "name": "SELECT quickjs(code)",
+      "description": "Evaluate JavaScript and return its result as VARCHAR."
+    },
+    {
+      "name": "FROM quickjs(code, ...)",
+      "description": "Evaluate an array expression; emit one result row per element."
+    },
+    {
+      "name": "quickjs_eval(function, ...)",
+      "description": "Call a JavaScript function and return JSON."
+    },
+    {
+      "name": "arg0, arg1, ...",
+      "description": "Access positional arguments in the table form."
+    },
+    {
+      "name": "parsed_arg0, ...",
+      "description": "Access a parsed copy of JSON strings in the table form."
+    },
+    {
+      "name": "JSON.parse(text)",
+      "description": "Parse a JSON string argument inside quickjs_eval."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Match the return shape",
+      "body": "Scalar quickjs returns VARCHAR, quickjs_eval returns JSON, and FROM quickjs returns rows in a result column. Cast or extract the result explicitly when the surrounding SQL needs a numeric or structured value."
+    },
+    {
+      "title": "Keep the interpreter focused",
+      "body": "JavaScript runs per row and costs more than native SQL. Filter first and reserve it for transformations that need it. This is an embedded language runtime, without browser or Node APIs; use trusted script text."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Call a function with row values",
+      "sql": "SELECT n, quickjs_eval(\n  'x => x * x', n\n)::INTEGER AS square\nFROM range(1, 4) t(n);\n-- 1, 4, 9",
+      "caption": "Use function parameters for per-row SQL arguments.",
+      "mode": "local"
+    },
+    {
+      "title": "Unpack a transformed array",
+      "sql": "SELECT result::INTEGER AS value\nFROM quickjs(\n  'parsed_arg0.map(x => x * arg1)',\n  '[1,2,3]', 3\n);\n-- 3, 6, 9",
+      "caption": "The table form exposes raw and parsed arguments.",
+      "mode": "local"
+    },
+    {
+      "title": "Reshape a JSON document",
+      "sql": "SELECT quickjs_eval(\n  'text => { const d = JSON.parse(text);' ||\n  'return {user: d.name, active: true}; }',\n  '{\"name\":\"Ada\"}'\n);\n-- {\"user\":\"Ada\",\"active\":true}",
+      "caption": "JSON arrives as text here; parse before accessing its fields.",
+      "mode": "local"
+    }
+  ],
+  "assertions": "SELECT CASE WHEN quickjs_eval('x => x * x', 7)::INTEGER = 49 AND (quickjs_eval('text => { const d = JSON.parse(text); return {user: d.name, active: true}; }', '{\"name\":\"Ada\"}')->>'user') = 'Ada' THEN true ELSE error('QuickJS result mismatch') END; SELECT CASE WHEN sum(result::INTEGER)=18 THEN true ELSE error('QuickJS table mismatch') END FROM quickjs('parsed_arg0.map(x => x * arg1)', '[1,2,3]', 3);"
+}

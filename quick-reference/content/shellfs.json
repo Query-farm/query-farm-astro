@@ -1,0 +1,68 @@
+{
+  "title": "Shellfs",
+  "subtitle": "Read and write shell pipelines through file paths",
+  "intro": "Use a shell command as a DuckDB file source or sink. A trailing pipe reads command output; a leading pipe sends COPY output to a command. Useful for local tools that already produce or consume CSV and JSON.",
+  "flow": [
+    "Local command",
+    "Streaming pipe",
+    "DuckDB rows"
+  ],
+  "referenceTitle": "Pipe paths + SQL integration",
+  "reference": [
+    {
+      "name": "'command |'",
+      "description": "Read the command’s standard output as a file."
+    },
+    {
+      "name": "'| command'",
+      "description": "Write bytes to the command’s standard input."
+    },
+    {
+      "name": "read_csv(pipe_path, ...)",
+      "description": "Parse streamed CSV with normal DuckDB reader options."
+    },
+    {
+      "name": "read_json(pipe_path, ...)",
+      "description": "Parse JSON emitted by a command."
+    },
+    {
+      "name": "COPY (...) TO pipe_path",
+      "description": "Stream query results into a command; specify the format."
+    },
+    {
+      "name": "SET ignore_sigpipe = true",
+      "description": "Optional setting to ignore SIGPIPE; default is false."
+    }
+  ],
+  "notes": [
+    {
+      "title": "Pipe placement sets direction",
+      "body": "Place | at the end to read, or at the beginning to write. Commands run through the host shell with the process’s permissions. Keep paths trusted and never construct commands by concatenating untrusted input."
+    },
+    {
+      "title": "Treat the source as a stream",
+      "body": "Pipes do not behave like seekable local files. CSV and newline-delimited JSON are natural fits. Set explicit parsing options when needed, and ensure the command and any prerequisite tools exist on the host."
+    }
+  ],
+  "examples": [
+    {
+      "title": "Query a command’s CSV output",
+      "sql": "SELECT sum(n) AS total\nFROM read_csv(\n  'printf \"n\\n1\\n2\\n3\\n\" |',\n  header = true\n);\n-- 6",
+      "caption": "Runs local printf; the trailing pipe makes it a readable path.",
+      "mode": "local"
+    },
+    {
+      "title": "Compress an export with gzip",
+      "sql": "COPY (SELECT range AS n FROM range(1, 4))\nTO '| gzip > /tmp/qf-shellfs.csv.gz'\n(FORMAT CSV, HEADER, COMPRESSION UNCOMPRESSED);",
+      "caption": "Requires gzip and writable /tmp. Disable COPY compression so only gzip compresses the stream.",
+      "mode": "local"
+    },
+    {
+      "title": "Read the archive back",
+      "sql": "SELECT sum(n) AS total\nFROM read_csv('/tmp/qf-shellfs.csv.gz');\n-- 6",
+      "caption": "Run after the export above; DuckDB detects gzip from the filename.",
+      "mode": "local"
+    }
+  ],
+  "assertions": "SELECT CASE WHEN sum(n) = 6 AND count(*) = 3 THEN true ELSE error('Shellfs gzip round trip failed') END FROM read_csv('/tmp/qf-shellfs.csv.gz');"
+}

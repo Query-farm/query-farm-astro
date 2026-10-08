@@ -64,11 +64,43 @@ refresh commands are `fetch:versions`, `snapshot:usage`, and
 - `scripts/haybarn-functions/` — function capture, verification, and indexing
 - `scripts/` — snapshot, documentation-generation, and search-index tooling
 - `extension-diff-tools/` — extension introspection and example validation
+- `quick-reference/` — Typst sources, curated content, fonts, build tools, and validation records
+- `public/quick-reference/` — extension PDFs, combined collection, and download archive
 
 The extension loader validates merged data with Zod and intentionally fails the
 build on schema mismatches. VGI SDK reference pages are generated from their
 language repositories; see `VGI_DOCS_GUIDE.md` before editing those pages.
 Visual changes should follow `DESIGN_BRIEF.md`.
+
+## Extension PDF quick references
+
+Every public extension documentation page links to its printable PDF below the
+page description. PDFs live at `/quick-reference/<slug>.pdf`; the collection and
+ZIP are in the same directory. Keep these rendered assets and their Typst sources
+in the repository together. Ordinary website builds verify and copy existing PDFs;
+they do not require Typst, DuckDB, or network access.
+
+To update a guide, edit its content in `quick-reference/content/<slug>.json`.
+Lindel and Stochastic use dedicated `.typ` files and shared `examples.json`.
+The shared layout is `quick-reference/template.typ`; update the edition date in
+`quick-reference/edition.json` when publishing a revised edition. Then run:
+
+```sh
+npm run generate:quick-references -- --check  # execute local SQL and regenerate
+npm run check:quick-reference-layout         # check rendered pages
+npm run build                               # verify assets and build linked pages
+```
+
+PDF regeneration needs Typst and Poppler; SQL checks also need DuckDB and the
+installed extensions. Setup-dependent examples are recorded separately from
+executed examples. For fixes awaiting community packages, pass
+`--extension-dir /path/to/built-extensions` to the generation command; see the
+workflow below for the six guides currently tested against repaired v1.5 builds.
+The Node-only asset check runs before every site build and
+rejects missing PDFs, catalog mismatches, or sources changed since rendering.
+Include `quick-reference/` and `public/quick-reference/` together when committing
+updates. See [the PDF workflow](quick-reference/README.txt) for prerequisites and
+[the findings log](quick-reference/FINDINGS.txt) for versioned API discrepancies.
 
 ## Haybarn function guide
 
