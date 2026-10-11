@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import { searchDevPlugin } from './scripts/search-dev.mjs';
+import { blogSitemapMetadata } from './scripts/blog-sitemap.mjs';
 import { defaultSnapshotId } from './src/haybarn-functions/data/haybarn-release.mjs';
 
 import tailwindcss from '@tailwindcss/vite';
@@ -15,6 +16,7 @@ import starlight from '@astrojs/starlight';
 // `astro dev` sets NODE_ENV=development, `astro build` sets production.
 const GA_MEASUREMENT_ID = 'G-EZ01WJETLF';
 const GA_ENABLED = process.env.NODE_ENV === 'production';
+const blogSitemap = blogSitemapMetadata();
 
 // Shiki theme, retuned for the Strata Sun palette (see DESIGN_BRIEF.md).
 // Ground is rock-900 (#1a1512) — the same surface every code block uses.
@@ -520,11 +522,13 @@ export default defineConfig({
       ],
     }),
     mdx(),
+    blogSitemap.integration,
     // Keep the sitemap to pages that are actually indexable. Submitting a
     // noindex or redirect-only URL is a Search Console error, and all of
     // these are reachable through on-page navigation anyway, so nothing
     // depends on them being listed here.
     sitemap({
+      serialize: blogSitemap.serialize,
       filter: page => {
         const { pathname } = new URL(page);
         // Current release archives resolve to the stable reference canonical;
@@ -532,9 +536,8 @@ export default defineConfig({
         const currentArchive = `/products/haybarn/functions/releases/${defaultSnapshotId}`;
         if (pathname === currentArchive || pathname.startsWith(currentArchive + '/')) return false;
         if (pathname.startsWith('/products/haybarn/functions/compare/')) return false;
-        // Blog tag archives: a tag holding one post carries robots noindex
-        // (src/lib/blog-tags.ts).
-        if (pathname.startsWith('/blog/tags/')) return false;
+        // Blog noindex rules and authored dates are applied by serialize,
+        // using the same metadata as the rendered posts and tag archives.
         // Per-function pages under an extension are pure 301 redirects to
         // their category anchor (src/pages/products/extensions/[slug]/functions/[function].astro)
         // — never resolve with a 200, so they don't belong in a sitemap.
