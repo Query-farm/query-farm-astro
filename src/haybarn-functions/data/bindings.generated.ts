@@ -3,6 +3,8 @@
 import binding0 from './bindings/duckdb-1.3.2.json';
 import binding1 from './bindings/duckdb-1.4.4.json';
 import binding2 from './bindings/duckdb-1.5.5.json';
-import binding3 from './bindings/haybarn-1.5.5-rc3.json';
+import binding3 from './bindings/duckdb-1.5.6.json';
+import binding4 from './bindings/haybarn-1.5.5-rc3.json';
+import binding5 from './bindings/haybarn-1.5.6-rc1.json';
 
-export const bindingModules = [binding0, binding1, binding2, binding3];
+export const bindingModules = [binding0, binding1, binding2, binding3, binding4, binding5];
