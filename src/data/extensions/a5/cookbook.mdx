@@ -9,7 +9,7 @@ The everyday entry point — convert `(lon, lat)` to a `UBIGINT` cell ID at a ch
 SELECT a5_lonlat_to_cell(-74.0060, 40.7128, 15) AS nyc_cell;
 ```
 
-<QueryResult columns={["nyc_cell"]} rows={[["2742821848331845632"]]} />
+<QueryResult columns={["nyc_cell"]} rows={[["2760559170984869888"]]} />
 
 Higher resolution = smaller cells. See [`a5_lonlat_to_cell`](#a5_lonlat_to_cell) for the full signature and [`a5_cell_area`](#a5_cell_area) for the equal-area cell size at any resolution:
 
@@ -43,7 +43,7 @@ Round-trip a cell ID back to `(lon, lat)` for labeling or display:
 SELECT a5_cell_to_lonlat(a5_lonlat_to_cell(-74.0060, 40.7128, 15)) AS center_coords;
 ```
 
-<QueryResult columns={["center_coords"]} rows={[["[-74.00764805615836, 40.71280225138428]"]]} />
+<QueryResult columns={["center_coords"]} rows={[["[-74.00764805615836, 40.712802251384296]"]]} />
 
 For a `GEOMETRY` point instead of a raw `[lon, lat]` array, use [`a5_cell_to_point`](#a5_cell_to_point).
 
@@ -80,15 +80,14 @@ The cell at resolution 10 covering Madrid (-3.7037, 40.41677):
 
 ## Cover a polygon (or point, or line) with cells
 
-[`a5_geometry_to_cells`](#a5_geometry_to_cells) runs the inverse of `a5_cell_to_geometry` — hand it any `GEOMETRY` and a resolution, and it returns the covering set of A5 cells. A plain `::GEOMETRY` cast from WKT text works with no extension beyond `a5` itself. The result comes back **compacted** — complete groups of sibling cells collapse to a coarser parent — the right shape for storage, transfer, and set operations. But cell boundaries at different resolutions don't nest geometrically, so **uncompact to a single resolution before drawing the cells on a map**; skip that and a mixed-resolution result will show gaps that aren't really there:
+[`a5_geometry_to_cells`](#a5_geometry_to_cells) runs the inverse of `a5_cell_to_geometry` — hand it any `GEOMETRY` and a resolution, and it returns the covering set of A5 cells. A plain `::GEOMETRY` cast from WKT text works with no extension beyond `a5` itself. For a polygon the result is a **covering**: complete groups of sibling cells collapse to a coarser parent, sorted in curve order, followed by a trailing **compaction marker** — a `UBIGINT` that is not a cell but records the resolution the covering stands for (see [Coverings and the compaction marker](#coverings-and-the-compaction-marker)). That's the right shape for storage, transfer, and set operations. But the marker is not a cell, and cell boundaries at different resolutions don't nest geometrically, so **uncompact before unnesting or drawing the cells on a map** — [`a5_uncompact`](#a5_uncompact) drops the marker and expands every cell to the resolution the covering was built at; skip it and a mixed-resolution result will show gaps that aren't really there:
 
 ```sql
 SELECT unnest(a5_uncompact(
     a5_geometry_to_cells(
         'POLYGON((-74.02 40.70, -73.99 40.70, -73.99 40.72, -74.02 40.72, -74.02 40.70))'::GEOMETRY,
         12
-    ),
-    12
+    )
 )) AS cell;
 ```
 
@@ -122,8 +121,7 @@ SELECT unnest(a5_uncompact(
         'POLYGON((-74.02 40.70, -73.99 40.70, -73.99 40.72, -74.02 40.72, -74.02 40.70))'::GEOMETRY,
         12,
         true
-    ),
-    12
+    )
 )) AS cell;
 ```
 
@@ -152,7 +150,7 @@ SELECT unnest(a5_uncompact(
   caption="Overlapping coverage of the same bounding box, uncompacted to a uniform resolution: genuinely gap-free, at the cost of cells extending past the query polygon's edge."
 />
 
-`a5_geometry_to_cells`'s compacted output is also the right shape to join against a uniform-resolution indexed cell column — `a5_uncompact` it to that resolution first — but that's a different reason to uncompact than the rendering one above: joins care about matching resolutions, drawing cares about geometric nesting.
+To ask whether a single cell falls inside the covering, skip the unnest entirely — [`a5_contains`](#a5_contains) probes the compacted covering directly, as long as the cell is at the covering's resolution. To join against an indexed cell column, `a5_uncompact` first and join on the expanded cells — but that's a different reason to uncompact than the rendering one above: joins care about matching resolutions, drawing cares about geometric nesting.
 
 ## Roll up to a coarser resolution
 
@@ -171,7 +169,25 @@ FROM indexed
 GROUP BY cell_10;
 ```
 
-[`a5_get_resolution`](#a5_get_resolution) recovers the resolution from a cell ID; [`a5_get_num_children`](#a5_get_num_children) returns the parent/child cell ratio between two resolutions.
+[`a5_get_resolution`](#a5_get_resolution) recovers the resolution from a cell ID; [`a5_get_num_children`](#a5_get_num_children) returns the parent/child cell ratio between two resolutions. Omit the resolution — `a5_cell_to_parent(cell_15)` — for the immediate parent one level up.
+
+## Parent vs supercell
+
+A5 cells don't nest exactly across resolutions: a cell's **parent** is its ancestor in the cell-ID hierarchy, and it need not contain the cell. When you want the coarser cell a point *actually lies in* — which is usually what a spatial roll-up means — use [`a5_cell_to_supercell`](#a5_cell_to_supercell), which returns the coarser cell containing the cell's center:
+
+```sql
+SELECT a5_cell_to_parent(c, 5)                   AS parent,
+       a5_cell_to_supercell(c, 5)                AS supercell,
+       a5_lonlat_to_cell(-74.0060, 40.7128, 5)   AS containing
+FROM (SELECT a5_lonlat_to_cell(-74.0060, 40.7128, 15) AS c);
+```
+
+<QueryResult
+  columns={["parent", "supercell", "containing"]}
+  rows={[["2760143621624692736", "2761269521531535360", "2761269521531535360"]]}
+/>
+
+The supercell matches encoding the original point directly at resolution 5; the parent is a neighboring cell. The parent is the cheaper, purely integer walk and is fine for bucketing that only needs to be consistent; use the supercell when the coarse buckets must respect real geography.
 
 ## Drill down to children
 
@@ -187,15 +203,33 @@ SELECT a5_cell_to_children(a5_lonlat_to_cell(-74.0060, 40.7128, 10)) AS kids;
 SELECT a5_cell_to_children(a5_lonlat_to_cell(-74.0060, 40.7128, 10), 12) AS descendants;
 ```
 
+The spatial counterpart is [`a5_cell_to_subcells`](#a5_cell_to_subcells): the finer cells whose *centers* lie inside the cell — the inverse of `a5_cell_to_supercell`. The two sets differ slightly at the edges:
+
+```sql
+SELECT a5_count(a5_cell_to_subcells(a5_lonlat_to_cell(-74.0060, 40.7128, 5), 8)) AS subcells,
+       a5_count(a5_cell_to_children(a5_lonlat_to_cell(-74.0060, 40.7128, 5), 8)) AS children;
+```
+
+<QueryResult columns={["subcells", "children"]} rows={[["62", "64"]]} />
+
+Subcells come back as a covering, so count them with [`a5_count`](#a5_count) rather than `len()`; the subcells of every cell at one resolution partition each finer resolution exactly.
+
 ## Neighborhood search by cell-step
 
 [`a5_grid_disk`](#a5_grid_disk) returns all cells within `k` edge-steps of a center cell — the typical "k-ring" pattern from H3:
 
 ```sql
-SELECT unnest(a5_grid_disk(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 1)) AS neighbor_cell;
+SELECT unnest(a5_uncompact(
+    a5_grid_disk(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 1)
+)) AS neighbor_cell;
 ```
 
-[`a5_grid_disk_vertex`](#a5_grid_disk_vertex) is the slightly wider variant that includes vertex-touching cells.
+<QueryResult
+  columns={["neighbor_cell"]}
+  rows={[["2760557102958116864"], ["2760559168837386240"], ["2760559169911128064"], ["2760559170984869888"], ["2760559172058611712"], ["2760559181722288128"]]}
+/>
+
+The center cell and its five edge neighbors. `a5_grid_disk` itself returns a compacted covering — here three cells plus the trailing compaction marker — so expand it with [`a5_uncompact`](#a5_uncompact) before unnesting, or you get coarser parent cells in place of the resolution-15 neighbors they stand for, plus the marker as a bogus row. [`a5_grid_disk_vertex`](#a5_grid_disk_vertex) is the slightly wider variant that includes vertex-touching cells.
 
 ## Neighborhood search by metric radius
 
@@ -206,32 +240,114 @@ When you have a real-world distance budget rather than a step count:
 SELECT a5_spherical_cap(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 5000.0) AS nearby_cells;
 ```
 
-The typical proximity-query pattern: expand to a coverage set, then probe an indexed cell column.
+That's a compacted covering — 248 cells plus the marker standing in for 2,480 resolution-15 cells. Test a single cell against it directly with [`a5_contains`](#a5_contains):
+
+```sql
+WITH cap AS (
+  SELECT a5_spherical_cap(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 5000.0) AS cells
+)
+SELECT a5_contains(cells, a5_lonlat_to_cell(-73.9857, 40.7484, 15)) AS midtown_in_range,
+       a5_contains(cells, a5_lonlat_to_cell(-73.7781, 40.6413, 15)) AS jfk_in_range
+FROM cap;
+```
+
+<QueryResult columns={["midtown_in_range", "jfk_in_range"]} rows={[["true", "false"]]} />
+
+For a join against an indexed cell column, uncompact to the column's resolution and probe:
 
 ```sql
 WITH cells AS (
-  SELECT unnest(a5_spherical_cap(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 5000.0)) AS c
+  SELECT unnest(a5_uncompact(
+      a5_spherical_cap(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 5000.0)
+  )) AS c
 )
 SELECT t.*
 FROM   transactions t
 JOIN   cells ON cells.c = t.cell_15;
 ```
 
-## Compact a coverage set
+## Coverings and the compaction marker
 
-[`a5_compact`](#a5_compact) replaces complete groups of sibling cells with their parent — fewer rows to ship, expandable on the consumer side:
+[`a5_compact`](#a5_compact) replaces complete groups of sibling cells with their parent — fewer rows to ship, expandable on the consumer side. The four resolution-6 children of a cell compact back to that one resolution-5 cell:
 
 ```sql
 SELECT a5_compact(a5_cell_to_children(a5_lonlat_to_cell(-122.4, 37.8, 5))) AS compacted;
 ```
 
-<QueryResult columns={["compacted"]} rows={[["[1937110789722734592]"]]} />
+<QueryResult columns={["compacted"]} rows={[["[1937110789722734592, 17295511418962968640]"]]} />
 
-[`a5_uncompact`](#a5_uncompact) is the inverse — expand a mixed-resolution set to a uniform target resolution:
+The second element is not a cell. It's the **compaction marker** that ends every covering — from `a5_compact`, `a5_grid_disk`, `a5_grid_disk_vertex`, `a5_spherical_cap`, `a5_cell_to_subcells`, the set operations, and polygon results of `a5_geometry_to_cells` — and it records the resolution the cells stand for. Without it, a covering that compacted down to a single resolution-5 cell would look the same whether it was built at resolution 6 or 12. Read it, and the size of the region, without expanding anything:
 
 ```sql
-SELECT a5_uncompact([a5_lonlat_to_cell(-122.4, 37.8, 5)], 7) AS expanded;
+WITH c AS (SELECT a5_compact(a5_cell_to_children(a5_lonlat_to_cell(-122.4, 37.8, 5))) AS cells)
+SELECT a5_covering_resolution(cells)                             AS resolution,
+       a5_count(cells)                                           AS cell_count,
+       list_filter(cells, x -> NOT a5_is_compaction_marker(x))   AS compacted_cells
+FROM c;
 ```
+
+<QueryResult
+  columns={["resolution", "cell_count", "compacted_cells"]}
+  rows={[["6", "4", "[1937110789722734592]"]]}
+/>
+
+[`a5_uncompact`](#a5_uncompact) is the inverse — it expands a covering to its own resolution and drops the marker:
+
+```sql
+SELECT a5_uncompact(a5_compact(a5_cell_to_children(a5_lonlat_to_cell(-122.4, 37.8, 5)))) AS expanded;
+```
+
+A plain list with no marker is accepted too; its resolution is that of its finest cell. To expand a hand-built list to a resolution of your choosing, expand each cell instead:
+
+```sql
+SELECT flatten(list_transform(
+    [a5_lonlat_to_cell(-122.4, 37.8, 5)],
+    c -> a5_cell_to_children(c, 7)
+)) AS expanded;
+```
+
+## Combine regions with set operations
+
+Coverings compose directly — [`a5_union`](#a5_union), [`a5_intersect`](#a5_intersect), and [`a5_difference`](#a5_difference) return a new covering, [`a5_overlaps`](#a5_overlaps) answers yes/no, and [`a5_area`](#a5_area) measures the result in square meters. Nothing is unnested along the way:
+
+```sql
+WITH zones AS (
+  SELECT a5_spherical_cap(a5_lonlat_to_cell(-74.0060, 40.7128, 13), 3000.0) AS lower_manhattan,
+         a5_spherical_cap(a5_lonlat_to_cell(-73.9903, 40.6928, 13), 3000.0) AS brooklyn_heights
+)
+SELECT a5_overlaps(lower_manhattan, brooklyn_heights)                  AS overlaps,
+       a5_count(a5_union(lower_manhattan, brooklyn_heights))           AS either,
+       a5_count(a5_intersect(lower_manhattan, brooklyn_heights))       AS both_zones,
+       a5_count(a5_difference(lower_manhattan, brooklyn_heights))      AS manhattan_only,
+       round(a5_area(a5_intersect(lower_manhattan, brooklyn_heights)) / 1e6, 2) AS shared_km2
+FROM zones;
+```
+
+<QueryResult
+  columns={["overlaps", "either", "both_zones", "manhattan_only", { name: "shared_km2", align: "right" }]}
+  rows={[["true", "84", "30", "27", 15.2]]}
+/>
+
+Both arguments must be at the same resolution — combining a resolution-12 covering with a resolution-13 one is an error, not a silent mix. `a5_area` and `a5_count` count overlapping cells more than once, so `a5_union` two regions before measuring their combined size.
+
+## Migrate cell IDs stored before A5 1.0
+
+A5 1.0 renumbered cells along a new curve. The cells themselves are unchanged at resolution 2 and finer, but their IDs are different — and an old ID is still well-formed, so it silently names a *different* cell instead of failing. [`a5_migrate`](#a5_migrate) converts a pre-1.0 ID to the current one:
+
+```sql
+SELECT a5_migrate(2742821848331845632)          AS migrated,
+       a5_lonlat_to_cell(-74.0060, 40.7128, 15) AS current;
+```
+
+<QueryResult columns={["migrated", "current"]} rows={[["2760559170984869888", "2760559170984869888"]]} />
+
+`2742821848331845632` is the resolution-15 Times Square cell as earlier versions of this extension encoded it. Migrate stored IDs exactly once — nothing in an ID says which index it belongs to, so running it twice corrupts them:
+
+```sql
+UPDATE indexed SET cell_15 = a5_migrate(cell_15);
+```
+
+Resolution-1 cells were redefined in 1.0 rather than renumbered, so `a5_migrate` leaves their IDs alone; re-index resolution-1 data from its source coordinates instead.
 
 ## Round-trip cell IDs as hex strings
 
@@ -265,7 +381,7 @@ JOIN   zones  z USING (cell)
 GROUP  BY z.zone_name;
 ```
 
-For polygon zones rather than centroids, encode each zone with [`a5_geometry_to_cells`](#a5_geometry_to_cells) instead and `UNNEST` the result before joining.
+For polygon zones rather than centroids, encode each zone with [`a5_geometry_to_cells`](#a5_geometry_to_cells) instead and `UNNEST(a5_uncompact(...))` the covering before joining.
 
 ## Inspect the base grid
 
@@ -275,7 +391,7 @@ The 12 root cells covering the entire globe at resolution 0:
 SELECT unnest(a5_get_res0_cells()) AS root_cell;
 ```
 
-[`a5_get_num_cells`](#a5_get_num_cells) returns the total cell count at any resolution — useful for sizing decisions before encoding a large dataset. [`a5_world_cell`](#a5_world_cell) returns the single root cell (ID `0`) above all twelve of these; [`a5_is_valid_cell`](#a5_is_valid_cell) is a quick sanity check when a `UBIGINT` came from outside DuckDB — it rejects a cell whose encoded origin points past the 12 base cells, which is the shape of ID corruption you'd actually hit (a bit-flipped or truncated cell), not just any small integer:
+[`a5_get_num_cells`](#a5_get_num_cells) returns the total cell count at any resolution (up to [`a5_max_resolution()`](#a5_max_resolution), 30) — useful for sizing decisions before encoding a large dataset. [`a5_world_cell`](#a5_world_cell) returns the single root cell (ID `0`) above all twelve of these; [`a5_is_valid_cell`](#a5_is_valid_cell) is a quick sanity check when a `UBIGINT` came from outside DuckDB — it rejects a cell whose encoded origin points past the 12 base cells, which is the shape of ID corruption you'd actually hit (a bit-flipped or truncated cell), not just any small integer:
 
 ```sql
 SELECT a5_is_valid_cell(a5_lonlat_to_cell(-74.0060, 40.7128, 10)) AS ok,

@@ -26,6 +26,10 @@ A5 is a **newer** discrete global grid system. Its specification and reference l
 Reach for A5 specifically when **uniform cell area** matters: cross-latitude density comparisons, equal-area sampling, anything where H3's hex-area variation (it swings by roughly 2× across the globe, in a smooth soccer-ball-like pattern, not just near the poles) is a problem. For "the broadest tool support" or "matching what the rest of my stack uses," H3 is still the conservative pick. The upstream [A5 vs H3 page](https://a5geo.org/docs/recipes/a5-vs-h3) walks through the trade in detail.
 </Callout>
 
+<Callout type="warning" title="Upgrading from an earlier version? Cell IDs changed in A5 1.0">
+This extension is built on [A5 1.0](https://crates.io/crates/a5), a breaking release. The same cell now has a **different ID** at resolution 2 and finer — and old IDs are still well-formed, so they silently name *different* cells. Convert stored IDs once with [`a5_migrate`](#a5_migrate). Coverings (`a5_compact`, `a5_grid_disk`, `a5_spherical_cap`, polygon `a5_geometry_to_cells`, …) now end in a [compaction marker](#coverings-and-set-operations), and `a5_uncompact` no longer takes a resolution. The [upgrade guide](https://github.com/Query-farm/a5/blob/v1.5/docs/UPGRADING.md) has the full checklist.
+</Callout>
+
 ## A5 vs H3 vs S2 at a glance
 
 | Property        | A5 (this extension)                 | [H3](https://h3geo.org/)                       | [S2](https://s2geometry.io/)                   |
@@ -44,14 +48,14 @@ If you're already on H3 and its hex-area variation isn't biting you, there's no 
 
 Pick the coarsest resolution that still distinguishes the phenomena you're measuring — each finer level is roughly a 4× row count after `GROUP BY`.
 
-| Resolution | Cell area (approx)    | Typical use                       |
-|------------|-----------------------|-----------------------------------|
-| 0–5        | 42M km² – 33k km²     | Continental / country-scale rollup |
-| 6–10       | 8k km² – 130 km²      | Regional / metro-scale analysis    |
-| 11–15      | 32 km² – 32 hectares  | City / district analysis           |
-| 16–20      | 8 hectares – 124 m²   | Neighborhood / building analysis   |
-| 21–25      | 31 m² – 0.5 m²        | Room / vehicle scale               |
-| 26–30      | 8 cm² – 0.03 mm²      | Sub-meter precision                |
+| Resolution | Cell area (approx)      | Typical use                       |
+|------------|-------------------------|-----------------------------------|
+| 0–5        | 42.5M km² – 33k km²     | Continental / country-scale rollup |
+| 6–10       | 8.3k km² – 32 km²       | Regional / metro-scale analysis    |
+| 11–15      | 8.1 km² – 3.2 hectares  | City / district analysis           |
+| 16–20      | 7,900 m² – 31 m²        | Neighborhood / building analysis   |
+| 21–25      | 7.7 m² – 300 cm²        | Room / vehicle scale               |
+| 26–30      | 75 cm² – 0.3 cm²        | Sub-meter precision                |
 
 [`a5_cell_area`](#a5_cell_area) returns the exact equal-area size for any resolution; [`a5_cell_edge_length_avg`](#a5_cell_edge_length_avg) returns the average edge length in meters (individual edges vary from it by roughly ±10%); [`a5_get_num_cells`](#a5_get_num_cells) returns the global cell count.
 
@@ -72,7 +76,27 @@ FROM indexed
 GROUP BY cell_10;
 ```
 
-[`a5_cell_to_parent`](#a5_cell_to_parent) walks any cell to a coarser ancestor; [`a5_cell_to_children`](#a5_cell_to_children) goes the other way. For a region-of-interest expressed as a set of cells, [`a5_compact`](#a5_compact) replaces complete groups of siblings with their parent — useful before storing or shipping a coverage set. [`a5_uncompact`](#a5_uncompact) is the inverse.
+[`a5_cell_to_parent`](#a5_cell_to_parent) walks any cell to a coarser ancestor (omit the resolution for the immediate parent; `-1` gives the world cell); [`a5_cell_to_children`](#a5_cell_to_children) goes the other way.
+
+Those follow the **cell-ID hierarchy**, and A5 cells don't nest exactly across resolutions — a cell's parent need not contain it. The geometric counterparts are [`a5_cell_to_supercell`](#a5_cell_to_supercell), the coarser cell that contains the cell's center, and [`a5_cell_to_subcells`](#a5_cell_to_subcells), the finer cells whose centers lie inside it. Roll up by supercell when the coarse buckets must respect real geography; the parent is a cheaper pure-integer walk that's fine when the buckets only need to be consistent.
+
+## Coverings and set operations
+
+A region is a list of cells, and A5 1.0 gives that list a canonical shape: a **covering**. Its cells are compacted (every complete group of siblings replaced by its parent, recursively), sorted in curve order, and followed by one **compaction marker** — a `UBIGINT` that is *not* a cell and records the resolution the cells stand for. [`a5_compact`](#a5_compact), [`a5_grid_disk`](#a5_grid_disk), [`a5_grid_disk_vertex`](#a5_grid_disk_vertex), [`a5_spherical_cap`](#a5_spherical_cap), [`a5_cell_to_subcells`](#a5_cell_to_subcells), the set operations below, and polygon results of [`a5_geometry_to_cells`](#a5_geometry_to_cells) all return coverings.
+
+```sql
+SELECT a5_grid_disk(a5_lonlat_to_cell(-74.0060, 40.7128, 15), 1) AS covering;
+-- [2760557102958116864, 2760559170447998976, 2760559181722288128, 17298044693753364544]
+--  three compacted cells, then the marker (resolution 15)
+```
+
+Because the marker isn't a cell, expand a covering before treating its elements as cells: [`a5_uncompact`](#a5_uncompact)`(cells)` expands to the covering's own resolution and drops the marker, and [`a5_is_compaction_marker`](#a5_is_compaction_marker) filters it out if you want the compacted cells themselves. Most of the time you don't need to expand at all — every function that takes a list of cells accepts a covering (or a plain list, whose resolution is that of its finest cell):
+
+- [`a5_count`](#a5_count), [`a5_area`](#a5_area), [`a5_covering_resolution`](#a5_covering_resolution) — size, square meters, and resolution of a region.
+- [`a5_union`](#a5_union), [`a5_intersect`](#a5_intersect), [`a5_difference`](#a5_difference) — combine two regions into a new covering.
+- [`a5_overlaps`](#a5_overlaps), [`a5_contains`](#a5_contains) — region-vs-region and region-vs-cell tests.
+
+The set operations and `a5_contains` require both sides at the same resolution and raise an error otherwise. `a5_count` and `a5_area` count overlapping cells more than once — `a5_union` first when measuring overlapping regions.
 
 ## Neighborhoods and proximity search
 
@@ -82,7 +106,7 @@ Three traversal primitives, depending on how you define "near":
 - [`a5_grid_disk_vertex`](#a5_grid_disk_vertex) — all cells within `k` **vertex-steps** (a slightly wider disk that includes corner-touching cells).
 - [`a5_spherical_cap`](#a5_spherical_cap) — all cells within a **metric radius** (in meters) of a center cell.
 
-Each returns a `UBIGINT[]`. The typical use is to expand to a coverage set, then probe an indexed cell column with `WHERE cell_id IN (UNNEST(...))` — much cheaper than `ST_DWithin` against raw geometries.
+Each returns a covering. Test one cell against it with [`a5_contains`](#a5_contains), or `a5_uncompact` it and probe an indexed cell column with `WHERE cell_id IN (SELECT UNNEST(a5_uncompact(...)))` — much cheaper than `ST_DWithin` against raw geometries. Don't `unnest` the covering directly: the compacted parents and the trailing marker aren't the cells you indexed.
 
 ## GEOMETRY integration
 
@@ -98,10 +122,10 @@ SELECT ST_AsGeoJSON(
 ) AS geojson;
 ```
 
-[`a5_geometry_to_cells`](#a5_geometry_to_cells) runs the other direction: it accepts any `GEOMETRY` (point, line, polygon, or a MULTI*/GEOMETRYCOLLECTION mix) and returns the A5 cells covering it at a chosen resolution. Points map to their containing cell, lines are traced, and polygons are filled by cell-center containment by default; pass `overlapping := true` to additionally include cells merely touching the boundary, for genuinely gap-free coverage. Polygon holes are subtracted before filling, and the covering set comes back compacted the same way [`a5_compact`](#a5_compact) would.
+[`a5_geometry_to_cells`](#a5_geometry_to_cells) runs the other direction: it accepts any `GEOMETRY` (point, line, polygon, or a MULTI*/GEOMETRYCOLLECTION mix) and returns the A5 cells covering it at a chosen resolution. Points map to their containing cell, lines are traced, and polygons are filled by cell-center containment by default; pass `overlapping := true` to additionally include cells merely touching the boundary, for genuinely gap-free coverage. Polygon holes are excluded, and a geometry with polygon parts comes back as a [covering](#coverings-and-set-operations) — compacted, with a trailing compaction marker — the same shape [`a5_compact`](#a5_compact) produces. Point- and line-only geometries return their plain cells in geometry order.
 
 <Callout type="note" title="Uncompact before you draw it">
-A compacted result is the right shape for storage, transfer, and set operations — but cell boundaries at different resolutions don't nest geometrically, so rendering a mixed-resolution result directly can show gaps that aren't really there. Call [`a5_uncompact`](#a5_uncompact) to a single resolution first whenever you draw the result on a map, as the [Cookbook](#cookbook) does.
+A compacted result is the right shape for storage, transfer, and set operations — but cell boundaries at different resolutions don't nest geometrically, so rendering a mixed-resolution result directly can show gaps that aren't really there. Call [`a5_uncompact`](#a5_uncompact) first whenever you draw the result on a map, as the [Cookbook](#cookbook) does — it expands every cell to the resolution the covering was built at and drops the marker.
 </Callout>
 
 For the raw vertex data underneath a cell's boundary — for custom rendering pipelines that don't go through `GEOMETRY` — [`a5_cell_to_boundary`](#a5_cell_to_boundary) returns `[lon, lat]` pairs directly. The `closed_ring` variant repeats the first vertex at the end so the result is directly usable as a polygon ring; the `segments` overload interpolates additional points along each edge for smoother rendering on curved projections.
@@ -110,17 +134,21 @@ For the raw vertex data underneath a cell's boundary — for custom rendering pi
 
 [`a5_is_valid_cell`](#a5_is_valid_cell) reports whether a `UBIGINT` is a canonically-encoded A5 cell rather than an arbitrary integer — useful right after decoding IDs from external data. [`a5_world_cell`](#a5_world_cell) returns the single root cell (ID `0`) that sits above all twelve resolution-0 cells; it's the cell `0` that [`a5_cell_to_boundary`](#a5_cell_to_boundary) special-cases to an empty boundary, since the whole-globe cell has no finite polygon to draw.
 
+## Cell IDs from earlier versions
+
+IDs stored by a pre-1.0 version of this extension must be converted once with [`a5_migrate`](#a5_migrate) — `UPDATE t SET cell_id = a5_migrate(cell_id)`. Apply it exactly once and only to pre-1.0 IDs; nothing in an ID records which index produced it. Resolution-1 cells were redefined rather than renumbered, so re-index resolution-1 data from source coordinates. See the [Cookbook](#cookbook) for a worked example.
+
 ## Cell IDs as hex strings
 
 A5 IDs round-trip through the canonical 16-character hex form used by the [reference A5 library](https://github.com/felixpalmer/a5):
 
 ```sql
 SELECT a5_u64_to_hex(a5_lonlat_to_cell(-74.0060, 40.7128, 10));
--- e.g. '2607000000000000'
+-- '264f798000000000'
 ```
 
 ```sql
-SELECT a5_hex_to_u64('2607000000000000');
+SELECT a5_hex_to_u64('264f798000000000');
 -- the corresponding UBIGINT
 ```
 
