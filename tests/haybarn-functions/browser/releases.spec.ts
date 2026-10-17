@@ -75,7 +75,7 @@ test('signature changes show both forms and function kinds, with readable mobile
 });
 
 test('comparison content and reference links remain available without JavaScript', async ({ browser }) => {
-  const context = await browser.newContext({ javaScriptEnabled: false });
+  const context = await browser.newContext({ javaScriptEnabled: false, reducedMotion: 'reduce' });
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:4323${comparison}`);
   await expect(page.locator('.change-filters')).toBeHidden();
