@@ -5,6 +5,6 @@ import snapshot1 from './snapshots/duckdb-1.4.4.json';
 import snapshot2 from './snapshots/duckdb-1.5.5.json';
 import snapshot3 from './snapshots/duckdb-1.5.6.json';
 import snapshot4 from './snapshots/haybarn-1.5.5-rc3.json';
-import snapshot5 from './snapshots/haybarn-1.5.6-rc2.json';
+import snapshot5 from './snapshots/haybarn-1.5.6-rc3.json';
 
 export const snapshotModules = [snapshot0, snapshot1, snapshot2, snapshot3, snapshot4, snapshot5];
