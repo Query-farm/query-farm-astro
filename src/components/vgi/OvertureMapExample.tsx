@@ -23,7 +23,6 @@ import {
 
 const LEAFLET_CSS = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css";
 const LEAFLET_JS = "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js";
-const ARROW_CDN = "https://cdn.jsdelivr.net/npm/apache-arrow@18.1.0/+esm";
 
 // One color per real taxonomy.primary value this query can return (see
 // vgi/index.astro's mapExample doc comment) — chosen for mutual contrast
@@ -262,7 +261,7 @@ export default function OvertureMapExample({ sql, setupSql }: Props) {
     try {
       await loadLeaflet();
       const [arrowModule] = await Promise.all([
-        import(/* @vite-ignore */ ARROW_CDN),
+        import("apache-arrow"),
         ensureEngine(),
       ]);
       const [ext, session] = await Promise.all([

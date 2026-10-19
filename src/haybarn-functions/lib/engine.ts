@@ -1,5 +1,6 @@
 import type { AsyncDuckDB, AsyncDuckDBConnection } from '@haybarn/haybarn-wasm';
 import { haybarnBundles } from '../../lib/repl/haybarn-bundles';
+import { createHaybarnWorker } from '../../lib/repl/haybarn-worker';
 
 export { wasmVersion } from '../data/settings';
 export interface Engine { db: AsyncDuckDB; worker: Worker; version: string; bundle: 'eh' | 'mvp'; }
@@ -20,7 +21,7 @@ export function ensureEngine(): Promise<Engine> {
 async function boot(): Promise<Engine> {
   const duckdb = await import('@haybarn/haybarn-wasm');
   const bundle = await duckdb.selectBundle(haybarnBundles);
-  const worker = await duckdb.createWorker(bundle.mainWorker!);
+  const worker = await createHaybarnWorker(bundle.mainWorker!);
   const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), worker);
   try {
     await db.instantiate(bundle.mainModule, bundle.pthreadWorker);

@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests',
-  testMatch: ['haybarn-functions/browser/**/*.spec.ts', 'haybarn-extensions/**/*.spec.ts'],
+  testMatch: ['haybarn-functions/browser/**/*.spec.ts', 'haybarn-extensions/**/*.spec.ts', 'vgi/**/*.spec.ts'],
   timeout: 90_000,
   expect: { timeout: 10_000 },
   workers: 1,

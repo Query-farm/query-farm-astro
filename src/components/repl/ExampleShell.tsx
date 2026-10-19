@@ -36,8 +36,6 @@ const CDN_SCRIPTS = [
   "https://cdn.jsdelivr.net/npm/xterm-addon-webgl@0.16.0/lib/xterm-addon-webgl.min.js",
 ];
 const CDN_CSS = "https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css";
-const ARROW_CDN = "https://cdn.jsdelivr.net/npm/apache-arrow@18.1.0/+esm";
-const READLINE_CDN = "https://cdn.jsdelivr.net/npm/xterm-readline@1.1.2/+esm";
 
 /**
  * Terminal palette — Strata Sun.
@@ -488,9 +486,10 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
     (async () => {
       try {
         await loadScripts();
+        // Bundle ESM dependencies to avoid the CDN's origin-relative preloads.
         const [arrowModule, readlineModule] = await Promise.all([
-          import(/* @vite-ignore */ ARROW_CDN),
-          import(/* @vite-ignore */ READLINE_CDN),
+          import("apache-arrow"),
+          import("xterm-readline"),
         ]);
         if (disposed || !containerRef.current) return;
 

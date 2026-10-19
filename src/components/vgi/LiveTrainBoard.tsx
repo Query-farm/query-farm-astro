@@ -23,8 +23,6 @@ import {
   type Session,
 } from "../../lib/repl/duckdb-boot";
 
-const ARROW_CDN = "https://cdn.jsdelivr.net/npm/apache-arrow@18.1.0/+esm";
-
 // The worker advertises a 30s freshness TTL on trip data (vgi-trains-ts
 // CLAUDE.md: TRIP_CACHE_TTL_SECONDS) — VGI's client-side result cache serves
 // repeats of the same query from that cache rather than re-fetching NS
@@ -259,7 +257,7 @@ export default function LiveTrainBoard({ sql }: Props) {
     setStatus("loading");
     setErrorMsg(null);
     try {
-      const arrowModule = await import(/* @vite-ignore */ ARROW_CDN);
+      const arrowModule = await import("apache-arrow");
       const { tableFromIPC } = arrowModule as any;
       tableFromIPCRef.current = tableFromIPC;
 

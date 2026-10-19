@@ -9,7 +9,7 @@
 // shell.
 //
 // The wasm binary and worker script use the shared, version-pinned CDN bundle
-// configuration. createWorker() fetches the cross-origin
+// configuration. createHaybarnWorker() fetches the cross-origin
 // worker script and wraps it in a same-origin blob URL so `new Worker(...)` is
 // allowed; the wasm module is fetched with permissive CORS.
 //
@@ -26,6 +26,7 @@
 
 import * as duckdb from "@haybarn/haybarn-wasm";
 import { haybarnBundles } from './haybarn-bundles';
+import { createHaybarnWorker } from './haybarn-worker';
 
 export interface QueryResult {
   ok: boolean;
@@ -64,7 +65,7 @@ export function ensureEngine(): Promise<Engine> {
 
 async function boot(): Promise<Engine> {
   const bundle = await duckdb.selectBundle(haybarnBundles);
-  const worker = await duckdb.createWorker(bundle.mainWorker!);
+  const worker = await createHaybarnWorker(bundle.mainWorker!);
   const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
   const db = new duckdb.AsyncDuckDB(logger, worker);
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
