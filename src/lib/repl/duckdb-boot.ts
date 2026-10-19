@@ -97,6 +97,9 @@ async function boot(): Promise<Engine> {
 }
 
 const extensionLoads = new Map<string, Promise<{ ok: boolean; error?: string }>>();
+// Extensions load one at a time: requests sent during a prefetch wait for it,
+// and a second prefetch sent while they wait can run them out of order.
+let extensionQueue: Promise<unknown> = Promise.resolve();
 
 /** Install + load an extension once, engine-wide. Subsequent calls for the same
  *  name return the cached result. Extension functions become visible to every
@@ -107,20 +110,35 @@ export function ensureExtension(
 ): Promise<{ ok: boolean; error?: string }> {
   let pending = extensionLoads.get(name);
   if (!pending) {
-    pending = (async () => {
+    pending = extensionQueue.then(async () => {
       const { db, controlConnId } = await ensureEngine();
       try {
+        // INSTALL downloads nothing in the browser, but its `FROM` sets the
+        // repository LOAD's URL is built from, so it must precede the prefetch.
         await db.runQuery(controlConnId, `INSTALL ${name} ${installFromClause(source)}`);
+        await prefetchExtension(db, name);
         await db.runQuery(controlConnId, `LOAD ${name}`);
         return { ok: true };
       } catch (e: unknown) {
         const error = e instanceof Error ? e.message : String(e);
         return { ok: false, error };
       }
-    })();
+    });
+    extensionQueue = pending;
     extensionLoads.set(name, pending);
   }
   return pending;
+}
+
+/** Download, hash (WebCrypto) and compile the extension in the worker, so LOAD
+ *  only checks the signature and links. A failed prefetch leaves the download
+ *  to LOAD, which reports any real error. */
+async function prefetchExtension(db: duckdb.AsyncDuckDB, name: string): Promise<void> {
+  try {
+    await db.prefetchExtensions([name]);
+  } catch (error) {
+    console.warn(`[repl] prefetch of ${name} failed; LOAD will download it`, error);
+  }
 }
 
 /** Split a SQL snippet into individual statements on top-level semicolons,
