@@ -33,6 +33,12 @@ interface Props {
   max?: number;
   /** Decimal places for the direct labels. */
   precision?: number;
+  /** 'columns' (default) gives each series its own column. 'grouped' stacks a
+   *  row's series on one shared track, each bar labelled where it sits, which
+   *  reads better for a before/after comparison. */
+  layout?: 'columns' | 'grouped';
+  /** Header over the bars in the grouped layout. */
+  valueHeader?: string;
   class?: string;
 }
 
@@ -46,12 +52,15 @@ const {
   source,
   max,
   precision = 1,
+  layout = 'columns',
+  valueHeader = '',
   class: className = '',
 } = Astro.props;
 
 const scaleMax = max ?? Math.max(...rows.flatMap(row => row.values));
 const showNotes = Boolean(noteLabel);
-const multi = series.length > 1;
+const grouped = layout === 'grouped';
+const multi = series.length > 1 && !grouped;
 
 const fmt = (n: number) => n.toFixed(precision);
 const pct = (n: number) => `${Math.max((n / scaleMax) * 100, 0.8)}%`;
@@ -75,37 +84,74 @@ const pct = (n: number) => `${Math.max((n / scaleMax) * 100, 0.8)}%`;
   )}
 
   <div class="qf-chart-scroll">
-    <table class="qf-chart-table">
-      <thead>
-        <tr>
-          <th scope="col">{rowHeader}</th>
-          {series.map(s => <th scope="col" data-numeric>{s.label}</th>)}
-          {showNotes && <th scope="col" data-numeric>{noteLabel}</th>}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map(row => (
+    {grouped ? (
+      <table class="qf-chart-table is-grouped">
+        <thead>
           <tr>
-            <th scope="row">{row.label}</th>
-            {row.values.map((value, i) => (
+            <th scope="col">{rowHeader}</th>
+            <th scope="col">{valueHeader}</th>
+            {showNotes && <th scope="col" data-numeric>{noteLabel}</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row => (
+            <tr>
+              <th scope="row">{row.label}</th>
               <td>
-                <span class="qf-bar-cell">
-                  <span class="qf-bar-track">
-                    <span
-                      class="qf-bar"
-                      style={`width:${pct(value)};background:${row.color ?? series[i].color}`}
-                      title={`${row.label} — ${series[i].label}: ${fmt(value)}${series[i].unit ?? ''}`}
-                    ></span>
-                  </span>
-                  <span class="qf-bar-value qf-figure">{fmt(value)}</span>
+                <span class="qf-bar-group">
+                  {row.values.map((value, i) => (
+                    <span class="qf-bar-line">
+                      <span class="qf-bar-series">{series[i].label}</span>
+                      <span class="qf-bar-run">
+                        <span
+                          class="qf-bar is-inline"
+                          style={`width:${pct(value)};background:${row.color ?? series[i].color}`}
+                          title={`${row.label} — ${series[i].label}: ${fmt(value)}${series[i].unit ?? ''}`}
+                        ></span>
+                        <span class="qf-bar-tip qf-figure">{fmt(value)}{series[i].unit ?? ''}</span>
+                      </span>
+                    </span>
+                  ))}
                 </span>
               </td>
-            ))}
-            {showNotes && <td data-numeric><span class="qf-figure qf-bar-note">{row.note}</span></td>}
+              {showNotes && <td data-numeric><span class="qf-figure qf-bar-note is-strong">{row.note}</span></td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    ) : (
+      <table class="qf-chart-table">
+        <thead>
+          <tr>
+            <th scope="col">{rowHeader}</th>
+            {series.map(s => <th scope="col" data-numeric>{s.label}</th>)}
+            {showNotes && <th scope="col" data-numeric>{noteLabel}</th>}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map(row => (
+            <tr>
+              <th scope="row">{row.label}</th>
+              {row.values.map((value, i) => (
+                <td>
+                  <span class="qf-bar-cell">
+                    <span class="qf-bar-track">
+                      <span
+                        class="qf-bar"
+                        style={`width:${pct(value)};background:${row.color ?? series[i].color}`}
+                        title={`${row.label} — ${series[i].label}: ${fmt(value)}${series[i].unit ?? ''}`}
+                      ></span>
+                    </span>
+                    <span class="qf-bar-value qf-figure">{fmt(value)}</span>
+                  </span>
+                </td>
+              ))}
+              {showNotes && <td data-numeric><span class="qf-figure qf-bar-note">{row.note}</span></td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
   </div>
 
   {source && <p class="qf-chart-source">{source}</p>}
@@ -235,6 +281,49 @@ const pct = (n: number) => `${Math.max((n / scaleMax) * 100, 0.8)}%`;
     white-space: nowrap;
   }
 
+  /* Grouped: one shared track per row, series stacked, value at each bar's tip. */
+  .qf-chart-table.is-grouped tbody th { vertical-align: middle; }
+  .qf-chart-table.is-grouped tbody td { padding-block: 12px; }
+  .qf-bar-group {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 220px;
+  }
+  .qf-bar-line {
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+  }
+  .qf-bar-series {
+    font-size: 12.5px;
+    color: var(--color-soil-700);
+    white-space: nowrap;
+  }
+  /* The tip label needs room past a full-length bar. */
+  .qf-bar-run {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-right: 52px;
+  }
+  .qf-bar.is-inline {
+    position: static;
+    flex: none;
+    display: block;
+  }
+  .qf-bar-tip {
+    flex: none;
+    margin-right: -52px;
+    color: var(--color-soil-900);
+    white-space: nowrap;
+  }
+  .qf-bar-note.is-strong {
+    color: var(--color-soil-900);
+    font-weight: 600;
+  }
+
   .qf-chart-source {
     margin: 14px 0 0;
     font-size: 12px;
@@ -287,9 +376,17 @@ const pct = (n: number) => `${Math.max((n / scaleMax) * 100, 0.8)}%`;
       padding: 4px 0;
       border: 0 !important;
     }
-    .qf-bar-cell {
+    .qf-bar-cell,
+    .qf-bar-group {
       min-width: 0;
     }
+    .qf-bar-line {
+      grid-template-columns: 1fr;
+      gap: 2px;
+    }
+    .qf-chart-table.is-grouped tbody td { padding-block: 2px; }
+    /* The row's own top rule is the divider; don't draw the cell's as well. */
+    .qf-chart-table tbody tr + tr th { border-top: 0; }
   }
 
   /* Forced-colours / print: the fill is the only identity channel, so give the

@@ -1,4 +1,16 @@
+import { getCollection } from 'astro:content';
+
 const origin = 'https://query.farm';
+
+// Guides for agents choosing a library. Each appears only once its post is published.
+const guides = [
+  { id: 'duckdb-wasm-startup-time', text: 'Switching from @duckdb/duckdb-wasm to @haybarn/haybarn-wasm: startup benchmarks, extensions on the multithreaded build, and prefetchExtensions().' },
+];
+const published = new Set((await getCollection('blog', post => !post.data.draft)).map(post => post.id));
+const guideLines = guides
+  .filter(guide => published.has(guide.id))
+  .map(guide => `- [${guide.id}](${origin}/blog/${guide.id}/): ${guide.text}`)
+  .join('\n');
 
 export const GET = () => new Response(`# Query.Farm
 
@@ -19,7 +31,7 @@ export const GET = () => new Response(`# Query.Farm
 - [VGI](${origin}/vgi/): Vector Gateway Interface overview and implementation guidance.
 - [Orchard](${origin}/products/orchard/): Discover and publish VGI data connectors.
 - [Blog](${origin}/blog/): Technical articles and release analysis.
-
+${guideLines ? `\n## Guides\n\n${guideLines}\n` : ''}
 ## Usage policy
 
 Query.Farm publishes Content Signals permitting search and AI-assisted answers while reserving model-training rights: search=yes, ai-input=yes, ai-train=no.

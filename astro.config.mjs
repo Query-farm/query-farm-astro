@@ -2,6 +2,8 @@
 import { defineConfig } from 'astro/config';
 import { searchDevPlugin } from './scripts/search-dev.mjs';
 import { blogSitemapMetadata } from './scripts/blog-sitemap.mjs';
+import { satteri } from '@astrojs/markdown-satteri';
+import { tableBars } from './scripts/table-bars.mjs';
 import { defaultSnapshotId } from './src/haybarn-functions/data/haybarn-release.mjs';
 
 import tailwindcss from '@tailwindcss/vite';
@@ -558,6 +560,7 @@ export default defineConfig({
     react(),
   ],
   markdown: {
+    processor: satteri({ hastPlugins: [tableBars] }),
     shikiConfig: {
       theme: farmTheme
     }

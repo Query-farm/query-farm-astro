@@ -8,9 +8,12 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const articles = [
   { slug: 'duckdb-community-extensions-distribution', topic: 'DuckDB · Distribution · Haybarn' },
   { slug: 'duckdb-variant-arrow-support-tracker', topic: 'DuckDB · Arrow · Interoperability' },
+  { slug: 'duckdb-wasm-startup-time', topic: 'DuckDB-WASM · WebAssembly · Haybarn' },
 ];
+// Pass slugs to regenerate only those cards.
+const only = process.argv.slice(2);
 
-for (const { slug, topic } of articles) {
+for (const { slug, topic } of articles.filter(a => !only.length || only.includes(a.slug))) {
   const source = readFileSync(`${root}src/content/blog/${slug}.md`, 'utf8');
   // These articles use JSON-compatible double-quoted frontmatter titles.
   const title = JSON.parse(source.match(/^title: (".*")$/m)[1]);

@@ -24,6 +24,9 @@ export interface BlogFigure {
   noteLabel?: string;
   source?: string;
   precision?: number;
+  /** See BarTable's layout prop. */
+  layout?: 'columns' | 'grouped';
+  valueHeader?: string;
   /** Short label under the card sparkline. */
   sparkLabel: string;
   /** How many rows the card sparkline shows. */
@@ -81,6 +84,29 @@ export const BLOG_FIGURES: Record<string, BlogFigure> = {
       'Haybarn CI (GitHub organization webhooks, snapshotted to DuckDB) and the GitHub Actions REST API for duckdb/community-extensions. Build time excludes queue wait. See Methodology.',
     sparkLabel: 'Build minutes per platform',
     sparkRows: 5,
+  },
+
+  'duckdb-wasm-startup-time': {
+    title: 'Ready to query, with six extensions loaded',
+    subtitle:
+      'Seconds from the page starting until icu, autocomplete, spatial, iceberg, grainlift and ducklake are all loaded, over the real CDN. Median of five fresh browsers; lower is better.',
+    rowHeader: 'Build',
+    series: [
+      { label: 'Baseline (rc2)', color: REFERENCE, unit: ' s' },
+      { label: 'rc6 with prefetch', color: HAYBARN, unit: ' s' },
+    ],
+    layout: 'grouped',
+    valueHeader: 'Seconds until all six are loaded',
+    noteLabel: 'Speedup',
+    precision: 1,
+    rows: [
+      { label: 'Multithreaded', values: [6.846, 2.257], note: '3.0× faster' },
+      { label: 'Single-threaded', values: [5.395, 2.017], note: '2.7× faster' },
+    ],
+    source:
+      'Headless Chromium 156 on an AWS c6g.12xlarge, five interleaved runs per build, each in a fresh browser. See Methodology.',
+    sparkLabel: 'Seconds to six extensions loaded',
+    sparkRows: 2,
   },
 
   'testing-duckdb-wasm-extensions': {
