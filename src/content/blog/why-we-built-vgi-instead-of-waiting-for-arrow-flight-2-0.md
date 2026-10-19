@@ -6,16 +6,16 @@ author: "Rusty Conover"
 tags: ["Apache Arrow", "Arrow Flight", "ADBC", "VGI", "RPC"]
 draft: false
 heroImage: "/media/posts/why-we-built-vgi-instead-of-waiting-for-arrow-flight-2-0/social.png"
-heroImageAlt: "Why we built VGI instead of waiting for Arrow Flight 2.0. Curved paths connect Arrow Flight to Airport, then carry its lessons into VGI-RPC and VGI."
+heroImageAlt: "Why we built VGI instead of waiting for Arrow Flight 2.0. Abstract flowing curves in ochre and green on a cream background."
 leadVisual:
   src: "/blog/why-we-built-vgi-instead-of-waiting-for-arrow-flight-2-0/flight-to-vgi.svg"
-  alt: "Arrow Flight powers Airport, a DuckDB extension. Lessons from building Airport led to VGI-RPC and VGI, serving browsers and query engines."
+  alt: ""
   width: 720
   height: 240
   mobile:
     src: "/blog/why-we-built-vgi-instead-of-waiting-for-arrow-flight-2-0/flight-to-vgi-mobile.svg"
     width: 400
-    height: 350
+    height: 220
 ---
 
 I don't expect an Arrow Flight 2.0 that fixes the design problems people have spent years working around. By 2.0, I mean a substantial protocol redesign, separate from Arrow's library version numbers.
