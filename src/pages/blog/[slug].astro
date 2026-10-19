@@ -113,7 +113,7 @@ const relatedPost = (await getCollection('blog'))
 >
   <BlogSubNav slot="subnav" />
   <div class="article-progress" aria-hidden="true"><i></i></div>
-  <article>
+  <article class="blog-article">
     <div class="mx-auto max-w-[720px] px-6 pt-11 pb-5">
       {topic && (
         <div class="text-[13.5px] font-medium text-link">
@@ -147,7 +147,7 @@ const relatedPost = (await getCollection('blog'))
       </div>
 
       {description && (
-        <p class="mt-5 text-[17.5px] leading-relaxed text-soil-700"><SqlKeywordText text={description} /></p>
+        <p class="article-description mt-5 text-[17.5px] leading-relaxed"><SqlKeywordText text={description} /></p>
       )}
     </div>
 
@@ -308,25 +308,61 @@ const relatedPost = (await getCollection('blog'))
     const article = document.querySelector<HTMLElement>('main article');
 
     if (progressBar && article) {
+      const subnav = document.querySelector<HTMLElement>('.blog-subnav');
+      const sections = Array.from(article.querySelectorAll<HTMLAnchorElement>('.article-index a[href^="#"]'))
+        .flatMap(link => {
+          const heading = document.getElementById(link.getAttribute('href')!.slice(1));
+          return heading ? [{ link, heading }] : [];
+        });
+      let currentLink: HTMLAnchorElement | undefined;
       let frame = 0;
-      const updateProgress = () => {
+      const updateReadingPosition = () => {
         frame = 0;
         const start = article.offsetTop;
         const distance = Math.max(1, article.offsetHeight - window.innerHeight);
         const progress = Math.min(1, Math.max(0, (window.scrollY - start) / distance));
         progressBar.style.transform = `scaleX(${progress})`;
+
+        // Keep the most recently passed heading active through long sections.
+        // The reading line sits just below both sticky navigation bars.
+        const readingLine = (subnav?.getBoundingClientRect().bottom ?? 0) + 24;
+        let nextLink: HTMLAnchorElement | undefined;
+        for (const { link, heading } of sections) {
+          if (heading.getClientRects().length && heading.getBoundingClientRect().top <= readingLine) {
+            nextLink = link;
+          }
+        }
+        if (nextLink !== currentLink) {
+          currentLink?.removeAttribute('aria-current');
+          nextLink?.setAttribute('aria-current', 'location');
+          currentLink = nextLink;
+        }
       };
       const requestUpdate = () => {
-        if (!frame) frame = requestAnimationFrame(updateProgress);
+        if (!frame) frame = requestAnimationFrame(updateReadingPosition);
       };
-      updateProgress();
+      updateReadingPosition();
       addEventListener('scroll', requestUpdate, { passive: true });
       addEventListener('resize', requestUpdate, { passive: true });
+      addEventListener('hashchange', requestUpdate);
+      addEventListener('pageshow', requestUpdate);
+      addEventListener('load', requestUpdate, { once: true });
+      document.fonts.ready.then(requestUpdate);
+
+      // Images, example panels, and wrapping navigation can move section
+      // boundaries even while the reader is stationary.
+      const layoutObserver = new ResizeObserver(requestUpdate);
+      layoutObserver.observe(article);
+      if (subnav) layoutObserver.observe(subnav);
     }
   </script>
 </BaseLayout>
 
 <style is:global>
+  .blog-article { --article-ink: #302e2b; }
+  .blog-article h1,
+  .article-description { color: var(--article-ink); }
+
   .article-progress {
     position: fixed;
     z-index: 45;
@@ -380,6 +416,7 @@ const relatedPost = (await getCollection('blog'))
     margin-top: 13px;
   }
   .article-index li {
+    position: relative;
     counter-increment: article-index;
     display: grid;
     grid-template-columns: 2.2em minmax(0, 1fr);
@@ -399,6 +436,23 @@ const relatedPost = (await getCollection('blog'))
     text-decoration: none;
   }
   .article-index a:hover { color: var(--color-link); text-decoration: underline; }
+  .article-index li:has(> a[aria-current='location']) {
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--color-link) 8%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-link) 8%, transparent);
+  }
+  .article-index li:has(> a[aria-current='location'])::after {
+    content: '';
+    position: absolute;
+    left: -9px;
+    top: -4px;
+    bottom: -4px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--color-link);
+  }
+  .article-index a[aria-current='location'],
+  .article-index li:has(> a[aria-current='location'])::before { color: var(--color-link); }
   .article-index a:focus-visible {
     border-radius: 2px;
     outline: 2px solid var(--color-link);
@@ -457,7 +511,7 @@ const relatedPost = (await getCollection('blog'))
   .article-brief li {
     position: relative;
     padding-left: 19px;
-    color: var(--color-soil-800);
+    color: var(--article-ink);
     font-size: 15.5px;
     line-height: 1.55;
   }
@@ -475,7 +529,7 @@ const relatedPost = (await getCollection('blog'))
   .qf-prose .article-brief ul { padding-left: 0; list-style: none; }
   .qf-prose .article-brief li {
     margin-top: 0;
-    color: var(--color-soil-800);
+    color: var(--article-ink);
   }
 
   /* Editorial prose — family E. The 720px reading measure now lives on the
@@ -491,7 +545,7 @@ const relatedPost = (await getCollection('blog'))
     overflow-wrap: break-word;
     font-size: 17.5px;
     line-height: 1.75;
-    counter-reset: article-section;
+    color: var(--article-ink);
   }
   .qf-prose > * { min-width: 0; max-width: 720px; margin-inline: auto; }
   /* The breakout set: things measured in columns and glyphs, not in words. */
@@ -502,29 +556,19 @@ const relatedPost = (await getCollection('blog'))
   .qf-prose > .support-matrix,
   .qf-prose > .expressive-code { max-width: 100%; }
   .qf-prose > * + * { margin-top: 20px; }
+  /* Reading text shares one ink; size and weight provide the hierarchy.
+     Inheritance also preserves light text inside dark result surfaces. */
   .qf-prose p,
-  .qf-prose li { color: var(--color-soil-700); }
-  .qf-prose strong { color: var(--color-soil-900); font-weight: 600; }
+  .qf-prose li { color: inherit; }
+  .qf-prose strong { color: inherit; font-weight: 600; }
 
   .qf-prose h2 {
     margin-top: 58px;
     padding-top: 28px;
     border-top: 1px solid var(--color-soil-300);
     font-size: clamp(1.5rem, 3.4vw, 2.25rem);
-    counter-increment: article-section;
   }
-  .qf-prose h2::before {
-    content: 'Section ' counter(article-section, decimal-leading-zero);
-    display: block;
-    margin-bottom: 9px;
-    color: var(--color-sun-700);
-    font-family: 'Noto Sans', ui-sans-serif, system-ui, sans-serif;
-    font-size: 11.5px;
-    font-weight: 600;
-    line-height: 1;
-    letter-spacing: .02em;
-  }
-  .qf-prose h2 + p { color: var(--color-soil-800); font-size: 1.035em; }
+  .qf-prose h2 + p { font-size: 1.035em; }
   .qf-prose h3 {
     margin-top: 38px;
     border-left: 3px solid var(--color-sun-400);
@@ -553,19 +597,19 @@ const relatedPost = (await getCollection('blog'))
     color: var(--color-sun-700);
   }
 
-  /* Links are green (interaction), not gold (identity) — and the underline is
-     load-bearing, not decoration. This palette cannot satisfy WCAG F73's 3:1
-     link-vs-body-text rule: no green dark enough for the cat-gold chip also
-     clears 3:1 against #211a12. So colour never distinguishes a link on its
-     own here; the underline, not weight, sets a link apart from body text
-     (both 400 since Noto Sans replaced Commissioner, whose body was 300). */
+  /* Clear green: medium weight and a solid underline distinguish links
+     from the article ink without relying on color alone. */
   .qf-prose a:not(.btn) {
     color: var(--color-link);
-    font-weight: 400;
+    font-weight: 500;
     text-decoration: underline;
-    text-decoration-thickness: 1px;
+    text-decoration-thickness: 1.5px;
     text-underline-offset: 0.18em;
-    text-decoration-color: color-mix(in srgb, var(--color-link) 45%, transparent);
+    text-decoration-color: currentColor;
+    text-decoration-skip-ink: auto;
+  }
+  .qf-prose a:not(.btn) :is(code, strong, b, span) {
+    color: inherit;
   }
   .qf-prose a:not(.btn):hover {
     color: var(--color-link-hover);
@@ -574,7 +618,7 @@ const relatedPost = (await getCollection('blog'))
   }
   .qf-prose a:not(.btn):focus-visible {
     outline: 2px solid var(--color-link);
-    outline-offset: 2px;
+    outline-offset: 3px;
     border-radius: 2px;
   }
 
@@ -601,7 +645,7 @@ const relatedPost = (await getCollection('blog'))
     font-size: 1.0625rem;
     line-height: 1.7;
     letter-spacing: normal;
-    color: var(--color-soil-800);
+    color: var(--article-ink);
     background: color-mix(in srgb, var(--color-sun-400) 7%, var(--color-soil-50));
     border-left: 3px solid var(--color-sun-400);
     border-radius: 0 8px 8px 0;
@@ -629,7 +673,7 @@ const relatedPost = (await getCollection('blog'))
     font-size: clamp(1.2rem, 2.4vw, 1.5rem);
     line-height: 1.32;
     letter-spacing: -0.018em;
-    color: var(--color-soil-900);
+    color: var(--article-ink);
     background: none;
     border-radius: 0;
     padding: 4px 0 4px 22px;
@@ -647,7 +691,7 @@ const relatedPost = (await getCollection('blog'))
     background: var(--color-soil-100);
     padding: 2px 6px;
     border-radius: 5px;
-    color: var(--color-soil-900);
+    color: inherit;
   }
   .qf-prose pre {
     background: var(--color-rock-900);
@@ -673,7 +717,7 @@ const relatedPost = (await getCollection('blog'))
     font-weight: 600;
     font-size: 12.5px;
     letter-spacing: 0;
-    color: var(--color-soil-600);
+    color: inherit;
     padding: 10px 14px;
     background: #fbf7ee;
     border-bottom: 1px solid var(--color-soil-300);
@@ -682,7 +726,7 @@ const relatedPost = (await getCollection('blog'))
   .qf-prose td {
     padding: 11px 14px;
     border-bottom: 1px solid var(--color-soil-200);
-    color: var(--color-soil-700);
+    color: inherit;
   }
   .qf-prose tr:last-child td { border-bottom: 0; }
   .qf-prose .function-kind-description {
@@ -882,7 +926,7 @@ const relatedPost = (await getCollection('blog'))
     margin: 2px 0 0;
     border: 0;
     padding: 0;
-    color: var(--color-soil-900);
+    color: var(--article-ink);
     font-family: 'Noto Sans', ui-sans-serif, system-ui, sans-serif;
     font-size: 14.5px;
     font-weight: 600;
@@ -909,7 +953,7 @@ const relatedPost = (await getCollection('blog'))
   }
   .qf-prose .engine-card dd {
     min-width: 0;
-    color: var(--color-soil-700);
+    color: var(--article-ink);
     font-size: 13.5px;
     line-height: 1.5;
   }
