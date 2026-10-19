@@ -85,6 +85,16 @@ Flight's HTTP download locations help fetch results, but leave its control and e
 
 VGI-RPC carries Arrow batches in ordinary HTTP request and response bodies. Its [TypeScript client](https://github.com/Query-farm/vgi-rpc-typescript#browser-usage) can call a worker directly from a browser, with authentication and cross-origin configuration handled by the server. Exchanges advance through continuation requests, with state tokens connecting each turn. That fits browser HTTP without a gRPC translation service.
 
+## Quack starts with DuckDB on both ends
+
+DuckDB's [Quack protocol](https://duckdb.org/2026/05/12/quack-remote-protocol) belongs in this picture. It connects DuckDB instances in a client-server setup, and its authors explicitly describe learning from Flight SQL. I see it as another example of progress through a focused protocol, without waiting for a universal Flight successor.
+
+Quack uses HTTP and client-driven request and response. [DuckDB-Wasm can speak it from a browser](https://duckdb.org/2026/05/12/quack-remote-protocol#http-based), so browser access isn't unique to VGI. Both designs show that efficient database communication can fit the HTTP interface browsers already provide.
+
+Quack also shows that using one serialization system doesn't have to mean using Arrow. Its [requests and responses use DuckDB's internal serialization](https://duckdb.org/docs/current/quack/overview#quack-in-a-nutshell), preserving DuckDB's types without converting through Arrow. That is a sensible choice when DuckDB sits at both ends. VGI instead pays the cost of mapping different engines onto Arrow and shared function contracts so workers can serve more than one engine. Neither serialization choice, by itself, guarantees reusable cached responses.
+
+For access to a remote DuckDB database, Quack is a natural starting point. VGI addresses a different need: exposing custom computation and catalogs to DuckDB, DataFusion, SQLite, Spark, and Polars. Quack strengthens my expectation that Flight's successors will specialize around their users rather than converge on one protocol.
+
 ## What VGI gets right
 
 VGI-RPC separates the application contract from the transport. A worker can start behind a pipe and later be exposed over HTTP, using Arrow batches for arguments and results in both cases.
@@ -111,6 +121,7 @@ The tradeoff appears when an application needs independent streams. VGI-RPC [doe
 | --- | --- |
 | A common database API with Arrow results | ADBC, potentially using its Flight SQL driver. |
 | DuckDB access to an existing Flight service | Airport. |
+| Access to a remote DuckDB database from DuckDB, including DuckDB-Wasm | Quack. |
 | Typed Arrow RPC from a browser | VGI-RPC, if lockstep exchanges fit the workload. |
 | External tables and functions in a query engine or dataframe library | VGI, after checking the relevant client's capabilities. |
 | Independent streams in both directions | Flight's `DoExchange`. |
