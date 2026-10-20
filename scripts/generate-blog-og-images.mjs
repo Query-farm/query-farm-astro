@@ -8,7 +8,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const articles = [
   { slug: 'duckdb-community-extensions-distribution', topic: 'DuckDB · Distribution · Haybarn' },
   { slug: 'duckdb-variant-arrow-support-tracker', topic: 'DuckDB · Arrow · Interoperability' },
-  { slug: 'duckdb-wasm-startup-time', topic: 'DuckDB-WASM · WebAssembly · Haybarn' },
+  { slug: 'duckdb-wasm-startup-time', topic: 'DuckDB-Wasm · WebAssembly · Haybarn' },
 ];
 // Pass slugs to regenerate only those cards.
 const only = process.argv.slice(2);

@@ -1,23 +1,23 @@
 ---
-title: "DuckDB-WASM startup: from 6.8 to 2.3 seconds with Haybarn-WASM"
-description: "Haybarn-WASM, a drop-in fork of DuckDB-WASM, loads five extensions in 1.9 seconds, against 5.4 for upstream. Here's where the startup time went and how we cut it."
+title: "DuckDB-Wasm startup: from 6.8 to 2.3 seconds with Haybarn-Wasm"
+description: "Haybarn-Wasm, a drop-in fork of DuckDB-Wasm, loads five extensions in 1.9 seconds, against 5.4 for upstream. Here's where the startup time went and how we cut it."
 pubDate: 2026-10-19
 author: "Rusty Conover"
-tags: ["DuckDB", "DuckDB-WASM", "WebAssembly", "Haybarn", "Performance", "Extensions"]
+tags: ["DuckDB", "DuckDB-Wasm", "WebAssembly", "Haybarn", "Performance", "Extensions"]
 draft: false
 heroImage: "/media/posts/duckdb-wasm-startup-time/social.png"
-heroImageAlt: "DuckDB-WASM startup: from 6.8 to 2.3 seconds with Haybarn-WASM."
+heroImageAlt: "DuckDB-Wasm startup: from 6.8 to 2.3 seconds with Haybarn-Wasm."
 ---
 
-[Cupola](/products/cupola/), our browser-based environment for querying and exploring data, runs on [Haybarn-WASM](https://github.com/Query-farm-haybarn/haybarn-wasm), and its users were waiting several seconds before they could do anything. I was waiting too. I use Safari with the multithreaded build enabled, and every page load meant watching the engine download and compile, then load each extension, one at a time.
+[Cupola](/products/cupola/), our browser-based environment for querying and exploring data, runs on [Haybarn-Wasm](https://github.com/Query-farm-haybarn/haybarn-wasm), and its users were waiting several seconds before they could do anything. I was waiting too. I use Safari with the multithreaded build enabled, and every page load meant watching the engine download and compile, then load each extension, one at a time.
 
-The multithreaded build should be the better choice, since queries can use every core. On our test machine it was the slower one to start. Haybarn-WASM 1.5.6-rc2 took 6.8 seconds to get a page to six loaded extensions ([icu](https://duckdb.org/docs/stable/core_extensions/icu), [autocomplete](https://duckdb.org/docs/stable/core_extensions/autocomplete), [spatial](https://duckdb.org/docs/stable/core_extensions/spatial/overview), [iceberg](https://duckdb.org/docs/stable/core_extensions/iceberg/overview), [grainlift](/products/grainlift/) and [ducklake](https://duckdb.org/docs/stable/core_extensions/ducklake)), and the single-threaded build took 5.4.
+The multithreaded build should be the better choice, since queries can use every core. On our test machine it was the slower one to start. Haybarn-Wasm 1.5.6-rc2 took 6.8 seconds to get a page to six loaded extensions ([icu](https://duckdb.org/docs/stable/core_extensions/icu), [autocomplete](https://duckdb.org/docs/stable/core_extensions/autocomplete), [spatial](https://duckdb.org/docs/stable/core_extensions/spatial/overview), [iceberg](https://duckdb.org/docs/stable/core_extensions/iceberg/overview), [grainlift](/products/grainlift/) and [ducklake](https://duckdb.org/docs/stable/core_extensions/ducklake)), and the single-threaded build took 5.4.
 
 With 1.5.6-rc6, it's 2.3 seconds threaded and 2.0 single-threaded. This post covers where the time went, what we changed, and the one call you need to add to your code to get all of the benefits.
 
-## Switching from DuckDB-WASM
+## Switching from DuckDB-Wasm
 
-Haybarn-WASM is Query.Farm's fork of [DuckDB-WASM](https://github.com/duckdb/duckdb-wasm), built on [Haybarn](/products/haybarn/), our [DuckDB](https://duckdb.org/) distribution. The JavaScript API is the same, so if your app uses `@duckdb/duckdb-wasm`, switching is a package swap:
+Haybarn-Wasm is Query.Farm's fork of [DuckDB-Wasm](https://github.com/duckdb/duckdb-wasm), built on [Haybarn](/products/haybarn/), our [DuckDB](https://duckdb.org/) distribution. The JavaScript API is the same, so if your app uses `@duckdb/duckdb-wasm`, switching is a package swap:
 
 ```sh
 npm install @haybarn/haybarn-wasm
@@ -36,7 +36,7 @@ I compared the two on one machine, loading the five extensions both projects pub
 
 <!-- bars: row -->
 
-| From page start | DuckDB-WASM 1.33.1-dev57.0 | Haybarn-WASM 1.5.6-rc6 | Haybarn-WASM with prefetch |
+| From page start | DuckDB-Wasm 1.33.1-dev57.0 | Haybarn-Wasm 1.5.6-rc6 | Haybarn-Wasm with prefetch |
 |---|---:|---:|---:|
 | Single-threaded build, first query result | 1.3 s | 0.7 s | 0.7 s |
 | Single-threaded build, five extensions loaded | 5.4 s | 3.3 s | **1.9 s** |
@@ -46,7 +46,7 @@ A few practical details about switching, like where to load the files from, are 
 
 ## Where the time went
 
-If you already use Haybarn-WASM, upgrading gets you the middle column, and adding the prefetch call gets you the last:
+If you already use Haybarn-Wasm, upgrading gets you the middle column, and adding the prefetch call gets you the last:
 
 <!-- bars: row -->
 
@@ -79,7 +79,7 @@ These changes make up the middle column: about three seconds on both builds. Wha
 
 ### Six `LOAD`s in a row took 2.2 seconds
 
-`LOAD` runs inside a SQL statement, and SQL in DuckDB-WASM runs synchronously in the worker. Each `LOAD` downloads its extension with a blocking request, hashes the file, checks the signature, compiles the module, and only then lets the next one start. While the engine hashes and compiles, the network sits idle.
+`LOAD` runs inside a SQL statement, and SQL in DuckDB-Wasm runs synchronously in the worker. Each `LOAD` downloads its extension with a blocking request, hashes the file, checks the signature, compiles the module, and only then lets the next one start. While the engine hashes and compiles, the network sits idle.
 
 I hadn't expected the hashing to matter. The signature check needs a SHA-256 of the whole file, and the engine computes it with its own SHA-256 code, compiled to WebAssembly. The files are larger than their downloads, because they arrive compressed: spatial is 4.8 MB over the network and 26 MB to hash. The browser's [WebCrypto SHA-256](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/digest) is native code and more than six times faster on the same bytes. For the eight files in our list, the engine spends 400 ms hashing, one file at a time:
 
@@ -161,39 +161,39 @@ One more emscripten fix, [still in review](https://github.com/emscripten-core/em
 
 ## Repeat visits
 
-Chrome can keep compiled WebAssembly between visits, so a returning user shouldn't have to compile the engine again. It wasn't doing that for DuckDB-WASM, because the code that reported download progress wrapped the response in a way that hid it from Chrome's cache. With that fixed, opening the database on a repeat visit takes 87 ms instead of about 230. Extensions compiled during a prefetch are cached too: on a repeat visit, the prefetch and six `LOAD`s take 1,009 ms instead of 1,362, and the page has all six loaded at 1.8 seconds instead of 2.2.
+Chrome can keep compiled WebAssembly between visits, so a returning user shouldn't have to compile the engine again. It wasn't doing that for DuckDB-Wasm, because the code that reported download progress wrapped the response in a way that hid it from Chrome's cache. With that fixed, opening the database on a repeat visit takes 87 ms instead of about 230. Extensions compiled during a prefetch are cached too: on a repeat visit, the prefetch and six `LOAD`s take 1,009 ms instead of 1,362, and the page has all six loaded at 1.8 seconds instead of 2.2.
 
 Two caveats. Current Chrome waits minutes before writing that cache, because of a V8 bug whose [fix](https://chromium.googlesource.com/v8/v8/+/cd68728aee4b) has landed and will ship in a coming release. And Safari doesn't keep compiled WebAssembly between visits at all, so in Safari, where I first noticed the wait, every visit is a first visit. That's why the first-visit work above mattered most to me.
 
-## If you use DuckDB-WASM from upstream
+## If you use DuckDB-Wasm from upstream
 
 Most of these fixes aren't specific to Haybarn, and I've sent them upstream:
 
 - emscripten: [lazy linking setup](https://github.com/emscripten-core/emscripten/pull/27993), [fewer export copies](https://github.com/emscripten-core/emscripten/pull/27996), [freeing an extension's bytes after load](https://github.com/emscripten-core/emscripten/pull/28002) and [on every thread](https://github.com/emscripten-core/emscripten/pull/28007), and [reading global mutability instead of probing it](https://github.com/emscripten-core/emscripten/pull/28006).
 - duckdb-wasm: [letting Chrome cache the compiled engine](https://github.com/duckdb/duckdb-wasm/pull/2278), [keeping the threaded build's memory views current](https://github.com/duckdb/duckdb-wasm/pull/2276), and [not caching a failed extension download in Node.js](https://github.com/duckdb/duckdb-wasm/pull/2279).
 
-They're open for review. Until they land, Haybarn-WASM carries them as patches. `prefetchExtensions()` depends on how Haybarn checks extension signatures, so for now it's only in Haybarn-WASM.
+They're open for review. Until they land, Haybarn-Wasm carries them as patches. `prefetchExtensions()` depends on how Haybarn checks extension signatures, so for now it's only in Haybarn-Wasm.
 
 ## How we measured
 
 - **Machine:** AWS `c6g.12xlarge` (Graviton2), the browser pinned to 16 cores, headless Chromium 156 driven by [Playwright](https://playwright.dev/). Every run used a fresh browser and profile, and the builds were interleaved so drift affected them all alike.
-- **DuckDB-WASM comparison:** the published `@duckdb/duckdb-wasm` 1.33.1-dev57.0 package (npm `latest`), with extensions from `extensions.duckdb.org`, against Haybarn-WASM 1.5.6-rc6 with extensions from `haybarn-extensions.query.farm`. Five interleaved runs each, same page and machine. grainlift was left out because DuckDB's repository doesn't publish it for WebAssembly.
+- **DuckDB-Wasm comparison:** the published `@duckdb/duckdb-wasm` 1.33.1-dev57.0 package (npm `latest`), with extensions from `extensions.duckdb.org`, against Haybarn-Wasm 1.5.6-rc6 with extensions from `haybarn-extensions.query.farm`. Five interleaved runs each, same page and machine. grainlift was left out because DuckDB's repository doesn't publish it for WebAssembly.
 - **Builds:** the published `@haybarn/haybarn-wasm` 1.5.6-rc2 package, and a local build of the rc6 code, made with the same toolchain before its package was published.
 - **Workload:** instantiate, open, `SELECT 1`, then `LOAD` icu, autocomplete, spatial, iceberg, grainlift and ducklake from `haybarn-extensions.query.farm`, then a multithreaded query. With prefetch, the list was those six plus avro and parquet. Five runs of each build; the tables show medians. "Six extensions loaded" is measured from the page starting, and includes the prefetch where there is one.
 - **Hashing:** each rc6 extension file from the CDN, hashed in the same worker by the engine's `sha256()` SQL function (the same SHA-256 code the signature check uses, minus the time to read the value) and by `crypto.subtle.digest` in 1 MB chunks, the way the prefetch does it. Five runs of each build in fresh browsers; the chart shows medians.
 - **Memory:** [`performance.measureUserAgentSpecificMemory()`](https://developer.mozilla.org/en-US/docs/Web/API/Performance/measureUserAgentSpecificMemory) in the same Chromium, threaded build, extensions served from a local mirror. One reading per page, after startup, after the prefetch, or after the six `LOAD`s, with five runs for each, except three after startup. The readings were identical across runs, since WebAssembly memory grows in fixed steps. The single-threaded figures come from Node.js, measuring how much the process grew across the `LOAD`s.
 - **Repeat visits:** Chrome was told to write its WebAssembly code cache immediately (`--js-flags=--wasm-caching-timeout-ms=0`), which is how it will behave once the V8 fix ships. Each run was a first visit and then a repeat visit with the same profile, four runs of the single-threaded build with the eight-file prefetch.
-- **Cupola:** headless Chromium on an Apple Silicon laptop against the development server, four runs each, Haybarn-WASM rc5 against rc6 with prefetch, while Cupola loaded nine extensions.
+- **Cupola:** headless Chromium on an Apple Silicon laptop against the development server, four runs each, Haybarn-Wasm rc5 against rc6 with prefetch, while Cupola loaded nine extensions.
 
 ## Notes on switching
 
-### Extensions on DuckDB-WASM's multithreaded build
+### Extensions on DuckDB-Wasm's multithreaded build
 
-None of the extensions loaded on DuckDB-WASM's multithreaded build. By default `LOAD` never returned, and with the thread count set to one first, it failed with a `LinkError`. Those extension binaries are built without shared memory, which the threaded engine needs. Haybarn builds its threaded extensions with shared memory and drops to one thread around each `LOAD` for you.
+None of the extensions loaded on DuckDB-Wasm's multithreaded build. By default `LOAD` never returned, and with the thread count set to one first, it failed with a `LinkError`. Those extension binaries are built without shared memory, which the threaded engine needs. Haybarn builds its threaded extensions with shared memory and drops to one thread around each `LOAD` for you.
 
 ### Other details
 
 - The package is larger than [jsDelivr](https://www.jsdelivr.com/) allows, so `getJsDelivrBundles()` won't find it. Serve the files yourself, or load them from [unpkg](https://unpkg.com/).
 - Extensions come from Haybarn's repository at `haybarn-extensions.query.farm`, signed with Haybarn's key. It has its own builds of DuckDB's core and community extensions, including some that aren't published for WebAssembly upstream, such as grainlift. `INSTALL … FROM community` works as before.
-- The multithreaded build still needs a [cross-origin isolated](https://web.dev/articles/coop-coep) page (`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`), as with DuckDB-WASM.
-- Haybarn-WASM 1.5.6-rc6 runs engine 1.5.6; DuckDB-WASM 1.33.1-dev57.0 runs DuckDB 1.5.4. Haybarn-WASM releases are currently release candidates.
+- The multithreaded build still needs a [cross-origin isolated](https://web.dev/articles/coop-coep) page (`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`), as with DuckDB-Wasm.
+- Haybarn-Wasm 1.5.6-rc6 runs engine 1.5.6; DuckDB-Wasm 1.33.1-dev57.0 runs DuckDB 1.5.4. Haybarn-Wasm releases are currently release candidates.
