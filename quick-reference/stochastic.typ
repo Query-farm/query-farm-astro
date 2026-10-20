@@ -92,10 +92,10 @@
   [
     #section("07", "Discrete sampling families")
     #reference-table(([Family token], [Parameters / interpretation]), (
-      (`bernoulli`, [p\ A Boolean draw; 0 ≤ p ≤ 1]),
-      (`binomial`, [trials, p\ Successes in a fixed trial count]),
-      (`geometric`, [p\ Failures before first success]),
-      (`negative_binomial`, [successes, p\ Failures before target successes]),
+      (`bernoulli`, [prob\ A Boolean draw; 0 ≤ prob ≤ 1]),
+      (`binomial`, [trials, prob\ Successes in a fixed trial count]),
+      (`geometric`, [prob\ Failures before first success]),
+      (`negative_binomial`, [successes, prob\ Failures before target successes]),
       (`poisson`, [rate\ Positive expected event count]),
       (`uniform_int`, [min, max\ Integer draws; both ends included]),
     ), widths: (1.1fr, 1.5fr), size: 7.6pt)
