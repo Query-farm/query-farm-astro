@@ -24,11 +24,42 @@ Autoescape is on by default for HTML output (`B&O` becomes `B&amp;O`). Pass `aut
 
 ## Architecture
 
-Two scalar entry points use the [`minijinja`](https://docs.rs/minijinja/) Rust crate: `minijinja_render(template, ...options)` for rendering without context, and `minijinja_render_with_context(template, context, ...options)` for JSON context. Use the latter for both literals and per-row context columns. Optional named arguments must be constant expressions; passing a context column to `minijinja_render` fails during binding.
+Two scalar entry points use the [`minijinja`](https://docs.rs/minijinja/) Rust crate: `minijinja_render(template, *, options)` for rendering without context, and `minijinja_render_with_context(template, context, *, options)` for JSON context. Use the latter for both literals and per-row context columns — `minijinja_render` takes exactly one positional argument, so passing a context to it is rejected when the query is bound.
 
 The template argument is a `VARCHAR` literal or column. The context argument is any DuckDB `JSON` value — a literal string, [`json_object(...)`](https://duckdb.org/docs/sql/functions/json), or a JSON column. Inside the template you address fields with normal Jinja syntax: `{{ user.name }}`, `{% for x in items %}`, `{{ items | length }}`, `{% if user.admin %}…{% endif %}`.
 
 Filters (`upper`, `lower`, `length`, `default`, `join`, `replace`, `trim`, …), control flow (`if` / `elif` / `else`, `for` with the [`loop` object](https://jinja.palletsprojects.com/en/stable/templates/#for)), and tests (`is defined`, `is none`) all work as documented in the [Jinja2 template reference](https://jinja.palletsprojects.com/en/stable/templates/) and the [MiniJinja crate docs](https://docs.rs/minijinja/).
+
+## Options
+
+The render options are native DuckDB named parameters, declared keyword-only with typed defaults — DuckDB matches the names, casts the values and fills in the defaults, so the signature you see in `duckdb_functions()` is the one the binder enforces:
+
+```
+minijinja_render(template VARCHAR, *,
+                 autoescape BOOLEAN := true,
+                 template_path VARCHAR := '',
+                 undefined_behavior VARCHAR := 'lenient',
+                 autoescape_extensions VARCHAR[] := [])
+
+minijinja_render_with_context(template VARCHAR, context JSON, *, ...same options...)
+```
+
+| Option | Default | Effect |
+|---|---|---|
+| `autoescape` | `true` | HTML-escape interpolated values. Pass `false` for configs, SQL, JSON or plain text. |
+| `template_path` | `''` | Directory to load templates from; `template` then names a file there, enabling `{% include %}` / `{% extends %}`. |
+| `undefined_behavior` | `'lenient'` | `'lenient'`, `'chainable'`, `'semi_strict'` or `'strict'` — how undefined variables render. Other values are a binder error. |
+| `autoescape_extensions` | `[]` | When non-empty, autoescape only templates whose name ends with one of these suffixes. |
+
+- **Keyword-only.** Options are always passed as `name := value`; `minijinja_render('Hello', false)` does not match any signature. The positional arguments can be named too, in any order: `minijinja_render_with_context(context := '{"a": 1}', template := '{{ a }}')`.
+- **Typed.** A value is accepted if DuckDB can cast it implicitly — string literals included, so `autoescape := 'false'` works — while `autoescape := 1` or an unknown name such as `autoescap := false` fails with DuckDB's standard *No function matches the given name and argument types* error.
+- **Constant.** Options are read once when the query is bound, so they must be constant expressions (`autoescape := random() > 0.5` is an error). Per-row values belong in the context.
+- **NULL in, NULL out.** A NULL template, a NULL context, or an explicit NULL option (`autoescape := NULL`) returns NULL. A NULL element inside `autoescape_extensions` is still an error.
+
+```sql
+SELECT minijinja_render('A & B', autoescape := 'false');
+-- 'A & B'
+```
 
 ## Compared to alternatives
 
