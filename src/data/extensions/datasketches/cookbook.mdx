@@ -53,7 +53,44 @@ SELECT
 FROM a, b;
 ```
 
-This is the headline use case for Theta — funnel and cohort analysis directly off sketch state.
+This is the headline use case for Theta — funnel and cohort analysis directly off sketch state. `datasketch_theta_union` and `datasketch_theta_intersect` take two *or more* sketches, and [`datasketch_theta_intersect_agg`](#datasketch_theta_intersect_agg) intersects a whole column of them.
+
+## How similar are two audiences? — Theta Jaccard
+
+```sql
+WITH a AS (SELECT datasketch_theta(12, user_id) AS s FROM events_jan),
+     b AS (SELECT datasketch_theta(12, user_id) AS s FROM events_feb)
+SELECT datasketch_theta_jaccard(a.s, b.s)               AS jaccard,         -- {lower, estimate, upper}
+       datasketch_theta_similarity_test(a.s, b.s, 0.3)  AS at_least_30pct
+FROM a, b;
+```
+
+<QueryResult columns={["jaccard", "at_least_30pct"]} rows={[["{'lower': 0.42857142857142855, 'estimate': 0.42857142857142855, 'upper': 0.42857142857142855}", "true"]]} />
+
+[`datasketch_theta_jaccard`](#datasketch_theta_jaccard) returns `|A ∩ B| / |A ∪ B|` with approximate bounds; the similarity / dissimilarity tests answer "at least / at most this similar" with high confidence.
+
+## Distinct customers *and* their revenue — Tuple sketch
+
+A [Tuple sketch](https://datasketches.apache.org/docs/Tuple/TupleOverview.html) is a Theta sketch whose keys carry a value, so one pass counts distinct keys and aggregates a metric per key.
+
+```sql
+SELECT datasketch_tuple_estimate(s) AS customers,
+       datasketch_tuple_sum(s)      AS revenue,
+       datasketch_tuple_mean(s)     AS revenue_per_customer
+FROM (SELECT datasketch_tuple(customer_id, amount) AS s FROM orders);
+```
+
+<QueryResult columns={["customers", "revenue", "revenue_per_customer"]} rows={[[40.0, 19494.0, 487.35]]} />
+
+`mode := 'min' | 'max' | 'one'` changes how a key's values combine (the default is `'sum'`). Tuple sketches merge, union, intersect and diff like Theta sketches — e.g. the revenue of customers present in two segments is `datasketch_tuple_sum(datasketch_tuple_intersect(a, b))`. For several metrics per key, use the array-of-doubles sketch:
+
+```sql
+SELECT datasketch_aod_column_sums(s)  AS totals,         -- [revenue, items]
+       datasketch_aod_column_means(s) AS per_customer
+FROM (SELECT datasketch_aod(customer_id, [amount, items]) AS s FROM orders);
+```
+
+<QueryResult columns={["totals", "per_customer"]} rows={[["[19494.0, 799.0]", "[487.35, 19.975]"]]} />
 
 ## p50 / p95 / p99 with KLL
 
@@ -70,7 +107,7 @@ SELECT
 FROM agg;
 ```
 
-`K = 200` is a sensible production starting point. Higher `K` → smaller error, larger sketch. The trailing `true` is the *inclusive* flag — `true` for inclusive search (`P[X ≤ q]`), `false` for exclusive (`P[X < q]`). Use [`datasketch_kll_normalized_rank_error`](#datasketch_kll_normalized_rank_error) to inspect the actual rank-error guarantee for the configured `K`.
+Or ask for several quantiles in one call with [`datasketch_kll_quantiles`](#datasketch_kll_quantiles) — `datasketch_kll_quantiles(sketch, [0.5, 0.95, 0.99], true)` returns a list — and the reverse with [`datasketch_kll_ranks`](#datasketch_kll_ranks). `K = 200` is a sensible production starting point. Higher `K` → smaller error, larger sketch. The trailing `true` is the *inclusive* flag — `true` for inclusive search (`P[X ≤ q]`), `false` for exclusive (`P[X < q]`). Use [`datasketch_kll_normalized_rank_error`](#datasketch_kll_normalized_rank_error) to inspect the actual rank-error guarantee for the configured `K`.
 
 ## Histograms in one query — KLL CDF / PMF
 
@@ -85,7 +122,7 @@ SELECT datasketch_kll_cdf(
 FROM requests;
 ```
 
-Returns one row of cumulative ranks at each split point — directly usable for histograms. Swap `cdf` for [`datasketch_kll_pmf`](#datasketch_kll_pmf) to get per-bucket probability mass instead.
+Returns a `LIST(DOUBLE)` of cumulative ranks, one per split point plus a final `1.0` — directly usable for histograms. CDF and PMF results are always `DOUBLE`, whatever the sketch's item type. For the retained items themselves, with their weights, use [`datasketch_kll_sorted_view`](#datasketch_kll_sorted_view). Swap `cdf` for [`datasketch_kll_pmf`](#datasketch_kll_pmf) to get per-bucket probability mass instead.
 
 ## Tail-accurate quantiles with TDigest
 
