@@ -41,6 +41,8 @@ SELECT tera_render(
 FROM users;
 ```
 
+The files are read and parsed once per query (per worker thread), not once per row, and inline templates are likewise parsed once and reused for every row that uses the same template text.
+
 Loading from disk is what unlocks Tera's [`{% extends %}` / `{% include %}` / `{% import %}`](https://keats.github.io/tera/docs/#inheritance) constructs — you can't `extends "base.html"` against a template that has no name. Authoring large templates in a `.html` file alongside the rest of your project is also nicer than embedding them as SQL string literals.
 
 ## Autoescape — on by default
@@ -59,6 +61,16 @@ SELECT tera_render('{{ v }}', '{"v":"B&O"}', autoescape := false);
 -- 'B&O'
 ```
 
+The same default applies to templates loaded with `template_path`, whatever their file extension. To escape only some files — say, `.html` templates but not `.txt` ones in the same glob — list the suffixes in `autoescape_extensions`:
+
+```sql
+SELECT tera_render('welcome.txt', json_object('name', name),
+                   template_path := './templates/*',
+                   autoescape_extensions := ['.html'])
+FROM users;
+-- welcome.txt renders unescaped; any .html template in the glob is escaped
+```
+
 ## Options
 
 On DuckDB 2.0 the options are native named parameters, declared keyword-only with typed defaults. Both overloads share them:
@@ -74,9 +86,9 @@ tera_render(template VARCHAR, context JSON, *, ...same options...)
 
 | Option | Default | Effect |
 |---|---|---|
-| `autoescape` | `true` | HTML-escape interpolated values in inline templates. Pass `false` for configs, SQL, JSON or plain text. |
+| `autoescape` | `true` | HTML-escape interpolated values, in inline templates and `template_path` files alike. Pass `false` for configs, SQL, JSON or plain text. |
 | `template_path` | `''` | Glob of template files; `template` is then a template name. |
-| `autoescape_extensions` | `[]` | With `template_path`, the template-name suffixes to HTML-escape (for example `['.html']`). File templates whose names don't match — every file template, with the default `[]` — are rendered unescaped. |
+| `autoescape_extensions` | `[]` | With `template_path`, restrict escaping to file templates whose names end with one of these suffixes (for example `['.html']`); the others render unescaped. With the default `[]`, `autoescape` escapes every template whatever its extension. Inline templates ignore this list. |
 
 - **Keyword-only.** Options are always passed as `name := value`; `tera_render('Hello', '{}', false)` does not match any signature. The positional arguments can be named too, in any order: `tera_render(context := '{"a": 1}', template := '{{ a }}')`.
 - **Typed.** DuckDB casts the value to the declared type when it can do so implicitly — string literals included, so `autoescape := 'false'` works — while `autoescape := 1` or a misspelled name such as `autoescap := false` fails with DuckDB's standard *No function matches the given name and argument types* error.
