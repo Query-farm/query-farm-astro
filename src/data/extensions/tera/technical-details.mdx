@@ -59,6 +59,35 @@ SELECT tera_render('{{ v }}', '{"v":"B&O"}', autoescape := false);
 -- 'B&O'
 ```
 
+## Options
+
+On DuckDB 2.0 the options are native named parameters, declared keyword-only with typed defaults. Both overloads share them:
+
+```
+tera_render(template VARCHAR, *,
+            autoescape BOOLEAN := true,
+            template_path VARCHAR := '',
+            autoescape_extensions VARCHAR[] := [])
+
+tera_render(template VARCHAR, context JSON, *, ...same options...)
+```
+
+| Option | Default | Effect |
+|---|---|---|
+| `autoescape` | `true` | HTML-escape interpolated values in inline templates. Pass `false` for configs, SQL, JSON or plain text. |
+| `template_path` | `''` | Glob of template files; `template` is then a template name. |
+| `autoescape_extensions` | `[]` | With `template_path`, the template-name suffixes to HTML-escape (for example `['.html']`). File templates whose names don't match — every file template, with the default `[]` — are rendered unescaped. |
+
+- **Keyword-only.** Options are always passed as `name := value`; `tera_render('Hello', '{}', false)` does not match any signature. The positional arguments can be named too, in any order: `tera_render(context := '{"a": 1}', template := '{{ a }}')`.
+- **Typed.** DuckDB casts the value to the declared type when it can do so implicitly — string literals included, so `autoescape := 'false'` works — while `autoescape := 1` or a misspelled name such as `autoescap := false` fails with DuckDB's standard *No function matches the given name and argument types* error.
+- **Constant.** Options are read when the query is bound, so they must be constant expressions; per-row values belong in the context.
+- **NULL in, NULL out.** A NULL template, context, or option (`autoescape := NULL`) returns NULL. A NULL element inside `autoescape_extensions` is an error.
+
+```sql
+SELECT tera_render('{{ v }}', '{"v": "B&O"}', autoescape := 'false');
+-- 'B&O'
+```
+
 ## Treat templates as trusted code
 
 Tera interpolation is **not** an injection-safe parameterization mechanism. A context value that contains `{{ ... }}` or `{% ... %}` syntax won't be re-evaluated, but a template body assembled from untrusted input absolutely can render arbitrary SQL or shell strings. Keep the template surface fixed and authored by trusted code; only the context (the second argument) should come from query data or user input.
@@ -71,4 +100,4 @@ For SQL specifically: use Tera to template the **shape** of a query (column list
 |---|---|
 | [`tera_render`](#tera_render) | Render an inline template, or a named template from a `template_path` glob, with JSON context. The full extension surface. |
 
-This is a deliberately small extension — one function, two optional named arguments, the full [Tera](https://keats.github.io/tera/) language available inside the templates. See the [Tera manual](https://keats.github.io/tera/docs/) for the template language itself; recipes for common SQL-side patterns live in the [Cookbook](#cookbook).
+This is a deliberately small extension — one function, three optional named arguments, the full [Tera](https://keats.github.io/tera/) language available inside the templates. See the [Tera manual](https://keats.github.io/tera/docs/) for the template language itself; recipes for common SQL-side patterns live in the [Cookbook](#cookbook).
