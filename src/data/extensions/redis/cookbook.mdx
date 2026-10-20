@@ -36,8 +36,13 @@ SELECT redis_set('user:1', 'John Doe', 'redis') AS ok;
 ```
 
 ```sql
--- Get a value (Redis GET)
+-- Get a value (Redis GET) — NULL if the key does not exist
 SELECT redis_get('user:1', 'redis') AS user_name;
+```
+
+```sql
+-- Fall back to a default for missing keys
+SELECT coalesce(redis_get('user:999', 'redis'), 'unknown') AS user_name;
 ```
 
 ```sql
@@ -51,20 +56,23 @@ FROM new_users;
 ```sql
 -- Multi-get in one round-trip (Redis MGET)
 SELECT redis_mget('user:1,user:2,user:3', 'redis');
+-- → "John Doe,,Jane Roe" when user:2 is missing
 ```
+
+`redis_mget` returns the values comma-joined in the order the keys were requested, with an empty entry for each missing key, so positions always line up with the key list. Split it with [`string_split`](https://duckdb.org/docs/current/sql/functions/text#string_splitstring-separator) when you need the values individually.
 
 Maps to [`GET`](https://redis.io/docs/latest/commands/get/), [`SET`](https://redis.io/docs/latest/commands/set/), [`MGET`](https://redis.io/docs/latest/commands/mget/). See [`redis_get`](#redis_get) / [`redis_set`](#redis_set) / [`redis_mget`](#redis_mget) for the function signatures.
 
 ## Hash operations
 
 ```sql
--- Set fields (Redis HSET)
-SELECT redis_hset('user:1', 'email', 'john@example.com', 'redis');
-SELECT redis_hset('user:1', 'age',   '30',               'redis');
+-- Set fields (Redis HSET) — returns the number of fields added (BIGINT)
+SELECT redis_hset('user:1', 'email', 'john@example.com', 'redis');  -- 1: new field
+SELECT redis_hset('user:1', 'email', 'john@example.org', 'redis');  -- 0: overwritten
 ```
 
 ```sql
--- Get one field (Redis HGET)
+-- Get one field (Redis HGET) — NULL if the key or field does not exist
 SELECT redis_hget('user:1', 'email', 'redis') AS email;
 ```
 
@@ -78,9 +86,9 @@ Maps to [`HGET`](https://redis.io/docs/latest/commands/hget/), [`HSET`](https://
 ## List operations
 
 ```sql
--- Push values (Redis LPUSH)
-SELECT redis_lpush('queue:jobs', 'job-1', 'redis');
-SELECT redis_lpush('queue:jobs', 'job-2', 'redis');
+-- Push values (Redis LPUSH) — returns the list length after the push (BIGINT)
+SELECT redis_lpush('queue:jobs', 'job-1', 'redis');  -- 1
+SELECT redis_lpush('queue:jobs', 'job-2', 'redis');  -- 2
 ```
 
 ```sql
@@ -95,27 +103,29 @@ SELECT * FROM redis_lrange_table('queue:jobs', 0, -1, 'redis');
 
 Maps to [`LPUSH`](https://redis.io/docs/latest/commands/lpush/) and [`LRANGE`](https://redis.io/docs/latest/commands/lrange/). [`redis_lrange_table`](#redis_lrange_table) is the table-shaped variant — pick it when you want one DuckDB row per list element instead of a single comma-joined string from [`redis_lrange`](#redis_lrange).
 
-## Discovery (SCAN, KEYS)
+## Discovery (SCAN)
 
-[`KEYS`](https://redis.io/docs/latest/commands/keys/) is convenient but blocks the Redis server on large keyspaces. In production, prefer cursor-paginated [`SCAN`](https://redis.io/docs/latest/commands/scan/):
+Both discovery functions use cursor-paginated [`SCAN`](https://redis.io/docs/latest/commands/scan/), never the server-blocking [`KEYS`](https://redis.io/docs/latest/commands/keys/) command:
 
 ```sql
--- KEYS — fine for development / small keyspaces
+-- Every matching key as a table — follows the SCAN cursor to the end for you
 SELECT * FROM redis_keys('user:*', 'redis');
 ```
 
 ```sql
--- SCAN — paginated, non-blocking
+-- One SCAN page per call, when you want to control pagination yourself
 SELECT redis_scan('0', 'user:*', 100, 'redis');
 -- → "1024:user:1,user:2,...,user:50"
 -- Pass the returned cursor (1024) back in to fetch the next page; cursor "0" means done.
 ```
 
+`redis_keys` walks the whole keyspace in one query, so keep the pattern narrow on large instances.
+
 See [`redis_keys`](#redis_keys) and [`redis_scan`](#redis_scan).
 
 ## Bulk hash discovery (`redis_hscan_over_scan`)
 
-The killer feature for migration and bulk analysis — combines [`SCAN`](https://redis.io/docs/latest/commands/scan/) with [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) to emit `(key, field, value)` rows for every hash matching a key pattern, in one query:
+The killer feature for migration and bulk analysis — combines [`SCAN`](https://redis.io/docs/latest/commands/scan/) with [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) to emit `(key, field, value)` rows for every hash matching a key pattern, in one query. Both cursors are followed to the end, and matching keys that aren't hashes are skipped:
 
 ```sql
 -- Every field of every user:* hash, as rows
