@@ -46,9 +46,33 @@ The companion piece for the CLI is [`fuzzycomplete`](/products/extensions/fuzzyc
 The named-parameter surface is shared in spirit across functions:
 
 - **Shapes / styles / themes** — `shape := 'circle' | 'square' | 'heart'` on [`tp_bar`](#tp_bar); named character-set styles on [`tp_density`](#tp_density) (`shaded`, `ascii`, `dots`, `height`, `circles`, `rainbow_circle`, ...); per-mode themes on [`tp_sparkline`](#tp_sparkline) (`utf8_blocks`, `arrows`, `faces`, `slopes`, ...).
-- **Colors** — `on_color` / `off_color` on [`tp_bar`](#tp_bar) and [`tp_density`](#tp_density). `thresholds := [(threshold, color), ...]` gives value-conditional coloring; each block uses the highest threshold it satisfies.
-- **Custom characters** — every function with `on` / `off` accepts arbitrary strings (single chars, emoji, multi-char sequences). They're SQL reserved words — quote them as `"on"` and `"off"`.
+- **Colors** — `on_color` / `off_color` on [`tp_bar`](#tp_bar). `thresholds := [(threshold, color), ...]` gives value-conditional coloring; each block uses the highest threshold it satisfies.
+- **Custom characters** — [`tp_bar`](#tp_bar) and [`tp_qr`](#tp_qr) take `on` / `off`, and [`tp_density`](#tp_density) takes `graph_chars` and `marker`; all accept arbitrary strings (single chars, emoji, multi-char sequences). `on` and `off` are SQL reserved words — quote them as `"on"` and `"off"`.
 - **Width** — fixed character width keeps charts aligned in tables.
+
+## Named parameters
+
+Each function takes one positional argument — the value, list, or data to plot — and every option is a **keyword-only named parameter with a default**, declared natively in the function signature:
+
+```sql
+SELECT tp_bar(75, min := 0, max := 100, width := 20);
+```
+
+- **Pass options by name**, in any order. A positional option such as `tp_bar(0.5, 0, 1)` is rejected; so is an option name the function doesn't declare.
+- **Values are cast to the declared type** — `width := 4::UTINYINT` is fine — but there is no lossy implicit cast: `width := 2.5` is an error, and a string that doesn't parse (`marker_value := 'x'`) fails the cast.
+- **Options must be constant** within a query (a literal, a constant expression, or a prepared-statement `?` parameter), not a per-row column.
+- **An explicit `NULL` option makes the result `NULL`**, the same as a `NULL` first argument.
+- **Some defaults mean "not passed"**: `style := ''` on [`tp_density`](#tp_density) means `shaded` (unless `graph_chars` is given), `theme := ''` on [`tp_sparkline`](#tp_sparkline) picks the mode's default theme, `on` / `off` := `''` use the built-in glyphs, `marker_value := NaN` means no marker, and `graph_chars := []` means "use `style`".
+
+An unknown option, a positional option, or a value of the wrong type fails at bind time with DuckDB's standard `No function matches the given name and argument types` error, which lists the full signature with every option and its default:
+
+```text
+Binder Error: No function matches the given name and argument types 'tp_bar(DECIMAL(2,1), "bogus" := INTEGER_LITERAL)'.
+	Candidate functions:
+	tp_bar("value" DOUBLE, /, *, min DOUBLE := 0.0, max DOUBLE := 1.0, width BIGINT := 10, "on" VARCHAR := , "off" VARCHAR := , on_color VARCHAR := red, off_color VARCHAR := white, shape VARCHAR := square, filled BOOLEAN := true, thresholds ANY := []) -> VARCHAR
+```
+
+Value checks — ranges, allowed shapes/styles/themes/ECC levels, `min < max`, `marker` requiring `marker_value`, `style` vs `graph_chars` — still run at bind time with textplot's own messages (for example `tp_bar: 'width' argument must be at least 1`). `duckdb_functions()` reports every option with its real name and type.
 
 ## Portability: ASCII vs Unicode
 
