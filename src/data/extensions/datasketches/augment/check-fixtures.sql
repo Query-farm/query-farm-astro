@@ -101,3 +101,15 @@ GROUP BY 1;
 CREATE OR REPLACE TABLE readings AS
 SELECT i::DOUBLE AS temp
 FROM range(1, 11) t(i);
+
+----------------------------------------------------------------------
+-- orders: per-order rows for the Tuple / array-of-doubles examples
+-- (distinct customers carrying a per-customer revenue or metric vector).
+----------------------------------------------------------------------
+CREATE OR REPLACE TABLE orders AS
+SELECT
+    (i % 40)                                  AS customer_id,
+    (['north','south'])[1 + (i % 2)]          AS region,
+    ((i * 13) % 97 + 1)::DOUBLE               AS amount,
+    (1 + i % 3)::DOUBLE                       AS items
+FROM range(0, 400) t(i);
