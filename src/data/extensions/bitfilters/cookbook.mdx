@@ -111,7 +111,7 @@ The `bitfilters_duckdb_*` family produces filters in DuckDB's *internal* Bloom f
 - Persist a filter and re-use it later in a join hint.
 - Build per-zone Bloom filters for custom data-skipping logic.
 
-All three functions take a constant version string (e.g. `'v1.5.1'`) as their first argument — bind-folded at parse time — so the produced hash and filter layout match the DuckDB build that will probe them later.
+All three functions take a constant version string (e.g. `'v2.0'`) as their first argument — bind-folded at parse time — so the produced hash and filter layout match the DuckDB build that will probe them later. Accepted versions are `v1.4.0`–`v1.4.4`, `v1.5.0`, `v1.5.1`, `v1.6.0` and `v2.0` (also spelled `2.0`, `v2.0.0` or `2.0.0`); the leading `v` is optional throughout. Any other string is a binder error that lists the supported versions.
 
 ```sql
 -- Build one DuckDB-shaped Bloom filter per bucket. The aggregate's middle
@@ -119,18 +119,24 @@ All three functions take a constant version string (e.g. `'v1.5.1'`) as their fi
 CREATE TABLE zone_filters AS
 SELECT bucket,
        bitfilters_duckdb_bloom_filter_create(
-         'v1.5.1',
+         'v2.0',
          16384,
-         bitfilters_duckdb_hash('v1.5.1', key)
+         bitfilters_duckdb_hash('v2.0', key)
        ) AS bf
 FROM keys
 GROUP BY bucket;
 
--- Probe the matching filter at scan time
+-- Probe one bucket's filter at scan time. The filter argument must be the
+-- same BLOB for every row (a literal, a scalar subquery or a variable);
+-- a per-row filter column is rejected.
 SELECT *
-FROM events e, zone_filters z
-WHERE z.bucket = e.bucket
-  AND bitfilters_duckdb_bloom_filter_probe('v1.5.1', z.bf, e.key);
+FROM events e
+WHERE e.bucket = 2
+  AND bitfilters_duckdb_bloom_filter_probe(
+        'v2.0',
+        (SELECT bf FROM zone_filters WHERE bucket = 2),
+        e.key
+      );
 ```
 
-`bitfilters_duckdb_hash` and `bitfilters_duckdb_bloom_filter_create` produce hashes / sector layouts that match the DuckDB build named by the version string — pin it to your runtime's exact version.
+`bitfilters_duckdb_hash` and `bitfilters_duckdb_bloom_filter_create` produce hashes / sector layouts that match the DuckDB build named by the version string — pin it to your runtime's exact version. DuckDB 2.0 kept the hash algorithms (`Hash<T>`, MurmurHash64, `HashBytes`, `CombineHashScalar`) and the Bloom filter sector/mask layout of v1.4–v1.6, so `'v2.0'` maps to the same implementation: `bitfilters_duckdb_hash('v2.0', x)` equals DuckDB 2.0's own `hash(x)`, and filters built under a v1.x version string probe identically under `'v2.0'` on little-endian platforms (x86-64, ARM64).

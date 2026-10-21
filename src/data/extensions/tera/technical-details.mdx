@@ -41,6 +41,8 @@ SELECT tera_render(
 FROM users;
 ```
 
+The files are read and parsed once per query (per worker thread), not once per row, and inline templates are likewise parsed once and reused for every row that uses the same template text.
+
 Loading from disk is what unlocks Tera's [`{% extends %}` / `{% include %}` / `{% import %}`](https://keats.github.io/tera/docs/#inheritance) constructs — you can't `extends "base.html"` against a template that has no name. Authoring large templates in a `.html` file alongside the rest of your project is also nicer than embedding them as SQL string literals.
 
 ## Autoescape — on by default
@@ -59,6 +61,45 @@ SELECT tera_render('{{ v }}', '{"v":"B&O"}', autoescape := false);
 -- 'B&O'
 ```
 
+The same default applies to templates loaded with `template_path`, whatever their file extension. To escape only some files — say, `.html` templates but not `.txt` ones in the same glob — list the suffixes in `autoescape_extensions`:
+
+```sql
+SELECT tera_render('welcome.txt', json_object('name', name),
+                   template_path := './templates/*',
+                   autoescape_extensions := ['.html'])
+FROM users;
+-- welcome.txt renders unescaped; any .html template in the glob is escaped
+```
+
+## Options
+
+On DuckDB 2.0 the options are native named parameters, declared keyword-only with typed defaults. Both overloads share them:
+
+```
+tera_render(template VARCHAR, *,
+            autoescape BOOLEAN := true,
+            template_path VARCHAR := '',
+            autoescape_extensions VARCHAR[] := [])
+
+tera_render(template VARCHAR, context JSON, *, ...same options...)
+```
+
+| Option | Default | Effect |
+|---|---|---|
+| `autoescape` | `true` | HTML-escape interpolated values, in inline templates and `template_path` files alike. Pass `false` for configs, SQL, JSON or plain text. |
+| `template_path` | `''` | Glob of template files; `template` is then a template name. |
+| `autoescape_extensions` | `[]` | With `template_path`, restrict escaping to file templates whose names end with one of these suffixes (for example `['.html']`); the others render unescaped. With the default `[]`, `autoescape` escapes every template whatever its extension. Inline templates ignore this list. |
+
+- **Keyword-only.** Options are always passed as `name := value`; `tera_render('Hello', '{}', false)` does not match any signature. The positional arguments can be named too, in any order: `tera_render(context := '{"a": 1}', template := '{{ a }}')`.
+- **Typed.** DuckDB casts the value to the declared type when it can do so implicitly — string literals included, so `autoescape := 'false'` works — while `autoescape := 1` or a misspelled name such as `autoescap := false` fails with DuckDB's standard *No function matches the given name and argument types* error.
+- **Constant.** Options are read when the query is bound, so they must be constant expressions; per-row values belong in the context.
+- **NULL in, NULL out.** A NULL template, context, or option (`autoescape := NULL`) returns NULL. A NULL element inside `autoescape_extensions` is an error.
+
+```sql
+SELECT tera_render('{{ v }}', '{"v": "B&O"}', autoescape := 'false');
+-- 'B&O'
+```
+
 ## Treat templates as trusted code
 
 Tera interpolation is **not** an injection-safe parameterization mechanism. A context value that contains `{{ ... }}` or `{% ... %}` syntax won't be re-evaluated, but a template body assembled from untrusted input absolutely can render arbitrary SQL or shell strings. Keep the template surface fixed and authored by trusted code; only the context (the second argument) should come from query data or user input.
@@ -71,4 +112,4 @@ For SQL specifically: use Tera to template the **shape** of a query (column list
 |---|---|
 | [`tera_render`](#tera_render) | Render an inline template, or a named template from a `template_path` glob, with JSON context. The full extension surface. |
 
-This is a deliberately small extension — one function, two optional named arguments, the full [Tera](https://keats.github.io/tera/) language available inside the templates. See the [Tera manual](https://keats.github.io/tera/docs/) for the template language itself; recipes for common SQL-side patterns live in the [Cookbook](#cookbook).
+This is a deliberately small extension — one function, three optional named arguments, the full [Tera](https://keats.github.io/tera/) language available inside the templates. See the [Tera manual](https://keats.github.io/tera/docs/) for the template language itself; recipes for common SQL-side patterns live in the [Cookbook](#cookbook).
