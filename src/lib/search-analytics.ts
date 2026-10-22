@@ -5,7 +5,7 @@
 //
 // Search boxes update as the visitor types, so one event is sent per settled
 // query: after they pause, never for each keystroke, and not again for the
-// same query. SearchWidget.astro repeats this inline (its script isn't bundled).
+// same query. All search widgets, including the site modal, share this helper.
 
 type Gtag = (...args: unknown[]) => void;
 

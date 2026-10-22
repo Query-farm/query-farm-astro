@@ -1,8 +1,7 @@
 ---
 // Site-wide search. Trigger lives in the nav; the modal lazy-loads Pagefind's
-// runtime (/pagefind/pagefind.js, produced by scripts/build-search-index.mjs at
-// build time) on first open. Degrades gracefully when the index is absent
-// (e.g. `astro dev`, where Pagefind hasn't run).
+// runtime on first query, with a small extension catalog for name ranking,
+// icons, and popular shortcuts. Direct extension search also works in dev.
 ---
 
 <!-- Trigger -->
@@ -25,8 +24,8 @@
 <div id="site-search-modal" class="fixed inset-0 z-[100] hidden" role="dialog" aria-modal="true" aria-labelledby="site-search-title" tabindex="-1">
   <div data-search-close class="absolute inset-0 bg-soil-900/40 backdrop-blur-sm"></div>
   <div class="relative mx-auto mt-[10vh] w-[92%] max-w-2xl overflow-hidden rounded-2xl border border-soil-300 bg-[#fffdf7] shadow-2xl">
-    <div class="flex items-center gap-3 border-b border-soil-200 px-4">
-      <svg class="w-5 h-5 text-soil-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <div class="site-search-input-row flex items-center gap-3 border-b border-soil-200 px-4">
+      <svg class="w-5 h-5 text-field-700 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z" />
       </svg>
       <input
@@ -34,13 +33,14 @@
         type="search"
         autocomplete="off"
         placeholder="Search extensions, functions, docs…"
-        class="flex-1 bg-transparent py-4 text-base text-soil-900 placeholder-soil-400 focus:outline-none"
+        class="min-w-0 flex-1 bg-transparent py-4 text-base text-soil-900 placeholder-soil-400 focus:outline-none"
         aria-label="Search the site"
       />
       <button data-search-close type="button" aria-label="Close search" class="rounded p-1 text-soil-400 hover:text-soil-700">
         <kbd class="rounded border border-soil-300 bg-soil-50 px-1.5 py-0.5 text-[11px] font-mono">Esc</kbd>
       </button>
     </div>
+    <h2 id="site-search-heading" hidden class="px-5 pt-4 pb-1 text-xs font-semibold uppercase tracking-wide text-soil-500"></h2>
     <div id="site-search-results" class="max-h-[55vh] overflow-y-auto p-2"></div>
     <p id="site-search-title" class="sr-only">Search Query.Farm</p>
     <p id="site-search-status" class="px-4 py-6 text-center text-sm text-soil-500" role="status" aria-live="polite"></p>
@@ -49,117 +49,154 @@
         <input id="site-search-functions" type="checkbox" class="h-3.5 w-3.5 rounded border-soil-400 text-field-700 focus:ring-link" />
         <span>Also search function names</span>
       </label>
+      <span class="ml-auto hidden sm:inline text-soil-500">↑ ↓ navigate · ↵ open</span>
     </div>
   </div>
 </div>
 
-<script is:inline>
-  (function () {
-    const openBtn = document.getElementById('site-search-open');
-    const modal = document.getElementById('site-search-modal');
-    const input = document.getElementById('site-search-input');
-    const resultsEl = document.getElementById('site-search-results');
-    const statusEl = document.getElementById('site-search-status');
-    const fnToggle = document.getElementById('site-search-functions');
-    if (!openBtn || !modal || !input || !resultsEl || !statusEl) return;
-
-    const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-
-    let pf = null; // null=not loaded, 'none'=unavailable
-    async function ensurePagefind() {
-      if (pf) return pf;
-      try {
-        const mod = await import('/pagefind/pagefind.js');
-        await mod.init();
-        pf = mod;
-      } catch (e) {
-        pf = 'none';
-      }
-      return pf;
-    }
-
-    function setStatus(msg) {
-      statusEl.textContent = msg || '';
-      statusEl.hidden = !msg;
-    }
-
-    function openModal() {
-      document.getElementById('haybarn-search')?.close();
-      modal.classList.remove('hidden');
-      openBtn.setAttribute('aria-expanded', 'true');
-      document.documentElement.style.overflow = 'hidden';
-      input.focus();
-      ensurePagefind().then((p) => {
-        if (p === 'none') setStatus('Search is available on the published site.');
-        else if (!input.value) setStatus('Type to search the docs and extensions.');
-      });
-    }
-    function closeModal() {
-      modal.classList.add('hidden');
-      openBtn.setAttribute('aria-expanded', 'false');
-      document.documentElement.style.overflow = '';
-      openBtn.focus();
-    }
-
-    openBtn.addEventListener('click', openModal);
-    modal.querySelectorAll('[data-search-close]').forEach((el) => el.addEventListener('click', closeModal));
-    document.addEventListener('keydown', (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k' && !document.getElementById('haybarn-search')) { e.preventDefault(); openModal(); }
-      else if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeModal();
-      else if (e.key === 'Tab' && !modal.classList.contains('hidden')) {
-        const focusable = Array.from(modal.querySelectorAll('button, input, a[href]'))
-          .filter((el) => !el.hasAttribute('disabled'));
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
-      }
-    });
-
-    let timer;
-    // One GA4 `search` event per settled query; mirrors src/lib/search-analytics.ts.
-    let trackTimer, tracked = '';
-    function trackSearch(q, results) {
-      clearTimeout(trackTimer);
-      trackTimer = setTimeout(() => {
-        if (q.toLowerCase() === tracked) return;
-        tracked = q.toLowerCase();
-        window.gtag?.('event', 'search', { search_term: q.slice(0, 100), search_area: 'site', search_results: results });
-      }, 1500);
-    }
-    input.addEventListener('input', () => {
-      clearTimeout(timer);
-      timer = setTimeout(runSearch, 140);
-    });
-    // Re-run immediately when the "function names" toggle flips.
-    fnToggle?.addEventListener('change', runSearch);
-
-    async function runSearch() {
-      const q = input.value.trim();
-      if (!q) { resultsEl.innerHTML = ''; setStatus('Type to search the docs and extensions.'); return; }
-      const p = await ensurePagefind();
-      if (p === 'none') { resultsEl.innerHTML = ''; setStatus('Search is available on the published site.'); return; }
-      // Default to pages only (extensions, docs); include the 700+ function
-      // records only when the user opts in.
-      const opts = { filters: { kind: fnToggle && fnToggle.checked ? { any: ['page', 'function'] } : 'page' } };
-      const search = await p.search(q, opts);
-      trackSearch(q, search.results.length);
-      const top = await Promise.all(search.results.slice(0, 8).map((r) => r.data()));
-      if (!top.length) { resultsEl.innerHTML = ''; setStatus(`No results for “${esc(q)}”.`); return; }
-      setStatus('');
-      resultsEl.innerHTML = top.map((d) => {
-        const title = esc((d.meta && d.meta.title) || d.url);
-        const tag = d.meta && d.meta.extension
-          ? `<span class="ml-2 shrink-0 rounded-full border border-sun-400/60 bg-sun-400/10 px-2 py-0.5 text-[11px] font-medium text-sun-700">${esc(d.meta.extension)}</span>`
-          : '';
-        return `<a href="${esc(d.url)}" class="block rounded-lg px-3 py-2 transition-colors hover:bg-soil-100">
-          <div class="flex items-center justify-between gap-2">
-            <span class="font-semibold text-soil-900 truncate">${title}</span>${tag}
-          </div>
-          <p class="mt-0.5 text-sm text-soil-700 line-clamp-2 [&_mark]:bg-sun-200 [&_mark]:text-soil-900 [&_mark]:rounded">${d.excerpt || ''}</p>
-        </a>`;
-      }).join('');
-    }
-  })();
+<script>
+  import '../../scripts/site-search';
 </script>
+
+<style>
+  .site-search-input-row {
+    background: linear-gradient(110deg, #edf6f1, #fbf7e9);
+    box-shadow: inset 0 3px 0 #45632f;
+  }
+  #site-search-results :global(.site-search-result) {
+    --search-ink: #475569;
+    --search-tint: #f1f5f9;
+    --search-border: #cbd5e1;
+    --search-wash: #f8fafc;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-block: 0.125rem;
+    padding: 0.75rem;
+    border-radius: 0.65rem;
+    transition: background-color 120ms;
+  }
+  /* Follow the extension catalog's category colors, with separate colors for
+     other result types. Labels still identify every type without color. */
+  #site-search-results :global([data-kind="Extension"]) {
+    --search-ink: #0369a1;
+    --search-tint: #e0f2fe;
+    --search-border: #7dd3fc;
+    --search-wash: #f0f9ff;
+    background: linear-gradient(100deg, var(--search-wash), transparent 85%);
+  }
+  #site-search-results :global([data-category="transformation"]),
+  #site-search-results :global([data-kind="Function"]) {
+    --search-ink: #6d28d9;
+    --search-tint: #ede9fe;
+    --search-border: #c4b5fd;
+    --search-wash: #f5f3ff;
+  }
+  #site-search-results :global([data-category="analytics"]) {
+    --search-ink: #a21caf;
+    --search-tint: #fae8ff;
+    --search-border: #f0abfc;
+    --search-wash: #fdf4ff;
+  }
+  #site-search-results :global([data-category="performance"]) {
+    --search-ink: #92400e;
+    --search-tint: #fef3c7;
+    --search-border: #fcd34d;
+    --search-wash: #fffbeb;
+  }
+  #site-search-results :global([data-category="devtools"]) {
+    --search-ink: #0f766e;
+    --search-tint: #ccfbf1;
+    --search-border: #5eead4;
+    --search-wash: #f0fdfa;
+  }
+  #site-search-results :global([data-category="quality"]),
+  #site-search-results :global([data-kind="Product"]) {
+    --search-ink: #047857;
+    --search-tint: #d1fae5;
+    --search-border: #6ee7b7;
+    --search-wash: #ecfdf5;
+  }
+  #site-search-results :global([data-kind="Documentation"]),
+  #site-search-results :global([data-kind="Reference"]) {
+    --search-ink: #4338ca;
+    --search-tint: #e0e7ff;
+    --search-border: #a5b4fc;
+    --search-wash: #eef2ff;
+  }
+  #site-search-results :global([data-kind="Blog"]) {
+    --search-ink: #be123c;
+    --search-tint: #ffe4e6;
+    --search-border: #fda4af;
+    --search-wash: #fff1f2;
+  }
+  #site-search-results :global(.site-search-result:hover),
+  #site-search-results :global(.site-search-result:focus-visible) {
+    background: var(--search-tint);
+    outline: 2px solid transparent;
+  }
+  #site-search-results :global(.site-search-result:focus-visible) {
+    outline-color: var(--search-ink);
+    outline-offset: -2px;
+  }
+  #site-search-results :global(.site-search-icon) {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    width: 2.5rem;
+    height: 2.5rem;
+    border: 1px solid var(--search-border);
+    border-radius: 0.6rem;
+    color: var(--search-ink);
+    background: var(--search-tint);
+  }
+  #site-search-results :global([data-kind="Extension"] .site-search-icon) {
+    background: var(--search-ink);
+    border-color: var(--search-ink);
+    color: white;
+  }
+  #site-search-results :global(.site-search-icon svg) { width: 1.4rem; height: 1.4rem; }
+  #site-search-results :global(.site-search-result-body) { flex: 1; min-width: 0; }
+  #site-search-results :global(.site-search-result-heading) {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.5rem;
+    color: var(--color-soil-900);
+  }
+  #site-search-results :global(.site-search-result-heading strong) { overflow-wrap: anywhere; }
+  #site-search-results :global(.site-search-badge) {
+    flex-shrink: 0;
+    border: 1px solid var(--search-border);
+    border-radius: 999px;
+    padding: 0.1rem 0.5rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--search-ink);
+    background: var(--search-tint);
+  }
+  #site-search-results :global(.site-search-excerpt) {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    margin-top: 0.2rem;
+    font-size: 0.875rem;
+    line-height: 1.45;
+    color: var(--color-soil-700);
+  }
+  #site-search-results :global(mark) {
+    background: var(--color-sun-200);
+    color: var(--color-soil-900);
+    border-radius: 0.15rem;
+  }
+  #site-search-results :global(.site-search-detail) {
+    margin-top: 0.3rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.7rem;
+    color: var(--color-soil-500);
+  }
+</style>

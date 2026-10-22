@@ -12,6 +12,7 @@ import { indexHaybarnExtensions } from './haybarn-extensions/search-index.mjs';
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { prepareSearchHTML } from './search-html.mjs';
 
 const DIST = 'dist';
 const EXT_DIST = join(DIST, 'products', 'extensions');
@@ -68,7 +69,9 @@ async function main() {
     if (content.includes('data-haybarn-guide')) {
       if (!content.includes('data-haybarn-search-page')) continue;
     }
-    const result = await index.addHTMLFile({ url: '/' + path.replace(/index\.html$/, ''), content });
+    const searchable = prepareSearchHTML(content);
+    if (!searchable) continue;
+    const result = await index.addHTMLFile({ url: '/' + path.replace(/index\.html$/, ''), content: searchable });
     if (result.errors?.length) throw new Error(result.errors.join('\n'));
   }
 
