@@ -2,6 +2,7 @@
 title: "DuckDB 2.0 Pushes Whole Queries Through ADBC—10–11× Faster on PostgreSQL"
 description: "Query Farm's adbc_scanner uses DuckDB 2.0 whole-query pushdown to run supported queries entirely in PostgreSQL. In our benchmark, it was 10–11× faster."
 pubDate: 2026-09-13
+updatedDate: 2026-10-22
 author: "Rusty Conover"
 tags: ["DuckDB", "ADBC", "PostgreSQL", "Performance", "Extensions"]
 heroImage: "/media/posts/one-query-one-arrow-stream-adbc-duckdb-2/social.png"
@@ -48,7 +49,7 @@ GROUP BY region;
 
 From the user's point of view, `pg.public.orders` is simply a table in a DuckDB query. Behind the scenes, PostgreSQL was always doing some work: [`adbc_scanner`](/products/extensions/adbc_scanner/) sent it SQL for the table scan and any supported filters. The transfer was vectorized in Arrow batches, but millions of rows could still have to move into DuckDB before it performed the remaining joins, grouping, and ordering.
 
-On DuckDB's 2.0 development branch, a supported query can take a shorter path. When all its tables belong to one remote database and every operation is safe to run there, DuckDB passes over the complete query, PostgreSQL or MySQL performs the work, and ADBC returns only the result. Otherwise, DuckDB uses the existing local path.
+In DuckDB 2.0, a supported query can take a shorter path. When all its tables belong to one remote database and every operation is safe to run there, DuckDB passes over the complete query, PostgreSQL or MySQL performs the work, and ADBC returns only the result. Otherwise, DuckDB uses the existing local path.
 
 ## The result: 10–11× faster
 
@@ -76,7 +77,7 @@ DuckDB's local plan already used a dynamic filter, so it reduced the fact scan t
 
 The row reductions are much larger than the latency reductions. PostgreSQL still has to scan and compute, and ADBC still has fixed statement and Arrow-stream costs. Pushdown removes transfer and local execution work; it does not make the remote query free. The complete setup and run procedure are in the [reproduction appendix](#appendix-reproducing-the-benchmark).
 
-[`adbc_scanner` is available today](/products/extensions/adbc_scanner/), and the DuckDB 2.0 implementation can be tested from its [`v2.0` branch](https://github.com/Query-farm/adbc_scanner/tree/v2.0).
+DuckDB 2.0 is now released, and the [`adbc_scanner`](/products/extensions/adbc_scanner/) build for it, with whole-query pushdown, installs from the Query.Farm extension repository. The [setup is below](#install-it-on-duckdb-20).
 
 ## Why this matters
 
@@ -92,7 +93,7 @@ When it applies, pushdown can reduce data transfer, DuckDB memory use, and clien
 
 There is a tradeoff: the remote database does more CPU work. That can be exactly right for a warehouse or read replica and the wrong choice for a busy operational system. The attachment option `query_pushdown false` keeps that decision under the user's control.
 
-The difference is easiest to see side by side. We have wired DuckDB 2.0's remote-database pushdown interface into [`adbc_scanner`](/products/extensions/adbc_scanner/); the implementation is on its [`v2.0` branch](https://github.com/Query-farm/adbc_scanner/tree/v2.0).
+The difference is easiest to see side by side. We have wired DuckDB 2.0's remote-database pushdown interface into [`adbc_scanner`](/products/extensions/adbc_scanner/); it ships in the extension's DuckDB 2.0 build.
 
 <figure>
   <img src="/blog/one-query-one-arrow-stream-adbc-duckdb-2/adbc-query-pushdown.svg" alt="Comparison of ADBC execution paths. Previously, ADBC sent table-level SQL to the remote database and returned many Arrow rows for DuckDB to join, group, and order locally. With DuckDB 2.0, a supported QueryNode passes through a dialect safety gate and becomes one remote statement containing the joins, filters, aggregates, and ordering; only the final Arrow result returns to DuckDB." loading="eager" width="760" height="650" />
@@ -118,8 +119,8 @@ That timing matters. The extension gets the user's query while it is still recog
 The same series of DuckDB changes added [`CONNECT`](https://github.com/duckdb/duckdb/pull/22950), which makes a remote database the current execution target. With [`adbc_scanner`](/products/extensions/adbc_scanner/), the two styles look like this:
 
 ```sql
--- Using a DuckDB 2.0 development build and a matching v2.0 extension build:
-LOAD adbc_scanner;
+-- DuckDB 2.0, with adbc_scanner installed from the Query.Farm repository (see below):
+LOAD adbc_scanner FROM query_farm;
 
 ATTACH 'postgresql://app:secret@db.example.com/warehouse'
     AS pg (TYPE adbc, driver 'postgresql');
@@ -186,7 +187,7 @@ The extension already exercises more ADBC drivers—including Flight SQL, DataFu
 
 <aside class="article-brief" aria-labelledby="works-today-title">
   <div class="article-brief-inner">
-    <p id="works-today-title" class="article-brief-label">On the <code>v2.0</code> branch</p>
+    <p id="works-today-title" class="article-brief-label">In the DuckDB 2.0 build</p>
     <ul>
       <li>Structured whole-query profiles for PostgreSQL, MySQL, SQLite, and DuckDB</li>
       <li>Automatic fallback to local DuckDB execution when a query is not safe to push</li>
@@ -197,7 +198,26 @@ The extension already exercises more ADBC drivers—including Flight SQL, DataFu
   </div>
 </aside>
 
-[`adbc_scanner`](/products/extensions/adbc_scanner/) is open source, and its DuckDB 2.0 work is available for testing now. [Haybarn](/products/haybarn/), Query Farm's DuckDB distribution, will also have a DuckDB 2.0 preview release soon, with the engine and matching extensions packaged together.
+### Install it on DuckDB 2.0
+
+[`adbc_scanner`](/products/extensions/adbc_scanner/) is open source. Its DuckDB 2.0 build is signed and published to the Query.Farm extension repository. Install it once on each machine:
+
+```sql
+SET allow_extension_repositories = 'allowed';
+CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm
+  WITH PREFIX 'https://duckdb-extensions.query.farm';
+INSTALL adbc_scanner FROM query_farm;
+```
+
+Then load it at the start of each session:
+
+```sql
+LOAD adbc_scanner FROM query_farm;
+```
+
+On DuckDB 1.5, `INSTALL adbc_scanner FROM community;` still works, but that build runs ordinary ADBC scans without whole-query pushdown.
+
+[Haybarn](/products/haybarn/), Query Farm's DuckDB distribution, will also have a DuckDB 2.0 preview release soon, with the engine and matching extensions packaged together.
 
 Several customers have already asked for profiles tailored to their databases and SQL conventions. [Query Farm can build and validate a custom profile on a consulting basis](/consulting/), using the customer's actual server and representative queries rather than assuming compatibility from a driver name.
 
@@ -245,7 +265,7 @@ Finally, the same remote-database pushdown work points beyond reads. `CONNECT` a
 - **ADBC is the leverage point, not a universal dialect.** It supplies reusable connection, statement, metadata, parameter, and Arrow transport machinery. Each SQL family still needs a tested compatibility profile.
 - **Fallback is part of the design.** Unsupported expressions and query shapes remain ordinary DuckDB plans; the extension does not gamble with semantics for a faster-looking `EXPLAIN`.
 - **Moving less data produced a large result.** On the same-host five-million-row benchmark, full pushdown was 10.0× and 11.4× faster for the two tested workloads.
-- **The implementation is available now for experimentation.** The [`adbc_scanner`](/products/extensions/adbc_scanner/) work is on its [`v2.0` branch](https://github.com/Query-farm/adbc_scanner/tree/v2.0), built against DuckDB's development branch. Expect both to keep moving before DuckDB 2.0 is released.
+- **It is available now.** DuckDB 2.0 has been released, and the [`adbc_scanner`](/products/extensions/adbc_scanner/) build for it installs from the Query.Farm extension repository. On DuckDB 1.5, the extension runs ordinary ADBC scans.
 
 The most exciting part is not the PostgreSQL result by itself. A community extension can add one carefully tested SQL profile and reuse the rest of the ADBC stack. DuckDB 2.0 provides the planning seam; ADBC provides the common execution seam.
 
