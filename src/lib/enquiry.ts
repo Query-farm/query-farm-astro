@@ -98,9 +98,11 @@ export async function verifyTurnstile(token: string, secret: string, ip: string 
   if (ip) body.append('remoteip', ip);
   try {
     const response = await fetchImpl('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST', body });
-    const result = (await response.json()) as { success?: boolean };
+    const result = (await response.json()) as { success?: boolean; 'error-codes'?: string[] };
+    if (result.success !== true) console.warn('enquiry: Turnstile refused', result['error-codes']);
     return result.success === true;
-  } catch {
+  } catch (error) {
+    console.warn('enquiry: Turnstile check failed', error);
     return false;
   }
 }
@@ -123,7 +125,10 @@ export async function handleEnquiry(request: Request, env: EnquiryEnv, fetchImpl
     return json({ ok: false, error: 'The form could not be read. Please try again.' }, 400);
   }
   // Honeypot: a field people never see. Bots that fill it get a quiet success.
-  if (text(raw.website)) return json({ ok: true }, 200);
+  if (text(raw.qf_hp)) {
+    console.warn('enquiry: honeypot filled; dropped');
+    return json({ ok: true }, 200);
+  }
 
   const checked = validateEnquiry(raw);
   if (!checked.ok) return json({ ok: false, error: 'Check the highlighted fields.', errors: checked.errors }, 400);
@@ -141,7 +146,8 @@ export async function handleEnquiry(request: Request, env: EnquiryEnv, fetchImpl
       body: JSON.stringify(email),
     });
     if (!sent.ok) throw new Error(`Resend answered ${sent.status}`);
-  } catch {
+  } catch (error) {
+    console.error('enquiry: Resend send failed', error);
     return json({ ok: false, error: 'Your message could not be sent. Please email hello@query.farm instead.' }, 502);
   }
   return json({ ok: true }, 200);
