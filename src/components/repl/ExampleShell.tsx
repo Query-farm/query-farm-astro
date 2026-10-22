@@ -28,6 +28,7 @@ import {
   type Session,
   type QueryResult,
 } from "../../lib/repl/duckdb-boot";
+import { normalizeStatement, tryPageType, trackTry } from "../../lib/repl/analytics";
 
 const CDN_SCRIPTS = [
   "https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js",
@@ -259,7 +260,16 @@ interface ReplDeps {
  *  disposed (which rejects the pending rl.read()). */
 async function runRepl(
   deps: ReplDeps,
-  opts: { seedSql?: string; extError?: string; fixtures?: string; extensionName?: string },
+  opts: {
+    seedSql?: string;
+    extError?: string;
+    fixtures?: string;
+    extensionName?: string;
+    /** Called once the seeded example has run; exampleOk is false if any statement failed. */
+    onExampleRun?: (exampleOk: boolean) => void;
+    /** Called after each statement the visitor runs; edited is false when it repeats the example. */
+    onUserRun?: (ok: boolean, edited: boolean) => void;
+  },
 ): Promise<void> {
   const { term, rl, session, tableFromIPC } = deps;
   let maxDisplayRows = 40;
@@ -416,6 +426,8 @@ async function runRepl(
   // second, unrelated extension (e.g. `LOAD spatial;` for a geometry join)
   // is NOT stripped — nothing has loaded that one, and it's genuinely part
   // of what the example needs, not boilerplate to skip past.
+  const seeded = new Set<string>();
+  let exampleOk = true;
   if (opts.seedSql) {
     const primary = opts.extensionName?.toLowerCase();
     const stmts: string[] = [];
@@ -455,13 +467,16 @@ async function runRepl(
         await session.runQuery(stmt);
         continue;
       }
-      await exec(stmt, true);
+      if (!(await exec(stmt, true))) exampleOk = false;
+      seeded.add(normalizeStatement(stmt));
       // Seed the readline history so the user can press ↑ to recall and edit
       // the example, just as if they had typed it.
       rl.appendHistory(stmt);
       rl.println("");
     }
   }
+
+  opts.onExampleRun?.(exampleOk);
 
   for (;;) {
     const sql = (await rl.read(PROMPT)).trim();
@@ -472,7 +487,8 @@ async function runRepl(
     if (sql.startsWith(".")) {
       if (handleDot(sql)) continue;
     }
-    await exec(sql);
+    const ok = await exec(sql);
+    opts.onUserRun?.(ok, !seeded.has(normalizeStatement(sql)));
   }
 }
 
@@ -488,6 +504,10 @@ interface Props {
   onClose?: () => void;
 }
 
+// Whether this page has already booted the engine, so load times from a
+// cold start and from a second shell on the same page can be told apart.
+let engineBooted = false;
+
 export default function ExampleShell({ extensionName, installSource, sql, fixtures, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -500,6 +520,11 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
     ensureShellStyle();
     let disposed = false;
     let cleanup = () => {};
+    const openedAt = performance.now();
+    const warm = engineBooted;
+    const base = { extension: extensionName, page_type: tryPageType() };
+    let stage = "boot";
+    trackTry("try_extension", base);
 
     (async () => {
       try {
@@ -612,6 +637,8 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
           "\x1b[90mBooting Haybarn (DuckDB) WebAssembly… (first load can take a few seconds)\x1b[0m",
         );
         await ensureEngine();
+        engineBooted = true;
+        stage = "extension";
         if (disposed) return;
 
         // Load the extension once, engine-wide; open an isolated session.
@@ -621,6 +648,9 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
         ]);
         if (disposed) return;
 
+        const loadMs = Math.round(performance.now() - openedAt);
+        if (!ext.ok) trackTry("try_extension_failed", { ...base, stage: "extension", load_ms: loadMs });
+        stage = "session";
         setStatus("ready");
         // Clear the booting line (carriage return + erase line) now that the
         // engine, extension, and session are ready.
@@ -635,10 +665,15 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
             extError: ext.ok
               ? undefined
               : `${extensionName} may not have a WebAssembly build yet — the SQL below may not run in-browser.`,
+            onExampleRun: (exampleOk) => {
+              if (ext.ok) trackTry("try_extension_ready", { ...base, load_ms: loadMs, warm, example_ok: exampleOk });
+            },
+            onUserRun: (ok, edited) => trackTry("try_query_run", { ...base, ok, edited }),
           },
         );
       } catch (e: unknown) {
         if (disposed) return;
+        trackTry("try_extension_failed", { ...base, stage, load_ms: Math.round(performance.now() - openedAt) });
         setStatus("error");
         setErrorMsg(e instanceof Error ? e.message : String(e));
       }
