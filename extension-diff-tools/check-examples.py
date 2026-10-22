@@ -190,6 +190,9 @@ RUNTIME_SKIP_HINTS = [
     # Redis cookbook examples that try to actually open a Redis
     # connection — there's no Redis running in CI.
     ("redis connection error", "Redis unreachable"),
+    # Tributary examples that talk to a Kafka cluster — there's no broker
+    # running in CI.
+    ("broker transport failure", "Kafka unreachable"),
     # Radio cookbook examples that try to subscribe before any sub
     # exists, or address a missing subscription — fixture-missing.
     ("no subscription found", "subscription not configured"),
@@ -311,7 +314,10 @@ class Result:
 # failures. Keep this list narrow: deterministic hashes and statistics continue
 # to receive exact output validation.
 NONDETERMINISTIC_OUTPUT_RE = re.compile(
-    r"\b(?:crypto_random_bytes|adbc_connect|dist_[a-z0-9_]+_sample|dist_uniform_int_range)\s*\(",
+    # datasketch_quantiles / datasketch_req compact with random choices, so the
+    # exact quantiles, ranks and sorted views they return vary between runs.
+    r"\b(?:crypto_random_bytes|adbc_connect|dist_[a-z0-9_]+_sample|dist_uniform_int_range"
+    r"|datasketch_quantiles|datasketch_req)\s*\(",
     re.IGNORECASE,
 )
 
