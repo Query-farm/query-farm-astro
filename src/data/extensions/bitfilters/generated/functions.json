@@ -166,15 +166,78 @@
         "varargs": true
       }
     ],
-    "description": "Probes a DuckDB-internal bloom filter (serialized as BLOB) for a value. The version parameter specifies which DuckDB hash algorithm to use. The filter blob and version are constant-folded at bind time. Multiple value arguments are combined for multi-key bloom filter probes.",
+    "description": "Probes a DuckDB-internal bloom filter (serialized as BLOB) for a value. The version parameter specifies which DuckDB hash algorithm to use. The version must be constant; a constant filter blob is parsed once at bind time, otherwise (e.g. a scalar subquery or a BLOB column) it is read per row. A NULL filter returns NULL. Multiple value arguments are combined for multi-key bloom filter probes.",
     "examples": [
       {
         "description": "",
-        "code": "SELECT bitfilters_duckdb_bloom_filter_probe('v2.0', filter_blob, key_col) FROM tbl;"
+        "code": "SELECT key_col, bitfilters_duckdb_bloom_filter_probe('v2.0', (SELECT bitfilters_duckdb_bloom_filter_create('v2.0', 1024, bitfilters_duckdb_hash('v2.0', k)) FROM range(100) t(k)), key_col) AS maybe_present FROM range(98, 102) t(key_col);",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "key_col",
+              "align": "left"
+            },
+            {
+              "name": "maybe_present",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "98",
+              "true"
+            ],
+            [
+              "99",
+              "true"
+            ],
+            [
+              "100",
+              "false"
+            ],
+            [
+              "101",
+              "false"
+            ]
+          ]
+        }
       },
       {
         "description": "",
-        "code": "SELECT bitfilters_duckdb_bloom_filter_probe('v2.0', filter_blob, col1, col2) FROM tbl;"
+        "code": "WITH f AS (SELECT bitfilters_duckdb_bloom_filter_create('v2.0', 1024, bitfilters_duckdb_hash('v2.0', i, 'k' || i)) AS filter_blob FROM range(100) t(i)) SELECT col1, col2, bitfilters_duckdb_bloom_filter_probe('v2.0', (SELECT filter_blob FROM f), col1, col2) AS maybe_present FROM (VALUES (1::BIGINT, 'k1'), (1, 'k2'), (200, 'k200')) t(col1, col2);",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "col1",
+              "align": "left"
+            },
+            {
+              "name": "col2",
+              "align": "left"
+            },
+            {
+              "name": "maybe_present",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "1",
+              "k1",
+              "true"
+            ],
+            [
+              "1",
+              "k2",
+              "false"
+            ],
+            [
+              "200",
+              "k200",
+              "false"
+            ]
+          ]
+        }
       }
     ]
   },

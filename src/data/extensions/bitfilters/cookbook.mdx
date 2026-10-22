@@ -126,9 +126,8 @@ SELECT bucket,
 FROM keys
 GROUP BY bucket;
 
--- Probe one bucket's filter at scan time. The filter argument must be the
--- same BLOB for every row (a literal, a scalar subquery or a variable);
--- a per-row filter column is rejected.
+-- Probe one bucket's filter at scan time. The filter can be a constant
+-- BLOB, a scalar subquery (as here) or a per-row BLOB column.
 SELECT *
 FROM events e
 WHERE e.bucket = 2
@@ -137,6 +136,18 @@ WHERE e.bucket = 2
         (SELECT bf FROM zone_filters WHERE bucket = 2),
         e.key
       );
+```
+
+The filter can also come from a column, so a join can probe each row against its own bucket's filter. A `NULL` filter returns `NULL`, which `WHERE` treats as false:
+
+```sql
+-- Probe every event against the filter for its bucket
+SELECT e.bucket, count(*) AS maybe_present
+FROM events e
+JOIN zone_filters z USING (bucket)
+WHERE bitfilters_duckdb_bloom_filter_probe('v2.0', z.bf, e.key)
+GROUP BY e.bucket
+ORDER BY e.bucket;
 ```
 
 `bitfilters_duckdb_hash` and `bitfilters_duckdb_bloom_filter_create` produce hashes / sector layouts that match the DuckDB build named by the version string — pin it to your runtime's exact version. DuckDB 2.0 kept the hash algorithms (`Hash<T>`, MurmurHash64, `HashBytes`, `CombineHashScalar`) and the Bloom filter sector/mask layout of v1.4–v1.6, so `'v2.0'` maps to the same implementation: `bitfilters_duckdb_hash('v2.0', x)` equals DuckDB 2.0's own `hash(x)`, and filters built under a v1.x version string probe identically under `'v2.0'` on little-endian platforms (x86-64, ARM64).
