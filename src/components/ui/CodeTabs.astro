@@ -18,13 +18,21 @@
 import CodeBlock from './CodeBlock.astro';
 import { Icon } from 'astro-icon/components';
 
+interface Step {
+  title: string;
+  description?: string;
+  code: string;
+}
+
 interface Tab {
   /** Stable key — also the value persisted for `group`. */
   id: string;
   label: string;
   /** Iconify name, e.g. `simple-icons:python`. */
   icon?: string;
-  code: string;
+  /** One snippet per tab, or `steps`: titled snippets shown in order. */
+  code?: string;
+  steps?: Step[];
   lang: string;
   title?: string;
   /** Draw a rule after this pill — for a set where one tab is the odd one out
@@ -37,9 +45,12 @@ interface Props {
   /** Tab sets sharing a group switch together and share a stored preference. */
   group?: string;
   ariaLabel?: string;
+  /** `pills` for code-only sets; `underline` is a tab strip, for tabs that
+   *  sit above headings and prose rather than straight on a code block. */
+  variant?: 'pills' | 'underline';
 }
 
-const { tabs, group = 'lang', ariaLabel = 'Choose a language' } = Astro.props;
+const { tabs, group = 'lang', ariaLabel = 'Choose a language', variant = 'pills' } = Astro.props;
 
 // Unique per instance so ids stay distinct when a page renders several sets.
 const uid = Math.random().toString(36).slice(2, 9);
@@ -49,10 +60,25 @@ const TAB_BASE =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sun-400';
 const TAB_ON = 'border-sun-400 bg-sun-400/12 text-sun-700';
 const TAB_OFF = 'border-soil-300 bg-[#fffdf7] text-soil-700 hover:border-soil-400 hover:text-soil-900';
+
+const STRIP_BASE =
+  '-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2 text-[15px] font-semibold transition ' +
+  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sun-400';
+const STRIP_ON = 'border-sun-500 text-soil-900';
+const STRIP_OFF = 'border-transparent text-soil-600 hover:border-soil-300 hover:text-soil-900';
+
+const underline = variant === 'underline';
+const tabBase = underline ? STRIP_BASE : TAB_BASE;
+const tabOn = underline ? STRIP_ON : TAB_ON;
+const tabOff = underline ? STRIP_OFF : TAB_OFF;
 ---
 
 <div class="code-tabs" data-group={group}>
-  <div class="mb-2.5 flex flex-wrap items-center gap-1.5" role="tablist" aria-label={ariaLabel}>
+  <div
+    class:list={underline ? 'mb-6 flex flex-wrap border-b border-soil-300' : 'mb-2.5 flex flex-wrap items-center gap-1.5'}
+    role="tablist"
+    aria-label={ariaLabel}
+  >
     {tabs.map((t, i) => (
       <>
       <button
@@ -63,11 +89,11 @@ const TAB_OFF = 'border-soil-300 bg-[#fffdf7] text-soil-700 hover:border-soil-40
         aria-controls={`cp-${uid}-${t.id}`}
         aria-selected={i === 0 ? 'true' : 'false'}
         tabindex={i === 0 ? 0 : -1}
-        class:list={[TAB_BASE, i === 0 ? TAB_ON : TAB_OFF]}
-        data-class-on={TAB_ON}
-        data-class-off={TAB_OFF}
+        class:list={[tabBase, i === 0 ? tabOn : tabOff]}
+        data-class-on={tabOn}
+        data-class-off={tabOff}
       >
-        {t.icon && <Icon name={t.icon} class="h-3.5 w-3.5" aria-hidden="true" />}
+        {t.icon && <Icon name={t.icon} class={underline ? 'h-4 w-4' : 'h-3.5 w-3.5'} aria-hidden="true" />}
         {t.label}
       </button>
       {t.dividerAfter && <span class="mx-1 h-5 w-px bg-soil-300" aria-hidden="true"></span>}
@@ -83,7 +109,19 @@ const TAB_OFF = 'border-soil-300 bg-[#fffdf7] text-soil-700 hover:border-soil-40
       aria-labelledby={`ct-${uid}-${t.id}`}
       hidden={i !== 0}
     >
-      <CodeBlock code={t.code} lang={t.lang} title={t.title} tryable={false} />
+      {t.steps ? (
+        <div class="space-y-6">
+          {t.steps.map((step) => (
+            <div>
+              <h3 class="mb-1 font-sans text-[15px] font-semibold leading-normal tracking-normal text-soil-900">{step.title}</h3>
+              {step.description && <p class="mb-2 text-[14px] text-soil-700">{step.description}</p>}
+              <CodeBlock code={step.code} lang={t.lang} tryable={false} />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <CodeBlock code={t.code ?? ''} lang={t.lang} title={t.title} tryable={false} />
+      )}
     </div>
   ))}
 </div>

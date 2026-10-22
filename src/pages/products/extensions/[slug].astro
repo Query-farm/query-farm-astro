@@ -3,6 +3,7 @@ import { organization } from '../../../lib/organization';
 import PageLayout from '../../../layouts/PageLayout.astro';
 import SectionHeader from '../../../components/ui/SectionHeader.astro';
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import CodeTabs from '../../../components/ui/CodeTabs.astro';
 import ExtensionHero from '../../../components/products/ExtensionHero.astro';
 import ExtensionsSubNav from '../../../components/sections/ExtensionsSubNav.astro';
 import ExtensionCard from '../../../components/products/ExtensionCard.astro';
@@ -31,6 +32,7 @@ import { getExtensionData, loadExtensionMdx, loadCookbookMdx, loadCheckFixtures 
 import { extensionNameAnchor } from '../../../lib/extension-anchors';
 import { extensionFunctionCategoryAnchorPath } from '../../../lib/extension-reference';
 import { getExtensionQuickReference } from '../../../data/extension-quick-references';
+import { queryFarmRepositoryName, queryFarmInstallSql, queryFarmLoadSql } from '../../../data/query-farm-repository';
 
 export async function getStaticPaths() {
   return publicExtensions.map(ext => ({
@@ -281,6 +283,9 @@ const installFrom = installSource === 'community'
 // these do nothing visible in the in-page REPL (the extension is already loaded
 // there), so the block must not get a "Try it in your browser" button.
 const installSql = `INSTALL ${metadata.name} ${installFrom};\nLOAD ${metadata.name};`;
+// Extensions published to the Query.Farm repository get a two-step Install
+// section instead: install once per machine, then load in every session.
+const repositoryName = queryFarmRepositoryName(extensionId);
 const seoDescription = extensionSeoDescription(metadata.displayName, metadata.description);
 
 // ── Page header ──────────────────────────────────────────────────────────
@@ -456,7 +461,53 @@ const jsonLd = [
            Keeps the `quick-install` id, so old deep links still land. -->
       <ExtensionSection id="quick-install">
         <h2 class="mb-5 text-[clamp(1.55rem,3.4vw,2.5rem)] text-soil-900">Install</h2>
-        <CodeBlock code={installSql} lang="sql" tryable={false} />
+        {repositoryName ? (
+          <CodeTabs
+            group="duckdb-version"
+            ariaLabel="Choose your DuckDB version"
+            variant="underline"
+            tabs={[
+              {
+                id: 'v2.0',
+                label: 'DuckDB 2.0',
+                icon: 'simple-icons:duckdb',
+                lang: 'sql',
+                steps: [
+                  {
+                    title: '1. Install once',
+                    description: 'Adds the Query.Farm extension repository and downloads the signed extension. Run it once on each machine; it is safe to run again.',
+                    code: queryFarmInstallSql(repositoryName),
+                  },
+                  {
+                    title: '2. Load in every session',
+                    description: 'Loads the installed extension. Run it at the start of each DuckDB session.',
+                    code: queryFarmLoadSql(repositoryName),
+                  },
+                ],
+              },
+              {
+                id: 'v1.5',
+                label: 'DuckDB 1.5',
+                icon: 'simple-icons:duckdb',
+                lang: 'sql',
+                steps: [
+                  {
+                    title: '1. Install once',
+                    description: 'Downloads the extension from the DuckDB community repository. The same steps work on DuckDB 1.4.',
+                    code: `INSTALL ${repositoryName} FROM community;`,
+                  },
+                  {
+                    title: '2. Load in every session',
+                    description: 'Loads the installed extension. Run it at the start of each DuckDB session.',
+                    code: `LOAD ${repositoryName};`,
+                  },
+                ],
+              },
+            ]}
+          />
+        ) : (
+          <CodeBlock code={installSql} lang="sql" tryable={false} />
+        )}
       </ExtensionSection>
 
       <!-- Quick Start — each example is its own Try-able cell, so a Try click
