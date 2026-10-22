@@ -73,7 +73,7 @@ export function enquiryEmail(enquiry: Enquiry, to: string, from: string) {
     from,
     to: [to],
     reply_to: enquiry.email,
-    subject: `${enquiry.topic}: enquiry from ${who}`,
+    subject: `${enquiry.topic}: inquiry from ${who}`,
     text: [
       `Name:    ${enquiry.name}`,
       `Email:   ${enquiry.email}`,
@@ -83,7 +83,7 @@ export function enquiryEmail(enquiry: Enquiry, to: string, from: string) {
       '',
       enquiry.message,
       '',
-      '— Sent from the query.farm enquiry form. Reply to answer the sender directly.',
+      '— Sent from the query.farm contact form. Reply to answer the sender directly.',
     ].join('\n'),
   };
 }
