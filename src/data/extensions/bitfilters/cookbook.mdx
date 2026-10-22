@@ -31,7 +31,7 @@ The classic use case — avoid an expensive lookup or cross-partition join when 
 
 ```sql
 -- 1. Build a filter from "interesting" keys, once
-CREATE TABLE interesting_filter AS
+CREATE OR REPLACE TABLE interesting_filter AS
 SELECT xor8_filter(hash(key)) AS filter FROM interesting_keys;
 
 -- 2. Probe the filter to skip the expensive operation entirely for non-members
@@ -49,20 +49,20 @@ Materialize one filter per logical partition; use it to skip whole partitions at
 
 ```sql
 -- Build filters at write time
-CREATE TABLE partition_filters AS
+CREATE OR REPLACE TABLE partition_filters AS
 SELECT day,
        binary_fuse8_filter(hash(user_id)) AS users_in_partition
 FROM events
 GROUP BY day;
 
--- At query time, only scan partitions that might contain the user
+-- At query time, only scan partitions that might contain user 7
 SELECT day, COUNT(*) AS hits
 FROM events
 WHERE day IN (
   SELECT day FROM partition_filters
-  WHERE binary_fuse8_filter_contains(users_in_partition, hash(:target_user))
+  WHERE binary_fuse8_filter_contains(users_in_partition, hash(7))
 )
-  AND user_id = :target_user
+  AND user_id = 7
 GROUP BY day;
 ```
 
@@ -116,7 +116,7 @@ All three functions take a constant version string (e.g. `'v2.0'`) as their firs
 ```sql
 -- Build one DuckDB-shaped Bloom filter per bucket. The aggregate's middle
 -- argument (16384 here) is the sector count — must be a power of two.
-CREATE TABLE zone_filters AS
+CREATE OR REPLACE TABLE zone_filters AS
 SELECT bucket,
        bitfilters_duckdb_bloom_filter_create(
          'v2.0',
