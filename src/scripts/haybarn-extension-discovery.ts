@@ -1,3 +1,5 @@
+import { searchTracker } from '../lib/search-analytics';
+
 type Entry = {
   name: string; categories: string[]; queryFarm: boolean; searchText: string;
   availability: { version: string; platform: string }[];
@@ -24,6 +26,7 @@ function initialize() {
   let search: Promise<Pagefind> | undefined;
   let request = 0;
   let timer: ReturnType<typeof setTimeout>;
+  const trackSearch = searchTracker('extension_directory');
   const fold = (value: string) => value.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
 
   function readURL() {
@@ -91,6 +94,7 @@ function initialize() {
     }
     count.textContent = `${shown} ${shown === 1 ? 'extension' : 'extensions'}${term ? ` for “${term}”` : ''}`;
     empty.hidden = shown !== 0;
+    trackSearch(term, shown);
     clear.hidden = !term && !target && !author;
   }
   form.addEventListener('submit', event => { event.preventDefault(); void update(); });

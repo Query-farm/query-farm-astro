@@ -1,4 +1,6 @@
-export {};
+import { searchTracker } from '../../lib/search-analytics';
+
+const trackSearch = searchTracker('haybarn_functions');
 
 interface SearchDocument { url: string; excerpt: string; meta: Record<string, string>; }
 interface SearchMatch { id: string; data(): Promise<SearchDocument>; }
@@ -191,6 +193,7 @@ async function search(token = ++generation) {
     const [functions, guides] = await Promise.all([functionMatches(query), guideMatches(query)]);
     if (token !== generation || !dialog.open) return;
     matches = [...functions, ...guides];
+    trackSearch(query, matches.length);
     await appendResults(token);
   } catch { failed(token); }
 }
