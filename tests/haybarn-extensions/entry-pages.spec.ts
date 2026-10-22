@@ -46,6 +46,15 @@ test('native DuckDB 2.0 examples use Query.Farm while browser examples keep the 
   await expect(native).toBeVisible();
 });
 
+test('VGI settings fit a small screen when web fonts are unavailable', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.route(/https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.abort());
+  await page.goto('/products/extensions/vgi/');
+  await page.evaluate(async () => { await document.fonts.ready; });
+  await expect(page.locator('#vgi_table_buffering code').filter({ hasText: /^PhysicalVgiTableBufferingFunction$/ })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(321);
+});
+
 test('all extension entry pages retain introductions, complete examples, and release-specific compatibility on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 844 });
   for (const { slug, metadata } of entries) {
