@@ -1,6 +1,6 @@
 ## API version and migration
 
-These examples target the attached-database API on the [v1.5 branch](https://github.com/Query-farm/adbc_scanner/tree/v1.5), introduced in [7e5210c](https://github.com/Query-farm/adbc_scanner/commit/7e5210c2802687c694a2d9114a42e2c04a3c3138). An older community package may still expose the previous connection-handle API. Installing from the community repository alone does not establish the source revision.
+These examples target the attached-database API, introduced on the [v1.5 branch](https://github.com/Query-farm/adbc_scanner/tree/v1.5) in [7e5210c](https://github.com/Query-farm/adbc_scanner/commit/7e5210c2802687c694a2d9114a42e2c04a3c3138) and carried into the DuckDB 2.0 build. An older community package may still expose the previous connection-handle API. Installing from the community repository alone does not establish the source revision.
 
 Every `adbc_*` function now takes the alias of an `ATTACH … (TYPE adbc)` database instead of a `BIGINT` connection handle. `adbc_connect`, `adbc_disconnect`, `adbc_commit`, `adbc_rollback`, and `adbc_set_autocommit` are removed:
 
@@ -40,9 +40,11 @@ COMMIT;
 DETACH db;
 ```
 
-Inside an explicit `BEGIN … COMMIT`, `adbc_execute` and `adbc_insert` use the attachment's write connection with autocommit disabled, so they commit or roll back together with writes made through the catalog (`INSERT INTO db.…`). Once the transaction has written, reads (`adbc_scan`, `adbc_scan_table`, the metadata functions) see its uncommitted writes. A driver that cannot disable autocommit fails the first write in the transaction rather than silently autocommitting. These transactions control the remote ADBC connection; local DuckDB writes and remote writes are not one distributed transaction.
+Inside an explicit `BEGIN … COMMIT`, `adbc_execute` and `adbc_insert` use the attachment's write connection with autocommit disabled, so they commit or roll back together with writes made through the catalog (`INSERT INTO db.…`). Once the transaction has written, reads (`adbc_scan`, `adbc_scan_table`, the metadata functions) see its uncommitted writes. A driver that cannot disable autocommit fails the first write in the transaction rather than silently autocommitting, because `ROLLBACK` could not undo it. These transactions control the remote ADBC connection; local DuckDB writes and remote writes are not one distributed transaction.
 
 Outside an explicit transaction, the `adbc_*` functions use the attachment's own connection in autocommit, so session state such as a temporary table created by `adbc_insert` or a `SET` run by `adbc_execute` is visible to later calls. Writes to an attachment made with `READ_ONLY` are rejected, in or out of a transaction.
+
+A driver without transactions (one that cannot turn autocommit off) can still be written to outside `BEGIN … COMMIT`, through `adbc_execute`, `adbc_insert`, `INSERT INTO db.…` and `CREATE TABLE db.… AS`. Each statement runs in the driver's autocommit, so one that fails part-way can leave some rows written.
 
 The write connection is separate from the attachment's own, so a SQLite `:memory:` attachment gives a transaction an empty database of its own; use a file.
 
@@ -66,11 +68,13 @@ Declare the complete result in its remote column order, even when an outer DuckD
 
 `adbc_scan_table` obtains table metadata through `AdbcConnectionGetTableSchema`, then executes a generated `SELECT` with supported projection and filter pushdown. It also accepts a `columns` override. `adbc_schema('db', table_name)` describes a **table**, not an arbitrary SQL query. Metadata discovery can contact the backend during planning.
 
-Remote tables expose no `rowid` column. A query that needs no columns, such as `count(*)`, reads the first real column instead.
+Remote tables expose no `rowid` column, and a reference to one (or to a backend system column such as PostgreSQL's `ctid`) fails to bind with `Referenced column "rowid" not found`. A query that needs no columns, such as `count(*)`, reads the first real column instead.
 
 ## Read-only catalogs and shared databases
 
 Use `ATTACH ... (TYPE adbc, READ_ONLY, ...)` for read-only analytics. Schemas and tables appear under the attachment name. See the cookbook for a file-backed SQLite example.
+
+An unqualified name (`db.orders`, or `orders` after `USE db`) resolves to the attachment's default schema: the schema the connection reports as current (PostgreSQL's `public`, for example), else the database's only schema, else `main`. Set it explicitly with the `default_schema` ATTACH option: `ATTACH '…' AS db (TYPE adbc, driver '…', default_schema 'sales')`. Catalog writes such as `INSERT INTO db.other.t` and `CREATE TABLE db.other.t AS` land in the schema they name.
 
 `READ_ONLY` rejects writes through that attachment, including `adbc_execute` and `adbc_insert`. It does not revoke the underlying database user's write permissions. Catalog write support without `READ_ONLY` is driver-dependent; `CALL adbc_execute` runs any remote SQL.
 
@@ -98,6 +102,35 @@ Arrow type support also varies by implementation. Our [DuckDB VARIANT and Arrow 
 
 Catalog scans and `adbc_scan_table` can push supported projections and filters into generated SQL. For arbitrary `adbc_scan` queries, put remote filtering in the SQL you send. Batch-size hints and early stream termination depend on driver support. Use a result-returning scan, with the appropriate schema, when inspecting a remote `EXPLAIN` result; `adbc_execute` returns an affected-row count rather than query rows.
 
-On the DuckDB 2.0 development branch, whole-query pushdown can go beyond individual scans. The [PostgreSQL pushdown benchmark](/blog/one-query-one-arrow-stream-adbc-duckdb-2/) explains how supported joins and aggregates become one remote SQL statement, what we measured, and when the extension falls back to local execution.
+On DuckDB 2.0, whole-query pushdown can go beyond individual scans. For drivers with a structured-query dialect profile (PostgreSQL, MySQL, SQLite and DuckDB), filters, projections, aggregates, supported joins, ordering, limits and nested queries against an attached catalog run as one remote statement. Anything unsupported, including a reference to a column the remote table does not have, falls back to the regular scan path. Repeated result column names in a pushed-down query, such as two `count(*)` columns, are renamed rather than raising a binder error. `EXPLAIN` shows the generated statement under `Remote SQL` in an `Adbc Remote Query` operator. Turn pushdown off per attachment with `query_pushdown false` when comparing plans or troubleshooting:
+
+```sql
+ATTACH 'postgresql://user:password@host/database' AS pg (
+    TYPE adbc,
+    driver 'postgresql',
+    query_pushdown false
+);
+```
+
+The [PostgreSQL pushdown benchmark](/blog/one-query-one-arrow-stream-adbc-duckdb-2/) explains how supported joins and aggregates become one remote SQL statement, what we measured, and when the extension falls back to local execution.
+
+## CONNECT on DuckDB 2.0
+
+DuckDB 2.0's `CONNECT` statement routes every following statement, queries and commands alike, to an attached ADBC database as raw SQL in the backend's own dialect, until `DISCONNECT`:
+
+```sql
+ATTACH ':memory:' AS db (TYPE adbc, driver 'sqlite');
+CONNECT db;
+SELECT sqlite_version();
+CREATE TABLE notes (id INTEGER, body TEXT);
+INSERT INTO notes VALUES (1, 'runs on SQLite');
+SELECT * FROM notes;
+DISCONNECT;
+DETACH db;
+```
+
+A command that the driver describes with result columns but that returns none when executed (DataFusion's `CREATE TABLE … AS SELECT`, for example) returns those columns with no rows.
 
 `adbc_insert` and `INSERT` / `CREATE TABLE AS` into an attached catalog pass DuckDB query results to the driver's Arrow ingestion API through a bounded producer queue. Stream binding and execution run together on the consumer thread, so drivers that read their input during `BindStream` can ingest without blocking. Ingestion modes and transaction behavior depend on that driver's capabilities.
+
+When appending to an existing table, the extension asks the driver for the target table's schema and marks the columns it declares `NOT NULL` as non-nullable in the ingest stream, so drivers that compare schemas strictly (DataFusion, for example) accept the append. A `NULL` in such a column fails with `NOT NULL constraint failed: <table>.<column>`. When the driver cannot report the table's schema, every column is sent as nullable.
