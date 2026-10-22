@@ -53,7 +53,7 @@ FROM radio_subscription_received_messages('wss://stream.example.com/events')
 ORDER BY receive_time DESC;
 ```
 
-The full row shape from `radio_received_messages()` / `radio_subscription_received_messages(url)` is `(subscription_id UBIGINT, subscription_url VARCHAR, message_id UBIGINT, message_type, receive_time TIMESTAMP_MS, seen_count UBIGINT, channel VARCHAR, message BLOB)`. The payload is a `BLOB` — cast it to `VARCHAR` for text or use [DuckDB's JSON functions](https://duckdb.org/docs/data/json/loading_json.html) for structured payloads. These are normal DuckDB table functions — `JOIN`, filter, aggregate, push to Parquet, anything you'd do with a regular table. See [`radio_received_messages`](#radio_received_messages) and [`radio_subscription_received_messages`](#radio_subscription_received_messages).
+The full row shape from `radio_received_messages()` / `radio_subscription_received_messages(url)` is `(subscription_id UBIGINT, subscription_url VARCHAR, message_id UBIGINT, message_type, receive_time TIMESTAMP_MS, seen_count UBIGINT, channel VARCHAR, message BLOB)`. The payload is a `BLOB` — turn UTF-8 text into a `VARCHAR` with `decode(message)`, then use [DuckDB's JSON functions](https://duckdb.org/docs/data/json/loading_json.html) for structured payloads. (A plain `message::VARCHAR` cast escapes quotes and non-ASCII bytes in DuckDB 2.0.) These are normal DuckDB table functions — `JOIN`, filter, aggregate, push to Parquet, anything you'd do with a regular table. See [`radio_received_messages`](#radio_received_messages) and [`radio_subscription_received_messages`](#radio_subscription_received_messages).
 
 ## Wait for fresh messages before reading
 
@@ -77,7 +77,7 @@ Pair with [`radio_sleep`](#radio_sleep) when scripting between polls.
 CALL radio_transmit_message(
   'wss://stream.example.com/events',
   /* channel       */ 'main',
-  /* payload       */ '{"type":"hello","at":"2026-04-28T12:00:00Z"}'::BLOB,
+  /* payload       */ '{"type":"hello","at":"2026-04-28T12:00:00Z"}',
   /* max_attempts  */ 3,
   /* retry_delay   */ INTERVAL '500 milliseconds'
 );
@@ -87,6 +87,8 @@ SELECT message_id, message
 FROM radio_subscription_transmit_messages('wss://stream.example.com/events')
 ORDER BY message_id DESC;
 ```
+
+A `VARCHAR` payload goes out as a WebSocket text frame, which JSON APIs such as Slack expect; pass a `BLOB` (`'...'::BLOB`) to send a binary frame instead. The bytes are sent as-is either way. A `NULL` payload is an error.
 
 Per-subscription delivery counters live on [`radio_subscriptions`](#radio_subscriptions) (`transmit_successes`, `transmit_failures`, `transmit_last_success_time`, `transmit_last_failure_time`); poll those to confirm delivery progress. See [`radio_transmit_message`](#radio_transmit_message) and [`radio_subscription_transmit_messages`](#radio_subscription_transmit_messages).
 
@@ -98,9 +100,13 @@ CALL radio_subscription_transmit_messages_delete_finished('wss://stream.example.
 ```
 
 ```sql
--- Or drop one specific pending outgoing message — message_id is the
--- UBIGINT returned by radio_subscription_transmit_messages.message_id.
-CALL radio_subscription_transmit_message_delete('wss://stream.example.com/events', :message_id::UBIGINT);
+-- Or drop one specific pending outgoing message by its message_id
+-- (the UBIGINT in radio_subscription_transmit_messages.message_id).
+SET VARIABLE message_id = (
+  SELECT max(message_id)
+  FROM radio_subscription_transmit_messages('wss://stream.example.com/events')
+);
+CALL radio_subscription_transmit_message_delete('wss://stream.example.com/events', getvariable('message_id'));
 ```
 
 See [`radio_subscription_transmit_messages_delete_finished`](#radio_subscription_transmit_messages_delete_finished) and [`radio_subscription_transmit_message_delete`](#radio_subscription_transmit_message_delete).
