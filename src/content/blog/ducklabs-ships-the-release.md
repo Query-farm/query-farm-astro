@@ -5,6 +5,12 @@ description: "The IP is safe under the DuckDB Foundation, but the Foundation doe
 author: "Rusty Conover"
 tags: ["DuckDB", "Governance", "Distribution", "Haybarn", "VGI"]
 heroImage: '/media/posts/ducklabs-ships-the-release/social.png'
+nextStep:
+  title: "Haybarn"
+  pitch: "Same SQL and database files as DuckDB, with signed artifacts, build provenance, and curated extension defaults."
+  href: "/products/haybarn/"
+  cta: "Explore Haybarn"
+  repo: "https://github.com/Query-farm-haybarn/haybarn"
 ---
 
 <aside class="article-brief" aria-labelledby="article-brief-title">

@@ -11,6 +11,12 @@ leadVisual:
   alt: "Three place names cross the VGI boundary as one batch. Glen Allen returns one row, the missing place returns none, and Ocean City returns three; each result is tagged with the input row it came from."
   width: 720
   height: 156
+nextStep:
+  title: "VGI"
+  pitch: "Turn any API into SQL tables and functions that DuckDB can call from every row, with workers in Python, TypeScript, Go, Rust, or Java."
+  href: "/vgi/"
+  cta: "Learn about VGI"
+  repo: "https://github.com/Query-farm/vgi"
 ---
 
 You have a table of place names and a geocoding API. The usual way to combine them is a loop in application code: read the rows, send a request for each one, collect the responses, then merge every response back onto the record that asked for it. It probably looks something like this:

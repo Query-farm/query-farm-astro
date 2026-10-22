@@ -1,0 +1,99 @@
+---
+/**
+ * PostNextStep — what a reader can do once an article ends.
+ *
+ * GA4 showed blog posts starting as many sessions as product pages but
+ * supplying only ~6% of internal product-page traffic: readers finished a
+ * post and left, even when the body linked the product a dozen times. The
+ * posts that converted best ended on something to run and a link to do it
+ * yourself. This puts that at the foot of every post that names a product in
+ * its `nextStep` frontmatter, and offers the newsletter on every post.
+ *
+ * Clicks on the card send a `post_next_step_click` GA4 event (production
+ * only, where gtag exists), so it can be marked as a key event.
+ */
+import type { CollectionEntry } from 'astro:content';
+import Button from '../ui/Button.astro';
+import CodeBlock from '../ui/CodeBlock.astro';
+import CodeTabs from '../ui/CodeTabs.astro';
+import NewsletterForm from '../forms/NewsletterForm.astro';
+import { queryFarmInstallTabs, queryFarmRepositoryName } from '../../data/query-farm-repository';
+
+interface Props {
+  nextStep?: CollectionEntry<'blog'>['data']['nextStep'];
+  postId: string;
+}
+
+const { nextStep, postId } = Astro.props;
+
+// An extension in the Query.Farm repository gets the same DuckDB 2.0 / 1.5
+// tabs as its extension page (one shared definition, one `duckdb-version`
+// group, so a reader's choice carries between them); any other extension
+// installs from the community repository.
+const extension = nextStep?.extension;
+const repositoryName = extension ? queryFarmRepositoryName(extension) : undefined;
+const communityInstall = extension && !repositoryName ? `INSTALL ${extension} FROM community;\nLOAD ${extension};` : undefined;
+---
+
+<aside class="mx-auto flex max-w-[720px] flex-col gap-6 px-6 pt-2 pb-8" aria-label="After this article">
+  {nextStep && (
+    <section
+      class="rounded-xl border border-soil-300 bg-[#fffdf7] px-6 py-6 sm:px-7"
+      aria-labelledby="next-step-title"
+      data-post-next-step={postId}
+    >
+      <p class="qf-eyebrow text-sun-700">Try it</p>
+      <h2 id="next-step-title" class="mt-2 text-[clamp(1.25rem,3vw,1.65rem)] leading-tight text-soil-900">
+        {nextStep.title}
+      </h2>
+      <p class="mt-2 max-w-[62ch] text-[15px] leading-relaxed text-soil-700">{nextStep.pitch}</p>
+      {repositoryName && (
+        <div class="mt-4">
+          <CodeTabs
+            group="duckdb-version"
+            ariaLabel="Choose your DuckDB version"
+            variant="underline"
+            tabs={queryFarmInstallTabs(repositoryName)}
+          />
+        </div>
+      )}
+      {communityInstall && (
+        <div class="mt-4">
+          <CodeBlock code={communityInstall} tryable={false} />
+        </div>
+      )}
+      {nextStep.installNote && (
+        <p class="mt-2 max-w-[62ch] text-[13px] leading-relaxed text-soil-600">{nextStep.installNote}</p>
+      )}
+      <div class="mt-5 flex flex-wrap gap-3">
+        <Button href={nextStep.href}>{nextStep.cta}</Button>
+        {nextStep.repo && (
+          <Button href={nextStep.repo} external variant="secondary">View on GitHub</Button>
+        )}
+      </div>
+    </section>
+  )}
+
+  <section class="rounded-xl border border-soil-300 px-6 py-5 sm:px-7" aria-labelledby="post-newsletter-title">
+    <h2 id="post-newsletter-title" class="text-lg leading-tight text-soil-900">Get the next article by email</h2>
+    <p class="mt-1.5 text-[14.5px] leading-relaxed text-soil-600">
+      The Query Farm Dispatch: new DuckDB extensions, releases, and engineering write-ups. Unsubscribe any time.
+    </p>
+    <NewsletterForm inline id="post-newsletter-email" class="mt-4" />
+  </section>
+</aside>
+
+<script>
+  // Delegated, because Button does not forward data attributes to its anchor.
+  for (const card of document.querySelectorAll<HTMLElement>('[data-post-next-step]')) {
+    card.addEventListener('click', (event) => {
+      const link = (event.target as Element).closest('a');
+      if (!link) return;
+      const gtag = (window as unknown as { gtag?: (...args: unknown[]) => void }).gtag;
+      gtag?.('event', 'post_next_step_click', {
+        post: card.dataset.postNextStep,
+        link_url: link.href,
+      });
+    });
+  }
+</script>

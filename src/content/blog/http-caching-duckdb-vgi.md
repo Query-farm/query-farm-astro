@@ -12,6 +12,12 @@ leadVisual:
   alt: "Repeated agent queries enter DuckDB's client cache. Green Bézier paths reuse an eligible result without another service call; ochre paths visit an API-backed worker marked with the VGI logo."
   width: 720
   height: 228
+nextStep:
+  title: "VGI"
+  pitch: "Write a VGI worker that tells DuckDB how long its results stay good, in Python, TypeScript, Go, Rust, or Java."
+  href: "/vgi/"
+  cta: "Learn about VGI"
+  repo: "https://github.com/Query-farm/vgi"
 ---
 
 You ask an AI agent to compare sales across countries. It looks up exchange rates, tries a query, and revises the analysis after a follow-up question. The SQL changes, but the exchange rates it needs may be exactly the ones it fetched a moment ago. Calling the service again adds another wait, and possibly another charge, without giving the agent any new information.

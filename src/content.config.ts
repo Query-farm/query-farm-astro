@@ -20,6 +20,19 @@ const blog = defineCollection({
     showTableOfContents: z.boolean().default(true),
     heroImage: z.string().optional(),
     heroImageAlt: z.string().optional(),
+    // The product the article is about, offered as a "Try it" card after the
+    // body (PostNextStep.astro). Omit it for posts with no product to try.
+    nextStep: z.object({
+      title: z.string(),
+      pitch: z.string(),
+      href: z.string().startsWith('/'),
+      cta: z.string(),
+      // An extension slug: the card shows that extension's install, with
+      // DuckDB 2.0 / 1.5 tabs when it is in the Query.Farm repository.
+      extension: z.string().optional(),
+      installNote: z.string().optional(),
+      repo: z.string().url().optional(),
+    }).optional(),
     leadVisual: z.object({
       src: z.string(),
       alt: z.string(),
