@@ -36,7 +36,7 @@ For internal APIs on a private network, behind a TLS proxy, against a read-only 
 
 [`httpserve_start`](#httpserve_start) starts an HTTP listener thread inside the DuckDB process. Each request runs on a fresh connection to the same database instance — so any extension you've `LOAD`ed, any database you've `ATTACH`ed, and any secret you've `CREATE`d is visible to HTTP clients. Connection-local state is not: temporary tables, `SET VARIABLE` values, and session settings from the calling connection are invisible to HTTP queries. There is one global server per DuckDB process; calling [`httpserve_start`](#httpserve_start) while it is running raises `HTTP server is already running`, so call [`httpserve_stop`](#httpserve_stop) first.
 
-`httpserve_start` returns as soon as the listener thread is launched, before the port is bound. Pick a port that is free: if the bind fails in background mode (port in use, privileged port), the listener thread throws and the whole DuckDB process terminates.
+`httpserve_start` binds the port before it returns. If the address can't be bound (port in use, privileged port, unknown interface), it raises `Failed to start HTTP server on <host>:<port>` and nothing is left running, so you can retry with another port. Pass port `0` to let the OS pick a free port; the returned message names the port actually bound.
 
 The endpoint surface is intentionally small:
 
@@ -68,7 +68,7 @@ The third argument to [`httpserve_start`](#httpserve_start) selects the auth mod
 | `'user:pass'` (one colon) | [HTTP Basic auth](https://datatracker.ietf.org/doc/html/rfc7617).                        |
 | any other value           | Shared key sent by clients in the `X-API-Key` header.                                    |
 
-Both auth modes are **single-credential** — there is one user/pass or one key per server. The server accepts the configured value from either header, so a `'user:pass'` server also accepts `X-API-Key: user:pass`. Multi-tenant or per-user access control belongs at a reverse proxy. The credential is compared as a plain string and travels in plaintext over HTTP, so TLS in front is non-negotiable for anything beyond a loopback bind.
+Both auth modes are **single-credential** — there is one user/pass or one key per server. Each mode accepts only its own header: a `'user:pass'` server rejects `X-API-Key: user:pass`, and a key server rejects HTTP Basic credentials. A Basic-mode `401` carries `WWW-Authenticate`, so browsers prompt for the login. Multi-tenant or per-user access control belongs at a reverse proxy. The credential is compared in constant time but travels in plaintext over HTTP, so TLS in front is non-negotiable for anything beyond a loopback bind.
 
 To rotate a credential without restarting DuckDB, call [`httpserve_stop`](#httpserve_stop) and then [`httpserve_start`](#httpserve_start) again with the new value.
 
