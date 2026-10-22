@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "duckdb>=1.4",
+#   "duckdb==2.0.0",
 #   "pyarrow>=17",
 # ]
 # ///
@@ -21,6 +21,21 @@ generated/ — augment/ files are never touched on subsequent runs.
 
 Usage:
   extension-diff.py --site <site-repo> --slug <extension-slug> [--init]
+
+DuckDB 2.0 / Query.Farm repository mode (no local builds needed; run from
+anywhere):
+  extension-diff.py --site <site-repo> --slug <extension-slug> --query-farm
+
+  Baseline = the released DuckDB pinned in this script's dependencies (the
+  python `duckdb` package, 2.0.0), extension session = the same engine after
+  `INSTALL <name> FROM query_farm; LOAD <name> FROM query_farm` against
+  https://duckdb-extensions.query.farm. Both sessions run the same repository
+  setup, so only the extension's contribution shows up in the diff. Use a
+  throwaway HOME so the install never touches ~/.duckdb.
+
+Output order is stable: entries already present in a generated/*.json file
+keep their position, new entries are appended in sorted order, and removed
+entries drop out. Reruns against the same build are byte-identical.
 """
 
 import argparse
@@ -30,6 +45,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Callable, Union
 
 import duckdb
 import pyarrow.parquet as pq
@@ -47,6 +63,34 @@ OBJECT_TYPES = [
 ]
 
 IGNORED_SETTINGS = {"profiling_mode", "enable_profiling"}
+
+# --query-farm: the Query.Farm extension repository for DuckDB 2.0.
+QUERY_FARM_REPOSITORY_URL = "https://duckdb-extensions.query.farm"
+QUERY_FARM_REPOSITORY_SETUP = (
+    "SET allow_extension_repositories = 'allowed'; "
+    "CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm "
+    f"WITH PREFIX '{QUERY_FARM_REPOSITORY_URL}'; "
+)
+# Site slug -> extension name, where they differ.
+INSTALL_NAMES = {"openprompt": "open_prompt"}
+
+# A "binary" is either a DuckDB CLI path (invoked as `<path> -c <sql>`) or an
+# argv prefix that receives the SQL as its last argument. --query-farm uses
+# the latter to run each session in a fresh child process of this script's
+# python with the pinned `duckdb` package, so baseline and extension
+# captures never share a database instance.
+Binary = Union[Path, list]
+PYTHON_DUCKDB_SHIM = "import sys, duckdb; duckdb.connect().execute(sys.argv[1])"
+
+
+def python_duckdb_engine() -> list:
+    return [sys.executable, "-I", "-c", PYTHON_DUCKDB_SHIM]
+
+
+def duckdb_argv(binary: Binary, query: str) -> list:
+    if isinstance(binary, list):
+        return [*binary, query]
+    return [str(binary), "-c", query]
 
 
 def check_binary(path: Path, name: str, build_hint: str) -> None:
@@ -78,14 +122,14 @@ def check_version_match(baseline: Path, debug: Path) -> None:
         sys.exit(1)
 
 
-def run_duckdb_query(binary: Path, query: str) -> None:
-    result = subprocess.run([str(binary), "-c", query], capture_output=True, text=True)
+def run_duckdb_query(binary: Binary, query: str) -> None:
+    result = subprocess.run(duckdb_argv(binary, query), capture_output=True, text=True)
     if result.returncode != 0:
         print(f"Error running DuckDB query: {result.stderr}", file=sys.stderr)
         sys.exit(1)
 
 
-def load_metadata_tables(binary: Path, temp_dir: Path, suffix: str, preamble: str = ""):
+def load_metadata_tables(binary: Binary, temp_dir: Path, suffix: str, preamble: str = ""):
     tables = {}
     for type_name in OBJECT_TYPES:
         output_file = temp_dir / f"{type_name}-{suffix}.parquet"
@@ -95,7 +139,7 @@ def load_metadata_tables(binary: Path, temp_dir: Path, suffix: str, preamble: st
     return tables
 
 
-def list_loaded_extensions(binary: Path, preamble: str = "") -> list[str]:
+def list_loaded_extensions(binary: Binary, preamble: str = "") -> list[str]:
     """Return names of all extensions currently loaded in a fresh CLI session
     after running `preamble`."""
     query = (
@@ -104,7 +148,7 @@ def list_loaded_extensions(binary: Path, preamble: str = "") -> list[str]:
         "TO '/dev/stdout' (FORMAT CSV, HEADER FALSE);"
     )
     result = subprocess.run(
-        [str(binary), "-c", query], capture_output=True, text=True
+        duckdb_argv(binary, query), capture_output=True, text=True
     )
     if result.returncode != 0:
         print(f"Error listing extensions: {result.stderr}", file=sys.stderr)
@@ -112,7 +156,7 @@ def list_loaded_extensions(binary: Path, preamble: str = "") -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def list_baseline_function_names(binary: Path, preamble: str = "") -> set[str]:
+def list_baseline_function_names(binary: Binary, preamble: str = "") -> set[str]:
     """Return the set of function names registered in the baseline session
     (transitive deps loaded but target extension NOT loaded). Used to filter
     out overloads that contribute new rows under existing names — these
@@ -123,7 +167,7 @@ def list_baseline_function_names(binary: Path, preamble: str = "") -> set[str]:
         "TO '/dev/stdout' (FORMAT CSV, HEADER FALSE);"
     )
     result = subprocess.run(
-        [str(binary), "-c", query], capture_output=True, text=True
+        duckdb_argv(binary, query), capture_output=True, text=True
     )
     if result.returncode != 0:
         print(f"Error listing baseline functions: {result.stderr}", file=sys.stderr)
@@ -198,7 +242,91 @@ def execute_example(con, expr: str) -> dict | None:
     return {"columns": columns, "rows": serialized}
 
 
-def build_function_doc(row: dict, exec_con=None) -> dict:
+def _split_signature_args(arglist: str) -> list[str]:
+    """Split a candidate signature's argument list on top-level commas
+    (types like MAP(VARCHAR, VARCHAR) and quoted names contain commas)."""
+    out, buf, depth, quote = [], [], 0, False
+    for ch in arglist:
+        if ch == '"':
+            quote = not quote
+        elif not quote and ch in "([":
+            depth += 1
+        elif not quote and ch in ")]":
+            depth -= 1
+        elif not quote and depth == 0 and ch == ",":
+            out.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    if "".join(buf).strip():
+        out.append("".join(buf).strip())
+    return out
+
+
+_CANDIDATE_ARG_RE = __import__("re").compile(r'^("(?:[^"]|"")*"|\S+)\s+(.+)$')
+
+
+def probe_table_positional_counts(con, rows: list[dict]) -> dict:
+    """DuckDB 2.0 reports real names for positional table-function parameters
+    (no more `colN`), so the name alone no longer says which parameters are
+    positional and which are named. Ask the binder instead: calling the
+    function with more arguments than any overload takes fails before bind
+    (so nothing executes) and lists every candidate as
+    `f(a VARCHAR, b ANY, /, **"options" ANY)`, positional parameters before
+    the `/`. Returns {(name, (param types...)): positional_count}. Functions
+    with a varargs overload are not probed (the call could match and bind).
+    """
+    by_name: dict[str, list[dict]] = {}
+    for r in rows:
+        if (r.get("function_type") or "").lower() == "table":
+            by_name.setdefault(r["function_name"], []).append(r)
+    counts: dict = {}
+    for name, overloads in by_name.items():
+        if any(r.get("varargs") for r in overloads):
+            continue
+        arity = max(len(safe_list(r.get("parameter_types"))) for r in overloads) + 1
+        quoted = '"' + name.replace('"', '""') + '"'
+        try:
+            con.execute(f"EXPLAIN SELECT * FROM {quoted}({', '.join(['NULL'] * arity)})")
+            continue  # unexpectedly bound: no information
+        except Exception as e:  # noqa: BLE001 - binder errors carry the data
+            msg = str(e)
+        if "Candidate functions:" not in msg:
+            continue
+        candidates = []
+        for line in msg.split("Candidate functions:", 1)[1].splitlines():
+            line = line.strip()
+            open_i = line.find("(")
+            if open_i < 0 or not line.endswith(")"):
+                continue
+            args = _split_signature_args(line[open_i + 1:-1])
+            if "/" not in args:
+                continue
+            positional = []
+            for a in args[:args.index("/")]:
+                m = _CANDIDATE_ARG_RE.match(a)
+                if m:
+                    pname = m.group(1)
+                    if pname.startswith('"'):
+                        pname = pname[1:-1].replace('""', '"')
+                    positional.append((pname, m.group(2).strip()))
+            candidates.append(positional)
+        for r in overloads:
+            pnames = safe_list(r.get("parameters"))
+            ptypes = [str(t) for t in safe_list(r.get("parameter_types"))]
+            matches = [c for c in candidates
+                       if len(c) <= len(pnames)
+                       and [n for n, _ in c] == pnames[:len(c)]
+                       and [t for _, t in c] == ptypes[:len(c)]]
+            # A shorter candidate can prefix-match a longer overload (e.g.
+            # f(location, /) vs f(location, criteria, /) for a row listing
+            # location, criteria, ...); the longest match is the overload.
+            if matches:
+                counts[(name, tuple(ptypes))] = max(len(c) for c in matches)
+    return counts
+
+
+def build_function_doc(row: dict, exec_con=None, positional_counts: dict | None = None) -> dict:
     """site-shaped FunctionDocData from a duckdb_functions() row.
 
     Generated-only fields. Augment may layer on categories, rich description,
@@ -219,9 +347,16 @@ def build_function_doc(row: dict, exec_con=None) -> dict:
     import re as _re
     POSITIONAL_RE = _re.compile(r"^col\d+$")
     is_table_function = (row.get("function_type") or "").lower() == "table"
+    # DuckDB 2.0 names positional parameters too; when the binder told us how
+    # many are positional (probe_table_positional_counts), use that.
+    n_positional = (positional_counts or {}).get(
+        (name, tuple(str(t) for t in param_types)))
     for i, ptype in enumerate(param_types):
         pname = param_names[i] if i < len(param_names) else f"arg{i}"
-        is_named = is_table_function and not POSITIONAL_RE.match(pname)
+        if is_table_function and n_positional is not None:
+            is_named = i >= n_positional
+        else:
+            is_named = is_table_function and not POSITIONAL_RE.match(pname)
         parameters.append({
             "name": pname,
             "type": str(ptype) if ptype else "ANY",
@@ -368,10 +503,40 @@ def build_view_doc(row: dict) -> dict:
     }
 
 
+def stable_order(items: list, key: Callable[[dict], str], existing_path: Path) -> list:
+    """Order `items` so a rerun only changes what really changed.
+
+    duckdb_*() row order (and an EXCEPT over it) is not deterministic, so
+    sort by `key` first, then keep entries that already exist in the
+    committed file at their committed position. New entries go after them in
+    sorted order; entries the extension no longer has disappear."""
+    items = sorted(items, key=lambda d: (key(d), json.dumps(d, sort_keys=True, default=str)))
+    try:
+        existing = json.loads(existing_path.read_text())
+    except (OSError, ValueError):
+        return items
+    if not isinstance(existing, list):
+        return items
+    position: dict[str, int] = {}
+    for i, entry in enumerate(existing):
+        if isinstance(entry, dict):
+            position.setdefault(key(entry), i)
+    return sorted(items, key=lambda d: (0, position[key(d)]) if key(d) in position else (1, 0))
+
+
 def write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Committed files differ in how they store non-ASCII text (most use
+    # \uXXXX escapes, a few raw UTF-8). Keep whichever the file already uses
+    # so a regeneration doesn't rewrite unchanged descriptions.
+    ensure_ascii = True
+    try:
+        ensure_ascii = path.read_text(encoding="utf-8").isascii()
+    except (OSError, UnicodeDecodeError):
+        pass
     # allow_nan=False: refuse to emit NaN/Infinity (which Vite rejects).
-    path.write_text(json.dumps(data, indent=2, default=str, allow_nan=False) + "\n")
+    path.write_text(json.dumps(data, indent=2, default=str, allow_nan=False,
+                               ensure_ascii=ensure_ascii) + "\n", encoding="utf-8")
     print(f"  wrote {path}")
 
 
@@ -409,6 +574,14 @@ def main() -> None:
                          "`haybarn` wrapper (override with HAYBARN_CMD), and skips the "
                          "DuckDB-only step that can't see a Haybarn extension: in-process "
                          "example baking.")
+    ap.add_argument("--query-farm", action="store_true",
+                    help="DuckDB 2.0 mode: diff the released DuckDB pinned in this "
+                         "script's dependencies (python duckdb==2.0.0) against the same "
+                         "engine with the extension installed and loaded FROM query_farm "
+                         f"({QUERY_FARM_REPOSITORY_URL}). Needs no local builds.")
+    ap.add_argument("--extension", metavar="NAME",
+                    help="Extension name to install, if it differs from --slug "
+                         f"(default: {INSTALL_NAMES} mapping, else the slug)")
     ap.add_argument("--duckdb", type=Path, default=Path("duckdb"),
                     help="DuckDB CLI binary to use in --community mode (default: PATH lookup)")
     ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE_DUCKDB,
@@ -422,6 +595,10 @@ def main() -> None:
                          "another extension's functions (e.g. --also-load spatial "
                          "for geosilo). Repeatable.")
     args = ap.parse_args()
+    ext_name = args.extension or INSTALL_NAMES.get(args.slug, args.slug)
+
+    if args.query_farm and (args.community or args.haybarn):
+        ap.error("--query-farm cannot be combined with --community/--haybarn")
 
     # Haybarn mode is community-mode capture routed through the Haybarn CLI.
     if args.haybarn:
@@ -430,7 +607,23 @@ def main() -> None:
         if args.duckdb == Path("duckdb"):
             args.duckdb = Path(__file__).resolve().parent / "haybarn"
 
-    if args.community:
+    if args.query_farm:
+        duckdb_bin: Binary = python_duckdb_engine()
+        version = subprocess.run(
+            [sys.executable, "-I", "-c",
+             "import duckdb; print(duckdb.__version__, duckdb.connect().execute("
+             "'SELECT source_id FROM pragma_version()').fetchone()[0])"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        print(f"Engine: python duckdb {version} (baseline and extension sessions)")
+        also_preamble = "".join(f"INSTALL {e}; LOAD {e}; " for e in args.also_load)
+        repo_preamble = QUERY_FARM_REPOSITORY_SETUP + also_preamble
+        # The discovery session FORCE INSTALLs so a rescan always picks up the
+        # latest published build; later sessions reuse that install.
+        load_tail = f"LOAD {ext_name} FROM query_farm; "
+        discover_preamble = f"{repo_preamble}FORCE INSTALL {ext_name} FROM query_farm; {load_tail}"
+        load_preamble = f"{repo_preamble}INSTALL {ext_name} FROM query_farm; {load_tail}"
+    elif args.community:
         # Resolve duckdb binary from PATH if a bare name was given.
         duckdb_bin = args.duckdb
         if not duckdb_bin.is_absolute() and not duckdb_bin.exists():
@@ -461,7 +654,24 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
-        if args.community:
+        if args.query_farm:
+            print(f"Discovering transitive extensions loaded by {ext_name} FROM query_farm...")
+            loaded = list_loaded_extensions(duckdb_bin, preamble=discover_preamble)
+            if ext_name not in loaded:
+                print(f"Error: {ext_name} is not loaded after LOAD ... FROM query_farm "
+                      f"(loaded: {', '.join(loaded)})", file=sys.stderr)
+                sys.exit(1)
+            transitive = [e for e in loaded if e != ext_name]
+            print(f"  loaded alongside: {', '.join(transitive) or 'none'}")
+            # Same repository setup in the baseline, so settings it changes
+            # (allow_extension_repositories) cancel out of the diff.
+            baseline_preamble = repo_preamble + "".join(f"LOAD {e}; " for e in transitive)
+            print("Capturing baseline metadata...")
+            baseline_tables = load_metadata_tables(duckdb_bin, temp_path, "baseline", preamble=baseline_preamble)
+            print(f"Capturing extension metadata (LOAD {ext_name} FROM query_farm)...")
+            extension_tables = load_metadata_tables(duckdb_bin, temp_path, "extension", preamble=load_preamble)
+            baseline_function_names = list_baseline_function_names(duckdb_bin, preamble=baseline_preamble)
+        elif args.community:
             # First, discover the full transitive set of extensions that get
             # loaded by `LOAD <slug>` so we can pre-load all but the target
             # into the baseline. Otherwise the diff leaks contributions from
@@ -501,7 +711,10 @@ def main() -> None:
             con.register(f"{type_name}_baseline", baseline_tables[type_name])
             con.register(f"{type_name}_extension", extension_tables[type_name])
 
-        EXCLUDE_COLUMNS = {"oid", "database_oid", "schema_oid", "function_oid", "view_oid", "scope"}
+        # Catalog oids shift with load order; typed_value (DuckDB 2.0
+        # duckdb_settings) is a VARIANT copy of `value`.
+        EXCLUDE_COLUMNS = {"oid", "database_oid", "schema_oid", "function_oid", "view_oid",
+                           "type_oid", "parent_schema_oid", "scope", "typed_value"}
 
         results = {}
         for type_name in OBJECT_TYPES:
@@ -511,7 +724,10 @@ def main() -> None:
             diff_query = f"SELECT {cols} FROM {type_name}_extension EXCEPT SELECT {cols} FROM {type_name}_baseline"
             # Arrow → Python dicts. NULLs come through as None (vs pandas' nan)
             # and big ints stay as Python ints — no float coercion gotchas.
-            results[type_name] = con.execute(diff_query).fetch_arrow_table().to_pylist()
+            rel = con.sql(diff_query)
+            # python duckdb 2.0: relation.to_arrow_table(); 1.x: relation.arrow().
+            fetch = getattr(rel, "to_arrow_table", None) or rel.arrow
+            results[type_name] = fetch().to_pylist()
         con.close()
 
         # Drop functions whose name already exists in a dependency's namespace
@@ -529,7 +745,12 @@ def main() -> None:
         # In community mode, open a second connection with the extension loaded
         # so we can execute each example expression and capture its result.
         exec_con = None
-        if args.community and not args.haybarn:
+        if args.query_farm:
+            exec_con = duckdb.connect()
+            exec_con.execute(QUERY_FARM_REPOSITORY_SETUP + also_preamble)
+            exec_con.execute(f"INSTALL {ext_name} FROM query_farm")
+            exec_con.execute(f"LOAD {ext_name} FROM query_farm")
+        elif args.community and not args.haybarn:
             exec_con = duckdb.connect()
             exec_con.execute(f"INSTALL {args.slug} FROM community")
             exec_con.execute(f"LOAD {args.slug}")
@@ -540,6 +761,9 @@ def main() -> None:
             # Haybarn-backed run later.
             print("Haybarn mode: skipping in-process example baking "
                   "(no DuckDB engine for a Haybarn extension).")
+        positional_counts: dict = {}
+        if args.query_farm and exec_con is not None:
+            positional_counts = probe_table_positional_counts(exec_con, results["functions"])
         try:
             # Functions (split macros out into their own file)
             functions, macros = [], []
@@ -554,28 +778,37 @@ def main() -> None:
                         "examples": [],
                     })
                 else:
-                    functions.append(build_function_doc(row, exec_con=exec_con))
+                    functions.append(build_function_doc(row, exec_con=exec_con,
+                                                        positional_counts=positional_counts))
         finally:
             if exec_con is not None:
                 exec_con.close()
+        by_id = lambda d: str(d.get("id"))
+        by_name = lambda d: str(d.get("name"))
+        functions = stable_order(functions, by_id, generated_dir / "functions.json")
+        macros = stable_order(macros, by_id, generated_dir / "macros.json")
         if functions:
             write_json(generated_dir / "functions.json", functions)
         if macros:
             write_json(generated_dir / "macros.json", macros)
 
         pragmas = [build_pragma_doc(r) for r in results["settings"] if r.get("name") not in IGNORED_SETTINGS]
+        pragmas = stable_order(pragmas, by_name, generated_dir / "pragmas.json")
         if pragmas:
             write_json(generated_dir / "pragmas.json", pragmas)
 
-        secrets = [build_secret_type_doc(r) for r in results["secret_types"]]
+        secrets = stable_order([build_secret_type_doc(r) for r in results["secret_types"]],
+                               by_id, generated_dir / "secrets.json")
         if secrets:
             write_json(generated_dir / "secrets.json", secrets)
 
-        types = [build_type_doc(r) for r in results["types"]]
+        types = stable_order([build_type_doc(r) for r in results["types"]],
+                             by_id, generated_dir / "types.json")
         if types:
             write_json(generated_dir / "types.json", types)
 
-        views = [build_view_doc(r) for r in results["views"]]
+        views = stable_order([build_view_doc(r) for r in results["views"]],
+                             lambda d: f"{d.get('schema')}.{d.get('name')}", generated_dir / "views.json")
         if views:
             write_json(generated_dir / "views.json", views)
 
@@ -589,6 +822,18 @@ def main() -> None:
         # or wrong WASM-availability data depending on run order. Run
         # `binary-sizes-snapshot.py --site <site> --slug <slug>` (or
         # `npm run refresh:snapshots`) to (re)generate it.
+
+        if args.query_farm:
+            # generated/ is machine-owned: a category the extension no longer
+            # provides must not linger from an older scan. Only the files this
+            # tool writes are touched (never compatibility.json / usage.json).
+            for fname, items in (("functions.json", functions), ("macros.json", macros),
+                                 ("pragmas.json", pragmas), ("secrets.json", secrets),
+                                 ("types.json", types), ("views.json", views)):
+                stale = generated_dir / fname
+                if not items and stale.exists():
+                    stale.unlink()
+                    print(f"  removed {stale} (no longer provided)")
 
         if args.init:
             write_metadata_stub(augment_dir, args.slug)

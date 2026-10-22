@@ -1,13 +1,30 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["haybarn==1.5.5rc1"]
+# dependencies = ["haybarn==1.5.5rc1", "duckdb==2.0.0"]
 # ///
 """
 Per-extension SQL example validator.
 
-SQL is executed with Query.Farm's Haybarn distribution, pinned in the inline
-script dependencies above so local and CI runs use the same engine release.
+SQL is executed with Query.Farm's Haybarn distribution (the default,
+`--engine haybarn`), pinned in the inline script dependencies above so local
+and CI runs use the same engine release.
+
+`--engine duckdb2` runs against the released DuckDB 2.0.0 (python
+`duckdb==2.0.0`) instead, installing and loading each extension from the
+Query.Farm extension repository:
+
+    SET allow_extension_repositories = 'allowed';
+    CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm
+        WITH PREFIX 'https://duckdb-extensions.query.farm';
+    INSTALL <name> FROM query_farm;
+    LOAD <name> FROM query_farm;
+
+In that mode `... FROM query_farm` lines in examples run exactly as written
+(no rewrite to `FROM community`), a full sweep covers only the Query.Farm
+extensions in QUERY_FARM_EXTENSIONS, and an extension that fails to load is
+reported as an ENV-FAIL rather than hidden behind PARSE-SKIPs. Run it with a
+throwaway HOME so the installs never touch ~/.duckdb.
 
 Walks every extension under `src/data/extensions/<slug>/` and checks every
 piece of authored SQL we render on the page:
@@ -74,7 +91,38 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-import haybarn as duckdb
+# The engine module is imported in select_engine() once --engine is known:
+# loading Haybarn (DuckDB 1.5) and DuckDB 2.0 into one process crashes, so
+# only one is ever imported.
+duckdb: Any = None
+ENGINE = "haybarn"
+
+QUERY_FARM_REPOSITORY_SETUP = [
+    "SET allow_extension_repositories = 'allowed'",
+    "CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm "
+    "WITH PREFIX 'https://duckdb-extensions.query.farm'",
+]
+# Site slug -> extension name for the Query.Farm extensions published to the
+# query_farm repository for DuckDB 2.0 (the --engine duckdb2 sweep set).
+QUERY_FARM_EXTENSIONS = {
+    slug: slug for slug in (
+        "a5 adbc_scanner airport bitfilters cronjob crypto datasketches "
+        "evalexpr_rhai fuzzycomplete geosilo hashfuncs http_client httpserver "
+        "inflector json_schema jsonata lindel marisa minijinja quickjs radio "
+        "rapidfuzz redis shellfs stochastic tera textplot tributary tsid webmacro"
+    ).split()
+}
+QUERY_FARM_EXTENSIONS["openprompt"] = "open_prompt"
+
+
+def select_engine(name: str) -> None:
+    global duckdb, ENGINE
+    ENGINE = name
+    if name == "duckdb2":
+        import duckdb as engine_module
+    else:
+        import haybarn as engine_module
+    duckdb = engine_module
 
 ROOT = Path(__file__).resolve().parent.parent
 EXT_DIR = ROOT / "src" / "data" / "extensions"
@@ -506,6 +554,9 @@ def substitute_bind_vars(sql: str) -> tuple[str, list[str]]:
 # DuckDB harness
 
 
+LOAD_ERRORS: dict[str, str] = {}
+
+
 def open_db_for(slug: str, install_extensions: bool, force_install: bool = False) -> tuple[duckdb.DuckDBPyConnection, bool]:
     """Returns (connection, extension_loaded). When False, snippets that
     reference the extension's functions will fail with "function does
@@ -514,6 +565,19 @@ def open_db_for(slug: str, install_extensions: bool, force_install: bool = False
     """
     db = duckdb.connect(":memory:")
     loaded = False
+    if install_extensions and ENGINE == "duckdb2":
+        name = QUERY_FARM_EXTENSIONS.get(slug, slug)
+        install_sql = "FORCE INSTALL" if force_install else "INSTALL"
+        try:
+            for stmt in QUERY_FARM_REPOSITORY_SETUP:
+                db.execute(stmt)
+            db.execute(f"{install_sql} {name} FROM query_farm")
+            db.execute(f"LOAD {name} FROM query_farm")
+            loaded = True
+        except duckdb.Error as e:
+            LOAD_ERRORS[slug] = f"{install_sql}/LOAD {name} FROM query_farm failed: {e}"
+            print(f"  ! {slug}: could not load extension from query_farm: {e}")
+        return db, loaded
     if install_extensions and slug not in NON_EXTENSION_SLUGS:
         try:
             install_sql = "FORCE INSTALL" if force_install else "INSTALL"
@@ -525,11 +589,38 @@ def open_db_for(slug: str, install_extensions: bool, force_install: bool = False
     return db, loaded
 
 
+FIXTURE_ERRORS: dict[str, list[str]] = {}
+
+
+def query_farm_fixture_sql(sql: str) -> str:
+    """Fixtures are written for Haybarn, where companion Query.Farm
+    extensions come FROM community and load with a bare LOAD. On DuckDB 2.0
+    those live in the query_farm repository (set up by open_db_for)."""
+    names = "|".join(re.escape(n) for n in QUERY_FARM_EXTENSIONS.values())
+    sql = re.sub(rf"(?i)\b(INSTALL\s+'?(?:{names})'?)\s+FROM\s+community\b", r"\1 FROM query_farm", sql)
+    return re.sub(rf"(?i)\b(LOAD\s+'?(?:{names})'?)(?=\s*;)", r"\1 FROM query_farm", sql)
+
+
 def run_fixtures(db: duckdb.DuckDBPyConnection, slug: str) -> None:
     fx = EXT_DIR / slug / "augment" / "check-fixtures.sql"
     if not fx.exists():
         return
     sql = fx.read_text()
+    if ENGINE == "duckdb2":
+        # Statement by statement, so one failing fixture (say a companion
+        # extension that isn't published) doesn't silently drop every table
+        # after it and turn real checks into "table fixture missing" skips.
+        for stmt in split_statements(query_farm_fixture_sql(sql)):
+            code = re.sub(r"--[^\n]*", "", stmt).strip()
+            if not code:
+                continue
+            try:
+                db.execute(stmt)
+            except duckdb.Error as e:
+                err = f"{code.splitlines()[0][:80]} -> {str(e).splitlines()[0][:160]}"
+                FIXTURE_ERRORS.setdefault(slug, []).append(err)
+                print(f"  ! {slug}: fixture statement failed: {err}")
+        return
     try:
         db.execute(sql)
     except duckdb.Error as e:
@@ -591,7 +682,10 @@ def check_snippet(
         return Result(snip, S_PARSE_SKIP, "documentation placeholder ellipsis", None, None)
 
     rewritten, _ = substitute_bind_vars(snip.code)
-    rewritten = community_install(rewritten)
+    if ENGINE != "duckdb2":
+        # Haybarn (DuckDB 1.5) has no query_farm repository; DuckDB 2.0 runs
+        # the snippet's own INSTALL/LOAD ... FROM query_farm as written.
+        rewritten = community_install(rewritten)
 
     # Run any per-snippet setup statements (these are author-blessed
     # context, not under test themselves).
@@ -950,10 +1044,53 @@ def report(results_by_ext: dict[str, list[Result]], *, strict: bool, verbose: bo
                 if verbose or r in ext_failed:
                     print(f"  [{tag:<32}] {r.snippet.source:<48} | {head}")
 
+    load_failures = {s: e for s, e in LOAD_ERRORS.items() if s in results_by_ext}
+
+    # Environment / fixture skips, grouped by reason: these are not doc bugs
+    # (no network, no Redis, missing fixture table, ...), but list them so a
+    # reviewer can see what was NOT verified.
+    skip_reasons: dict[str, list[Result]] = {}
+    for results in results_by_ext.values():
+        for r in results:
+            if r in failures:
+                continue
+            reason = None
+            if r.parse_status == S_PARSE_SKIP:
+                reason = f"PARSE-SKIP: {r.parse_error}"
+            elif r.exec_status == S_EXEC_SKIP:
+                reason = f"EXEC-SKIP: {r.exec_error}"
+            elif r.parse_status == S_SKIP:
+                reason = f"SKIP (author): {r.exec_error}"
+            if reason:
+                skip_reasons.setdefault(reason, []).append(r)
+    if skip_reasons:
+        print("\n" + "-" * 70)
+        print("environment / fixture skips (not verified, not counted as failures):")
+        for reason, rs in sorted(skip_reasons.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+            print(f"  {len(rs):>4}  {reason}")
+            if verbose:
+                for r in rs:
+                    print(f"          [{r.snippet.extension}] {r.snippet.source}")
+
     print("\n" + "=" * 70)
+    print(f"engine: {ENGINE} ({duckdb.__name__} {getattr(duckdb, '__version__', '?')})")
     print(f"summary: {n_pass} PASS, {n_setup} SETUP, {n_exec_skip} EXEC-SKIP, "
           f"{n_parse_skip} PARSE-SKIP, {n_skip} SKIP, "
-          f"{n_parse_fail} PARSE-FAIL, {n_exec_fail} EXEC-FAIL")
+          f"{n_parse_fail} PARSE-FAIL, {n_exec_fail} EXEC-FAIL"
+          + (f", {len(load_failures)} ENV-FAIL (extension did not load)" if load_failures else ""))
+    print(f"real failures (doc drift: wrong names, parameters, results, syntax): "
+          f"{len(failures)}")
+    fixture_errors = {s: e for s, e in FIXTURE_ERRORS.items() if s in results_by_ext}
+    if fixture_errors:
+        print("\nfixture errors (check-fixtures.sql statements that failed; snippets "
+              "using them show up as fixture skips):\n")
+        for slug, errs in fixture_errors.items():
+            for err in dict.fromkeys(errs):
+                print(f"  [{slug}] {err}")
+    if load_failures:
+        print("\nENV-FAIL — extension did not load, its snippets could not be checked:\n")
+        for slug, err in load_failures.items():
+            print(f"  [{slug}] {err.splitlines()[0][:200]}")
     if failures:
         print("\nfailures:\n")
         for r in failures:
@@ -963,7 +1100,7 @@ def report(results_by_ext: dict[str, list[Result]], *, strict: bool, verbose: bo
             for line in err.splitlines()[:6]:
                 print(f"    | {line}")
             print(f"    code: {r.snippet.code.strip().splitlines()[0][:90]}")
-    return 0 if not failures else 1
+    return 0 if not failures and not load_failures else 1
 
 
 def _run_isolated(slug: str, args) -> int:
@@ -976,7 +1113,8 @@ def _run_isolated(slug: str, args) -> int:
     every other one. Running each in a child turns a fatal crash into one
     reported CRASH line and lets the rest of the run finish.
     """
-    cmd = [sys.executable, "-u", str(Path(__file__).resolve()), "--slug", slug]
+    cmd = [sys.executable, "-u", str(Path(__file__).resolve()), "--slug", slug,
+           "--engine", args.engine]
     if args.no_install:
         cmd.append("--no-install")
     if args.force_install:
@@ -1000,6 +1138,10 @@ def _run_isolated(slug: str, args) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--slug", help="Only check this extension")
+    ap.add_argument("--engine", choices=("haybarn", "duckdb2"), default="haybarn",
+                    help="haybarn (default): Haybarn / DuckDB 1.5, extensions FROM community. "
+                         "duckdb2: released DuckDB 2.0.0, extensions FROM query_farm, "
+                         "examples' FROM query_farm lines run as written.")
     ap.add_argument("--no-install", action="store_true",
                     help="Don't INSTALL/LOAD extensions (parse-only against base DuckDB)")
     ap.add_argument("--force-install", action="store_true",
@@ -1012,9 +1154,12 @@ def main() -> None:
                     help="Run every extension in this process. Faster, but one "
                          "native crash kills the whole run (see _run_isolated).")
     args = ap.parse_args()
+    select_engine(args.engine)
 
     if args.slug:
         slugs: Iterable[str] = [args.slug]
+    elif args.engine == "duckdb2":
+        slugs = sorted(s for s in QUERY_FARM_EXTENSIONS if (EXT_DIR / s).is_dir())
     else:
         slugs = sorted(
             d.name for d in EXT_DIR.iterdir()
