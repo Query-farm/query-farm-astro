@@ -24,9 +24,14 @@
         "description": "Per-partition offset of the message."
       },
       {
+        "name": "key",
+        "type": "BLOB",
+        "description": "Raw message key, `NULL` when the message has none. `JSON` when `schema.registry.url` is set and the `<topic>-key` subject has a JSON schema."
+      },
+      {
         "name": "message",
         "type": "BLOB",
-        "description": "Raw message payload as a BLOB. Cast or parse it with DuckDB's JSON / Avro / decode utilities depending on your topic's serialization."
+        "description": "Raw message payload. Use `decode(message)` for UTF-8 text such as JSON (not `message::VARCHAR`, which escapes quotes in DuckDB 2.0). When `schema.registry.url` is set and the `<topic>-value` subject has a JSON schema, this column is named `value` and has type `JSON`."
       }
     ],
     "parameters": [
@@ -34,19 +39,19 @@
         "name": "topic_name",
         "type": "VARCHAR",
         "paramType": "positional",
-        "description": "Kafka topic to read."
+        "description": "Kafka topic to read. Write it as `kafka://<name>/<topic>` to use the `tributary_cluster` secret scoped to `kafka://<name>`."
       },
       {
         "name": "bootstrap.servers",
         "type": "VARCHAR",
         "paramType": "named",
-        "description": "Comma-separated `host:port` list of brokers to bootstrap from. Required."
+        "description": "Comma-separated `host:port` list of brokers to bootstrap from. Required unless it comes from a `tributary_cluster` secret."
       },
       {
         "name": "group.id",
         "type": "VARCHAR",
         "paramType": "named",
-        "description": "Consumer group id. See [Kafka consumer configs](https://kafka.apache.org/documentation/#consumerconfigs)."
+        "description": "Consumer group id passed to librdkafka. The scan reads explicit partition ranges and never commits offsets, so it doesn't move a group's position."
       },
       {
         "name": "security.protocol",
@@ -70,33 +75,40 @@
         "name": "sasl.password",
         "type": "VARCHAR",
         "paramType": "named",
-        "description": "SASL password (PLAIN / SCRAM). Pass via `getenv()` and a SQL variable rather than inlining."
+        "description": "SASL password (PLAIN / SCRAM). Keep it in a `tributary_cluster` secret, or pass it with `getvariable()` from a variable set with `getenv()`, rather than inlining it."
+      },
+      {
+        "name": "schema.registry.url",
+        "type": "VARCHAR",
+        "paramType": "named",
+        "description": "Schema Registry URL. When set, the latest JSON schemas of the `<topic>-key` and `<topic>-value` subjects are used to return `key` and `value` as `JSON`. Avro and Protobuf subjects are an error."
       },
       {
         "name": "...",
         "type": "VARCHAR",
         "paramType": "named",
-        "description": "Any other [`librdkafka` configuration](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) name — `auto.offset.reset`, `enable.auto.commit`, `ssl.ca.location`, etc. — passes through unchanged. Tributary doesn't validate keys; misspellings surface as `librdkafka` errors at scan time.",
+        "description": "Any other librdkafka *global* (client) property from its [CONFIGURATION reference](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) — `ssl.ca.location`, `client.id`, `debug`, etc. — plus `schema.registry.url` to decode JSON-schema topics. Names are checked when the query is bound (a misspelling is a Binder Error); topic-level properties such as `auto.offset.reset` are not accepted. Values pass to librdkafka unchanged.",
         "varargs": true
       }
     ],
-    "description": "Read messages from a Kafka topic as DuckDB rows. Multi-partition topics are scanned in parallel by partition. Each row is `(topic, partition, offset, message)`; the message is a `BLOB` you decode in SQL based on your serialization (JSON, Avro, Protobuf, etc.).\n\nFor a long-running topic this scans the entire current contents — pair with a `WHERE` clause on `timestamp` / `partition` / `offset` for finite slices, or with `tributary_metadata` first to plan the scan.",
+    "description": "Read messages from a Kafka topic as DuckDB rows. Multi-partition topics are scanned in parallel by partition. Each row is `(topic, partition, offset, key, message)`; the key and message are `BLOB`s you decode in SQL based on your serialization (JSON, Avro, Protobuf, etc.), or `JSON` columns when `schema.registry.url` points at the topic's JSON schemas.\n\nEach scan reads every non-empty partition from its first retained offset up to the high watermark seen when the scan started, without joining a consumer group or committing offsets. `WHERE` filters run after the read, so scope cost by snapshotting into a table, and use `tributary_metadata` first to plan the scan.",
     "examples": [
       {
         "description": "Snapshot a topic into a local table",
-        "code": "CREATE TABLE orders_snapshot AS\nSELECT *\nFROM tributary_scan_topic('orders',\n                          \"bootstrap.servers\" := 'kafka:9092');"
+        "code": "CREATE OR REPLACE TABLE orders_snapshot AS\nSELECT *\nFROM tributary_scan_topic('orders',\n                          \"bootstrap.servers\" := 'kafka:9092');"
       },
       {
         "description": "Decode JSON messages on the way in",
-        "code": "SELECT\n  partition,\n  \"offset\",\n  json_extract_string(message::VARCHAR, '$.user_id') AS user_id,\n  json_extract_string(message::VARCHAR, '$.event')   AS event\nFROM tributary_scan_topic('events',\n                          \"bootstrap.servers\" := 'kafka:9092');"
+        "code": "SELECT\n  partition,\n  \"offset\",\n  json_extract_string(decode(message), '$.user_id') AS user_id,\n  json_extract_string(decode(message), '$.event')   AS event\nFROM tributary_scan_topic('events',\n                          \"bootstrap.servers\" := 'kafka:9092');"
       },
       {
-        "description": "SASL-authenticated consume against a managed Kafka",
-        "code": "SET VARIABLE k_user = getenv('KAFKA_USER');\nSET VARIABLE k_pass = getenv('KAFKA_PASSWORD');\n\nSELECT *\nFROM tributary_scan_topic('orders',\n  \"bootstrap.servers\"  := 'broker.example.com:9093',\n  \"security.protocol\"  := 'SASL_SSL',\n  \"sasl.mechanism\"     := 'SCRAM-SHA-512',\n  \"sasl.username\"      := :k_user,\n  \"sasl.password\"      := :k_pass);"
+        "description": "SASL-authenticated consume through a cluster secret",
+        "code": "CREATE SECRET prod_kafka (\n  TYPE tributary_cluster,\n  SCOPE 'kafka://prod',\n  \"bootstrap.servers\" 'broker.example.com:9093',\n  \"security.protocol\" 'SASL_SSL',\n  \"sasl.mechanism\"    'SCRAM-SHA-512',\n  \"sasl.username\"     getenv('KAFKA_USER'),\n  \"sasl.password\"     getenv('KAFKA_PASSWORD')\n);\n\nSELECT * FROM tributary_scan_topic('kafka://prod/orders');"
       }
     ],
     "relatedFunctions": [
       "tributary_metadata",
+      "tributary_schema_registry_get_schema_latest",
       "tributary_version"
     ]
   },
@@ -131,7 +143,7 @@
         "name": "...",
         "type": "VARCHAR",
         "paramType": "named",
-        "description": "Any other [`librdkafka` configuration](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) name — same surface as [`tributary_scan_topic`](#tributary_scan_topic).",
+        "description": "Any other librdkafka global (client) property — same surface as [`tributary_scan_topic`](#tributary_scan_topic). This function doesn't read `tributary_cluster` secrets.",
         "varargs": true
       }
     ],
@@ -159,12 +171,532 @@
     ],
     "returnType": "VARCHAR",
     "parameters": [],
-    "description": "Returns the loaded Tributary extension version as a date-stamped build string (e.g. `'20250612.01'`). Use to confirm what's loaded when matching against bug reports or release notes.",
+    "description": "Returns the loaded Tributary extension version as a date-stamped build string (e.g. `'20251020.01'`). Use to confirm what's loaded when matching against bug reports or release notes.",
     "examples": [
       {
         "description": "Print the loaded version",
         "code": "SELECT tributary_version();"
       }
     ]
+  },
+  {
+    "id": "tributary_schema_registry_subjects",
+    "name": "tributary_schema_registry_subjects",
+    "type": "table",
+    "categories": [
+      "Schema Registry"
+    ],
+    "parameters": [
+      {
+        "name": "schema_registry_url",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Base URL of the Schema Registry. Credentials come from the `tributary_schema_registry` secret whose scope matches it."
+      },
+      {
+        "name": "deleted",
+        "type": "BOOLEAN",
+        "paramType": "positional",
+        "description": "Include soft-deleted subjects."
+      }
+    ],
+    "description": "List the registry's subjects, one row per subject.",
+    "returnsTable": [
+      {
+        "name": "subject",
+        "type": "VARCHAR",
+        "description": "Subject name."
+      }
+    ],
+    "returnType": "TABLE",
+    "examples": [
+      {
+        "description": "List subjects",
+        "code": "SELECT * FROM tributary_schema_registry_subjects('https://registry.example.com', false);",
+        "skip": "needs a Schema Registry"
+      }
+    ]
+  },
+  {
+    "id": "tributary_schema_registry_versions",
+    "name": "tributary_schema_registry_versions",
+    "type": "table",
+    "categories": [
+      "Schema Registry"
+    ],
+    "parameters": [
+      {
+        "name": "schema_registry_url",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Base URL of the Schema Registry. Credentials come from the `tributary_schema_registry` secret whose scope matches it."
+      },
+      {
+        "name": "subject",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Subject name, usually `<topic>-value` or `<topic>-key`."
+      }
+    ],
+    "description": "List the version numbers registered under a subject.",
+    "returnsTable": [
+      {
+        "name": "version",
+        "type": "INTEGER",
+        "description": "Version number."
+      }
+    ],
+    "returnType": "TABLE",
+    "examples": [
+      {
+        "description": "Versions of a subject",
+        "code": "SELECT * FROM tributary_schema_registry_versions('https://registry.example.com', 'orders-value');",
+        "skip": "needs a Schema Registry"
+      }
+    ]
+  },
+  {
+    "id": "tributary_schema_registry_get_schema_latest",
+    "name": "tributary_schema_registry_get_schema_latest",
+    "type": "table",
+    "categories": [
+      "Schema Registry"
+    ],
+    "parameters": [
+      {
+        "name": "schema_registry_url",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Base URL of the Schema Registry. Credentials come from the `tributary_schema_registry` secret whose scope matches it."
+      },
+      {
+        "name": "subject",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Subject name, usually `<topic>-value` or `<topic>-key`."
+      }
+    ],
+    "description": "Fetch the latest schema registered under a subject.",
+    "returnsTable": [
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "description": "Schema id."
+      },
+      {
+        "name": "guid",
+        "type": "VARCHAR",
+        "description": "Schema GUID."
+      },
+      {
+        "name": "subject",
+        "type": "VARCHAR",
+        "description": "Subject."
+      },
+      {
+        "name": "version",
+        "type": "INTEGER",
+        "description": "Version number within the subject."
+      },
+      {
+        "name": "schema_type",
+        "type": "VARCHAR",
+        "description": "`JSON`, `AVRO` or `PROTOBUF`."
+      },
+      {
+        "name": "schema",
+        "type": "VARCHAR",
+        "description": "Schema definition text."
+      }
+    ],
+    "returnType": "TABLE",
+    "examples": [
+      {
+        "description": "Latest schema of a topic's values",
+        "code": "SELECT version, schema_type, schema\nFROM tributary_schema_registry_get_schema_latest('https://registry.example.com', 'orders-value');",
+        "skip": "needs a Schema Registry"
+      }
+    ]
+  },
+  {
+    "id": "tributary_schema_registry_get_schema_by_version",
+    "name": "tributary_schema_registry_get_schema_by_version",
+    "type": "table",
+    "categories": [
+      "Schema Registry"
+    ],
+    "parameters": [
+      {
+        "name": "schema_registry_url",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Base URL of the Schema Registry. Credentials come from the `tributary_schema_registry` secret whose scope matches it."
+      },
+      {
+        "name": "subject",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Subject name, usually `<topic>-value` or `<topic>-key`."
+      },
+      {
+        "name": "version",
+        "type": "INTEGER",
+        "paramType": "positional",
+        "description": "Version number within the subject."
+      }
+    ],
+    "description": "Fetch one version of a subject's schema.",
+    "returnsTable": [
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "description": "Schema id."
+      },
+      {
+        "name": "guid",
+        "type": "VARCHAR",
+        "description": "Schema GUID."
+      },
+      {
+        "name": "subject",
+        "type": "VARCHAR",
+        "description": "Subject."
+      },
+      {
+        "name": "version",
+        "type": "INTEGER",
+        "description": "Version number within the subject."
+      },
+      {
+        "name": "schema_type",
+        "type": "VARCHAR",
+        "description": "`JSON`, `AVRO` or `PROTOBUF`."
+      },
+      {
+        "name": "schema",
+        "type": "VARCHAR",
+        "description": "Schema definition text."
+      }
+    ],
+    "returnType": "TABLE",
+    "examples": []
+  },
+  {
+    "id": "tributary_schema_registry_get_schema_by_subject_and_id",
+    "name": "tributary_schema_registry_get_schema_by_subject_and_id",
+    "type": "table",
+    "categories": [
+      "Schema Registry"
+    ],
+    "parameters": [
+      {
+        "name": "schema_registry_url",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Base URL of the Schema Registry. Credentials come from the `tributary_schema_registry` secret whose scope matches it."
+      },
+      {
+        "name": "subject",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Subject name, usually `<topic>-value` or `<topic>-key`."
+      },
+      {
+        "name": "schema_id",
+        "type": "INTEGER",
+        "paramType": "positional",
+        "description": "Schema id."
+      }
+    ],
+    "description": "Fetch a schema by subject and schema id.",
+    "returnsTable": [
+      {
+        "name": "schema_type",
+        "type": "VARCHAR",
+        "description": "`JSON`, `AVRO` or `PROTOBUF`."
+      },
+      {
+        "name": "schema",
+        "type": "VARCHAR",
+        "description": "Schema definition text."
+      }
+    ],
+    "returnType": "TABLE",
+    "examples": []
+  },
+  {
+    "id": "tributary_schema_registry_get_schema_by_guid",
+    "name": "tributary_schema_registry_get_schema_by_guid",
+    "type": "table",
+    "categories": [
+      "Schema Registry"
+    ],
+    "parameters": [
+      {
+        "name": "schema_registry_url",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Base URL of the Schema Registry. Credentials come from the `tributary_schema_registry` secret whose scope matches it."
+      },
+      {
+        "name": "guid",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Schema GUID."
+      }
+    ],
+    "description": "Fetch a schema by its GUID.",
+    "returnsTable": [
+      {
+        "name": "schema_type",
+        "type": "VARCHAR",
+        "description": "`JSON`, `AVRO` or `PROTOBUF`."
+      },
+      {
+        "name": "schema",
+        "type": "VARCHAR",
+        "description": "Schema definition text."
+      }
+    ],
+    "returnType": "TABLE",
+    "examples": []
+  },
+  {
+    "id": "tributary_schema_registry_get_schema_latest_json_structure",
+    "name": "tributary_schema_registry_get_schema_latest_json_structure",
+    "type": "scalar",
+    "categories": [
+      "Schema Registry"
+    ],
+    "parameters": [
+      {
+        "name": "schema_registry_url",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Base URL of the Schema Registry. Credentials come from the `tributary_schema_registry` secret whose scope matches it."
+      },
+      {
+        "name": "subject",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Subject name, usually `<topic>-value` or `<topic>-key`."
+      }
+    ],
+    "description": "Convert the latest JSON schema of a subject into a DuckDB JSON structure description, for use with `json_transform` / `from_json`. Errors when the subject's schema is not a JSON schema.",
+    "returnType": "VARCHAR",
+    "examples": []
+  },
+  {
+    "id": "tributary_schema_registry_register_schema",
+    "name": "tributary_schema_registry_register_schema",
+    "type": "table",
+    "categories": [
+      "Schema Registry"
+    ],
+    "parameters": [
+      {
+        "name": "schema_registry_url",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Base URL of the Schema Registry. Credentials come from the `tributary_schema_registry` secret whose scope matches it."
+      },
+      {
+        "name": "subject",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Subject name, usually `<topic>-value` or `<topic>-key`."
+      },
+      {
+        "name": "schema_type",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "`JSON`, `AVRO` or `PROTOBUF`."
+      },
+      {
+        "name": "schema",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Schema definition text."
+      },
+      {
+        "name": "normalize",
+        "type": "BOOLEAN",
+        "paramType": "positional",
+        "description": "Ask the registry to normalize the schema before registering it."
+      }
+    ],
+    "description": "Register a schema under a subject and return the registration.",
+    "returnsTable": [
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "description": "Schema id."
+      },
+      {
+        "name": "guid",
+        "type": "VARCHAR",
+        "description": "Schema GUID."
+      },
+      {
+        "name": "subject",
+        "type": "VARCHAR",
+        "description": "Subject."
+      },
+      {
+        "name": "version",
+        "type": "INTEGER",
+        "description": "Version number within the subject."
+      },
+      {
+        "name": "schema_type",
+        "type": "VARCHAR",
+        "description": "`JSON`, `AVRO` or `PROTOBUF`."
+      },
+      {
+        "name": "schema",
+        "type": "VARCHAR",
+        "description": "Schema definition text."
+      }
+    ],
+    "returnType": "TABLE",
+    "examples": []
+  },
+  {
+    "id": "tributary_schema_registry_delete_subject",
+    "name": "tributary_schema_registry_delete_subject",
+    "type": "table",
+    "categories": [
+      "Schema Registry"
+    ],
+    "parameters": [
+      {
+        "name": "schema_registry_url",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Base URL of the Schema Registry. Credentials come from the `tributary_schema_registry` secret whose scope matches it."
+      },
+      {
+        "name": "subject",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Subject name, usually `<topic>-value` or `<topic>-key`."
+      },
+      {
+        "name": "permanent",
+        "type": "BOOLEAN",
+        "paramType": "positional",
+        "description": "`false` for a soft delete, `true` for a hard delete of an already soft-deleted subject."
+      }
+    ],
+    "description": "Delete a subject and return the versions that were deleted.",
+    "returnsTable": [
+      {
+        "name": "deleted_version",
+        "type": "INTEGER",
+        "description": "A deleted version number."
+      }
+    ],
+    "returnType": "TABLE",
+    "examples": []
+  },
+  {
+    "id": "tributary_schema_registry_delete_subject_version",
+    "name": "tributary_schema_registry_delete_subject_version",
+    "type": "table",
+    "categories": [
+      "Schema Registry"
+    ],
+    "parameters": [
+      {
+        "name": "schema_registry_url",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Base URL of the Schema Registry. Credentials come from the `tributary_schema_registry` secret whose scope matches it."
+      },
+      {
+        "name": "subject",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Subject name, usually `<topic>-value` or `<topic>-key`."
+      },
+      {
+        "name": "version",
+        "type": "INTEGER",
+        "paramType": "positional",
+        "description": "Version number to delete."
+      },
+      {
+        "name": "permanent",
+        "type": "BOOLEAN",
+        "paramType": "positional",
+        "description": "`false` for a soft delete, `true` for a hard delete."
+      }
+    ],
+    "description": "Delete one version of a subject.",
+    "returnsTable": [
+      {
+        "name": "deleted_version",
+        "type": "INTEGER",
+        "description": "The deleted version number."
+      }
+    ],
+    "returnType": "TABLE",
+    "examples": []
+  },
+  {
+    "id": "tributary_schema_registry_serialize_json",
+    "name": "tributary_schema_registry_serialize_json",
+    "type": "scalar",
+    "categories": [
+      "Schema Registry"
+    ],
+    "parameters": [
+      {
+        "name": "schema_registry_url",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Base URL of the Schema Registry. Credentials come from the `tributary_schema_registry` secret whose scope matches it."
+      },
+      {
+        "name": "schema",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "JSON schema for the value."
+      },
+      {
+        "name": "topic",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Topic the value is meant for (its `<topic>-value` subject)."
+      },
+      {
+        "name": "data",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "Value to encode."
+      }
+    ],
+    "description": "Encode a JSON value with a JSON schema into the Schema Registry wire format, as a `BLOB` ready to hand to a Kafka producer.",
+    "returnType": "BLOB",
+    "examples": []
+  },
+  {
+    "id": "tributary",
+    "name": "tributary",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "VARCHAR",
+    "parameters": [
+      {
+        "name": "name",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": "Any string."
+      }
+    ],
+    "description": "Greeting left over from the extension template: returns `'Tributary <name> 🐥'`. It does not talk to Kafka.",
+    "examples": []
   }
 ]
