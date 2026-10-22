@@ -58,7 +58,9 @@ test('search, category filters, empty state and release navigation work', async 
   await page.getByRole('button', { name: 'Clear filters' }).click();
   await page.locator('.category-nav[href$="?category=json"]').click();
   await expect(page.locator('#result-count')).toContainText('functions');
-  expect(await page.locator('[data-function-row]:visible').evaluateAll(rows => rows.every(row => (row as HTMLElement).dataset.category === 'json'))).toBe(true);
+  // The count reads "N functions" before and after filtering, so it can't tell
+  // us the filter has applied; poll the rows themselves.
+  await expect.poll(() => page.locator('[data-function-row]:visible').evaluateAll(rows => rows.length > 0 && rows.every(row => (row as HTMLElement).dataset.category === 'json'))).toBe(true);
   await expect(page.getByLabel('Documentation snapshot')).toHaveCount(0);
   await page.locator('#sidebar').getByRole('link', { name: 'Function changes' }).click();
   await page.locator('#compare-from').selectOption('duckdb-1.4.4');
