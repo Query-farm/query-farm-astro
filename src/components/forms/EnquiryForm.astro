@@ -1,0 +1,147 @@
+---
+/**
+ * EnquiryForm — a short brief that reaches hello@query.farm without a mail
+ * client. Posts JSON to /api/enquiry (functions/api/enquiry.ts →
+ * src/lib/enquiry.ts), which checks Cloudflare Turnstile and sends through
+ * Resend. A successful send records GA4's recommended `generate_lead` event.
+ */
+import Button from '../ui/Button.astro';
+import { ENQUIRY_TOPICS } from '../../lib/enquiry';
+
+interface Props {
+  /** Pre-selects the topic, e.g. "Consulting" on the consulting page. */
+  topic?: (typeof ENQUIRY_TOPICS)[number];
+  id?: string;
+}
+
+const { topic, id = 'enquiry' } = Astro.props;
+
+// Turnstile widget site key (public). This is Cloudflare's always-pass TEST
+// key; replace it with the query.farm widget's key before deploying — the
+// production secret rejects test tokens, so a missed swap fails closed.
+const TURNSTILE_SITE_KEY = '1x00000000000000000000AA';
+
+const INPUT =
+  'w-full rounded-lg border border-soil-300 bg-[#fffdf7] px-3.5 py-2.5 text-[15.5px] font-normal text-soil-900 transition ' +
+  'placeholder:text-soil-500 focus:border-link focus:ring-[3px] focus:ring-link/20 focus:outline-none ' +
+  'aria-[invalid=true]:border-[#b3261e]';
+const LABEL = 'text-[12.5px] font-medium text-soil-600';
+const ERROR = 'text-[13px] text-[#b3261e]';
+---
+
+<form id={id} class="enquiry-form flex flex-col gap-4" novalidate data-enquiry-form>
+  <div class="grid gap-4 sm:grid-cols-2">
+    <div class="flex flex-col gap-1.5">
+      <label for={`${id}-name`} class={LABEL}>Name</label>
+      <input id={`${id}-name`} name="name" autocomplete="name" required maxlength="120" class={INPUT} aria-describedby={`${id}-name-error`} />
+      <p id={`${id}-name-error`} class={ERROR} data-error-for="name" hidden></p>
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <label for={`${id}-email`} class={LABEL}>Work email</label>
+      <input id={`${id}-email`} name="email" type="email" autocomplete="email" required maxlength="254" placeholder="you@company.com" class={INPUT} aria-describedby={`${id}-email-error`} />
+      <p id={`${id}-email-error`} class={ERROR} data-error-for="email" hidden></p>
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <label for={`${id}-company`} class={LABEL}>Company <span class="font-normal text-soil-500">(optional)</span></label>
+      <input id={`${id}-company`} name="company" autocomplete="organization" maxlength="160" class={INPUT} aria-describedby={`${id}-company-error`} />
+      <p id={`${id}-company-error`} class={ERROR} data-error-for="company" hidden></p>
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <label for={`${id}-topic`} class={LABEL}>What do you need?</label>
+      <select id={`${id}-topic`} name="topic" required class={INPUT} aria-describedby={`${id}-topic-error`}>
+        {!topic && <option value="" selected disabled>Choose one</option>}
+        {ENQUIRY_TOPICS.map(t => <option value={t} selected={t === topic}>{t}</option>)}
+      </select>
+      <p id={`${id}-topic-error`} class={ERROR} data-error-for="topic" hidden></p>
+    </div>
+  </div>
+
+  <div class="flex flex-col gap-1.5">
+    <label for={`${id}-message`} class={LABEL}>Your brief</label>
+    <textarea
+      id={`${id}-message`}
+      name="message"
+      rows="5"
+      required
+      maxlength="5000"
+      placeholder="What are you trying to query or build, which DuckDB version you're on, and any deadline."
+      class={INPUT}
+      aria-describedby={`${id}-message-error`}
+    ></textarea>
+    <p id={`${id}-message-error`} class={ERROR} data-error-for="message" hidden></p>
+  </div>
+
+  {/* Honeypot: hidden from people and assistive tech; bots fill it in. */}
+  <div class="absolute -left-[9999px] h-px w-px overflow-hidden" aria-hidden="true">
+    <label for={`${id}-website`}>Leave this empty</label>
+    <input id={`${id}-website`} name="website" tabindex="-1" autocomplete="off" />
+  </div>
+
+  <div class="cf-turnstile" data-sitekey={TURNSTILE_SITE_KEY} data-theme="light"></div>
+
+  <div class="flex flex-wrap items-center gap-4">
+    <Button type="submit">Send brief</Button>
+    <p class="text-[13px] text-soil-600" role="status" aria-live="polite" data-enquiry-status></p>
+  </div>
+</form>
+
+<div class="rounded-xl border border-field-700/30 bg-field-700/5 px-5 py-4" data-enquiry-sent hidden tabindex="-1">
+  <p class="font-medium text-soil-900">Thanks — your brief is on its way.</p>
+  <p class="mt-1 text-[14.5px] text-soil-700">A person reads every message and replies within one or two working days.</p>
+</div>
+
+<script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+
+<script>
+  type Turnstile = { reset: (el?: Element) => void };
+  type Gtag = (...args: unknown[]) => void;
+
+  for (const form of document.querySelectorAll<HTMLFormElement>('[data-enquiry-form]')) {
+    const status = form.querySelector<HTMLElement>('[data-enquiry-status]')!;
+    const sent = form.nextElementSibling as HTMLElement;
+    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+
+    const showErrors = (errors: Record<string, string> = {}) => {
+      for (const p of form.querySelectorAll<HTMLElement>('[data-error-for]')) {
+        const field = p.dataset.errorFor!;
+        const input = form.elements.namedItem(field) as HTMLElement | null;
+        p.textContent = errors[field] ?? '';
+        p.hidden = !errors[field];
+        input?.setAttribute('aria-invalid', errors[field] ? 'true' : 'false');
+      }
+      const first = Object.keys(errors)[0];
+      if (first) (form.elements.namedItem(first) as HTMLElement | null)?.focus();
+    };
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(form)) as Record<string, string>;
+      const payload = { ...data, turnstileToken: data['cf-turnstile-response'] ?? '', page: location.pathname };
+      submit.disabled = true;
+      status.textContent = 'Sending…';
+      showErrors();
+      try {
+        const response = await fetch('/api/enquiry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const result = (await response.json()) as { ok: boolean; error?: string; errors?: Record<string, string> };
+        if (result.ok) {
+          form.hidden = true;
+          sent.hidden = false;
+          sent.focus();
+          (window as unknown as { gtag?: Gtag }).gtag?.('event', 'generate_lead', { form_id: 'enquiry', topic: data.topic });
+          return;
+        }
+        status.textContent = result.error ?? 'Something went wrong. Please email hello@query.farm.';
+        showErrors(result.errors);
+      } catch {
+        status.textContent = 'Your brief could not be sent. Please email hello@query.farm instead.';
+      } finally {
+        submit.disabled = false;
+        (window as unknown as { turnstile?: Turnstile }).turnstile?.reset(form.querySelector('.cf-turnstile') ?? undefined);
+      }
+    });
+  }
+</script>
