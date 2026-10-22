@@ -219,6 +219,38 @@ def function_signature_id(name: str, param_types: list) -> str:
     return f"{name}({sig})" if sig else name
 
 
+# BLOB-like results come back from python duckdb as bytes; str() would give
+# a Python repr (b'\x01...'). Short values (geometry, small headers) are shown
+# as hex, the way the DuckDB CLI's hex() reads. Longer ones (serialized
+# sketches and filters run to kilobytes) are not readable output, so the
+# example keeps its code and drops the table.
+MAX_BLOB_OUTPUT_BYTES = 64
+
+
+class _UnreadableOutput(Exception):
+    pass
+
+
+def _serialize_value(v) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        b = bytes(v)
+        if len(b) > MAX_BLOB_OUTPUT_BYTES:
+            raise _UnreadableOutput()
+        return b.hex()
+    return str(v)
+
+
+def serialize_rows(rows) -> list[list[str]] | None:
+    try:
+        return [[_serialize_value(v) for v in row] for row in rows]
+    except _UnreadableOutput:
+        return None
+
+
 def execute_example(con, expr: str) -> dict | None:
     """Run `SELECT <expr>` against an extension-loaded connection and return
     {columns, rows} suitable for the site's `outputTable` shape, or None on error.
@@ -231,14 +263,9 @@ def execute_example(con, expr: str) -> dict | None:
         print(f"  [skip example] {expr!r}: {e}", file=sys.stderr)
         return None
     columns = [{"name": d[0], "align": "left"} for d in (cur.description or [])]
-    serialized = []
-    for row in rows:
-        serialized.append([
-            "" if v is None else
-            ("true" if v is True else "false") if isinstance(v, bool) else
-            str(v)
-            for v in row
-        ])
+    serialized = serialize_rows(rows)
+    if serialized is None:
+        return None
     return {"columns": columns, "rows": serialized}
 
 
@@ -413,14 +440,9 @@ def build_function_doc(row: dict, exec_con=None, positional_counts: dict | None 
                     rows = cur.fetchall() if cur.description else []
                     if cur.description:
                         cols = [{"name": d[0], "align": "left"} for d in cur.description]
-                        serialized = [
-                            ["" if v is None else
-                             ("true" if v is True else "false") if isinstance(v, bool) else
-                             str(v)
-                             for v in row]
-                            for row in rows
-                        ]
-                        output_table = {"columns": cols, "rows": serialized}
+                        serialized = serialize_rows(rows)
+                        output_table = (None if serialized is None
+                                        else {"columns": cols, "rows": serialized})
                     else:
                         output_table = None
                 except Exception as e:
