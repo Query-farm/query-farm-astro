@@ -418,14 +418,32 @@ async function runRepl(
   // of what the example needs, not boilerplate to skip past.
   if (opts.seedSql) {
     const primary = opts.extensionName?.toLowerCase();
-    const stmts = splitStatements(opts.seedSql).filter((s) => {
-      if (isCommentOnly(s)) return false;
-      const m = /^\s*(INSTALL|LOAD)\s+["']?([A-Za-z_][A-Za-z0-9_]*)/i.exec(s);
-      if (!m) return true; // not an INSTALL/LOAD statement
+    const stmts: string[] = [];
+    for (const s of splitStatements(opts.seedSql)) {
+      if (isCommentOnly(s)) continue;
+      // Match on the statement itself, not the `--` comment lines above it.
+      const bare = s.replace(/^(\s*--[^\n]*\n)+/, '');
+      // Examples are written for DuckDB 2.0, where our extensions come from
+      // the Query.Farm repository. The browser engine installs them from
+      // community instead, so the repository setup has nothing to do here.
+      if (/^\s*SET\s+allow_extension_repositories\b/i.test(bare)) continue;
+      if (/^\s*CREATE\s+(OR\s+REPLACE\s+)?EXTENSION\s+REPOSITORY\b/i.test(bare)) continue;
+      const m = /^\s*(INSTALL|LOAD)\s+["']?([A-Za-z_][A-Za-z0-9_]*)/i.exec(bare);
+      if (!m) {
+        stmts.push(s); // not an INSTALL/LOAD statement
+        continue;
+      }
       // No known primary extension name: fall back to the old blanket drop.
-      if (!primary) return false;
-      return m[2].toLowerCase() !== primary;
-    });
+      if (!primary || m[2].toLowerCase() === primary) continue;
+      // A second Query.Farm extension (`LOAD a5 FROM query_farm`): load it the
+      // way the browser can, from community, rather than running the statement.
+      if (/\bFROM\s+query_farm\b/i.test(bare)) {
+        const loaded = await ensureExtension(m[2].toLowerCase(), 'community');
+        if (!loaded.ok) writeln(`Note: could not load ${m[2]}: ${loaded.error}`, "33");
+        continue;
+      }
+      stmts.push(s);
+    }
     for (const stmt of stmts) {
       // ATTACH still has to run — the query below depends on the catalog it
       // creates — but it's setup the reader already sees in the code sample
