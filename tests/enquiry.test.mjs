@@ -47,7 +47,7 @@ test('a valid enquiry is verified, then emailed with the sender as reply-to', as
   const email = JSON.parse(calls[1].init.body);
   assert.deepEqual(email.to, ['hello@query.farm']);
   assert.equal(email.reply_to, 'ada@example.com');
-  assert.equal(email.subject, 'Consulting: enquiry from Ada Lovelace (Analytical Engines)');
+  assert.equal(email.subject, 'Consulting: inquiry from Ada Lovelace (Analytical Engines)');
   assert.match(email.text, /We need a DuckDB extension/);
 });
 
@@ -98,5 +98,5 @@ test('validation trims fields and leaves company optional', () => {
   assert.equal(result.ok, true);
   assert.equal(result.enquiry.name, 'Ada');
   const email = enquiryEmail(result.enquiry, 'to@query.farm', 'Site <site@query.farm>');
-  assert.equal(email.subject, 'Consulting: enquiry from Ada');
+  assert.equal(email.subject, 'Consulting: inquiry from Ada');
 });
