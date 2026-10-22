@@ -286,8 +286,14 @@ def probe_table_positional_counts(con, rows: list[dict]) -> dict:
             continue
         arity = max(len(safe_list(r.get("parameter_types"))) for r in overloads) + 1
         quoted = '"' + name.replace('"', '""') + '"'
+        # A TABLE parameter only binds to a subquery (NULL fails with
+        # "requires a subquery" before the candidate list is printed).
+        table_pos = {i for r in overloads
+                     for i, t in enumerate(safe_list(r.get("parameter_types")))
+                     if str(t).upper() == "TABLE"}
+        probe_args = ["(SELECT 1)" if i in table_pos else "NULL" for i in range(arity)]
         try:
-            con.execute(f"EXPLAIN SELECT * FROM {quoted}({', '.join(['NULL'] * arity)})")
+            con.execute(f"EXPLAIN SELECT * FROM {quoted}({', '.join(probe_args)})")
             continue  # unexpectedly bound: no information
         except Exception as e:  # noqa: BLE001 - binder errors carry the data
             msg = str(e)
@@ -379,7 +385,7 @@ def build_function_doc(row: dict, exec_con=None, positional_counts: dict | None 
     # others as bare expressions ("foo(1)"). Detect leading SQL keywords so
     # we don't double-up to "SELECT SELECT foo(1);".
     import re as _re
-    STATEMENT_RE = _re.compile(r"^\s*(SELECT|WITH|CREATE|INSERT|UPDATE|DELETE|PRAGMA|ATTACH|COPY|EXPLAIN|SHOW|DESCRIBE|CALL)\b",
+    STATEMENT_RE = _re.compile(r"^\s*(SELECT|FROM|WITH|CREATE|INSERT|UPDATE|DELETE|PRAGMA|ATTACH|COPY|EXPLAIN|SHOW|DESCRIBE|CALL)\b",
                                _re.IGNORECASE)
     for ex in raw_examples:
         if not ex:
