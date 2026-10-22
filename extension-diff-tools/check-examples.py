@@ -562,6 +562,17 @@ def classify_parse_error(err: str) -> str | None:
 # Per-snippet execution
 
 
+def community_install(sql: str) -> str:
+    """Examples are written for DuckDB 2.0, where our extensions come from the
+    Query.Farm repository. This checker runs Haybarn (DuckDB 1.5), which
+    installs them from community, so drop the repository setup and point
+    INSTALL/LOAD ... FROM query_farm at community."""
+    sql = re.sub(r"(?im)^\s*SET\s+allow_extension_repositories\b[^;]*;", "", sql)
+    sql = re.sub(r"(?is)\bCREATE\s+(OR\s+REPLACE\s+)?EXTENSION\s+REPOSITORY\b[^;]*;", "", sql)
+    sql = re.sub(r"(?i)\b(INSTALL\s+\w+)\s+FROM\s+query_farm\b", r"\1 FROM community", sql)
+    return re.sub(r"(?i)\b(LOAD\s+\w+)\s+FROM\s+query_farm\b", r"\1", sql)
+
+
 def check_snippet(
     db: duckdb.DuckDBPyConnection,
     snip: Snippet,
@@ -580,6 +591,7 @@ def check_snippet(
         return Result(snip, S_PARSE_SKIP, "documentation placeholder ellipsis", None, None)
 
     rewritten, _ = substitute_bind_vars(snip.code)
+    rewritten = community_install(rewritten)
 
     # Run any per-snippet setup statements (these are author-blessed
     # context, not under test themselves).

@@ -57,3 +57,19 @@ SELECT ST_GeomFromText('POINT(0.001 0.002)') AS geom;
 -- parcels_geometry(id, geom) — GEOMETRY-typed parcels for export example
 CREATE OR REPLACE TABLE parcels_geometry AS
 SELECT id, geom FROM raw_parcels;
+
+-- parcels(id, name, geom GEOSILO) — the table the cookbook defines and fills
+-- in earlier blocks. Each in-browser example runs on its own, so it needs to
+-- exist up front. The polygons sit inside the cookbook's -78..-76 longitude,
+-- 39..41 latitude band, so its bounding-box filters return rows.
+CREATE OR REPLACE TABLE parcels (
+  id    INTEGER,
+  name  VARCHAR,
+  geom  GEOSILO('EPSG:4326') USING COMPRESSION zstd
+);
+INSERT INTO parcels
+SELECT * FROM (VALUES
+  (1, 'north lot', ST_GeomFromText('POLYGON((-77.2 39.8,-77.1 39.8,-77.1 39.9,-77.2 39.9,-77.2 39.8))')),
+  (2, 'river parcel', ST_GeomFromText('POLYGON((-76.9 40.1,-76.8 40.1,-76.8 40.2,-76.9 40.2,-76.9 40.1))')),
+  (3, 'west field', ST_GeomFromText('POLYGON((-79.5 38.0,-79.4 38.0,-79.4 38.1,-79.5 38.1,-79.5 38.0))'))
+) t(id, name, geom);
