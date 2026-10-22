@@ -14,33 +14,53 @@ import Callout from '../../../components/docs/Callout.astro';
 The shortest path from "Kafka topic" to "queryable DuckDB table":
 
 ```sql
-CREATE TABLE orders_snapshot AS
+CREATE OR REPLACE TABLE orders_snapshot AS
 SELECT
   partition,
   "offset",
-  json_extract_string(message::VARCHAR, '$.user_id') AS user_id,
-  json_extract_string(message::VARCHAR, '$.amount')  AS amount
+  json_extract_string(decode(message), '$.user_id') AS user_id,
+  json_extract_string(decode(message), '$.amount')  AS amount
 FROM tributary_scan_topic('orders',
   "bootstrap.servers" := 'kafka:9092');
 ```
 
-[`tributary_scan_topic`](#tributary_scan_topic) reads each partition in parallel, hands DuckDB the message bytes as a `BLOB`, and lets you decode them inline with whatever SQL fits your serialization. Any [librdkafka configuration option](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) — `security.protocol`, `sasl.username`, `auto.offset.reset`, `ssl.ca.location` — passes through as a named parameter.
+[`tributary_scan_topic`](#tributary_scan_topic) reads each partition in parallel, hands DuckDB the message bytes as a `BLOB`, and lets you decode them inline with whatever SQL fits your serialization. librdkafka's client configuration options — `security.protocol`, `sasl.username`, `ssl.ca.location`, `client.id` — pass through as named parameters.
 
 <Callout type="note" title="Best fit, scoped honestly">
-This extension is the consumer side of Kafka — read paths, snapshot paths, cluster introspection. It is **not a Kafka producer**: there is no documented write-back function in the current version. For publishing to topics, keep a real Kafka producer.
+This extension is the consumer side of Kafka — read paths, snapshot paths, cluster introspection, plus a [Schema Registry](#schema-registry) client. It is **not a Kafka producer**: there is no write-back function in the current version. For publishing to topics, keep a real Kafka producer.
 
-Status is **experimental**; the function surface may change as more `librdkafka` paths get exposed. The configuration surface is large because Tributary forwards every parameter to `librdkafka` unchanged — that's the design, but it means typos surface as `librdkafka` errors at scan time rather than at SQL parse time.
+Status is **experimental**; the function surface may change as more `librdkafka` paths get exposed. Option names are checked when the query is bound — a misspelled name is a `Binder Error: Invalid named parameter` — while option *values* go to `librdkafka` unchanged, so a bad value surfaces as a `librdkafka` error when the scan starts.
 </Callout>
 
 ## Architecture
 
-Tributary is a thin [DuckDB table-function](https://duckdb.org/docs/sql/statements/select) wrapper around [librdkafka](https://github.com/confluentinc/librdkafka), the standard C/C++ Kafka client. Every named parameter you pass to [`tributary_scan_topic`](#tributary_scan_topic) or [`tributary_metadata`](#tributary_metadata) is forwarded to librdkafka's configuration as-is — there's no Tributary-specific naming layer to learn. If a setting works in the [Kafka consumer config reference](https://kafka.apache.org/documentation/#consumerconfigs), it works here.
+Tributary is a thin [DuckDB table-function](https://duckdb.org/docs/sql/statements/select) wrapper around [librdkafka](https://github.com/confluentinc/librdkafka), the standard C/C++ Kafka client. Every named parameter you pass to [`tributary_scan_topic`](#tributary_scan_topic) or [`tributary_metadata`](#tributary_metadata) is forwarded to librdkafka's configuration as-is — there's no Tributary-specific naming layer to learn. The accepted names are librdkafka's *global* (client) properties from its [CONFIGURATION reference](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md), plus `schema.registry.url`. Topic-level properties such as `auto.offset.reset` are not accepted.
 
-A topic with `N` partitions is scanned by `N` parallel consumers, and DuckDB pipelines the resulting Arrow batches into the rest of the query plan. The output schema is fixed: `(topic VARCHAR, partition INTEGER, offset BIGINT, message BLOB)`. The message column is intentionally a `BLOB` — Tributary doesn't try to guess your wire format. Cast it (`message::VARCHAR`) and use [DuckDB's JSON functions](https://duckdb.org/docs/data/json/loading_json.html), or pair with the `avro` / `protobuf` community extensions, depending on what's on your topic.
+Each scan reads every non-empty partition from its first retained offset up to the high watermark it saw when the scan started, so the result is a finite snapshot of the topic even while producers keep writing. Partitions are separate scan tasks that DuckDB's threads pick up in parallel. The scan doesn't join a consumer group or commit offsets, so it never moves an application's consumer-group position.
+
+The output schema is `(topic VARCHAR, partition INTEGER, offset BIGINT, key BLOB, message BLOB)`; a message without a key has a `NULL` key. The key and message columns are intentionally `BLOB` — Tributary doesn't try to guess your wire format. Turn UTF-8 payloads into text with [`decode(message)`](https://duckdb.org/docs/sql/functions/blob) and use [DuckDB's JSON functions](https://duckdb.org/docs/data/json/loading_json.html), or pair with the `avro` / `protobuf` community extensions, depending on what's on your topic. Don't use `message::VARCHAR` for JSON: in DuckDB 2.0 a `BLOB` to `VARCHAR` cast escapes quotes and non-ASCII bytes (`{\x22user_id\x22: ...}`), which JSON functions reject. When the topic's schemas live in a Schema Registry, Tributary can decode JSON-schema payloads for you — see [Schema Registry](#schema-registry).
 
 ## Securing credentials
 
-Authentication parameters are plain SQL values, so anything passed inline appears in the cached query plan and `EXPLAIN` output. Source secrets from the environment via `getenv()` and bind them in:
+Authentication parameters are plain SQL values, so anything passed inline appears in the query text. Keep them in a `tributary_cluster` secret, which stores librdkafka options for one cluster and redacts the sensitive ones (`sasl.username`, `sasl.password`, `ssl.key.password`, key and certificate locations) in [`duckdb_secrets()`](https://duckdb.org/docs/configuration/secrets_manager). The secret's scope is a `kafka://` name, and a scan picks the secret up when its topic is written as `kafka://<name>/<topic>`:
+
+```sql
+CREATE SECRET prod_kafka (
+  TYPE tributary_cluster,
+  SCOPE 'kafka://prod',
+  "bootstrap.servers" 'broker.example.com:9093',
+  "security.protocol" 'SASL_SSL',
+  "sasl.mechanism"    'SCRAM-SHA-512',
+  "sasl.username"     getenv('KAFKA_USER'),
+  "sasl.password"     getenv('KAFKA_PASSWORD')
+);
+
+SELECT * FROM tributary_scan_topic('kafka://prod/orders');
+```
+
+Named parameters passed to the scan override the secret's values. A plain topic name (no `kafka://` prefix) never matches a secret. [`tributary_metadata`](#tributary_metadata) doesn't read secrets; pass its connection options as named parameters.
+
+Without a secret, source credentials from the environment and pass them with [`getvariable`](https://duckdb.org/docs/sql/statements/set_variable):
 
 ```sql
 SET VARIABLE k_user = getenv('KAFKA_USER');
@@ -51,22 +71,44 @@ FROM tributary_scan_topic('orders',
   "bootstrap.servers"  := 'broker.example.com:9093',
   "security.protocol"  := 'SASL_SSL',
   "sasl.mechanism"     := 'SCRAM-SHA-512',
-  "sasl.username"      := :k_user,
-  "sasl.password"      := :k_pass);
+  "sasl.username"      := getvariable('k_user'),
+  "sasl.password"      := getvariable('k_pass'));
 ```
 
-`getenv` runs at parse time, so the literal credential never appears in any cached plan. See [Kafka security: SASL](https://kafka.apache.org/documentation/#security_sasl) and [SSL](https://kafka.apache.org/documentation/#security_ssl) for the upstream guidance on which mechanism fits your cluster.
+See [Kafka security: SASL](https://kafka.apache.org/documentation/#security_sasl) and [SSL](https://kafka.apache.org/documentation/#security_ssl) for the upstream guidance on which mechanism fits your cluster.
 
 ## Scoping the scan
 
-[`tributary_scan_topic`](#tributary_scan_topic) defaults to reading the topic's current contents — fine for a low-volume topic or a one-off snapshot, but expensive on a high-throughput production topic. Three ways to scope:
+[`tributary_scan_topic`](#tributary_scan_topic) always reads everything the topic currently retains — fine for a low-volume topic or a one-off snapshot, but expensive on a high-throughput production topic. There is no offset or time range to pass, and a `WHERE` on `partition` or `offset` is applied after the messages are read, so it narrows the result but not the amount consumed. To keep the cost down:
 
-- **Filter on `partition` / `offset`** in a `WHERE` clause. DuckDB pushes these down so partitions you don't need aren't consumed at all.
-- **Use `auto.offset.reset := 'latest'`** so a fresh consumer group starts at the tail of the topic instead of the head.
-- **Set `enable.auto.commit := 'false'`** for ad-hoc analytics so the read doesn't advance any production consumer-group offsets you might inadvertently share.
+- **Check the size first** with [`tributary_metadata`](#tributary_metadata) — partition counts tell you how wide the scan will be.
+- **Scan once, query many times.** Materialize the topic with `CREATE TABLE ... AS SELECT * FROM tributary_scan_topic(...)` and run the exploratory queries against the local table.
+- **Keep retention in mind.** The scan starts at the oldest retained offset, so a topic's retention settings decide how far back it reaches.
+
+## Schema Registry
+
+Tributary includes a client for a [Confluent-compatible Schema Registry](https://docs.confluent.io/platform/current/schema-registry/index.html). Every function takes the registry URL as its first argument; credentials come from a `tributary_schema_registry` secret whose scope is that URL (`basic_auth_username` + `basic_auth_password`, or `bearer_access_token`):
+
+{/* check: skip needs a Schema Registry */}
+```sql
+CREATE SECRET registry (
+  TYPE tributary_schema_registry,
+  SCOPE 'https://registry.example.com',
+  basic_auth_username 'svc-analytics',
+  basic_auth_password getenv('REGISTRY_PASSWORD')
+);
+
+SELECT * FROM tributary_schema_registry_subjects('https://registry.example.com', false);
+SELECT * FROM tributary_schema_registry_get_schema_latest('https://registry.example.com', 'orders-value');
+```
+
+- **Browse:** [`tributary_schema_registry_subjects`](#tributary_schema_registry_subjects), [`tributary_schema_registry_versions`](#tributary_schema_registry_versions), and the `get_schema_*` lookups by latest version, version number, subject and id, or GUID.
+- **Change:** [`tributary_schema_registry_register_schema`](#tributary_schema_registry_register_schema), [`tributary_schema_registry_delete_subject`](#tributary_schema_registry_delete_subject), [`tributary_schema_registry_delete_subject_version`](#tributary_schema_registry_delete_subject_version).
+- **Decode while scanning:** pass `"schema.registry.url" := '...'` to [`tributary_scan_topic`](#tributary_scan_topic) (or put it in the `tributary_cluster` secret). Tributary looks up the latest schema of the `<topic>-key` and `<topic>-value` subjects; when one is a JSON schema, that column comes back decoded as `JSON` — named `key` and `value` — instead of a `BLOB`. A subject that doesn't exist leaves its column as a `BLOB`. Only JSON schemas are supported: an Avro or Protobuf subject is an error.
+- **Encode:** [`tributary_schema_registry_serialize_json`](#tributary_schema_registry_serialize_json) encodes a JSON value with a JSON schema into the Schema Registry wire format for a topic, as a `BLOB` ready to hand to a producer.
 
 ## Compared to alternatives
 
-- **[Kafka Connect](https://kafka.apache.org/documentation/#connect)** — purpose-built for sustained, structured Kafka↔system pipelines. Reach for that when you need delivery guarantees, schema-registry integration, or recurring sync. Reach for Tributary when you want SQL on demand.
+- **[Kafka Connect](https://kafka.apache.org/documentation/#connect)** — purpose-built for sustained, structured Kafka↔system pipelines. Reach for that when you need delivery guarantees, Avro / Protobuf schema handling, or recurring sync. Reach for Tributary when you want SQL on demand.
 - **[`kcat`](https://github.com/edenhill/kcat) + CSV → DuckDB** — what people often did before this extension. Tributary collapses the file-in-the-middle and lets you push DuckDB predicates back into the consume.
 - **Python `confluent-kafka` + DataFrames** — much heavier setup; you give up DuckDB's vectorized execution against the streamed data and re-introduce row-format conversion at the DataFrame boundary.
