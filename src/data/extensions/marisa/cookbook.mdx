@@ -3,12 +3,12 @@
 [`marisa_trie`](#marisa_trie) is an aggregate — feed it a column of strings, get one `BLOB` back. Build at ingest time, store the BLOB, query forever.
 
 ```sql
-CREATE TABLE employees(name TEXT);
+CREATE OR REPLACE TABLE employees(name TEXT);
 INSERT INTO employees VALUES
   ('Alice'),('Bob'),('Charlie'),('David'),('Eve'),('Frank'),
   ('Mallory'),('Megan'),('Oscar'),('Melissa');
 
-CREATE TABLE employees_trie AS
+CREATE OR REPLACE TABLE employees_trie AS
   SELECT marisa_trie(name) AS trie FROM employees;
 
 SELECT octet_length(trie) AS bytes FROM employees_trie;
@@ -48,10 +48,10 @@ Drop this into the backend of a type-ahead search box: one row, one BLOB, micros
 [`marisa_common_prefix`](#marisa_common_prefix) is the inverse of predictive — every string in the trie that is *itself* a prefix of the search input:
 
 ```sql
-CREATE TABLE country_codes(code TEXT);
+CREATE OR REPLACE TABLE country_codes(code TEXT);
 INSERT INTO country_codes VALUES ('U'), ('US'), ('USA');
 
-CREATE TABLE country_codes_trie AS
+CREATE OR REPLACE TABLE country_codes_trie AS
   SELECT marisa_trie(code) AS trie FROM country_codes;
 
 SELECT marisa_common_prefix(trie, 'USA', 10) AS matches
@@ -67,11 +67,11 @@ The classic MARISA workload — load a wordlist into a trie once, ship the BLOB 
 
 ```sql
 -- Load any newline-delimited wordlist (e.g. /usr/share/dict/words on macOS/Linux)
-CREATE TABLE words AS
+CREATE OR REPLACE TABLE words AS
   SELECT trim(column0) AS word
   FROM read_csv('/usr/share/dict/words', columns := {'column0': 'VARCHAR'});
 
-CREATE TABLE words_trie AS
+CREATE OR REPLACE TABLE words_trie AS
   SELECT marisa_trie(word) AS trie FROM words;
 
 -- Spell-check
@@ -94,7 +94,7 @@ COPY (SELECT trie FROM words_trie)
   TO 'words_trie.parquet' (FORMAT 'parquet');
 
 -- On the other side
-CREATE TABLE words_trie AS
+CREATE OR REPLACE TABLE words_trie AS
   SELECT * FROM 'words_trie.parquet';
 
 SELECT marisa_predictive(trie, 'rou', 5) FROM words_trie;
@@ -107,7 +107,7 @@ Loading is a pointer-walk — no parsing, no decompression. Useful for shipping 
 Materialize one trie per logical partition (day, tenant, region) at write time. The set of tries is tiny compared to the source data and serves all three lookup operations at query time:
 
 ```sql
-CREATE TABLE name_tries AS
+CREATE OR REPLACE TABLE name_tries AS
 SELECT day,
        marisa_trie(name) AS trie
 FROM signups
