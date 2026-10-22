@@ -80,13 +80,12 @@ SELECT lon, lat FROM _a5_cities;
 
 -- ---------------------------------------------------------------------
 -- `indexed` — referenced by cookbook.mdx + technical-details.mdx
--- "roll up" snippets. Those blocks `CREATE TABLE indexed AS SELECT ...`
+-- "roll up" snippets. Those blocks `CREATE OR REPLACE TABLE indexed AS SELECT ...`
 -- and then `SELECT ... FROM indexed`. The validator EXPLAINs each
 -- statement before running it, so the second statement's reference to
 -- `indexed` would fail at parse time. Pre-creating it (with the same
--- shape) makes EXPLAIN happy; the snippet's own CREATE OR REPLACE-style
--- semantics work because the executor uses CREATE TABLE which is fine
--- against a fresh validator session per slug.
+-- shape) makes EXPLAIN happy, and the snippets' CREATE OR REPLACE then
+-- rebuilds it from raw_points.
 -- Columns: lon, lat, cell_15.
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE TABLE indexed AS
