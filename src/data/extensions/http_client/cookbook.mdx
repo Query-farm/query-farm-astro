@@ -2,7 +2,7 @@ import Callout from '../../../components/docs/Callout.astro';
 
 ## Read the response shape
 
-Every `http_*` function returns a [JSON](https://duckdb.org/docs/data/json/overview) object with three fields. Pull them out with [`->>`](https://duckdb.org/docs/data/json/json_functions):
+Every `http_*` function returns a [JSON](https://duckdb.org/docs/data/json/overview) object with three fields — `status`, `reason`, and `body` ([`http_head`](#http_head) returns `headers` in place of `body`). Pull them out with [`->>`](https://duckdb.org/docs/data/json/json_functions):
 
 ```sql
 WITH r AS (
@@ -16,6 +16,8 @@ FROM r;
 ```
 
 To dive into a JSON response body, cast it on the way out: `((res->>'body')::JSON)->>'$.field'`. See [`http_get`](#http_get) for the full signature.
+
+A request that never gets a response — DNS failure, refused connection, TLS error, or no data within the 10-second read timeout — does **not** raise an error. It returns `status` `-1` with the failure in `reason` (for example `HTTP GET request failed. Connection error.`), so check `status` before trusting `body`.
 
 ## GET a JSON API and project a field
 
@@ -156,11 +158,11 @@ FROM r;
 SELECT (http_head('https://httpbin.org/')->>'status')::INT AS status;
 ```
 
-[`http_head`](#http_head) returns the same response metadata as [`http_get`](#http_get) but the server skips the body. Useful for "is this URL reachable?" probes before a heavier `GET`.
+[`http_head`](#http_head) returns the status and reason like [`http_get`](#http_get), plus the response headers (lower-cased names, encoded as a JSON string in `headers`), but the server skips the body. Useful for "is this URL reachable?" probes before a heavier `GET`.
 
 ## Trigger a webhook from a SQL pipeline
 
-End a pipeline by POSTing a summary to a webhook — synchronous, so the webhook either succeeds or the surrounding statement sees the error:
+End a pipeline by POSTing a summary to a webhook. The call is synchronous, but a failed request does not raise an error: check the returned `status` (`-1` means no response arrived) if the pipeline must know the webhook landed:
 
 ```sql
 SET VARIABLE hook = getenv('WEBHOOK_URL');
