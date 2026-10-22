@@ -12,7 +12,7 @@ const GOOD = {
   message: 'We need a DuckDB extension for our engine.',
   page: '/company/contact',
   turnstileToken: 'token',
-  website: '',
+  qf_hp: '',
 };
 
 function post(body) {
@@ -69,7 +69,7 @@ test('a failed Turnstile check is refused before Resend is called', async () => 
 
 test('a filled honeypot gets a quiet success and sends nothing', async () => {
   const { calls, fetchImpl } = stubFetch();
-  const response = await handleEnquiry(post({ ...GOOD, website: 'http://spam.example' }), ENV, fetchImpl);
+  const response = await handleEnquiry(post({ ...GOOD, qf_hp: 'http://spam.example' }), ENV, fetchImpl);
   assert.equal(response.status, 200);
   assert.equal(calls.length, 0);
 });
@@ -99,4 +99,11 @@ test('validation trims fields and leaves company optional', () => {
   assert.equal(result.enquiry.name, 'Ada');
   const email = enquiryEmail(result.enquiry, 'to@query.farm', 'Site <site@query.farm>');
   assert.equal(email.subject, 'Consulting: inquiry from Ada');
+});
+
+test('a field named "website" (browser autofill) does not trip the honeypot', async () => {
+  const { calls, fetchImpl } = stubFetch();
+  const response = await handleEnquiry(post({ ...GOOD, website: 'https://example.com' }), ENV, fetchImpl);
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 2);
 });
