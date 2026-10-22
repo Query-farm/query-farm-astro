@@ -10,12 +10,6 @@ SELECT * FROM (VALUES
   (2, 'b', ST_GeomFromText('POLYGON((2 2,3 2,3 3,2 3,2 2))'))
 ) t(id, name, geom);
 
--- NOTE: raw_data intentionally not created. The tech-details snippets
--- INSERT INTO parcels SELECT id, geom FROM raw_data, but cookbook.mdx
--- runs first and creates `parcels` with 3 columns (id, name, geom),
--- so a 2-column INSERT would fail bind. Leaving raw_data missing
--- preserves the PARSE-SKIP "table fixture missing" verdict.
-
 -- roads(geom) for ST_Length aggregate
 CREATE OR REPLACE TABLE roads AS
 SELECT * FROM (VALUES
