@@ -2,7 +2,7 @@
   "name": "rapidfuzz",
   "displayName": "RapidFuzz",
   "icon": "magnifying-glass",
-  "description": "Fuzzy string matching and edit-distance for DuckDB, powered by the RapidFuzz C++ library. Five ratio variants for record matching plus eight distance/similarity algorithms (Jaro, Jaro-Winkler, Hamming, Indel, Levenshtein/OSA, LCS, prefix/postfix) — every one in distance, similarity, and normalized forms.",
+  "description": "Compare strings and rank candidate matches in DuckDB SQL using RapidFuzz. Find similar names, match reordered words, or calculate edit distances.",
   "githubUrl": "https://github.com/Query-farm/rapidfuzz",
   "cta": {
     "title": "High-Performance Fuzzy Matching",
@@ -16,20 +16,79 @@
   "installSource": "community",
   "quickStart": [
     {
-      "title": "Headline ratio (0–100, like Python rapidfuzz.fuzz.ratio)",
-      "sql": "SELECT rapidfuzz_ratio('hello world', 'helo wrld');  -- 90.0"
-    },
-    {
-      "title": "Match with reordered words",
-      "sql": "SELECT rapidfuzz_token_sort_ratio('world hello', 'hello world');  -- 100.0"
-    },
-    {
-      "title": "Pick best match per row",
-      "sql": "SELECT a.id, b.id,\n       rapidfuzz_ratio(a.name, b.name) AS score\nFROM left_records a, right_records b\nWHERE rapidfuzz_ratio(a.name, b.name) > 85\nORDER BY a.id, score DESC;"
+      "title": "Find the closest name for each record",
+      "description": "Compare two input names with three candidates. Keep the highest-scoring candidate with a score of at least 80 for each input, using the candidate id to break ties.",
+      "sql": "WITH names(id, name) AS (\n  VALUES (1, 'Jon Smith'), (2, 'Jane Doe')\n), candidates(id, name) AS (\n  VALUES (10, 'John Smith'), (11, 'Jane Doe'), (12, 'Jon Smyth')\n)\nSELECT a.name AS input_name, b.name AS matched_name,\n  round(rapidfuzz_ratio(a.name, b.name), 1) AS score\nFROM names a CROSS JOIN candidates b\nWHERE rapidfuzz_ratio(a.name, b.name) >= 80\nQUALIFY row_number() OVER (\n  PARTITION BY a.id\n  ORDER BY rapidfuzz_ratio(a.name, b.name) DESC, b.id\n) = 1\nORDER BY a.id;",
+      "outputTable": {
+        "columns": [
+          {
+            "name": "input_name"
+          },
+          {
+            "name": "matched_name"
+          },
+          {
+            "name": "score"
+          }
+        ],
+        "rows": [
+          [
+            "Jon Smith",
+            "John Smith",
+            94.7
+          ],
+          [
+            "Jane Doe",
+            "Jane Doe",
+            100.0
+          ]
+        ]
+      },
+      "note": "A similarity score identifies a candidate, not a confirmed duplicate. This tiny example compares every pair. For larger tables, [reduce the candidate pairs before scoring](#blocking-strategies). Inputs with no score of at least 80 are omitted."
     }
   ],
   "relatedExtensions": [
     "fuzzycomplete",
     "marisa"
+  ],
+  "entryPage": {
+    "title": "RapidFuzz: Fuzzy String Matching in DuckDB",
+    "seoDescription": "Compare names and find candidate matches in DuckDB SQL with RapidFuzz. Complete examples, similarity scores, algorithm guidance, and function reference.",
+    "testedWith": "DuckDB 1.5.6",
+    "tasks": [
+      {
+        "title": "Choose a similarity function",
+        "description": "Compare ratio, token, and edit-distance functions.",
+        "href": "#pick-the-right-algorithm"
+      },
+      {
+        "title": "Reduce the number of comparisons",
+        "description": "Use blocking rules before joining large datasets.",
+        "href": "#blocking-strategies"
+      },
+      {
+        "title": "Normalize names before matching",
+        "description": "Apply consistent casing and punctuation rules.",
+        "href": "#pre-normalize-once-score-many"
+      },
+      {
+        "title": "Find possible duplicate records",
+        "description": "Compare records within a table and review the candidate pairs.",
+        "href": "#dedupe"
+      }
+    ],
+    "introduction": {
+      "title": "Find candidate matches when text differs",
+      "paragraphs": [
+        "Exact equality misses names with typing errors, changed word order, or small spelling differences. RapidFuzz adds similarity scores and edit distances to DuckDB so you can compare values and rank possible matches in SQL.",
+        "Use it for record linkage, reviewing possible duplicates, or matching input against a known list. A high score is evidence for a candidate, not proof of identity. For large tables, narrow the candidate pairs with a rule such as a shared postcode before scoring them."
+      ]
+    }
+  },
+  "searchTerms": [
+    "fuzzy matching",
+    "name matching",
+    "string similarity",
+    "deduplication record linkage levenshtein"
   ]
 }

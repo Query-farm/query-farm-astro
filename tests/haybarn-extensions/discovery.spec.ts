@@ -81,7 +81,7 @@ test('prototype references render captured options, developer explanations, and 
   await expect(page.locator('#read_gsheet')).not.toContainText('headers');
   await expect(page.locator('#authentication')).toContainText('oauth');
   await expect(page.locator('#write')).toContainText('FORMAT gsheet');
-  await expect(page.locator('button', { hasText: /Run via WASM|Try it in your browser/ })).toHaveCount(0);
+  await expect(page.locator('button', { hasText: /Run example|Try it in your browser/ })).toHaveCount(0);
 });
 
 test('discovery and prototype pages fit a small screen', async ({ page }) => {

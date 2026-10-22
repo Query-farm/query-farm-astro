@@ -2,7 +2,7 @@
   "name": "json_schema",
   "displayName": "JSON Schema",
   "icon": "seal-check",
-  "description": "JSON Schema validation and default-value enrichment in SQL. Validate that JSON columns conform to a schema, lint the schema itself, generate JSON-Patch operations that fill in missing defaults, and apply those defaults in place. Targets JSON Schema draft-07.",
+  "description": "Validate JSON documents against a JSON Schema in DuckDB SQL. Check required fields and value types, or fill in defaults defined by your schema.",
   "githubUrl": "https://github.com/Query-farm/json_schema",
   "cta": {
     "title": "Validate JSON in SQL",
@@ -16,23 +16,75 @@
   "installSource": "community",
   "quickStart": [
     {
-      "title": "Validate a JSON document against a schema",
-      "sql": "SELECT COALESCE(TRY(json_schema_validate(:schema, payload)), false) AS ok\nFROM events;"
-    },
-    {
-      "title": "Verify the schema itself is well-formed",
-      "sql": "SELECT json_schema_validate_schema(:schema) AS schema_ok;"
-    },
-    {
-      "title": "Compute a JSON-Patch that fills in missing defaults",
-      "sql": "SELECT TRY(json_schema_patch(:schema, payload)) AS patch FROM events;"
-    },
-    {
-      "title": "Or apply the defaults inline",
-      "sql": "SELECT TRY(json_schema_update(:schema, payload)) AS enriched FROM events;"
+      "title": "Check two JSON documents",
+      "description": "The schema requires an integer id. The first document passes; the second has a string where an integer is required. All sample data is included.",
+      "sql": "WITH schema AS (\n  SELECT '{\n    \"type\": \"object\",\n    \"properties\": {\"id\": {\"type\": \"integer\"}},\n    \"required\": [\"id\"]\n  }'::JSON AS definition\n), events(row_num, payload) AS (\n  VALUES\n    (1, '{\"id\": 42}'::JSON),\n    (2, '{\"id\": \"oops\"}'::JSON)\n)\nSELECT row_num, payload,\n  COALESCE(\n    TRY(json_schema_validate(definition, payload)), false\n  ) AS valid\nFROM events CROSS JOIN schema\nORDER BY row_num;",
+      "outputTable": {
+        "columns": [
+          {
+            "name": "row_num"
+          },
+          {
+            "name": "payload"
+          },
+          {
+            "name": "valid"
+          }
+        ],
+        "rows": [
+          [
+            1,
+            "{\"id\":42}",
+            true
+          ],
+          [
+            2,
+            "{\"id\":\"oops\"}",
+            false
+          ]
+        ]
+      },
+      "note": "Validation raises an error for a nonconforming document. `TRY` turns that error into `NULL`; `COALESCE` makes the result `false`. Validate a schema separately before using this pattern with your own data, because `TRY` also catches errors in the schema. The validator targets JSON Schema draft-07."
     }
   ],
   "relatedExtensions": [
     "jsonata"
+  ],
+  "entryPage": {
+    "title": "JSON Schema: Validate JSON in DuckDB",
+    "seoDescription": "Validate JSON against a schema in DuckDB SQL. Runnable examples for required fields, invalid rows, and default values, with a function reference.",
+    "testedWith": "DuckDB 1.5.6",
+    "tasks": [
+      {
+        "title": "Check the schema itself",
+        "description": "Catch schema errors before validating a batch of documents.",
+        "href": "#lint-the-schema-before-deploying"
+      },
+      {
+        "title": "Validate a JSON column",
+        "description": "Count valid and invalid documents in an existing table.",
+        "href": "#validate-a-column"
+      },
+      {
+        "title": "Apply default values",
+        "description": "Fill missing fields using defaults declared in the schema.",
+        "href": "#apply-defaults-inline"
+      },
+      {
+        "title": "Read JSON files into DuckDB",
+        "description": "See how JSON loading and schema validation fit together.",
+        "href": "#pairs-with-duckdbs-json-support"
+      }
+    ],
+    "introduction": {
+      "title": "Check that JSON documents follow an agreed structure",
+      "paragraphs": [
+        "A JSON Schema describes a document’s expected fields, types, and constraints. DuckDB can read JSON with different shapes; this extension adds an explicit check against the contract you choose.",
+        "Use it to check API payloads or incoming records before further processing. The validator targets JSON Schema draft-07 and can apply schema-defined defaults. Validation errors normally stop the query; the example shows how to turn invalid documents into a boolean result after checking the schema itself."
+      ]
+    }
+  },
+  "searchTerms": [
+    "json validation validate schema required fields defaults"
   ]
 }

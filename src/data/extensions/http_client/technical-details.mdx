@@ -1,26 +1,14 @@
 import Callout from '../../../components/docs/Callout.astro';
 
-## What you can do with one query
+## Response handling
 
-The shortest path from "REST API" to "DuckDB row":
+Each request returns a JSON object with `status`, `reason`, and `body`. The body is a string: cast it to `JSON` before extracting fields from a JSON response. Check the status first, because an error response may have a different shape from a successful response.
 
-```sql
-SELECT ((http_get('https://api.github.com/repos/duckdb/duckdb')->>'body')::JSON)->>'$.stargazers_count' AS stars;
-```
-
-[`http_get`](#http_get) issues a synchronous [HTTP `GET`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods/GET), returns the response as a JSON object with `status` / `reason` / `body`, and lets you cast and chain [`->>`](https://duckdb.org/docs/data/json/json_functions) right where you need the field. No Python wrapper, no `curl` in the middle, no temp file.
-
-<Callout type="note" title="Best fit, scoped honestly">
-This extension is for **ad-hoc API calls and low-volume per-row enrichment** from inside SQL. It supports [`GET`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods/GET), [`POST`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods/POST) (JSON or [form-encoded](https://datatracker.ietf.org/doc/html/rfc1866)), and [`HEAD`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods/HEAD) — no `PUT` / `PATCH` / `DELETE` in the documented surface.
-
-Calls are **synchronous**: DuckDB blocks until the response arrives. There is **no retry, no backoff, no streaming, no per-row timeout knob** (the read timeout is fixed at 10 seconds) — the entire response body is buffered into memory. One HTTP request per input row, sequentially. For high-throughput integrations or streaming responses, keep a real HTTP client. For curl-only features (cookies, custom TLS, complex auth), use [shellfs](/products/extensions/shellfs) instead.
-
-Status is **experimental** — pin a known-good extension version in any pipeline that depends on it.
-</Callout>
+Requests are synchronous and the full response is buffered in memory. Use this extension for small responses and limited numbers of requests. Retries, backoff, and request scheduling belong in the calling application when needed.
 
 ## Architecture
 
-The extension is a thin SQL surface over a synchronous HTTP request. There is no `ATTACH`, no secrets type, no connection pool, no background fetcher — just four scalar functions:
+The extension is a thin SQL surface over a synchronous HTTP request. There is no `ATTACH`, no secrets type, no connection pool, no background fetcher — a small set of HTTP functions:
 
 - [`http_get(url)`](#http_get) — `GET` request. A second form, `http_get(url, headers, params)`, sends request headers and appends the `params` [`MAP`](https://duckdb.org/docs/sql/data_types/map) to the URL as a query string.
 - [`http_post(url, headers, params)`](#http_post) — `POST` with `params` (a `JSON` value; a `MAP` is converted to a JSON object) sent as the `application/json` body.

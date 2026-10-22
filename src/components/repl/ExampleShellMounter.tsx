@@ -21,7 +21,7 @@ const HIDE_ICON =
   '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
 const TRY_LABEL = `<span class="example-try-icon">${PLAY_ICON}</span><span>Try it in your browser</span>`;
 const HIDE_LABEL = `<span class="example-try-icon">${HIDE_ICON}</span><span>Hide</span>`;
-const RUN_ICON_LABEL = `<span class="example-toolbar-icon">${PLAY_ICON}</span><span>Run via WASM</span>`;
+const RUN_ICON_LABEL = `<span class="example-toolbar-icon">${PLAY_ICON}</span><span>Run example</span>`;
 const CLOSE_ICON_LABEL = `<span class="example-toolbar-icon">${HIDE_ICON}</span><span>Hide</span>`;
 
 const STYLE = `
@@ -425,8 +425,8 @@ export default function ExampleShellMounter({
         let runBar: HTMLElement | null = null;
         if (controls === "toolbar") {
           btn.className = "code-toolbar-button example-toolbar-run-button";
-          btn.setAttribute("aria-label", "Run this example via WebAssembly");
-          btn.title = "Run via WASM";
+          btn.setAttribute("aria-label", "Run example in your browser");
+          btn.title = "Run example";
           btn.innerHTML = RUN_ICON_LABEL;
           bar.appendChild(btn);
         } else {
@@ -450,8 +450,8 @@ export default function ExampleShellMounter({
           btn.innerHTML = controls === "toolbar" ? RUN_ICON_LABEL : TRY_LABEL;
           btn.setAttribute("aria-expanded", "false");
           if (controls === "toolbar") {
-            btn.setAttribute("aria-label", "Run this example via WebAssembly");
-            btn.title = "Run via WASM";
+            btn.setAttribute("aria-label", "Run example in your browser");
+            btn.title = "Run example";
           }
           setShells((prev) => prev.filter((s) => s.id !== id));
           container.remove();

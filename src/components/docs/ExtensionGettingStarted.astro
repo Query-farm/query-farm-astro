@@ -1,0 +1,98 @@
+---
+import type { ExtensionMetadata } from '../../data/extension-types';
+import CodeBlock from '../ui/CodeBlock.astro';
+import CodeTabs from '../ui/CodeTabs.astro';
+import { queryFarmInstallSql, queryFarmLoadSql } from '../../data/query-farm-repository';
+import ExtensionSection from './ExtensionSection.astro';
+import QueryResult from './QueryResult.astro';
+import { parseInline } from 'marked';
+
+interface Props {
+  metadata: ExtensionMetadata;
+  installSql: string;
+  wasmSupported: boolean;
+  repositoryName?: string;
+}
+const { metadata, installSql, wasmSupported, repositoryName } = Astro.props;
+const entry = metadata.entryPage!;
+const examples = Array.isArray(metadata.quickStart) ? metadata.quickStart : [];
+---
+
+{entry.introduction && (
+  <ExtensionSection id="overview">
+    <h2 class="mb-4 text-2xl text-soil-900 sm:text-3xl">{entry.introduction.title}</h2>
+    <div class="entry-note max-w-[70ch] space-y-4 text-soil-700 leading-relaxed">
+      {entry.introduction.paragraphs.map(paragraph => <p set:html={parseInline(paragraph)} />)}
+    </div>
+  </ExtensionSection>
+)}
+
+<ExtensionSection id="quick-start">
+  {examples.map((example, index) => (
+    <div id={index === 0 && !entry.introduction ? 'overview' : undefined} data-entry-example-panel class:list={['scroll-mt-28 rounded-xl border border-soil-300 bg-white p-5 sm:p-6', index > 0 && 'mt-10']}>
+      <p class="qf-eyebrow mb-3 text-sun-700">Example</p>
+      <h2 class="mb-3 text-[clamp(1.55rem,3.4vw,2.5rem)] text-soil-900">{example.title}</h2>
+      {example.description && <p class="mb-5 max-w-[70ch] text-soil-700">{example.description}</p>}
+      {example.requirements && <p class="entry-note mb-4 max-w-[70ch] border-l-2 border-sun-400 pl-4 text-sm leading-relaxed text-soil-700"><strong>Before you run it: </strong><span set:html={parseInline(example.requirements)} /></p>}
+      <p class="mb-4 text-[13px] text-soil-600">
+        {entry.testedWith && <>Tested with <span class="font-sans tabular-nums">{entry.testedWith}</span>.{' '}</>}
+        {wasmSupported && example.browserRunnable !== false ? 'Browser examples use Haybarn-Wasm 1.5.6.' : 'Run this example in the DuckDB CLI or a native client.'}
+      </p>
+      <div id={index === 0 ? 'quick-install' : undefined} class="scroll-mt-36" data-entry-example>
+        {repositoryName ? (
+          <CodeTabs
+            group="duckdb-version"
+            ariaLabel="Choose the example's DuckDB version"
+            variant="underline"
+            tabs={[
+              {
+                id: 'v1.5',
+                label: wasmSupported && example.browserRunnable !== false ? 'Browser / DuckDB 1.5' : 'DuckDB 1.5',
+                icon: 'simple-icons:duckdb',
+                lang: 'sql',
+                code: `${installSql}\n\n${example.sql}`,
+                tryable: wasmSupported && example.browserRunnable !== false,
+              },
+              {
+                id: 'v2.0',
+                label: 'DuckDB 2.0',
+                icon: 'simple-icons:duckdb',
+                lang: 'sql',
+                code: `${queryFarmInstallSql(repositoryName)}\n${queryFarmLoadSql(repositoryName)}\n\n${example.sql}`,
+                tryable: false,
+              },
+            ]}
+          />
+        ) : (
+          <CodeBlock code={`${installSql}\n\n${example.sql}`} lang="sql" tryable={wasmSupported && example.browserRunnable !== false} />
+        )}
+      </div>
+      {example.outputTable && (
+        <div role="region" aria-label={`Expected result: ${example.title}`}>
+          <QueryResult columns={example.outputTable.columns} rows={example.outputTable.rows} label="Expected result" />
+        </div>
+      )}
+      {example.note && <p class="entry-note mt-4 max-w-[70ch] text-sm leading-relaxed text-soil-700" set:html={parseInline(example.note)} />}
+    </div>
+  ))}
+</ExtensionSection>
+
+<ExtensionSection id="common-tasks">
+  <h2 class="mb-5 text-[clamp(1.55rem,3.4vw,2.5rem)] text-soil-900">Common tasks</h2>
+  <ul class="divide-y divide-soil-300 border-y border-soil-300">
+    {entry.tasks.map(task => (
+      <li>
+        <a href={task.href} class="group grid gap-1 rounded-sm py-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-link sm:grid-cols-[minmax(0,1fr)_auto]">
+          <span class="font-medium text-link underline decoration-link/40 underline-offset-4 group-hover:decoration-link">{task.title}</span>
+          <span class="max-w-[68ch] text-sm leading-relaxed text-soil-700 sm:col-start-1">{task.description}</span>
+          <span class="hidden text-link sm:col-start-2 sm:row-start-1 sm:block" aria-hidden="true">→</span>
+        </a>
+      </li>
+    ))}
+  </ul>
+</ExtensionSection>
+
+<style>
+  .entry-note :global(a) { color: var(--color-link); text-decoration: underline; text-underline-offset: 3px; }
+  .entry-note :global(code) { font-size: .9em; overflow-wrap: anywhere; }
+</style>

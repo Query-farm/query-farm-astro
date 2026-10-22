@@ -1,30 +1,8 @@
 import Callout from '../../../components/docs/Callout.astro';
 
-## What you can do with one query
+## Comparing records
 
-The magic moment — dedup a messy customer table without leaving SQL:
-
-```sql
-CREATE TABLE customer_dupes AS
-SELECT a.id AS left_id,
-       b.id AS right_id,
-       rapidfuzz_token_set_ratio(a.name, b.name) AS score
-FROM customers a
-JOIN customers b
-  ON a.id < b.id
- AND length(a.name) BETWEEN length(b.name) - 3 AND length(b.name) + 3
- AND lower(left(a.name, 1)) = lower(left(b.name, 1))
-WHERE rapidfuzz_token_set_ratio(a.name, b.name) > 88
-ORDER BY score DESC;
-```
-
-Two predicates do the heavy lifting before any string comparison runs: a length-bucket filter and a same-first-letter filter. Only pairs that pass both get scored by [`rapidfuzz_token_set_ratio`](#rapidfuzz_token_set_ratio). That's blocking — and it's what makes fuzzy matching tractable at scale.
-
-<Callout type="note" title="Be honest about cost">
-Every individual call is fast — the algorithms are vectorized C++ kernels from the upstream [RapidFuzz](https://github.com/maxbachmann/RapidFuzz) library. Pairwise self-joins, on the other hand, are **O(n²)**: 100k rows comparing against themselves is 10 billion candidate pairs. Without a blocking strategy that prunes the pair space first, fuzzy matching does not scale past a few tens of thousands of rows.
-
-This page treats blocking as a first-class concern, not an afterthought.
-</Callout>
+A similarity score helps identify records to review. It does not establish that two records refer to the same person or company. Choose a threshold using examples from your own data, and check both false matches and missed matches.
 
 ## Architecture
 
@@ -53,19 +31,19 @@ For cross-pair comparisons where strings differ in length, prefer the `_normaliz
 
 ## Blocking strategies
 
-The whole game on real datasets is reducing the candidate-pair space before scoring. A few patterns that compose cleanly:
+A cross join of two tables with 100,000 rows produces 10 billion candidate pairs. Restrict those pairs before scoring. Each restriction trades fewer comparisons for a risk of missing a match:
 
 **Length bucket.** Two strings that differ in length by more than `k` characters can't have a Levenshtein distance ≤ `k`. Filter on `length(a) BETWEEN length(b) - k AND length(b) + k`.
 
 **First-letter (or first-N) prefix.** Cheap join key. Misses pairs where the first letter is itself the typo (rare for names, common for OCR'd text).
 
-**Length + first-letter combined.** What the lead snippet uses; usually enough to make a 100k × 100k join finish in seconds.
+**Length + first-letter combined.** Combine both rules when they fit your data. Measure the remaining candidate count before running the full join.
 
 **Phonetic prefix (soundex / metaphone).** When typos are phonetic ("Smyth" vs "Smith"). DuckDB's built-in [`fuzzy`](https://duckdb.org/docs/extensions/fuzzy.html) extension supplies the codes; group by code and only score within a group.
 
 **Token-based blocking.** For multi-word strings, require at least one token in common (e.g. via a normalized array intersection). Excellent for company names where the legal suffix differs but the brand word is shared.
 
-Compose blocking with the actual scoring step in a single SQL pass — the planner pushes the cheap predicates ahead of the expensive ratio call automatically.
+Put the candidate restrictions in the join condition and inspect the query plan when performance matters.
 
 ## Pre-normalize once, score many
 
@@ -74,7 +52,7 @@ Hoist deterministic transformations out of the join so they run `O(n)` instead o
 ```sql
 WITH normalized AS (
   SELECT id,
-         lower(regexp_replace(name, '[^a-z0-9 ]', '', 'g')) AS name_n,
+         regexp_replace(lower(name), '[^a-z0-9 ]', '', 'g') AS name_n,
          length(name) AS len,
          left(lower(name), 1)              AS block_letter
   FROM customers
@@ -105,7 +83,7 @@ JOIN right_records b
 WHERE rapidfuzz_jaro_winkler_normalized_similarity(a.name, b.name) > 0.92
 QUALIFY ROW_NUMBER() OVER (
   PARTITION BY a.id
-  ORDER BY rapidfuzz_jaro_winkler_normalized_similarity(a.name, b.name) DESC
+  ORDER BY rapidfuzz_jaro_winkler_normalized_similarity(a.name, b.name) DESC, b.id
 ) = 1;
 ```
 

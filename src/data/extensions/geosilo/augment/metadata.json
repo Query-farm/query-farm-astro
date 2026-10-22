@@ -2,7 +2,7 @@
   "name": "geosilo",
   "displayName": "GeoSilo",
   "icon": "map-trifold",
-  "description": "Compact geometry storage for DuckDB. A first-class GEOSILO column type that delta-encodes coordinates as scaled integers and pairs with ZSTD for ~21% smaller geometry storage than DuckDB's GEOMETRY (and ~70% smaller raw blobs against WKB). Native ST_* overloads for bounding-box, area, length, and introspection skip the WKB decode entirely.",
+  "description": "Store compact geometry values with the GEOSILO type in DuckDB. Encode coordinates on insert and query them with geometry functions.",
   "githubUrl": "https://github.com/query-farm/geosilo",
   "cta": {
     "title": "Compact geometry, native fast paths",
@@ -16,12 +16,67 @@
   "installSource": "community",
   "quickStart": [
     {
-      "title": "A GEOSILO column with ZSTD — create, load from a GEOMETRY source, query with ST_*",
-      "sql": "-- A GEOSILO column with ZSTD — the recommended setup\nCREATE OR REPLACE TABLE parcels (\n  id    INTEGER,\n  name  VARCHAR,\n  geom  GEOSILO('EPSG:4326') USING COMPRESSION zstd\n);\n\n-- Insert from any GEOMETRY source — implicit cast auto-encodes\nINSERT INTO parcels SELECT id, name, geom FROM raw_parcels;\n\n-- ST_* runs directly on the GEOSILO column; native overloads skip the decode\nSELECT id, ST_Area(geom), ST_X(ST_Centroid(geom)) FROM parcels;"
+      "title": "Store and read a point",
+      "description": "Load GeoSilo before spatial for compatibility with older builds. The sample supplies its own geometry and uses a temporary table.",
+      "sql": "INSTALL spatial;\nLOAD spatial;\n\nCREATE OR REPLACE TEMP TABLE qf_points (\n  id INTEGER,\n  geom GEOSILO('EPSG:4326')\n);\nINSERT INTO qf_points VALUES (1, ST_Point(-74.0060, 40.7128));\nSELECT id, ST_X(geom) AS longitude, ST_Y(geom) AS latitude\nFROM qf_points;",
+      "note": "For persistent tables, see the compression and coordinate-scale guidance. The temporary table above demonstrates the type; it does not measure storage savings.",
+      "outputTable": {
+        "columns": [
+          {
+            "name": "id"
+          },
+          {
+            "name": "longitude"
+          },
+          {
+            "name": "latitude"
+          }
+        ],
+        "rows": [
+          [
+            1,
+            -74.006,
+            40.7128
+          ]
+        ]
+      }
     }
   ],
   "relatedExtensions": [
     "a5",
     "lindel"
+  ],
+  "entryPage": {
+    "title": "GeoSilo: Compact Geometry Storage in DuckDB",
+    "seoDescription": "Store compact geometry values with the GEOSILO type in DuckDB. Encode coordinates on insert and query them with geometry functions.",
+    "tasks": [
+      {
+        "title": "Create a compressed geometry table",
+        "description": "Declare a CRS and ZSTD compression.",
+        "href": "#define-a-compact-geometry-table"
+      },
+      {
+        "title": "Load an existing geometry column",
+        "description": "Insert values from GEOMETRY sources.",
+        "href": "#load-from-any-geometry-source"
+      },
+      {
+        "title": "Filter by a bounding box",
+        "description": "Use native coordinate bounds before geometry operations.",
+        "href": "#native-bounding-box-prefilter"
+      }
+    ],
+    "testedWith": "DuckDB 1.5.6",
+    "introduction": {
+      "title": "Store geometry with controlled coordinate precision",
+      "paragraphs": [
+        "GeoSilo adds a compact geometry type that stores scaled integer coordinates and the differences between nearby vertices. You choose the coordinate scale, which determines the precision retained by the encoding.",
+        "Use it when storing large geometry datasets and controlling their size matters. The extension supplies native operations for its GEOSILO values and converts to GEOMETRY for other spatial operations. Check the precision and resulting storage size on your own data before adopting the format."
+      ]
+    }
+  },
+  "searchTerms": [
+    "geospatial geometry compression compact storage",
+    "wkt wkb spatial"
   ]
 }

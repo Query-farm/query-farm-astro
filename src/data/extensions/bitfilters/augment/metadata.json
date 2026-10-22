@@ -2,7 +2,7 @@
   "name": "bitfilters",
   "displayName": "Bitfilters",
   "icon": "funnel",
-  "description": "Probabilistic set-membership filters as DuckDB columns. Quotient, XOR (8/16-bit), Binary Fuse (8/16-bit), and DuckDB-style Bloom filters — answer 'is X in this set?' in O(1) using a fraction of the memory of the source set, with tunable false-positive rates and zero false negatives.",
+  "description": "Build probabilistic membership filters in DuckDB. Use compact filters to reject keys that are absent before checking possible matches against the original data.",
   "githubUrl": "https://github.com/Query-farm/bitfilters",
   "cta": {
     "title": "Skip Expensive Operations Probabilistically",
@@ -16,15 +16,60 @@
   "installSource": "community",
   "quickStart": [
     {
-      "title": "Build an xor8 filter from hashed keys",
-      "sql": "-- 1% false-positive rate, ~9 bits per key\nWITH f AS (\n  SELECT xor8_filter(hash(email)) AS filter FROM users\n)\nSELECT email,\n       xor8_filter_contains(f.filter, hash(email)) AS might_be_known\nFROM new_signups, f\nLIMIT 10;"
-    },
-    {
-      "title": "Per-partition Quotient filter — supports deletion and resize",
-      "sql": "SELECT bucket,\n       quotient_filter(16, 4, hash(id)) AS filter\nFROM ids\nGROUP BY bucket;"
+      "title": "Test whether a key might be present",
+      "description": "Build an XOR filter from three IDs and test one of the IDs that went into it.",
+      "sql": "WITH known_ids(id) AS (VALUES (101), (102), (103)),\nfilters AS (\n  SELECT xor8_filter(hash(id)) AS filter FROM known_ids\n)\nSELECT xor8_filter_contains(filter, hash(102)) AS might_contain_102\nFROM filters;",
+      "note": "A positive result means “might be present.” Filters can return false positives, so confirm matches against the original set. Hash build and lookup values consistently.",
+      "outputTable": {
+        "columns": [
+          {
+            "name": "might_contain_102"
+          }
+        ],
+        "rows": [
+          [
+            true
+          ]
+        ]
+      }
     }
   ],
   "relatedExtensions": [
     "hashfuncs"
+  ],
+  "entryPage": {
+    "title": "Bitfilters: Membership Filters in DuckDB",
+    "seoDescription": "Build probabilistic membership filters in DuckDB. Use compact filters to reject keys that are absent before checking possible matches against the original data.",
+    "tasks": [
+      {
+        "title": "Choose a filter family",
+        "description": "Compare XOR, binary fuse, Bloom, and quotient filters.",
+        "href": "#pick-the-right-filter"
+      },
+      {
+        "title": "Reduce an expensive join",
+        "description": "Reject absent keys before the full join.",
+        "href": "#pre-filter-an-expensive-join"
+      },
+      {
+        "title": "Store a filter for each partition",
+        "description": "Skip partitions that cannot contain a key.",
+        "href": "#per-partition-data-skipping"
+      }
+    ],
+    "testedWith": "DuckDB 1.5.6",
+    "introduction": {
+      "title": "Rule out keys before doing expensive work",
+      "paragraphs": [
+        "A membership filter is a compact summary of a set. It can tell you that a value is definitely absent or might be present. Bitfilters builds these summaries from SQL columns and stores them as BLOBs that you can save and query later.",
+        "Use a filter to skip irrelevant partitions or reduce the rows sent into an expensive join. A possible match still needs an exact check because filters can produce false positives. The extension offers several filter families with different memory and update trade-offs."
+      ]
+    }
+  },
+  "searchTerms": [
+    "bloom filter xor binary fuse quotient",
+    "membership test",
+    "probabilistic set",
+    "join prefilter"
   ]
 }

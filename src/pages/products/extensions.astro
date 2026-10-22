@@ -11,10 +11,10 @@ import { usageSummary } from '../../data/usage-summary';
 interface SubBucket { title?: string; slugs: string[] }
 interface Bucket {
   id: string;
-  /** Long form, used for the section blurb and the pill's title attribute. */
+  /** Task heading and accessible navigation label. */
   title: string;
-  /** Short form for the filter pill. */
-  pill: string;
+  /** Short form for task navigation. */
+  label: string;
   blurb: string;
   subs: SubBucket[];
 }
@@ -22,9 +22,9 @@ interface Bucket {
 // The intent taxonomy. It is curated, not derived: it says what a reader is
 // trying to *do*, which the per-extension `category` field does not. The
 // coverage check below fails the build if an extension is added without being
-// placed here, so the pills can never silently under-report the catalog.
+// placed here, so task navigation always covers the catalog.
 const TAXONOMY: Bucket[] = [
-  { id:'connect', pill:'Connectors',
+  { id:'connect', label:'Connectors',
     title:'Connect to external systems',
     blurb:'Read from, write to, or stand alongside another system.',
     subs: [
@@ -32,11 +32,11 @@ const TAXONOMY: Bucket[] = [
       { title:'Messaging & streams', slugs:['tributary','radio'] },
       { title:'HTTP & shell',        slugs:['http_client','httpserver','shellfs'] },
     ]},
-  { id:'json', pill:'JSON',
+  { id:'json', label:'JSON',
     title:'Work with JSON',
     blurb:'Query, reshape, and validate JSON columns.',
     subs: [{ slugs:['jsonata','json_schema'] }]},
-  { id:'text', pill:'Text & IDs',
+  { id:'text', label:'Text & IDs',
     title:'Work with text & identifiers',
     blurb:'Hash, match, transform strings, and mint stable IDs.',
     subs: [
@@ -44,7 +44,7 @@ const TAXONOMY: Bucket[] = [
       { title:'Matching & casing', slugs:['rapidfuzz','inflector'] },
       { title:'Identifiers',       slugs:['tsid'] },
     ]},
-  { id:'analytics', pill:'Analytics',
+  { id:'analytics', label:'Analytics',
     title:'Make analytics approximate or fast',
     blurb:'Sketches, probabilistic filters, distributions, and lookup indices.',
     subs: [
@@ -52,11 +52,11 @@ const TAXONOMY: Bucket[] = [
       { title:'Distributions', slugs:['stochastic'] },
       { title:'Indexing',      slugs:['marisa'] },
     ]},
-  { id:'geo', pill:'Geospatial',
+  { id:'geo', label:'Geospatial',
     title:'Index or compress geospatial data',
     blurb:'Pentagonal cell indexes, compact geometry, space-filling curves.',
     subs: [{ slugs:['a5','geosilo','lindel'] }]},
-  { id:'render', pill:'Scripting',
+  { id:'render', label:'Scripting',
     title:'Render or execute code from rows',
     blurb:'Templates, scripting engines, URL-loaded macros.',
     subs: [
@@ -64,11 +64,11 @@ const TAXONOMY: Bucket[] = [
       { title:'Scripting',       slugs:['quickjs','evalexpr_rhai'] },
       { title:'Macros from URL', slugs:['webmacro'] },
     ]},
-  { id:'operate', pill:'Operations',
+  { id:'operate', label:'Operations',
     title:'Operate your DuckDB process',
     blurb:'Schedule queries; capture and forward events.',
     subs: [{ slugs:['cronjob','events'] }]},
-  { id:'ergonomics', pill:'Ergonomics',
+  { id:'ergonomics', label:'Ergonomics',
     title:'SQL ergonomics',
     blurb:'Make the CLI nicer, make output prettier.',
     subs: [{ slugs:['textplot','fuzzycomplete'] }]},
@@ -91,7 +91,7 @@ if (missingFromTaxonomy.length || slugsNotFound.length) {
   );
 }
 
-// slug → bucket, for the pill filter and the table's category column.
+// Include task vocabulary in the search index.
 const bucketOf: Record<string, Bucket> = {};
 for (const bucket of TAXONOMY) {
   for (const sub of bucket.subs) {
@@ -141,7 +141,7 @@ const maxUsageCount = publicExtensions.reduce(
 );
 
 const searchKey = (e: (typeof publicExtensions)[number]) =>
-  `${e.name} ${e.id} ${e.description} ${bucketOf[e.id]?.pill ?? ''} ${bucketOf[e.id]?.title ?? ''}`.toLowerCase();
+  `${e.name} ${e.id} ${e.description} ${bucketOf[e.id]?.label ?? ''} ${bucketOf[e.id]?.title ?? ''} ${(e.searchTerms ?? []).join(' ')}`.toLowerCase();
 
 const faqItems = [
   {
@@ -215,8 +215,8 @@ LOAD airport FROM query_farm;`;
 ---
 
 <PageLayout
-  title="DuckDB Extensions — Browse by What You Need"
-  description={`Browse ${totalExtensions} DuckDB extensions from Query.Farm — for JSON, geospatial, text, crypto, streaming and more. Signed builds for DuckDB 2.0 from the Query.Farm extension repository.`}
+  title="DuckDB Extensions by Task — JSON, APIs, Text and More"
+  description={`Find DuckDB extensions for APIs, JSON validation, fuzzy matching, geospatial data, and more. Browse ${totalExtensions} extensions with SQL examples and documentation.`}
   ogImage="/og/extensions.jpg"
   jsonLd={jsonLd}
 >
@@ -227,85 +227,138 @@ LOAD airport FROM query_farm;`;
     ]}
   />
 
-  <div class="mx-auto w-full max-w-[1360px] px-5 sm:px-7">
-    <!-- What an extension is / how to install one -->
-    <div class="grid gap-10 pt-12 lg:grid-cols-[minmax(0,1fr)_420px]">
-      <div>
-        <p class="qf-eyebrow text-sun-700">What is a DuckDB extension?</p>
-        <h1 class="mt-3 font-display text-4xl text-soil-900 md:text-5xl">Where DuckDB ends, extensions begin.</h1>
-        <p class="mt-4 max-w-[62ch] text-soil-700">
-          An extension is native code that loads inside DuckDB and runs as part of it — the fastest way
-          to add features DuckDB doesn't ship with, with no separate service to run. It is also the right
-          home for capabilities too specialized to land in DuckDB itself but that data engineers,
-          analysts, and scientists need anyway.
-        </p>
-        <p class="mt-4 max-w-[62ch] text-soil-700">
-          Query.Farm is one of the foremost builders of them. We ship and maintain dozens, available both
-          through DuckDB's community extension channel and through
-          <a href="/products/haybarn" class="text-link underline decoration-link/45 underline-offset-2 hover:decoration-link">Haybarn</a>,
-          Query.Farm's own distribution of DuckDB.
-        </p>
+  <header class="mx-auto w-full max-w-[1360px] px-5 pt-9 pb-7 sm:px-7">
+    <p class="qf-eyebrow text-sun-700">Query.Farm extensions</p>
+    <h1 class="mt-3 font-display text-4xl text-soil-900 md:text-5xl">DuckDB extensions by task</h1>
+    <p class="mt-3 max-w-[68ch] text-lg text-soil-700">
+      Find extensions for APIs, JSON, text, analytics, and more. Each has installation instructions and SQL examples.
+    </p>
 
-        <dl class="mt-8 grid gap-6 sm:grid-cols-3">
-          <div>
-            <dt class="font-display text-lg text-soil-900">Runs inside DuckDB</dt>
-            <dd class="mt-1.5 text-sm text-soil-700">
-              Native code alongside your query — no network round-trip, no separate service, no added latency.
-            </dd>
-          </div>
-          <div>
-            <dt class="font-display text-lg text-soil-900">Fills the gaps</dt>
-            <dd class="mt-1.5 text-sm text-soil-700">
-              When a capability is too niche for DuckDB itself, an extension delivers it without bending
-              your pipeline around the gap.
-            </dd>
-          </div>
-          <div>
-            <dt class="font-display text-lg text-soil-900">Expert-built</dt>
-            <dd class="mt-1.5 text-sm text-soil-700">
-              Each one is built and maintained by Query.Farm, signed and published to the community channel.
-            </dd>
-          </div>
-        </dl>
-
-        <div class="mt-9 rounded-2xl border border-soil-300/70 bg-white/70 p-6 sm:p-7">
-          <p class="qf-eyebrow text-sun-700">Not in the catalog?</p>
-          <p class="mt-2 font-display text-2xl text-soil-900">
-            Need something that doesn't exist yet? We can build it.
-          </p>
-          <p class="mt-3 max-w-[56ch] text-soil-700">
-            From a single scalar function to a full catalog integration — built, signed, and published
-            under a licence you choose, in a repo you own.
-          </p>
-          <div class="mt-5">
-            <Button variant="primary" href="/consulting">Commission a custom extension →</Button>
-          </div>
-        </div>
+    <form role="search" aria-label="Find an extension" id="extension-search" class="mt-7 max-w-[760px]">
+      <label for="ext-filter" class="mb-2 block font-medium text-soil-900">Search extensions</label>
+      <div class="flex min-h-14 items-center gap-3 rounded-lg border border-soil-500 bg-white px-4 shadow-sm focus-within:border-link focus-within:ring-2 focus-within:ring-link/25">
+        <svg class="h-5 w-5 shrink-0 text-soil-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg>
+        <input
+          id="ext-filter" name="q" type="search" autocomplete="off"
+          aria-controls="ext-buckets" aria-describedby="ext-search-help ext-filter-status"
+          placeholder="Name or task, e.g. JSON validation"
+          class="min-w-0 flex-1 border-0 bg-transparent py-3.5 text-base text-soil-900 placeholder:text-soil-500 focus:outline-none"
+        />
+        <button id="ext-clear" type="button" hidden aria-label="Clear extension search" class="min-h-11 shrink-0 rounded px-2 text-sm text-link underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-link">Clear</button>
       </div>
+      <p id="ext-search-help" class="mt-2 text-sm text-soil-600">Search all {totalExtensions} extensions by name or what you want to do.</p>
+      <p id="ext-filter-status" class="mt-2 text-sm font-medium text-soil-700" role="status" aria-live="polite" aria-atomic="true">Showing all {totalExtensions} extensions</p>
+    </form>
 
+    <nav aria-label="Browse extensions by task" class="mt-6 hidden sm:block">
+      <p class="mb-2 text-sm font-medium text-soil-700">Browse by task</p>
+      <ul class="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+        {bucketCounts.map(bucket => <li><a class="task-jump inline-block rounded py-1 text-link underline decoration-link/45 underline-offset-4 hover:decoration-link focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-link" href={`#${bucket.id}`} title={bucket.title}>{bucket.label}</a></li>)}
+        <li><a class="inline-block rounded py-1 text-link underline decoration-link/45 underline-offset-4 hover:decoration-link focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-link" href="#install-extension">How to install</a></li>
+      </ul>
+    </nav>
+    <details class="mt-5 rounded border border-soil-300 px-3 py-2 sm:hidden">
+      <summary class="cursor-pointer rounded py-1 font-medium text-soil-700 focus-visible:outline-2 focus-visible:outline-link">Browse by task</summary>
+      <nav aria-label="Browse extensions by task">
+        <ul class="grid grid-cols-2 gap-x-3 py-2 text-sm">
+          {bucketCounts.map(bucket => <li><a class="task-jump inline-flex min-h-11 items-center rounded text-link underline decoration-link/45 underline-offset-4 focus-visible:outline-2 focus-visible:outline-link" href={`#${bucket.id}`}>{bucket.label}</a></li>)}
+          <li><a href="#install-extension" class="inline-flex min-h-11 items-center rounded text-link underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-link">How to install</a></li>
+        </ul>
+      </nav>
+    </details>
+  </header>
+
+  <!-- Browse by intent: every extension, grouped. Restored from the
+       pre-redesign catalog — ranking the top 12 and dumping the rest into an
+       "everything else" table lost the thing that made this page useful, which
+       is that it answers "what am I trying to do?".
+
+       Each group is a full-bleed band carrying its own ground tint, the way the
+       homepage stages do. The colour change IS the separator, so the headers
+       need no chrome — no panel, no icon chip. -->
+  <div id="ext-buckets">
+    {TAXONOMY.map(bucket => {
+      const items = bucket.subs.flatMap(sub => sub.slugs.map(slug => bySlug[slug]).filter(Boolean));
+      return (
+        <section
+          id={bucket.id}
+          class="ext-bucket scroll-mt-32"
+          data-bucket={bucket.id}
+        >
+          <div class="mx-auto w-full max-w-[1360px] px-5 py-11 sm:px-7">
+            {/* The heading block is held to a reading measure and marked with a
+                short gold rule. Full-bleed across 1360px it was a run of very
+                wide, very plain text with the count marooned at the far right —
+                the eye had nothing to catch on between one section and the next.
+                The count now sits with the title it counts. */}
+            <div class="max-w-[62ch]">
+              <span class="mb-3 block h-[3px] w-9 rounded-full bg-sun-400" aria-hidden="true"></span>
+              <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <h2 class="font-display text-2xl text-soil-900 md:text-[28px]">{bucket.title}</h2>
+                <span class="band-count text-[13px]" data-total={items.length}>
+                  <span class="qf-figure">{items.length}</span> extensions
+                </span>
+              </div>
+              <p class="band-blurb mt-1.5">{bucket.blurb}</p>
+            </div>
+
+            <div class="mt-8 space-y-10">
+              {bucket.subs.map(sub => (
+                <div class="ext-sub">
+                  {sub.title && (
+                    <h3 class="mb-5 flex items-center gap-2.5 font-display text-xl text-soil-900">
+                      {sub.title}
+                      <span class="h-px flex-1 bg-soil-300/70" aria-hidden="true"></span>
+                    </h3>
+                  )}
+                  <div class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,288px),1fr))] gap-3.5">
+                    {sub.slugs.map(slug => {
+                      const e = bySlug[slug];
+                      return e && (
+                        <div class="ext-item" data-bucket={bucket.id} data-search={searchKey(e)}>
+                          <ExtensionCard
+                            id={e.id}
+                            name={e.name}
+                            description={e.description}
+                            category={e.category}
+                            status={e.status}
+                            icon={e.icon}
+                            usageCount={e.usageCount}
+                            usagePeriod={e.usagePeriod}
+                            maxUsageCount={maxUsageCount}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      );
+    })}
+  </div>
+
+  <div class="mx-auto w-full max-w-[1360px] px-5 sm:px-7">
+    <div id="ext-empty" hidden class="py-10">
+      <h2 class="font-display text-2xl text-soil-900">No extensions found</h2>
+      <p id="ext-empty-message" class="mt-2 text-soil-700">Try a shorter name or a task such as JSON or fuzzy matching.</p>
+      <button type="button" id="ext-reset" class="mt-4 min-h-11 rounded text-link underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-link">Clear search and browse all extensions</button>
+    </div>
+
+    <section id="install-extension" class="mt-12 grid scroll-mt-44 gap-8 border-t border-soil-300 pt-10 lg:grid-cols-2" aria-labelledby="install-heading">
       <div>
         <p class="qf-eyebrow text-sun-700">Getting started</p>
-        <h2 class="mt-3 font-display text-2xl text-soil-900">Install one in two statements</h2>
-        <p class="mt-3 text-sm text-soil-700">
-          Query.Farm publishes to DuckDB's community repository, so you install these the same way you
-          install any community extension — no extra setup, no custom repository.
+        <h2 id="install-heading" class="mt-3 font-display text-3xl text-soil-900">Install, then load</h2>
+        <p class="mt-4 max-w-[62ch] text-soil-700">
+          Install an extension once, then load it in each DuckDB session.
+          Each extension page lists its installation source and supported versions.
+          Here is Airport on DuckDB 2.0 from the Query.Farm repository:
         </p>
-        <div class="mt-4">
-          <CodeBlock code={installSnippet} lang="sql" tryable={false} />
-        </div>
-        {usageSummary && (
-          <div class="mt-8 rounded-2xl border border-soil-300/70 bg-white/70 p-6">
-            <div class="qf-figure text-[38px] leading-none text-sun-700">
-              {usageSummary.annualizedLoads.toLocaleString()}
-            </div>
-            <div class="mt-2 text-[13px] font-medium text-soil-700">Loads per year · all extensions</div>
-            <div class="mt-1 text-[12.5px] text-soil-500">
-              Annualized from the <span class="qf-figure">{usageSummary.windowDays}</span>-day snapshot
-            </div>
-          </div>
-        )}
       </div>
-    </div>
+      <CodeBlock code={installSnippet} lang="sql" tryable={false} />
+    </section>
 
     <p class="mt-14 border-t border-soil-300 pt-10 text-[13.5px] text-soil-600">
       Load counts come from the DuckDB community extension registry over a rolling
@@ -313,8 +366,7 @@ LOAD airport FROM query_farm;`;
     </p>
 
     <!-- Weekly loads — measured, not modelled. Every bar keeps its own value
-         and week label: this is the evidence behind the annual figure, and
-         summarising it away costs the reader the shape AND the numbers. The
+         and week label, preserving both the shape and the numbers. The
          restraint comes from weight — hairline gridlines, light label colour,
          the latest week emphasised — not from removing data.
 
@@ -394,134 +446,6 @@ LOAD airport FROM query_farm;`;
         </div>
       </figure>
     )}
-
-    <div class="mt-14 border-t border-soil-300 pt-10">
-      <p class="qf-eyebrow text-sun-700">Browse by intent</p>
-      <h2 class="mt-3 font-display text-3xl text-soil-900">What are you trying to do?</h2>
-      <p class="mt-4 max-w-[62ch] text-soil-700">
-        Each section groups the extensions that solve one class of problem, with finer-grained
-        sub-groups where they help. Filter by intent or search by name.
-      </p>
-    </div>
-
-  </div>
-
-  <!-- Filters. Full-bleed so the tinted bands below can run edge to edge and
-       still scroll cleanly under the sticky bar. -->
-  <div
-    class="sticky z-30 border-b border-soil-300 bg-soil-50/95 backdrop-blur"
-    style="top: calc(var(--qf-nav-h) + 45px)"
-  >
-    <!-- Two zones that never reflow into one another: the intent chips scroll
-         sideways on one line, the search box holds its place on the right. As a
-         single wrapping flex row this bar grew to three lines and 113px tall by
-         1180px — a sticky header that eats a third of the viewport, and the
-         search field ended up on its own orphan row. -->
-    <div class="mx-auto flex w-full max-w-[1360px] flex-col items-stretch gap-2 px-5 py-3 sm:flex-row sm:items-center sm:gap-3 sm:px-7">
-      <div class="qf-chiprow flex min-w-0 flex-1 items-center gap-2.5 overflow-x-auto pb-0.5 sm:pb-0">
-        <button type="button" class="qf-pill flex-none" data-bucket="all" aria-controls="ext-buckets" aria-pressed="true">All {totalExtensions}</button>
-        {bucketCounts.map((bucket) => (
-          <button type="button" class="qf-pill flex-none" data-bucket={bucket.id} aria-controls="ext-buckets" aria-pressed="false" title={bucket.title}>
-            {bucket.pill} <span class="qf-figure">{bucket.count}</span>
-          </button>
-        ))}
-      </div>
-
-      <span class="flex w-full flex-none items-center gap-2 rounded-full border border-soil-300 bg-white px-3.5 py-1.5 focus-within:border-link sm:w-[190px]">
-        <label for="ext-filter" class="sr-only">Filter extensions</label>
-        <input
-          id="ext-filter"
-          type="search"
-          autocomplete="off"
-          aria-controls="ext-buckets"
-          aria-describedby="ext-filter-status"
-          aria-keyshortcuts="/"
-          placeholder="Filter&#8230;"
-          class="w-full min-w-0 border-0 bg-transparent text-sm text-soil-900 placeholder:text-soil-500 focus:outline-none"
-        />
-        <kbd class="hidden flex-none rounded border border-soil-300 px-1.5 font-mono text-[9.5px] text-soil-500 sm:inline">/</kbd>
-      </span>
-      <span id="ext-filter-status" class="sr-only" role="status" aria-live="polite"></span>
-    </div>
-  </div>
-
-  <!-- Browse by intent: every extension, grouped. Restored from the
-       pre-redesign catalog — ranking the top 12 and dumping the rest into an
-       "everything else" table lost the thing that made this page useful, which
-       is that it answers "what am I trying to do?".
-
-       Each group is a full-bleed band carrying its own ground tint, the way the
-       homepage stages do. The colour change IS the separator, so the headers
-       need no chrome — no panel, no icon chip. -->
-  <div id="ext-buckets">
-    {TAXONOMY.map(bucket => {
-      const items = bucket.subs.flatMap(sub => sub.slugs.map(slug => bySlug[slug]).filter(Boolean));
-      return (
-        <section
-          id={bucket.id}
-          class="ext-bucket scroll-mt-52 sm:scroll-mt-32"
-          data-bucket={bucket.id}
-        >
-          <div class="mx-auto w-full max-w-[1360px] px-5 py-11 sm:px-7">
-            {/* The heading block is held to a reading measure and marked with a
-                short gold rule. Full-bleed across 1360px it was a run of very
-                wide, very plain text with the count marooned at the far right —
-                the eye had nothing to catch on between one section and the next.
-                The count now sits with the title it counts. */}
-            <div class="max-w-[62ch]">
-              <span class="mb-3 block h-[3px] w-9 rounded-full bg-sun-400" aria-hidden="true"></span>
-              <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <h2 class="font-display text-2xl text-soil-900 md:text-[28px]">{bucket.title}</h2>
-                <span class="band-count text-[13px]">
-                  <span class="qf-figure">{items.length}</span> extensions
-                </span>
-              </div>
-              <p class="band-blurb mt-1.5">{bucket.blurb}</p>
-            </div>
-
-            <div class="mt-8 space-y-10">
-              {bucket.subs.map(sub => (
-                <div class="ext-sub">
-                  {sub.title && (
-                    <h3 class="mb-5 flex items-center gap-2.5 font-display text-xl text-soil-900">
-                      {sub.title}
-                      <span class="h-px flex-1 bg-soil-300/70" aria-hidden="true"></span>
-                    </h3>
-                  )}
-                  <div class="grid grid-cols-[repeat(auto-fill,minmax(288px,1fr))] gap-3.5">
-                    {sub.slugs.map(slug => {
-                      const e = bySlug[slug];
-                      return e && (
-                        <div class="ext-item" data-bucket={bucket.id} data-search={searchKey(e)}>
-                          <ExtensionCard
-                            id={e.id}
-                            name={e.name}
-                            description={e.description}
-                            category={e.category}
-                            status={e.status}
-                            icon={e.icon}
-                            usageCount={e.usageCount}
-                            usagePeriod={e.usagePeriod}
-                            maxUsageCount={maxUsageCount}
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-      );
-    })}
-  </div>
-
-  <div class="mx-auto w-full max-w-[1360px] px-5 sm:px-7">
-    <p id="ext-empty" hidden role="status" aria-live="polite" class="py-10 text-center text-soil-600">
-      No extensions match that filter.
-    </p>
-
     <section class="mt-16 border-t border-soil-300 pt-10" aria-labelledby="extensions-faq-title">
       <p class="qf-eyebrow text-sun-700">Frequently asked questions</p>
       <h2 id="extensions-faq-title" class="mt-3 font-display text-3xl text-soil-900">DuckDB extension basics</h2>
@@ -552,57 +476,62 @@ LOAD airport FROM query_farm;`;
   </div>
 
   <script>
-    // Catalog filtering. Cards carry `.ext-item` + `data-bucket` / `data-search`.
-    // Because the catalog is grouped by intent, filtering also has to collapse
-    // any sub-group and bucket left with nothing in it — otherwise a search
-    // leaves a page of orphaned headings above empty grids.
-    const pills = Array.from(document.querySelectorAll<HTMLButtonElement>('.qf-pill'));
     const items = Array.from(document.querySelectorAll<HTMLElement>('.ext-item'));
     const subs = Array.from(document.querySelectorAll<HTMLElement>('.ext-sub'));
-    const bucketEls = Array.from(document.querySelectorAll<HTMLElement>('.ext-bucket'));
-    const input = document.getElementById('ext-filter') as HTMLInputElement | null;
+    const buckets = Array.from(document.querySelectorAll<HTMLElement>('.ext-bucket'));
+    const input = document.getElementById('ext-filter') as HTMLInputElement;
+    const clear = document.getElementById('ext-clear') as HTMLButtonElement;
     const empty = document.getElementById('ext-empty');
-    const filterStatus = document.getElementById('ext-filter-status');
+    const emptyMessage = document.getElementById('ext-empty-message');
+    const status = document.getElementById('ext-filter-status');
+    const normalize = (value: string) => value.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    const index = new Map(items.map(item => [item, normalize(item.dataset.search ?? '')]));
+    const visibleIn = (root: HTMLElement) => Array.from(root.querySelectorAll<HTMLElement>('.ext-item')).filter(item => !item.hidden).length;
 
-    let activeBucket = 'all';
-
-    const anyVisible = (root: HTMLElement) =>
-      Array.from(root.querySelectorAll<HTMLElement>('.ext-item')).some(i => !i.hidden);
-
-    function apply() {
-      const q = (input?.value || '').trim().toLowerCase();
-      let visible = 0;
+    function apply(updateUrl = true) {
+      const query = input.value.trim();
+      const words = normalize(query).split(/\s+/).filter(Boolean);
+      let count = 0;
       for (const item of items) {
-        const okBucket = activeBucket === 'all' || item.dataset.bucket === activeBucket;
-        const okQuery = !q || (item.dataset.search || '').includes(q);
-        const show = okBucket && okQuery;
-        item.hidden = !show;
-        if (show) visible++;
+        item.hidden = !words.every(word => index.get(item)!.includes(word));
+        if (!item.hidden) count++;
       }
-      for (const sub of subs) sub.hidden = !anyVisible(sub);
-      for (const b of bucketEls) b.hidden = !anyVisible(b);
-      if (empty) empty.hidden = visible !== 0;
-      if (filterStatus) filterStatus.textContent = `${visible} extension${visible === 1 ? '' : 's'} shown`;
+      for (const sub of subs) sub.hidden = visibleIn(sub) === 0;
+      for (const bucket of buckets) {
+        const visible = visibleIn(bucket);
+        bucket.hidden = visible === 0;
+        const label = bucket.querySelector('.band-count');
+        if (label) label.textContent = `${visible} extension${visible === 1 ? '' : 's'}`;
+      }
+      clear.hidden = !query;
+      if (empty) empty.hidden = count > 0;
+      if (emptyMessage) emptyMessage.textContent = query ? `No matches for “${query}”. Try a shorter name or a task such as JSON or fuzzy matching.` : '';
+      if (status) status.textContent = query ? `${count} extension${count === 1 ? '' : 's'} matching “${query}”` : `Showing all ${items.length} extensions`;
+      if (updateUrl) {
+        const url = new URL(location.href);
+        if (query) url.searchParams.set('q', query); else url.searchParams.delete('q');
+        history.replaceState(null, '', url);
+      }
     }
-
-    for (const pill of pills) {
-      pill.addEventListener('click', () => {
-        activeBucket = pill.dataset.bucket || 'all';
-        for (const p of pills) p.setAttribute('aria-pressed', String(p === pill));
-        apply();
+    function reset(focus = true) {
+      input.value = '';
+      apply();
+      if (focus) input.focus();
+    }
+    input.value = new URL(location.href).searchParams.get('q') ?? '';
+    apply(false);
+    input.addEventListener('input', () => apply());
+    clear.addEventListener('click', () => reset());
+    document.getElementById('ext-reset')?.addEventListener('click', () => reset());
+    document.getElementById('extension-search')?.addEventListener('submit', event => { event.preventDefault(); apply(); });
+    document.querySelectorAll<HTMLAnchorElement>('.task-jump').forEach(link => {
+      link.addEventListener('click', () => {
+        reset(false);
+        const details = link.closest('details');
+        if (details) details.open = false;
       });
-    }
-
-    input?.addEventListener('input', apply);
-
-    // `/` focuses the filter, the way every catalog people already use does.
-    document.addEventListener('keydown', (event) => {
-      if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target as HTMLElement | null;
-      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
-      event.preventDefault();
-      input?.focus();
     });
+    window.addEventListener('popstate', () => { input.value = new URL(location.href).searchParams.get('q') ?? ''; apply(false); });
   </script>
 
   <style>
@@ -645,53 +574,3 @@ LOAD airport FROM query_farm;`;
     .ext-bucket:nth-of-type(n+4) .band-count { color: var(--color-soil-900); }
   </style>
 </PageLayout>
-
-<style is:global>
-  /* The chip strip scrolls sideways instead of wrapping. Its scrollbar is
-     hidden the same way the section subnav hides its own — a visible bar under
-     a single row of pills is noise, and the row is short enough that the
-     overflow is obvious from the clipped chip at the edge. */
-  .qf-chiprow {
-    scrollbar-width: none;
-  }
-  .qf-chiprow::-webkit-scrollbar {
-    display: none;
-  }
-
-  .qf-pill {
-    font-weight: 500;
-    font-size: 13.5px;
-    letter-spacing: 0;
-    color: var(--color-soil-700);
-    background: #fff;
-    border: 1px solid var(--color-soil-300);
-    border-radius: 999px;
-    padding: 6px 13px;
-    cursor: pointer;
-    transition: 0.18s;
-  }
-  .qf-pill:hover {
-    border-color: var(--color-soil-400);
-    color: var(--color-soil-900);
-  }
-  .qf-pill[aria-pressed='true'] {
-    background: var(--color-soil-900);
-    border-color: var(--color-soil-900);
-    color: var(--color-soil-50);
-  }
-  .qf-pill:focus-visible {
-    outline: 2px solid var(--color-link);
-    outline-offset: 2px;
-  }
-
-  .qf-th {
-    font-weight: 600;
-    font-size: 12.5px;
-    letter-spacing: 0;
-    color: var(--color-soil-600);
-    background: var(--color-soil-50);
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--color-soil-300);
-    text-align: left;
-  }
-</style>

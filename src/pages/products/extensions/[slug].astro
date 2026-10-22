@@ -5,6 +5,7 @@ import SectionHeader from '../../../components/ui/SectionHeader.astro';
 import CodeBlock from '../../../components/ui/CodeBlock.astro';
 import CodeTabs from '../../../components/ui/CodeTabs.astro';
 import ExtensionHero from '../../../components/products/ExtensionHero.astro';
+import ExtensionGettingStarted from '../../../components/docs/ExtensionGettingStarted.astro';
 import ExtensionsSubNav from '../../../components/sections/ExtensionsSubNav.astro';
 import ExtensionCard from '../../../components/products/ExtensionCard.astro';
 import ExtensionInfo from '../../../components/products/ExtensionInfo.astro';
@@ -79,6 +80,7 @@ const {
 
 // Use extension metadata
 const GITHUB_URL = metadata.githubUrl;
+const entryPage = metadata.entryPage;
 
 // Create unified extension contents (functions + macros + pragmas + secrets + filesystems + storage + logging)
 interface ExtensionContent {
@@ -214,17 +216,24 @@ interface TOCItem {
 }
 
 const tocItems: TOCItem[] = [
-  // Overview (Technical Overview) - always shown if it exists
-  ...(technicalOverview ? [{ id: 'overview', label: 'Overview' }] : []),
-  // Technical Details (from MDX) — the rest of the "what is this and why",
-  // so it stays with the Overview rather than sitting below the SQL.
-  ...(TechnicalDetailsContent ? [{ id: 'technical-details', label: 'Technical Details' }] : []),
-  // Install
-  { id: 'quick-install', label: 'Install' },
-  // Quick Start example(s) — string (legacy) or non-empty array of examples
-  ...(((q) => (Array.isArray(q) ? q.length > 0 : !!q))((metadata as any).quickStart)
-    ? [{ id: 'quick-start', label: 'Quick Start' }]
-    : []),
+  ...(entryPage ? [
+    ...(entryPage.introduction ? [{ id: 'overview', label: 'Overview' }] : []),
+    { id: 'quick-start', label: 'Example' },
+    { id: 'common-tasks', label: 'Common tasks' },
+    ...(TechnicalDetailsContent ? [{ id: 'technical-details', label: 'Technical details' }] : []),
+  ] : [
+    // Overview (Technical Overview) - always shown if it exists
+    ...(technicalOverview ? [{ id: 'overview', label: 'Overview' }] : []),
+    // Technical Details (from MDX) — the rest of the "what is this and why",
+    // so it stays with the Overview rather than sitting below the SQL.
+    ...(TechnicalDetailsContent ? [{ id: 'technical-details', label: 'Technical Details' }] : []),
+    // Install
+    { id: 'quick-install', label: 'Install' },
+    // Quick Start example(s) — string (legacy) or non-empty array of examples
+    ...(((q) => (Array.isArray(q) ? q.length > 0 : !!q))((metadata as any).quickStart)
+      ? [{ id: 'quick-start', label: 'Quick Start' }]
+      : []),
+  ]),
   // Extension Contents
   ...(extensionContents.length > 0 ? [{ id: 'functions-index', label: 'Extension Contents' }] : []),
   // Function Reference
@@ -260,7 +269,7 @@ const pageUrl = `${SITE_ORIGIN}/products/extensions/${extensionId}`;
 // scripts/generate-extension-og-images.mjs (npm run generate:og-extensions).
 const resolvedOgImage = metadata.image ?? `/og/extensions/${extensionId}.png`;
 const operatingSystems = (metadata.platforms ?? []).map(p => p.platform);
-const wasmSupported = (metadata.platforms ?? []).some(p => p.platform === 'WASM');
+const wasmSupported = entryPage?.browserExamples !== false && (metadata.platforms ?? []).some(p => p.platform === 'WASM');
 const installSource = (metadata as any).installSource ?? 'community';
 const checkFixtures = loadCheckFixtures(extensionId);
 // quickStart is either the legacy single SQL string or the preferred array of
@@ -277,16 +286,11 @@ const quickStartExamples: { title?: string; sql: string }[] = Array.isArray(rawQ
 const installFrom = installSource === 'community'
   ? 'FROM community'
   : installSource.toLowerCase().startsWith('from ') ? installSource : `FROM '${installSource}'`;
-// The Install section's SQL, one statement per line — INSTALL fetches the
-// extension once, LOAD brings it into the session every time. Rendered by the
-// same CodeBlock as every other SQL snippet on the page, but `tryable={false}`:
-// these do nothing visible in the in-page REPL (the extension is already loaded
-// there), so the block must not get a "Try it in your browser" button.
+// Installation is included in the entry example, or shown separately on pages
+// with the overview-first layout. The standalone install block is not runnable.
 const installSql = `INSTALL ${metadata.name} ${installFrom};\nLOAD ${metadata.name};`;
-// Extensions published to the Query.Farm repository get a two-step Install
-// section instead: install once per machine, then load in every session.
 const repositoryName = queryFarmRepositoryName(extensionId);
-const seoDescription = extensionSeoDescription(metadata.displayName, metadata.description);
+const seoDescription = entryPage?.seoDescription ?? extensionSeoDescription(metadata.displayName, metadata.description);
 
 // ── Page header ──────────────────────────────────────────────────────────
 const listing = getExtensionById(extensionId);
@@ -351,7 +355,7 @@ const jsonLd = [
 ---
 
 <PageLayout
-  title={`${metadata.displayName} — DuckDB Extension`}
+  title={entryPage?.title ?? `${metadata.displayName} — DuckDB Extension`}
   description={seoDescription}
   ogImage={resolvedOgImage}
   jsonLd={jsonLd}
@@ -377,12 +381,20 @@ const jsonLd = [
   <!-- Page header — mark, name, badges, lede, loads. -->
   <ExtensionHero
     name={metadata.displayName}
+    logo={extensionId === 'vgi' ? { src: '/vgi/vgi-logo-transparent.webp', alt: 'Vector Gateway Interface logo', width: 480, height: 353 } : undefined}
     eyebrow="DuckDB Extension"
-    description={firstSentence(metadata.description)}
+    description={entryPage ? metadata.description : firstSentence(metadata.description)}
     badges={headerBadges}
     loads={loadCount}
     loadsPeriod={loadPeriod}
     quickReference={getExtensionQuickReference(extensionId)}
+    actions={entryPage ? [
+      { label: 'Example', href: '#quick-start' },
+      functions.length > 0
+        ? { label: 'Function reference', href: '#function-reference' }
+        : { label: 'Extension reference', href: extensionContents.length > 0 ? '#functions-index' : '#compatibility' },
+      { label: 'Source code', href: GITHUB_URL },
+    ] : undefined}
   />
 
   <!-- Two columns: page TOC / prose. One under 900px — the rail drops, never
@@ -433,8 +445,12 @@ const jsonLd = [
         </div>
       )}
 
-      <!-- Technical Overview — lead with what the extension is and why. -->
-      {technicalOverview && (
+      {entryPage && (
+        <ExtensionGettingStarted metadata={metadata} installSql={installSql} wasmSupported={wasmSupported} repositoryName={repositoryName} />
+      )}
+
+      <!-- Other extension pages retain their overview-first layout. -->
+      {!entryPage && technicalOverview && (
         <DuckDBExtensionTechnicalOverview
           eyebrow={technicalOverview.eyebrow}
           title={technicalOverview.title}
@@ -443,11 +459,7 @@ const jsonLd = [
         />
       )}
 
-      <!-- Technical Details (from MDX) — the long-form half of "what is this
-           and why", so it belongs directly under the Technical Overview. On an
-           extension with no overview (airport, shellfs) it becomes the page's
-           opening section, which is the point: nobody should meet a new
-           extension with `INSTALL` as the first thing on the page. -->
+      <!-- Detailed guidance follows the entry example or the legacy overview. -->
       {TechnicalDetailsContent && (
         <DuckDBExtensionTechnicalDetails
           title="Technical Details"
@@ -456,10 +468,8 @@ const jsonLd = [
         </DuckDBExtensionTechnicalDetails>
       )}
 
-      <!-- Install — after the prose, not before it: what the extension is
-           earns the top of the page, and this is one line people learn once.
-           Keeps the `quick-install` id, so old deep links still land. -->
-      <ExtensionSection id="quick-install">
+      <!-- Entry pages include installation in their first complete example. -->
+      {!entryPage && <ExtensionSection id="quick-install">
         <h2 class="mb-5 text-[clamp(1.55rem,3.4vw,2.5rem)] text-soil-900">Install</h2>
         {repositoryName ? (
           <CodeTabs
@@ -471,11 +481,11 @@ const jsonLd = [
         ) : (
           <CodeBlock code={installSql} lang="sql" tryable={false} />
         )}
-      </ExtensionSection>
+      </ExtensionSection>}
 
       <!-- Quick Start — each example is its own Try-able cell, so a Try click
            runs just that example rather than the whole script. -->
-      {quickStartExamples.length > 0 && (
+      {!entryPage && quickStartExamples.length > 0 && (
         <ExtensionSection id="quick-start">
           <h2 class="mb-6 text-[clamp(1.55rem,3.4vw,2.5rem)] text-soil-900">Quick Start</h2>
           <div class="space-y-6">
@@ -674,6 +684,8 @@ const jsonLd = [
         platforms={metadata.platforms}
         duckdbVersions={metadata.duckdbVersions}
         binarySizes={metadata.binarySizes}
+        compatibilityReleases={metadata.compatibilityReleases}
+        compatibilityCheckedAt={metadata.compatibilityCheckedAt}
       />
 
       <!-- Related Extensions (if any exist) -->

@@ -242,6 +242,11 @@ export const ExtensionStatusSchema = z.enum(['stable', 'beta', 'experimental']);
 export const QuickStartExampleSchema = z.object({
   title: z.string().optional(),
   sql: z.string(),
+  description: z.string().optional(),
+  outputTable: OutputTableSchema.optional(),
+  note: z.string().optional(),
+  requirements: z.string().optional(),
+  browserRunnable: z.boolean().optional(),
 });
 
 export const ExtensionMetadataSchema = z.object({
@@ -258,6 +263,7 @@ export const ExtensionMetadataSchema = z.object({
   status: ExtensionStatusSchema.optional(),
   docsUrl: z.string().optional(),
   features: z.array(z.string()).optional(),
+  searchTerms: z.array(z.string()).optional(),
   // 'community' (DuckDB Community Extensions) or 'query.farm' or a literal
   // INSTALL clause like "FROM 'github://owner/repo'". Defaults to 'community'.
   installSource: z.string().default('community'),
@@ -265,6 +271,24 @@ export const ExtensionMetadataSchema = z.object({
   // {title, sql} examples (each rendered as its own Try-able cell). A bare
   // string is the legacy single-block form, still accepted during migration.
   quickStart: z.union([z.string(), z.array(QuickStartExampleSchema)]).optional(),
+  // Entry pages explain the extension before a complete example and task navigation.
+  entryPage: z.object({
+    title: z.string(),
+    seoDescription: z.string(),
+    introduction: z.object({
+      title: z.string(),
+      paragraphs: z.array(z.string()).min(1),
+    }).optional(),
+    testedWith: z.string().optional(),
+    // Disable interactive examples when a published WASM build cannot load in
+    // the site's pinned runtime. Platform availability remains in compatibility.
+    browserExamples: z.boolean().optional(),
+    tasks: z.array(z.object({
+      title: z.string(),
+      description: z.string(),
+      href: z.string(),
+    })),
+  }).optional(),
   license: z.string().optional(),
   pricing: z.enum(['free', 'paid']).optional(),
   firstRelease: z.string().optional(),
@@ -280,8 +304,20 @@ export const ExtensionMetadataSchema = z.object({
   githubStars: z.number().optional(),
   platforms: z.array(PlatformInfoSchema).optional(),
   duckdbVersions: z.array(z.string()).optional(),
-  // Per (platform, architecture) compiled artifact size in bytes. Discovered
-  // by extension-diff.py from Content-Length on community-extensions.duckdb.org.
+  compatibilityCheckedAt: z.string().optional(),
+  compatibilityReleases: z.array(z.object({
+    distribution: z.enum(['duckdb', 'haybarn']),
+    version: z.string(),
+    repository: z.string().url(),
+    platforms: z.array(PlatformInfoSchema),
+    binarySizes: z.array(z.object({
+      platform: z.string(),
+      architecture: z.string(),
+      bytes: z.number().int().nonnegative(),
+    })),
+  })).optional(),
+  // Artifact sizes for the pinned Haybarn browser release, discovered by
+  // binary-sizes-snapshot.py. Other releases live in compatibilityReleases.
   binarySizes: z.array(z.object({
     platform: z.string(),
     architecture: z.string(),

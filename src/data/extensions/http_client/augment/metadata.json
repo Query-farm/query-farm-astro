@@ -2,7 +2,7 @@
   "name": "http_client",
   "displayName": "HTTP Client",
   "icon": "globe",
-  "description": "Make HTTP GET and POST requests directly from DuckDB SQL. Returns a JSON object with `status`, `reason`, and `body` you can extract inline. Best fit: ad-hoc API calls, low-volume per-row enrichment, and joining a SQL query with a small REST endpoint. Synchronous and buffered — not a streaming or high-throughput HTTP client.",
+  "description": "Make HTTP requests from DuckDB SQL and read the response as JSON. Use it to fetch a small API response or enrich a small set of rows.",
   "githubUrl": "https://github.com/Query-farm/duckdb-extension-httpclient",
   "cta": {
     "title": "HTTP calls from a SELECT",
@@ -16,19 +16,68 @@
   "installSource": "community",
   "quickStart": [
     {
-      "title": "GET a URL and read the status code",
-      "sql": "SELECT (http_get('https://httpbin.org/get')->>'status')::INT AS status;"
-    },
-    {
-      "title": "POST a JSON body",
-      "sql": "SELECT http_post(\n  'https://httpbin.org/post',\n  headers => MAP{'accept': 'application/json'},\n  params  => MAP{'name': 'alice'}\n);"
-    },
-    {
-      "title": "POST as application/x-www-form-urlencoded",
-      "sql": "SELECT http_post_form(\n  'https://httpbin.org/post',\n  headers => MAP{},\n  params  => MAP{'limit': '10'}\n);"
+      "title": "Fetch a repository from the GitHub API",
+      "description": "This request needs no API key. It returns the HTTP status and repository name; the response body is parsed as JSON before extracting the name.",
+      "sql": "WITH response AS MATERIALIZED (\n  SELECT http_get(\n    'https://api.github.com/repos/duckdb/duckdb'\n  ) AS res\n)\nSELECT\n  (res->>'status')::INTEGER AS status,\n  ((res->>'body')::JSON)->>'full_name' AS repository\nFROM response;",
+      "outputTable": {
+        "columns": [
+          {
+            "name": "status"
+          },
+          {
+            "name": "repository"
+          }
+        ],
+        "rows": [
+          [
+            200,
+            "duckdb/duckdb"
+          ]
+        ]
+      },
+      "note": "The result above assumes a successful request. Check the HTTP status before using the body: GitHub can return an error or rate-limit the request. Calls are synchronous and the response is buffered in memory."
     }
   ],
   "relatedExtensions": [
     "shellfs"
+  ],
+  "entryPage": {
+    "title": "HTTP Client: Call REST APIs from DuckDB SQL",
+    "seoDescription": "Call REST APIs from DuckDB SQL with HTTP Client. Complete GET and POST examples, response handling, installation, and function reference.",
+    "testedWith": "DuckDB 1.5.6",
+    "tasks": [
+      {
+        "title": "Send a JSON body",
+        "description": "Make a POST request with headers and a JSON payload.",
+        "href": "#post-a-json-body"
+      },
+      {
+        "title": "Handle an unsuccessful response",
+        "description": "Check the status before extracting fields from the body.",
+        "href": "#conditional-logic-on-the-status-code"
+      },
+      {
+        "title": "Save a response for later queries",
+        "description": "Store API results in a table to avoid repeating requests.",
+        "href": "#cache-responses-into-a-table"
+      },
+      {
+        "title": "Call an API for each row with VGI",
+        "description": "An alternative approach using a VGI worker, with a worked example.",
+        "href": "/blog/call-an-api-from-every-row-in-duckdb/"
+      }
+    ],
+    "introduction": {
+      "title": "Bring a small API response into a SQL query",
+      "paragraphs": [
+        "HTTP Client adds functions for making HTTP requests from DuckDB. A call returns the response status, headers, and body, which you can inspect and parse with SQL before storing or joining the result.",
+        "Use it to look up API metadata, inspect an endpoint, or enrich a small set of records. Calls wait for the response and buffer it in memory. Check the status before reading the body, and save responses to a table when later queries should reuse the same data."
+      ]
+    }
+  },
+  "searchTerms": [
+    "rest api",
+    "http get post requests",
+    "fetch web json"
   ]
 }

@@ -4,11 +4,10 @@ import SectionHeader from '../ui/SectionHeader.astro';
 import ExtensionSection from '../docs/ExtensionSection.astro';
 import { Icon } from 'astro-icon/components';
 import { HAYBARN_VERSION_TAGS } from '../../data/haybarn-versions';
+import type { ExtensionMetadata } from '../../data/extension-types';
+import { wasmVersion } from '../../haybarn-functions/data/haybarn-release.mjs';
 
-// A Haybarn release is cut per DuckDB version — Haybarn v1.5.5 ships DuckDB
-// 1.5.5 — so an extension's supported DuckDB versions name the Haybarn releases
-// that carry it. The map holds only the featured release, so older versions
-// resolve to null and the row just omits the line rather than guessing a tag.
+// Link recorded Haybarn releases to their status page when a tag is known.
 const haybarnFor = (duckdbVersion: string): { rc: string; href: string } | null => {
   const key = `v${duckdbVersion}`;
   const tag = HAYBARN_VERSION_TAGS[key];
@@ -41,6 +40,8 @@ interface Props {
   platforms?: PlatformInfo[]; // Platform with architectures
   duckdbVersions?: string[]; // Supported versions (e.g., ['1.1.0', '1.1.1', '1.1.2', '1.1.3'])
   binarySizes?: { platform: string; architecture: string; bytes: number }[];
+  compatibilityReleases?: ExtensionMetadata['compatibilityReleases'];
+  compatibilityCheckedAt?: string;
 }
 
 const {
@@ -57,17 +58,36 @@ const {
   writtenIn,
   sourceAvailable,
   dependencies,
-  platforms = [],
+  platforms: legacyPlatforms = [],
   duckdbVersions = [],
-  binarySizes
+  binarySizes: legacyBinarySizes,
+  compatibilityReleases,
+  compatibilityCheckedAt,
 } = Astro.props as Props;
+
+// The platform card describes one release. Browser eligibility elsewhere
+// continues to use the pinned Haybarn matrix, never this native release.
+const availableReleases = compatibilityReleases?.filter(release => release.platforms.length > 0);
+const platformRelease = availableReleases?.[0];
+const platforms = platformRelease?.platforms ?? legacyPlatforms;
+const binarySizes = platformRelease?.binarySizes ?? legacyBinarySizes;
+const versions = availableReleases?.map(release => ({
+  version: release.version,
+  label: `${release.distribution === 'duckdb' ? 'DuckDB' : 'Haybarn'} v${release.version}`,
+  repository: release.repository,
+  repositoryLabel: release.distribution === 'duckdb' ? 'Query.Farm repository' : 'Built-in community repository',
+  haybarn: release.distribution === 'haybarn' ? haybarnFor(release.version) : null,
+})) ?? duckdbVersions.map(version => ({
+  version, label: `DuckDB v${version}`, repository: null, repositoryLabel: '', haybarn: haybarnFor(version),
+}));
+const browserVersion = wasmVersion.split('-')[0];
 
 // Never fabricate compatibility. When the extension reports no platform or
 // version data, show an honest "not recorded" state rather than inventing a
 // platform matrix or a list of DuckDB versions the extension was never tested
 // against.
 const hasPlatforms = platforms.length > 0;
-const hasVersions = duckdbVersions.length > 0;
+const hasVersions = versions.length > 0;
 
 function formatBytes(n: number): string {
   if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(2) + ' MB';
@@ -286,6 +306,10 @@ for (const p of platforms) {
               Platforms
             </h3>
 
+            {platformRelease && <p class="mb-4 text-sm text-soil-600" data-platform-release>
+              {platformRelease.distribution === 'duckdb' ? 'DuckDB' : 'Haybarn'} <span class="font-sans tabular-nums">{platformRelease.version}</span>
+            </p>}
+
             {!hasPlatforms && (
               <p class="text-sm text-soil-500 italic">Platform availability hasn't been recorded for this extension yet.</p>
             )}
@@ -358,7 +382,7 @@ for (const p of platforms) {
                       ))}
                     </tbody>
                   </table>
-                  <p class="text-[12.5px] text-soil-500 mt-2">Compressed download size from the Haybarn extension repository.</p>
+                  <p class="text-[12.5px] text-soil-500 mt-2">Compressed download sizes for the release shown above.</p>
                 </div>
               </details>
             )}
@@ -394,13 +418,13 @@ for (const p of platforms) {
                 stretched a lone version across the full card. */}
             {hasVersions ? (
               <ul class="divide-y divide-soil-200 overflow-hidden rounded-lg border border-soil-300">
-                {duckdbVersions.map((version) => {
-                  const haybarn = haybarnFor(version);
+                {versions.map(({ label, repository, repositoryLabel, haybarn }) => {
                   return (
                     <li class="flex items-center justify-between gap-3 bg-white px-3 py-2.5">
                       <span class="min-w-0">
-                        <span class="qf-figure block text-[14px] text-soil-700">DuckDB v{version}</span>
-                        {haybarn && (
+                        <span class="qf-figure block text-[14px] text-soil-700">{label}</span>
+                        {repository && <span class="mt-0.5 block text-[12.5px] text-soil-500">{repositoryLabel}</span>}
+                        {!repository && haybarn && (
                           <a
                             href={haybarn.href}
                             class="mt-0.5 block text-[12.5px] text-soil-500 no-underline transition-colors hover:text-link"
@@ -422,6 +446,8 @@ for (const p of platforms) {
             ) : (
               <span class="text-sm italic text-soil-500">Not recorded for this extension.</span>
             )}
+            <p class="mt-4 text-sm leading-relaxed text-soil-600">Browser examples use Haybarn-Wasm <span class="font-sans tabular-nums">{browserVersion}</span>.</p>
+            {compatibilityCheckedAt && <p class="mt-2 text-[12.5px] text-soil-500">Checked <time datetime={compatibilityCheckedAt}>{compatibilityCheckedAt.slice(0, 10)}</time>.</p>}
           </Card>
         </div>
       </div>
