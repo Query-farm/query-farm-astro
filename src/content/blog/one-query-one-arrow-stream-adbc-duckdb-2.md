@@ -6,6 +6,14 @@ author: "Rusty Conover"
 tags: ["DuckDB", "ADBC", "PostgreSQL", "Performance", "Extensions"]
 heroImage: "/media/posts/one-query-one-arrow-stream-adbc-duckdb-2/social.png"
 draft: false
+nextStep:
+  title: "ADBC Scanner"
+  pitch: "Query PostgreSQL, SQLite, and other databases from DuckDB through their ADBC drivers, with Arrow batches at the DuckDB interface."
+  href: "/products/extensions/adbc_scanner/"
+  cta: "Explore ADBC Scanner"
+  extension: "adbc_scanner"
+  installNote: "Whole-query pushdown needs DuckDB 2.0. On DuckDB 1.5, the extension runs ordinary ADBC scans."
+  repo: "https://github.com/Query-farm/adbc_scanner"
 ---
 
 <aside class="article-brief" aria-labelledby="article-brief-title">

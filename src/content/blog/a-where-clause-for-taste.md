@@ -10,6 +10,12 @@ leadVisual:
   alt: ""
   width: 720
   height: 156
+nextStep:
+  title: "VGI"
+  pitch: "Make APIs, services, models, and business logic available as SQL tables and functions, with workers in Python, TypeScript, Go, Rust, or Java."
+  href: "/vgi/"
+  cta: "Learn about VGI"
+  repo: "https://github.com/Query-farm/vgi"
 ---
 
 Hacker News gives out its 500 newest submissions from one API endpoint. Most of them are not for me. Which ones *are* depends entirely on who I am, and I can't write that down as a `LIKE` pattern.
