@@ -9,10 +9,8 @@
 -- … FROM foo;` will fail to parse the SELECT (foo doesn't exist yet
 -- during EXPLAIN). For the affected tables (daily_uniques, readings)
 -- we pre-create them with the same column names + types the snippets
--- expect, so EXPLAIN succeeds. The subsequent execute phase will hit
--- "table already exists" on the in-snippet CREATE — that's an
--- accepted EXEC-FAIL on a couple of CREATE-flavored snippets, in
--- exchange for many more PASSes on SELECT-flavored ones.
+-- expect, so EXPLAIN succeeds. The snippets themselves use CREATE OR
+-- REPLACE, so their own CREATE then rebuilds the table on execute.
 
 ----------------------------------------------------------------------
 -- events: the catch-all source table referenced by HLL/CPC/Theta
@@ -80,10 +78,7 @@ FROM range(0, 100) t(i);
 -- example, and the persist-to-Parquet snippet. Schema matches what
 -- the cookbook + functions.json snippets expect: (day DATE, hll
 -- sketch_hll). The technical-details snippet builds its own (day,
--- sketch) shape via CREATE TABLE … AS SELECT and PARSE-FAILs on
--- unrelated function-signature drift, so we don't try to satisfy it.
--- CREATE-side snippets that re-create daily_uniques will EXEC-FAIL on
--- duplicate-create — accepted in exchange for SELECT-side PASSes.
+-- sketch) shape with CREATE OR REPLACE TABLE … AS SELECT.
 ----------------------------------------------------------------------
 CREATE OR REPLACE TABLE daily_uniques AS
 SELECT
@@ -95,8 +90,8 @@ GROUP BY 1;
 ----------------------------------------------------------------------
 -- readings: temp DOUBLE column for the TDigest cookbook examples.
 -- Pre-seeded so the SELECT inside the same snippet binds at EXPLAIN
--- time. The snippet will then re-create with the same shape on
--- execute (EXEC-FAIL acceptable).
+-- time. The snippet then re-creates it (CREATE OR REPLACE) with the
+-- same shape on execute.
 ----------------------------------------------------------------------
 CREATE OR REPLACE TABLE readings AS
 SELECT i::DOUBLE AS temp
