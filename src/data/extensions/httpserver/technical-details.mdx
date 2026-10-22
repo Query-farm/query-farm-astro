@@ -26,6 +26,7 @@ Exposing a DuckDB connection over HTTP is genuinely risky. Treat this extension 
 - **Run DuckDB with `-readonly`.** Without it, any authenticated client can `INSERT`, `ATTACH`, `COPY TO`, install extensions, or call file-system functions ([`SQL injection`](https://owasp.org/www-community/attacks/SQL_Injection) is the entire API here — there is no safe parameterization path). The upstream README's first security note is exactly this.
 - **Front it with TLS.** The server speaks plain HTTP. [HTTP Basic](https://en.wikipedia.org/wiki/Basic_access_authentication) over plaintext is effectively no auth. Use [nginx](https://nginx.org/en/docs/http/ngx_http_ssl_module.html), [Caddy](https://caddyserver.com/docs/automatic-https), or [HAProxy](https://www.haproxy.org/) as a TLS terminator.
 - **One credential, no per-user scope.** Auth is binary — the client either presents the configured key or it doesn't. No users, no roles, no per-query allowlists, no rate limiting.
+- **Don't rely on a `localhost` bind alone.** Every response carries `Access-Control-Allow-Origin: *`, so a web page open in a browser on the same machine can send queries to a local server and read the results. Always set a credential, even on loopback.
 - **Lock down the DuckDB process itself.** Follow [DuckDB's hardening guidance](https://duckdb.org/docs/operations_manual/securing_duckdb/overview) and consider disabling [community-extension installation](https://duckdb.org/docs/operations_manual/securing_duckdb/securing_extensions) on the served process.
 
 For internal APIs on a private network, behind a TLS proxy, against a read-only database — this extension is a great fit. For anything multi-tenant or internet-exposed, a dedicated SQL gateway is the right tool.
@@ -33,23 +34,29 @@ For internal APIs on a private network, behind a TLS proxy, against a read-only 
 
 ## Architecture
 
-[`httpserve_start`](#httpserve_start) starts an HTTP listener thread inside the DuckDB process. Requests are dispatched to the same DuckDB connection that called the function — so any extension you've `LOAD`ed, any database you've `ATTACH`ed, and any secret you've `CREATE`d is visible to HTTP clients. There is one global server per DuckDB process.
+[`httpserve_start`](#httpserve_start) starts an HTTP listener thread inside the DuckDB process. Each request runs on a fresh connection to the same database instance — so any extension you've `LOAD`ed, any database you've `ATTACH`ed, and any secret you've `CREATE`d is visible to HTTP clients. Connection-local state is not: temporary tables, `SET VARIABLE` values, and session settings from the calling connection are invisible to HTTP queries. There is one global server per DuckDB process; calling [`httpserve_start`](#httpserve_start) while it is running raises `HTTP server is already running`, so call [`httpserve_stop`](#httpserve_stop) first.
+
+`httpserve_start` returns as soon as the listener thread is launched, before the port is bound. Pick a port that is free: if the bind fails in background mode (port in use, privileged port), the listener thread throws and the whole DuckDB process terminates.
 
 The endpoint surface is intentionally small:
 
 | Endpoint | Methods   | Purpose                                                          |
 |----------|-----------|------------------------------------------------------------------|
-| `/`      | GET, POST | Execute a SQL query, or serve the embedded *quackplay* UI to a browser. |
-| `/ping`  | GET       | Liveness check.                                                  |
+| `/`      | GET, POST | Execute the SQL in the request body or in `?query=` / `?q=`; a request with no query gets the embedded *quackplay* UI. |
+| `/ping`  | GET       | Liveness check (unauthenticated, returns `OK`).                  |
 
 There is no `/metrics`, no `/health` JSON, and no [OpenAPI](https://www.openapis.org/) document — anything beyond *send SQL, read JSON* lives outside this extension.
 
 The response format vocabulary mirrors the [ClickHouse HTTP interface](https://clickhouse.com/docs/en/interfaces/formats):
 
-- `?default_format=JSONEachRow` — newline-delimited rows ([JSONEachRow](https://clickhouse.com/docs/en/interfaces/formats#jsoneachrow)).
-- `?default_format=JSONCompact` — single document with `meta`, `data`, `rows`, and `statistics` keys ([JSONCompact](https://clickhouse.com/docs/en/interfaces/formats#jsoncompact)).
+- `?default_format=JSONEachRow` — newline-delimited rows ([JSONEachRow](https://clickhouse.com/docs/en/interfaces/formats#jsoneachrow)). This is the default. Every non-`NULL` value is rendered as a JSON string (`{"a":"42"}`).
+- `?default_format=JSONCompact` — single document with `meta`, `data`, `rows`, and `statistics` keys ([JSONCompact](https://clickhouse.com/docs/en/interfaces/formats#jsoncompact)), with typed values.
+- `?default_format=CSV` — a header row followed by comma-separated rows.
+- `?default_format=XML` — a `<results>` document with one `<row>` per result row.
 
-Three environment variables tune the runtime: `DUCKDB_HTTPSERVER_FOREGROUND=1` runs the server on the main thread (so the SQL caller blocks), `DUCKDB_HTTPSERVER_DEBUG=1` enables stdout request logging, and `DUCKDB_HTTPSERVER_SYSLOG=1` routes logs to syslog.
+The format can also be sent in an `X-ClickHouse-Format` or `format` request header. A failed query returns HTTP `500` with the DuckDB error message as plain text.
+
+Four environment variables tune the runtime: `DUCKDB_HTTPSERVER_FOREGROUND=1` runs the server on the main thread (so the SQL caller blocks), `DUCKDB_HTTPSERVER_DEBUG=1` enables stdout request logging, `DUCKDB_HTTPSERVER_SYSLOG=1` routes logs to syslog, and `DUCKDB_HTTPSERVER_BASEPATH=/duckdb/` serves the endpoints under a path prefix (`/duckdb/` and `/duckdb/ping`) instead of `/`.
 
 ## Authentication
 
@@ -61,7 +68,7 @@ The third argument to [`httpserve_start`](#httpserve_start) selects the auth mod
 | `'user:pass'` (one colon) | [HTTP Basic auth](https://datatracker.ietf.org/doc/html/rfc7617).                        |
 | any other value           | Shared key sent by clients in the `X-API-Key` header.                                    |
 
-Both auth modes are **single-credential** — there is one user/pass or one key per server. Multi-tenant or per-user access control belongs at a reverse proxy. The credential is checked in constant time but travels in plaintext over HTTP, so TLS in front is non-negotiable for anything beyond a loopback bind.
+Both auth modes are **single-credential** — there is one user/pass or one key per server. The server accepts the configured value from either header, so a `'user:pass'` server also accepts `X-API-Key: user:pass`. Multi-tenant or per-user access control belongs at a reverse proxy. The credential is compared as a plain string and travels in plaintext over HTTP, so TLS in front is non-negotiable for anything beyond a loopback bind.
 
 To rotate a credential without restarting DuckDB, call [`httpserve_stop`](#httpserve_stop) and then [`httpserve_start`](#httpserve_start) again with the new value.
 
@@ -70,11 +77,11 @@ To rotate a credential without restarting DuckDB, call [`httpserve_stop`](#https
 The HTTP endpoint inherits the DuckDB connection's surface in full. The most reliable way to make that surface safe is at the DuckDB level, not the HTTP level:
 
 ```bash
-# Read-only — INSERT / UPDATE / COPY TO / ATTACH all fail at SQL parse time.
-duckdb -readonly mydata.duckdb -c "
+# Read-only — INSERT / UPDATE / COPY TO / ATTACH all fail.
+# FOREGROUND=1 keeps the listener on the main thread, so the process stays up.
+DUCKDB_HTTPSERVER_FOREGROUND=1 duckdb -readonly mydata.duckdb -c "
   LOAD httpserver FROM query_farm;
   SELECT httpserve_start('0.0.0.0', 9999, 'shared-api-key');
-  CALL pg_sleep(86400);
 "
 ```
 

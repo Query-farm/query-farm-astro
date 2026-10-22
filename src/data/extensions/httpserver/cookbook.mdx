@@ -30,7 +30,7 @@ curl -X POST --header "X-API-Key: supersecretkey" \
      "http://localhost:9999/?default_format=JSONEachRow"
 ```
 
-`JSONEachRow` returns newline-delimited objects — see the [ClickHouse format reference](https://clickhouse.com/docs/en/interfaces/formats#jsoneachrow) for the exact shape.
+`JSONEachRow` (the default when no format is given) returns newline-delimited objects with every non-`NULL` value as a JSON string — see the [ClickHouse format reference](https://clickhouse.com/docs/en/interfaces/formats#jsoneachrow). `CSV` and `XML` are also accepted.
 
 ## Pass SQL as a query parameter
 
@@ -90,14 +90,13 @@ Open `http://localhost:9999/` in a browser. Authenticate, then paste queries int
 ## Serve a read-only DuckDB to a private network
 
 ```bash
-duckdb -readonly mydata.duckdb -c "
+DUCKDB_HTTPSERVER_FOREGROUND=1 duckdb -readonly mydata.duckdb -c "
   LOAD httpserver FROM query_farm;
   SELECT httpserve_start('0.0.0.0', 9999, 'shared-api-key');
-  CALL pg_sleep(86400);
 "
 ```
 
-`-readonly` is the simplest hard guarantee against mutation through the HTTP endpoint — see the [DuckDB CLI docs](https://duckdb.org/docs/api/cli).
+`-readonly` is the simplest hard guarantee against mutation through the HTTP endpoint — see the [DuckDB CLI docs](https://duckdb.org/docs/api/cli). `DUCKDB_HTTPSERVER_FOREGROUND=1` makes `httpserve_start` block, which keeps the one-shot `duckdb -c` process alive until it is interrupted.
 
 ## Foreground mode and logging
 
@@ -107,6 +106,7 @@ Set these in the environment **before** launching DuckDB:
 DUCKDB_HTTPSERVER_FOREGROUND=1   # Run the listener on the main thread (the SQL caller blocks).
 DUCKDB_HTTPSERVER_DEBUG=1        # Verbose request logging to stdout.
 DUCKDB_HTTPSERVER_SYSLOG=1       # Route logs to syslog.
+DUCKDB_HTTPSERVER_BASEPATH=/duckdb/  # Serve / and /ping under /duckdb/ instead.
 ```
 
 `FOREGROUND=1` is the simplest way to keep the process alive when launching from a one-shot `duckdb -c '...'` invocation in a container.
@@ -117,7 +117,7 @@ DUCKDB_HTTPSERVER_SYSLOG=1       # Route logs to syslog.
 curl -i http://localhost:9999/ping
 ```
 
-`/ping` is unauthenticated and returns a small `200 OK` — wire it to a load balancer or `docker healthcheck`.
+`/ping` is unauthenticated and returns `200` with the body `OK` — wire it to a load balancer or `docker healthcheck`.
 
 ## Rotate the credential
 
