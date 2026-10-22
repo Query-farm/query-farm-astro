@@ -29,23 +29,23 @@
     {
       "icon": "⚙️",
       "title": "How it works",
-      "description": "Tributary is a thin DuckDB-table-function wrapper around [librdkafka](https://github.com/confluentinc/librdkafka). Every named parameter you pass is forwarded as a librdkafka configuration key, so any consumer-side option Kafka supports is also a Tributary option — broker discovery, SASL, SSL, offset reset, fetch tuning.",
+      "description": "Tributary is a thin DuckDB-table-function wrapper around [librdkafka](https://github.com/confluentinc/librdkafka). Every named parameter you pass is forwarded as a librdkafka configuration key, so librdkafka's client options are Tributary options — broker discovery, SASL, SSL, fetch tuning.",
       "bulletPoints": [
         {
           "label": "Configuration is parameter-passthrough",
-          "description": "No Tributary-specific auth or transport settings. Every name in [librdkafka's CONFIGURATION reference](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) is accepted as a named SQL parameter."
+          "description": "No Tributary-specific auth or transport settings. The global (client) properties in [librdkafka's CONFIGURATION reference](https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md) are accepted as named SQL parameters; names are checked at bind time."
         },
         {
           "label": "Multi-partition parallelism",
-          "description": "Each partition is read concurrently, so cluster scans scale with topic partition count rather than serializing through one consumer."
+          "description": "Each non-empty partition is a separate scan task read concurrently, so scans scale with topic partition count rather than serializing through one consumer."
         },
         {
           "label": "Output shape",
-          "description": "Each row is `(topic, partition, offset, message)`. The message is a `BLOB` — decode it in SQL with DuckDB's [JSON functions](https://duckdb.org/docs/data/json/loading_json.html), Avro/Protobuf extensions, or `decode(...)`."
+          "description": "Each row is `(topic, partition, offset, key, message)`. Key and message are `BLOB`s — turn UTF-8 payloads into text with `decode(...)` and use DuckDB's [JSON functions](https://duckdb.org/docs/data/json/loading_json.html), or Avro/Protobuf extensions. With a Schema Registry, JSON-schema topics come back as `JSON` columns."
         },
         {
-          "label": "No catalog, no secrets",
-          "description": "There is no `ATTACH ... (TYPE tributary)` and no managed `CREATE SECRET TYPE tributary`. Every call passes its own credentials through named parameters — source them from `getenv()` and pass via SQL variables so they never appear inline in queries."
+          "label": "Secrets, no catalog",
+          "description": "There is no `ATTACH ... (TYPE tributary)`. Cluster options and credentials can live in a `tributary_cluster` secret (used for topics written `kafka://<name>/<topic>`), and Schema Registry credentials in a `tributary_schema_registry` secret; named parameters work too."
         }
       ]
     },
@@ -56,15 +56,15 @@
       "bulletPoints": [
         {
           "label": "Reads, not writes",
-          "description": "The verified function surface is consumer-side. There is no documented producer / write-back function — for cache-priming or topic-publishing workflows, keep a real Kafka producer."
+          "description": "The function surface is consumer-side plus a Schema Registry client. There is no producer / write-back function — for cache-priming or topic-publishing workflows, keep a real Kafka producer."
         },
         {
           "label": "Whole-topic scan by default",
-          "description": "A scan reads the topic's current contents end-to-end. Scope with `WHERE` on partition/offset/timestamp, or set `auto.offset.reset := 'latest'`."
+          "description": "A scan reads everything the topic retains, from each partition's first retained offset to the high watermark at scan start. `WHERE` filters run after the read, so snapshot into a table when you'll query a topic repeatedly."
         },
         {
           "label": "Credentials in named parameters",
-          "description": "Pass [SASL](https://kafka.apache.org/documentation/#security_sasl) / [SSL](https://kafka.apache.org/documentation/#security_ssl) credentials via bind variables seeded from `getenv()` so they don't appear in cached SQL plans."
+          "description": "Keep [SASL](https://kafka.apache.org/documentation/#security_sasl) / [SSL](https://kafka.apache.org/documentation/#security_ssl) credentials in a `tributary_cluster` secret (redacted in `duckdb_secrets()`), or pass them with `getvariable()` from variables set with `getenv()`, so they don't appear in query text."
         },
         {
           "label": "Experimental status",
