@@ -80,22 +80,18 @@ CREATE OR REPLACE TABLE new_signups AS
 SELECT 'user' || i || '@example.com' AS email
 FROM range(20, 40) t(i);
 
--- Generic `tbl` referenced by the bitfilters_duckdb_* examples the
--- extension ships in duckdb_functions(). filter_blob is a per-row column
--- (NULL here, so the fixture loads on every engine); the probe examples
--- that read it fail, because the probe requires a filter that is constant
--- across rows.
+-- Generic `tbl` referenced by the bitfilters_duckdb_hash and
+-- bitfilters_duckdb_bloom_filter_create examples the extension ships in
+-- duckdb_functions().
 CREATE OR REPLACE TABLE tbl AS
-SELECT i AS key, i AS key_col, i AS col1, i * 10 AS col2,
-       CAST(NULL AS BLOB) AS filter_blob
+SELECT i AS key, i AS key_col, i AS col1, i * 10 AS col2
 FROM range(0, 20) t(i);
 
--- Per-zone DuckDB-compatible Bloom filters for the cookbook snippet.
--- The actual `bitfilters_duckdb_*` API takes additional parameters; this
--- fixture exists purely so the snippet's `FROM zone_filters z` parses.
--- We populate `bf` as a generic BLOB so the column type is reasonable.
+-- Per-bucket DuckDB-compatible Bloom filters for the cookbook snippets,
+-- built the same way as the cookbook's CREATE TABLE.
 CREATE OR REPLACE TABLE zone_filters AS
 SELECT bucket,
-       CAST(NULL AS BLOB) AS bf
+       bitfilters_duckdb_bloom_filter_create(
+         'v2.0', 16384, bitfilters_duckdb_hash('v2.0', key)) AS bf
 FROM keys
 GROUP BY bucket;
