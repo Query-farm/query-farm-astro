@@ -2,7 +2,7 @@
 title: "DuckDB-Wasm startup: from 6.8 to 2.3 seconds with Haybarn-Wasm"
 description: "Haybarn-Wasm, a drop-in fork of DuckDB-Wasm, loads five extensions in 1.9 seconds, against 5.4 for upstream. Here's where the startup time went and how we cut it."
 pubDate: 2026-10-19
-author: "Rusty Conover"
+author: "Query Farm Team"
 tags: ["DuckDB", "DuckDB-Wasm", "WebAssembly", "Haybarn", "Performance", "Extensions"]
 draft: false
 heroImage: "/media/posts/duckdb-wasm-startup-time/social.png"

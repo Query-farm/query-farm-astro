@@ -14,7 +14,7 @@ const blog = defineCollection({
     pubDate: z.coerce.date(),
     // Set only for a substantive editorial update, never from the build clock.
     updatedDate: z.coerce.date().optional(),
-    author: z.string().default('Query.Farm Team'),
+    author: z.string().default('Query Farm Team'),
     tags: z.array(z.string()).default([]),
     draft: z.boolean().default(false),
     showDescription: z.boolean().default(true),

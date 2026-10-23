@@ -2,7 +2,7 @@
 title: "SQL in your browser, code and data on your machine—with Iroh"
 description: "Call VGI functions and query databases through Grainlift and ADBC, without deploying a public HTTP endpoint or managing TLS certificates."
 pubDate: 2026-10-08
-author: "Rusty Conover"
+author: "Query Farm Team"
 tags: ["Iroh", "vgi-rpc", "VGI", "Grainlift", "ADBC", "WebAssembly", "Apache Arrow"]
 draft: false
 heroImage: "/media/posts/iroh-vgi-rpc/social.png"

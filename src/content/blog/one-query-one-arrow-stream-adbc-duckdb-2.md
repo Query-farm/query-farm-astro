@@ -3,7 +3,7 @@ title: "DuckDB 2.0 Pushes Whole Queries Through ADBC—10–11× Faster on Postg
 description: "Query Farm's adbc_scanner uses DuckDB 2.0 whole-query pushdown to run supported queries entirely in PostgreSQL. In our benchmark, it was 10–11× faster."
 pubDate: 2026-09-13
 updatedDate: 2026-10-22
-author: "Rusty Conover"
+author: "Query Farm Team"
 tags: ["DuckDB", "ADBC", "PostgreSQL", "Performance", "Extensions"]
 heroImage: "/media/posts/one-query-one-arrow-stream-adbc-duckdb-2/social.png"
 draft: false
