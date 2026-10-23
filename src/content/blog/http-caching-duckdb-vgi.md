@@ -2,7 +2,7 @@
 title: "Bringing HTTP’s caching rules to DuckDB functions with VGI"
 description: "A data service can tell DuckDB how long an answer is safe to reuse, so repeated queries can skip another API call. Our benchmarks show when that saves time—and when caching costs more than it saves."
 pubDate: 2026-09-25
-author: 'Query.Farm Team'
+author: 'Query Farm Team'
 tags: ["VGI", "DuckDB", "Caching", "Arrow"]
 draft: false
 showTableOfContents: false

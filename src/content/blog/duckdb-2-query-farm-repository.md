@@ -2,7 +2,7 @@
 title: "DuckDB 2.0 and the Query Farm extension repository"
 description: "Query Farm now distributes its DuckDB 2.0 extensions through its own repository. Here's how to install them and why we're changing how we deliver releases."
 pubDate: 2026-10-22
-author: "Rusty Conover"
+author: "Query Farm Team"
 tags: ['DuckDB', 'Extensions', 'Distribution']
 draft: false
 showDescription: false

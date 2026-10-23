@@ -2,7 +2,7 @@
 title: "Call an API From Every Row in DuckDB, Without the Loop"
 description: "A table function turns an API call into rows in your database. A LATERAL join lets every row on the left call it — and VGI makes those calls in batches."
 pubDate: 2026-09-23
-author: "Rusty Conover"
+author: "Query Farm Team"
 tags: ["DuckDB", "VGI", "SQL", "Performance"]
 draft: false
 heroImage: "/media/posts/call-an-api-from-every-row-in-duckdb/social.png"

@@ -2,7 +2,7 @@
 title: "Quack and VGI: Two Approaches to Bringing RPC to DuckDB"
 description: "Quack — the new client/server protocol extension for DuckDB — was announced today. It's been built since November 2025, almost exactly as long as I've been building VGI. Here's what's interesting, what's surprising, and where the two projects converge and diverge."
 pubDate: 2026-05-12
-author: 'Query.Farm Team'
+author: 'Query Farm Team'
 tags: ["RPC", "VGI", "Quack"]
 heroImage: '/media/posts/quack-vgi-two-approaches-rpc-duckdb/social.png'
 ---

@@ -2,7 +2,7 @@
 title: "Why we built VGI instead of waiting for Arrow Flight 2.0"
 description: "Arrow Flight moves large datasets between applications, but is awkward to use from a browser. Building an alternative taught us why its future is likely to split across several projects."
 pubDate: 2026-10-19
-author: "Rusty Conover"
+author: "Query Farm Team"
 tags: ["Apache Arrow", "Arrow Flight", "ADBC", "VGI", "RPC"]
 draft: false
 heroImage: "/media/posts/why-we-built-vgi-instead-of-waiting-for-arrow-flight-2-0/social.png"

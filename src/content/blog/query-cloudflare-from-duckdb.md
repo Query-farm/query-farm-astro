@@ -2,7 +2,7 @@
 title: "Your Cloudflare data, in DuckDB"
 description: "Query Cloudflare's Durable Objects, D1, and Analytics Engine from your browser, the Haybarn/DuckDB command line, or Python through Grainlift and ADBC."
 pubDate: 2026-10-07
-author: "Rusty Conover"
+author: "Query Farm Team"
 tags: ["Grainlift", "Cloudflare", "DuckDB", "ADBC", "WebAssembly"]
 draft: false
 heroImage: "/media/posts/query-cloudflare-from-duckdb/social.png"

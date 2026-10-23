@@ -2,7 +2,7 @@
 title: "The Foundation owns the IP. DuckLabs ships the release."
 pubDate: 2026-08-26
 description: "The IP is safe under the DuckDB Foundation, but the Foundation doesn't cut releases — DuckLabs does. What the AWS acquisition changes for people who build on DuckDB, and what Query Farm is doing about it."
-author: "Rusty Conover"
+author: "Query Farm Team"
 tags: ["DuckDB", "Governance", "Distribution", "Haybarn", "VGI"]
 heroImage: '/media/posts/ducklabs-ships-the-release/social.png'
 nextStep:

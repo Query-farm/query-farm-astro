@@ -2,7 +2,7 @@
 title: "Compiling Isn't Running: Functionally Testing DuckDB-WASM Extensions"
 description: "A DuckDB extension that compiles for WebAssembly has only proven that it compiles. Whether it loads, and whether it actually runs, are separate questions. I built a Node harness to ask them across 124 community extensions. Here's what it found and the fixes that came out of it."
 pubDate: 2026-06-14
-author: 'Query.Farm Team'
+author: 'Query Farm Team'
 tags: ["WebAssembly", "Testing", "Extensions"]
 heroImage: '/media/posts/testing-duckdb-wasm-extensions/social.jpg'
 ---

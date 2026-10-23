@@ -2,7 +2,7 @@
 title: "A SQL WHERE Clause for Taste"
 description: "I pointed DuckDB at Hacker News and at Jev, TypeSafe's decision model, and asked it to score 500 stories against one sentence about what I like. It took 17 seconds and cost less than a penny."
 pubDate: 2026-09-18
-author: "Rusty Conover"
+author: "Query Farm Team"
 tags: ["DuckDB", "VGI", "SQL", "TypeSafe", "Jev"]
 heroImage: "/media/posts/a-where-clause-for-taste/social.png"
 leadVisual:
