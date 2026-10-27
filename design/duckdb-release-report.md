@@ -12,8 +12,8 @@ shared Buttondown form. No signup is required to read or download the evidence.
 
 ## Evidence and regeneration
 
-The report opens with the upgrade question and DuckDB's own migration guidance,
-then presents the calendar, release-aligned issue benchmark, first-time reporters,
+The report opens with the upgrade question, then presents the calendar,
+release-aligned issue benchmark, first-time reporters,
 package distribution, repository links and contributor trends. The normal blog
 title and byline replace the report masthead. The cutoff and preliminary status are recorded in the methods; the opening
 frames the upgrade and patch-release questions before investigating the data. Findings
@@ -25,7 +25,9 @@ and name the actor when describing others' work. State findings directly; cut
 transitions that merely announce their importance and repeated caveats. The
 opening asks whether 2.0 had more quality problems than expected after a release;
 the evidence measures issue activity, so preserve that limitation without
-restating it in every section.
+restating it in every section. Keep the conclusion focused on the core/client
+findings and a brief recommendation. Omit generic migration checklists, support
+date recaps and unverified explanations for client activity.
 
 The seven measures, two baselines, and two chart views come from the saved
 `duckdb-velocity-analysis` snapshot. The report does not fetch GitHub in the
