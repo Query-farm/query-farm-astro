@@ -92,8 +92,11 @@ The article links the [VGI connector](https://github.com/Query-farm/vgi-github)
 and [VGI](https://query.farm/vgi/). More reporters includes more first-observed
 reporters; a wider mix of users or workloads has not been established.
 GitHub's [Copilot workflow](https://github.blog/ai-and-ml/github-copilot/from-idea-to-pr-a-guide-to-github-copilots-agentic-workflows/)
-supports the statement that AI can simplify issue creation, but this dataset
-does not measure AI use. DuckDB's [2.0 static-linking documentation](https://duckdb.org/docs/2.0/dev/building/linking_extensions)
+supports the statement that AI can simplify issue creation. The article omits
+the product example and link; its general statement about increasing agent use
+is also supported by [adoption research](https://arxiv.org/abs/2601.18341v2).
+Neither source establishes the AI-assisted share of DuckDB issue reports, which
+this dataset does not measure. DuckDB's [2.0 static-linking documentation](https://duckdb.org/docs/2.0/dev/building/linking_extensions)
 documents client build adaptations. Those changes are a plausible contributor
 to integration problems, not an established cause of the aggregate issue rise.
 
