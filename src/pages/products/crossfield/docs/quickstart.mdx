@@ -1,0 +1,121 @@
+---
+layout: '../../../../layouts/CrossfieldDocs.astro'
+title: 'Retail orders and line items'
+description: 'Combine sales and receipt-line measures without counting an order’s revenue more than once.'
+---
+
+import JaffleDataModel from '../../../../components/crossfield/JaffleDataModel.astro';
+
+Use this guide to understand a common reporting problem: one purchase can have several receipt lines, but its revenue should count only once. If you are starting from the homepage, the [fulfillment walkthrough](/products/crossfield/docs/fulfillment) continues that example. This retail case explores relationships between records at different levels of detail.
+
+## Understand the example data
+
+Jaffle Shop is a fictional shop. We use a fixed synthetic sample containing 525 orders and 834 order lines, with sales in Brooklyn and Philadelphia. A customer makes a purchase at a store; the order has a line for each purchased product.
+
+<JaffleDataModel showKeys />
+
+These five tables will live in the `warehouse` catalog. An order stores three monetary amounts: `subtotal` before tax, `tax`, and `total` including tax. The setup converts the CSV's integer cents into USD decimal amounts.
+
+The report asks for **orders, order lines, and revenue by store**. The current semantic model defines `order_count` as the number of orders, `item_count` as the number of lines, and `revenue` as the sum of order subtotals. `store_name` supplies the grouping. For example, an order with three lines contributes one order and three lines; its subtotal must count only once.
+
+The walkthrough also attaches an older model that included tax in revenue. Both revisions read the same tables, letting you compare the effect of that definition change.
+
+## Before you start
+
+You need a matching patched DuckDB CLI and Crossfield extension from the same build. The [retail download](/crossfield/examples/retail.zip) includes all data, models and setup without requiring a source checkout; [run that bundle](/products/crossfield/docs/examples#run-a-bundle), then continue at “Query measures at their own grains” below. The checkout-based instructions that follow are an alternative setup. See [availability and limits](/products/crossfield/docs/compatibility). This walkthrough uses checked-in CSVs and in-memory catalogs; no external service or Python interpreter is required.
+
+## Open the matching CLI
+
+Replace both placeholder paths. Run from the **Crossfield repository root**, so the fixture and model paths resolve:
+
+```sh
+cd /path/to/crossfield
+/path/to/build/duckdb -unsigned -init /dev/null :memory: \
+  -cmd "LOAD '/path/to/build/extension/crossfield/crossfield.duckdb_extension'"
+```
+
+In that fresh CLI connection, load the physical tables with this CLI command:
+
+```sql
+.read examples/jaffle-shop/setup.sql
+```
+
+Then execute these SQL statements on the **same connection**:
+
+```sql
+ATTACH 'examples/jaffle-shop/jaffle-v1.package.json'
+AS jaffle_old (
+    TYPE crossfield,
+    MODEL_VERSION '1',
+    BINDINGS '{"sales":"warehouse","reference":"warehouse"}'
+);
+
+ATTACH 'examples/jaffle-shop/jaffle-v2.package.json'
+AS jaffle_current (
+    TYPE crossfield,
+    MODEL_VERSION '2',
+    BINDINGS '{"sales":"warehouse","reference":"warehouse"}'
+);
+```
+
+An application should submit the SQL inside `setup.sql`, then these attachment statements, after loading the extension. `.read` itself is a CLI command.
+
+Setup creates `warehouse` and loads 525 orders and 834 order lines, plus reference tables. Both models bind logical keys `sales` and `reference` to those same physical rows. `MODEL_VERSION` asserts each local package revision. Attachment requires existing sources; it does not create or populate them.
+
+In the queries below, `jaffle_current` is the attachment name and `jaffle` is the model inside it. `FROM SEMANTIC jaffle_current.jaffle` selects that model's approved definitions over the warehouse tables.
+
+## Query measures at their own grains
+
+```sql
+SELECT store_name, order_count, item_count, revenue
+FROM SEMANTIC jaffle_current.jaffle
+GROUP BY store_name
+ORDER BY store_name;
+```
+
+| store_name | order_count | item_count | revenue |
+|---|---:|---:|---:|
+| Brooklyn | 19 | 36 | 255.00 |
+| Philadelphia | 506 | 798 | 6100.00 |
+
+The model counts orders and lines independently before combining them by store. Revenue sums order subtotals in USD, excluding tax. Brooklyn's 36 lines therefore do not multiply its 19 orders or its revenue.
+
+Detail preserves each line identity, including repeated products:
+
+```sql
+SELECT id, order_id, sku
+FROM jaffle_current.detail.items
+ORDER BY id
+LIMIT 5;
+```
+
+## Run a model-owned report
+
+```sql
+SELECT *
+FROM jaffle_current.reports.store_revenue(
+    store_name => 'Philadelphia',
+    start_day => '2024-01-01',
+    end_day => '2024-02-01'
+);
+-- Philadelphia | 107 | 1270.00
+```
+
+The start date is inclusive and the end date exclusive. All three parameters are required. Named arguments may appear in any order.
+
+## Inspect and enable strict mode
+
+```sql
+EXPLAIN (SEMANTIC)
+SELECT revenue FROM SEMANTIC jaffle_current.jaffle;
+
+USE jaffle_current.semantic;
+SET crossfield_mode = 'strict';
+
+SELECT revenue FROM SEMANTIC jaffle_current.jaffle;
+-- 6355.00
+```
+
+Attached entries already validate their definitions before strict mode is enabled. Strict mode additionally restricts the supported statement to approved operations in one attachment. See [discovery and AI agents](/products/crossfield/docs/discovery) for rejected queries and repairs that preserve their meaning.
+
+The displayed numbers are independently specified expectations in `test/sql/examples/jaffle_shop.test`, derived from frozen CSV rows using integer cents. The website SQL was also executed against the matching native engine on October 20, 2026, with numerical checks passing with the optimizer enabled and disabled. This fixture is a selected synthetic customer panel; preserve its `NOTICE` and license when redistributing the CSVs.

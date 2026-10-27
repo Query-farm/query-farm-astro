@@ -1,0 +1,85 @@
+---
+layout: '../../../../layouts/CrossfieldDocs.astro'
+title: 'Query APIs through a semantic model'
+description: 'Let users choose an approved scope while the model owns provider inputs and retrieval dependencies.'
+---
+
+A researcher should be able to ask for an organization’s pull requests without reconstructing API endpoints or writing a lateral join to enumerate repositories. A callable model can expose complete typed signatures and own the approved retrieval behind them.
+
+## Choose a scope through named inputs
+
+A required repository can be positional or named. An organization alternative can require a keyword, so a bare string has one declared meaning. Optional filters are keyword-only. Crossfield uses native DuckDB argument binding; it does not inspect string contents or try providers until one succeeds.
+
+The GitHub overload pilot demonstrates these calls against an isolated generated model and deterministic HTTP fixture:
+
+```sql
+SELECT repository_count, pull_request_count, merged_prs, median_merge_hours
+FROM SEMANTIC engineering.github('example/alpha');
+-- 1 | 3 | 2 | 30
+
+SELECT repository_count, pull_request_count, merged_prs, median_merge_hours
+FROM SEMANTIC engineering.github(organization => 'example');
+-- 3 | 4 | 3 | 12
+
+SELECT repository_count, pull_request_count, merged_prs, median_merge_hours
+FROM SEMANTIC engineering.github(
+    organization => 'example', user => 'alice'
+);
+-- 3 | 3 | 2 | 27
+```
+
+These are recorded integration-fixture answers, not live GitHub activity. They require the matching native VGI build, generated worker and setup in `tests/crossfield/overloads.test` in the `vgi-github` checkout. The entire production generator has not been migrated to this overload interface.
+
+The example permits organization plus user; useful filter intersections are not forced into competing scopes. In this pilot, organization traversal happens inside the worker. The next example demonstrates a different mechanism: a dependency explicitly owned by Crossfield’s invocation model.
+
+## Run a model that retrieves its own dependencies
+
+Download [pipelines.zip](/crossfield/examples/pipelines.zip) and follow the [setup instructions](/products/crossfield/docs/examples#model-owned-pipeline). The fixture uses DuckDB’s native `range` function, so no VGI worker or network is needed:
+
+```sql
+SELECT number_count, number_sum
+FROM SEMANTIC arithmetic.numbers(5);
+-- 5 | 10
+
+SELECT number_count, number_sum
+FROM SEMANTIC arithmetic.numbers(stop => 5);
+-- 5 | 10
+
+SELECT number_count, number_sum
+FROM SEMANTIC arithmetic.numbers(seed => 4);
+-- 3 | 6
+```
+
+Both entry paths reuse the same canonical metrics and fields. The direct signature produces 0 through 4. The `seed` signature declares a driver/stage dependency:
+
+1. Produce candidate rows 0 through 3.
+2. Retain candidates at least 1.
+3. For each candidate, invoke the approved range stage with that candidate and its successor.
+4. Aggregate the resulting 1, 2 and 3 using the same count and sum definitions.
+
+The caller supplies a scope. The model supplies stage mappings, approval and grain contracts. An empty response contributes no fact rows: `seed => 1` yields count `0` and sum `NULL`, not a fabricated NULL fact or a promised zero-valued population row.
+
+## Discover before calling
+
+```sql
+SELECT signature_id, signature, parameters
+FROM crossfield_signatures()
+WHERE database_name = 'arithmetic'
+  AND object_kind = 'semantic';
+```
+
+Metadata exposes complete accepted signatures, types, defaults, nullability and calling conventions. The signature identifier is for discovery and diagnostics; users do not supply it in SQL. Missing scope, incompatible inputs or unsupported caller expressions fail before provider execution.
+
+`EXPLAIN (SEMANTIC)` identifies the selected signature and declared pipeline without executing providers. Run `explain.sql` from the download to inspect both paths.
+
+## Distinguish retrieval dependencies from reporting joins
+
+| Mechanism | Purpose |
+|---|---|
+| Model-owned invocation dependency | Pass an upstream row into an approved provider stage |
+| Semantic dataset relationship | Enrich or combine modeled datasets under grain and population rules |
+| Join between semantic models | Combine independently computed results across approved shared dimensions |
+
+Public correlation across model calls is not supported. A caller cannot supply an outer row as `repository => r.repository_name` to a separate semantic model and bypass the model’s retrieval contract. Crossfield also does not infer provider inputs from a `WHERE` or `ON` clause.
+
+Provider execution uses DuckDB’s native execution path. Connector compatibility, credentials, transport behavior and source consistency remain integration concerns. See [availability and limits](/products/crossfield/docs/compatibility).

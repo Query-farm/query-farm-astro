@@ -1,0 +1,87 @@
+---
+layout: '../../../layouts/CrossfieldArticle.astro'
+title: 'Give every report the same business definitions'
+description: 'Follow a delivery standard from a business decision to an attached model, a SQL query and a reviewed change.'
+eyebrow: 'How it works'
+---
+
+import EngineDiagram from '../../../components/crossfield/EngineDiagram.astro';
+import FulfillmentExample from '../../../components/crossfield/FulfillmentExample.astro';
+import RevisionComparison from '../../../components/crossfield/RevisionComparison.astro';
+import QueryModes from '../../../components/crossfield/QueryModes.astro';
+import SQLExample from '../../../components/crossfield/SQLExample.astro';
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import { crossfieldScenarios } from '../../../data/crossfield-scenarios';
+
+## Agree on what the report should measure
+
+A delivery report can count shipments that arrived on time or customers who received their complete order on time. Both calculations are useful. They answer different questions, and a team needs to know which one it is looking at before judging service performance.
+
+For this example, the business chooses **complete orders delivered by the original promised date**. Canceled orders are excluded. Incomplete orders remain in the count of orders the business was expected to deliver.
+
+The source data contains four eligible orders. Two were complete by the original promise date, so the result is 50%. The [runnable fulfillment guide](/products/crossfield/docs/fulfillment) explains every source row and supplies the model. If investment reporting is closer to your work, follow the [portfolio example](/products/crossfield/docs/trading).
+
+<FulfillmentExample />
+
+## Put the definition in a model
+
+The model author records which orders count, what “complete and on time” means, and how to calculate the percentage. The model also names the dimensions people may use to group the results, such as region.
+
+These decisions become reusable definitions. A regional report and a company-wide report can select the same metrics without rebuilding their rules in each query. The business still owns the choice of definition and the quality of its source data.
+
+Crossfield reads supported [Apache Ossie definitions](/products/crossfield/ossie) and adds rules for their use in DuckDB. The [model authoring guide](/products/crossfield/docs/models) explains the files and their responsibilities.
+
+## Attach the model and ask a question
+
+The fulfillment setup loads the source facts into `warehouse` and attaches the model as `operations`. The model becomes a catalog alongside the data; attachment checks its source references without copying the source rows.
+
+<CodeBlock code={`${crossfieldScenarios[0].attach}\n\n${crossfieldScenarios[0].explainQuery}`} title="SQL · Attach the model and report by region" tryable={false} />
+
+`FROM SEMANTIC operations.fulfillment` selects the model. The query chooses metrics and a grouping; the model supplies the eligibility and delivery rules. `BINDINGS` connects its logical source to the physical `warehouse` catalog.
+
+The [setup already performs this attachment](/products/crossfield/docs/fulfillment#load-the-example). Run it once in a fresh connection, then use the query. The guide includes expected regional and overall results.
+
+<span id="inspect-sql"></span>
+
+## Inspect the calculation before running the report
+
+When reviewing a model, you should be able to see how a business definition becomes a calculation. `EXPLAIN (SEMANTIC)` shows the selected definitions and generated SQL without running the report or calling providers.
+
+<SQLExample summary="Inspect this report and its generated SQL" purpose="Look for the original promise date, canceled-order exclusion and complete-delivery condition.">
+  <CodeBlock code={`EXPLAIN (SEMANTIC)\n${crossfieldScenarios[0].explainQuery}`} title="SQL · Explain the delivery report" tryable={false} />
+  <CodeBlock code={crossfieldScenarios[0].expanded} title="expanded_sql · Captured engine output" tryable={false} />
+</SQLExample>
+
+This is [captured output from the runnable example](/crossfield/examples/fulfillment/explain-semantic.json). Execute the original semantic query to keep Crossfield’s validation. The [explanation reference](/products/crossfield/docs/discovery#inspect-semantic-intent) also explains `EXPLAIN (SQL)`, which binds and optimizes, and `EXPLAIN ANALYZE`, which executes.
+
+## Decide how much freedom query authors should have
+
+Attaching a model makes its definitions available. You can leave ordinary SQL available for exploration, compose semantic results in a larger query, or require supported reporting queries to follow one model’s rules.
+
+<QueryModes id="how-it-works" strictSQL={crossfieldScenarios[0].strict} intro={false} />
+
+For example, strict mode can reject a calculation written directly against the source tables when the report must use the model. An application that must prevent users from changing those controls also needs to seal the connection. [Host-controlled sessions](/products/crossfield/docs/compatibility#host-controlled-sessions) describe that application boundary.
+
+## Keep the checks inside query execution
+
+Crossfield resolves the definitions and builds a DuckDB query. DuckDB binds, optimizes and executes it in the same connection. Crossfield’s checks continue through supported query preparation and execution, including checks that require actual source rows.
+
+<EngineDiagram />
+
+This engine integration is why Crossfield will ship in [Haybarn](/products/haybarn), Query Farm’s DuckDB distribution. [Read about the engine changes](/products/crossfield/engine) and the problems they solve.
+
+## Review a definition change before adoption
+
+Suppose the business proposes measuring against revised delivery promises. One previously late order now qualifies. Run both model versions against the same source data to see how much that rule change affects the result.
+
+<RevisionComparison scenario={crossfieldScenarios[0]} />
+
+Whether the revised promise is appropriate is a business decision. Crossfield gives reviewers a way to examine its effect before changing the reports people use. The [model versions guide](/products/crossfield/docs/model-versions) walks through the comparison and explains how to keep earlier definitions available.
+
+## Combine reports that different teams maintain
+
+Different teams can maintain separate models and combine their results through approved shared dimensions. In the [investment example](/products/crossfield/docs/trading#compare-exposure-with-limits), the portfolio model calculates exposure while the risk model supplies limits. Their results meet at the issuer dimension.
+
+Each model calculates its own result before the join. The models must agree on the meaning and complete grouping keys of the shared dimension; identical column names are insufficient. A missing limit remains NULL.
+
+These comparisons use semantic or off mode. Strict business queries stay within one attachment. The [query composition guide](/products/crossfield/docs/querying) covers the SQL and join rules.

@@ -1,0 +1,69 @@
+---
+layout: '../../../layouts/CrossfieldArticle.astro'
+title: 'Why Crossfield is part of Haybarn'
+description: 'Reporting rules need to stay in effect when DuckDB resolves functions, prepares queries and executes them. Haybarn provides the engine integration that makes those checks possible.'
+eyebrow: 'Engine integration'
+---
+
+import EngineLifecycle from '../../../components/crossfield/EngineLifecycle.astro';
+
+## Keep reporting rules in effect as a query runs
+
+A query that followed the model yesterday may need to be checked again after that model is replaced. A function that looks familiar in SQL may resolve to a different implementation. Crossfield needs access to those decisions inside DuckDB so it can apply the model’s rules at the point they matter.
+
+Crossfield is implemented as a native extension. It loads models, compiles metric definitions, evaluates approval rules and supplies semantic diagnostics. DuckDB supplies the parser and binder, optimizer, vectorized operators, transactions and storage.
+
+Crossfield will ship in [Haybarn](/products/haybarn), Query Farm’s DuckDB distribution, with the engine support it needs. Our specialized requirements extend beyond recognizing `FROM SEMANTIC`: a query's approved meaning must survive rewriting, binding and later execution. We added generic hooks at those boundaries, keeping business rules in the extension.
+
+<EngineLifecycle />
+
+## Recheck prepared queries when the model changes
+
+An application might prepare a report, replace its semantic model attachment and execute the old handle. A rewrite performed only when the SQL first arrived would miss that change.
+
+Crossfield retains the original semantic request and its governing context. Replacing the attachment invalidates affected prepared work; the caller must prepare again. Other context changes can require revalidation or recompilation. Supported views likewise retain semantic intent and are checked when used.
+
+These rules also need to cover native preparation, query consumers and execution entry points, not just the text sent through one application wrapper. The lifecycle hook gives the extension a consistent place to apply its own contract.
+
+## Check the function DuckDB will actually call
+
+DuckDB resolves overloads and can invoke extension callbacks during binding. A function name alone does not identify the selected implementation. Crossfield must check the chosen definition **before** type resolution and binding callbacks can invoke it.
+
+The scalar authorization hook exposes the selected native definition; separate cast provenance identifies the owner of an effective cast registration. Crossfield applies its approval rules to those resolved objects and the resulting plan. It does not equate business permission with equality of executable function pointers.
+
+These controls govern SQL through supported entry points. Native providers and engine code remain trusted. The integration is not a memory sandbox for a hostile native extension.
+
+## What the maintained patch series adds
+
+The earlier retail, Ossie, measurement and pipeline examples were verified against DuckDB source [`d54cbbe3df`](https://github.com/duckdb/duckdb/commit/d54cbbe3df17e8e5ce68312f483b4155836112aa) plus the eight-patch series below. Seven patches provide extension capabilities; the eighth fixes SQL presentation.
+
+The newer trading and fulfillment examples were checked separately against Haybarn’s shared engine revision `6d01968ba1ee4973483e3e67c9a1f58864a1ea9f`, based on the same DuckDB revision. Their [verification records and build requirements](/products/crossfield/docs/compatibility#match-the-engine-and-extension) identify that combination. The table documents the earlier example build, rather than specifying the build for every example or the upcoming Haybarn release.
+
+| Patch | User outcome | Generic mechanism |
+|---|---|---|
+| `0001` Statement lifecycle | Retain intent and revalidate governed work at preparation and execution. | Lifecycle callbacks and contextual cast checks. |
+| `0002` Parser refresh | A grammar-setting change applies to the next statement in a batch. | Refresh parser options between statements. |
+| `0003` Function authorization | Reject disallowed scalar definitions before binding callbacks run. | Selected-overload authorization and retained definition/operator provenance. |
+| `0004` Parser options | Compose semantic syntax with the connection's active grammar. | Connection-aware extension parser options. |
+| `0005` Correlated function options | A model-owned pipeline can supply row inputs and constant named provider options. | Native binding for named options on correlated table functions. |
+| `0006` Cast provenance | Inspect the owning extension of a registered conversion without executing it. | Read-only cast-registration identity. |
+| `0007` Parser guidance | Add applicable signature repair information without hiding the original error or location. | Structured parser-error callback. |
+| `0008` SQL formatting | Keep `$name` and `$1` intact in readable SQL exports. | Parameter-token formatting fix; no lifecycle hook or ABI change. |
+
+The complete rationale and regression names live in `patches/duckdb/README.md` in the Crossfield checkout. [Download the earlier example build’s patch contract](/crossfield/examples/engine-patches.md) to inspect the mechanisms and their boundaries. For an evaluation, use the matching engine, extension and build manifest supplied for the example you are running.
+
+## How other extensions could use the hooks
+
+Connection-aware grammar options can serve other SQL dialect extensions. Correlated table functions can use native named options and defaults. Parser guidance can support domain-specific tools while retaining DuckDB's original diagnostic.
+
+Lifecycle and binding callbacks could also support other extensions whose decisions depend on a connection's current policy or resolved function definitions. Those are potential uses of the interfaces, not claims that other projects have adopted them.
+
+These requirements are specialized. Query Farm will maintain the integration in Haybarn. Our product does not depend on the changes being accepted upstream; that decision belongs to DuckDB's maintainers.
+
+## Ship the engine and extension together
+
+Matching a `DuckDB 2.0` version string is insufficient. Some hooks change native interfaces. The CLI or host library, Crossfield extension and other native modules must agree on the patched engine, ABI and platform.
+
+Use the matching `crossfield-build.json` manifest and artifacts supplied for the evaluated profile. Crossfield checks required runtime capabilities; those checks do not make unrelated native builds interchangeable. Updating upstream DuckDB also requires rebuilding and qualifying the combination.
+
+The upcoming Crossfield-enabled Haybarn release will provide the matching engine and extension. Until then, the examples use the recorded development builds; they do not establish browser/WASM support. [Availability and limits](/products/crossfield/docs/compatibility) explains evaluation access and build requirements. [Model validation](/products/crossfield/docs/validation) distinguishes software versions from model revisions.

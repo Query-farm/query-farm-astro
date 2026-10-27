@@ -1,0 +1,310 @@
+---
+import CodeBlock from '../ui/CodeBlock.astro';
+import SQLExample from './SQLExample.astro';
+import {
+  jaffleStoreSQL,
+  jaffleTotalSQL,
+  jaffleStoreRows,
+  jaffleTotalRows,
+} from '../../data/crossfield';
+---
+
+<div class="jaffle-demo" data-jaffle-demo>
+  <div class="demo-heading">
+    <span class="demo-label">Shop sales · Precomputed results</span>
+    <p>The same metrics, by store or overall.</p>
+  </div>
+
+  <p class="demo-note">
+    To run this SQL, use the matching Crossfield build, example data, and the
+    <code>jaffle_current</code> attachment.
+    <a href="/products/crossfield/docs/quickstart">See the setup →</a>
+  </p>
+
+  <div class="demo-controls" data-jaffle-controls hidden role="group" aria-label="Choose example grouping">
+    <button type="button" data-jaffle-view="store" aria-pressed="true" aria-controls="jaffle-store-example">
+      By store
+    </button>
+    <button type="button" data-jaffle-view="total" aria-pressed="false" aria-controls="jaffle-total-example">
+      Overall totals
+    </button>
+  </div>
+
+  <div id="jaffle-store-example" class="demo-panel" data-jaffle-panel="store">
+    <p class="table-hint">Scroll the table sideways to see all columns.</p>
+    <div class="result-scroll" tabindex="0" role="region" aria-label="Expected results by store">
+      <table>
+        <caption>Expected results · revenue in USD</caption>
+        <thead>
+          <tr>
+            <th scope="col">store_name</th>
+            <th scope="col" data-numeric>order_count</th>
+            <th scope="col" data-numeric>item_count</th>
+            <th scope="col" data-numeric>revenue</th>
+          </tr>
+        </thead>
+        <tbody>
+          {jaffleStoreRows.map(([store, orders, items, revenue]) => (
+            <tr>
+              <th scope="row">{store}</th>
+              <td data-numeric>{orders}</td>
+              <td data-numeric>{items}</td>
+              <td data-numeric>{revenue}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <SQLExample summary="See the store query" purpose="The caller chooses approved metrics and a store dimension. The model owns the calculations and joins; the SQL does not restate them."><CodeBlock code={jaffleStoreSQL} title="SQL · By store" tryable={false} /></SQLExample>
+  </div>
+
+  <div id="jaffle-total-example" class="demo-panel" data-jaffle-panel="total" hidden>
+    <p class="table-hint">Scroll the table sideways to see all columns.</p>
+    <div class="result-scroll" tabindex="0" role="region" aria-label="Expected overall totals">
+      <table>
+        <caption>Expected results · revenue in USD</caption>
+        <thead>
+          <tr>
+            <th scope="col" data-numeric>order_count</th>
+            <th scope="col" data-numeric>item_count</th>
+            <th scope="col" data-numeric>revenue</th>
+          </tr>
+        </thead>
+        <tbody>
+          {jaffleTotalRows.map(([orders, items, revenue]) => (
+            <tr>
+              <td data-numeric>{orders}</td>
+              <td data-numeric>{items}</td>
+              <td data-numeric>{revenue}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <SQLExample summary="See the totals query" purpose="Removing the store dimension asks for overall totals. The revenue definition and the independent order/line counts stay the same."><CodeBlock code={jaffleTotalSQL} title="SQL · Overall totals" tryable={false} /></SQLExample>
+  </div>
+
+  <p class="demo-note">
+    Frozen synthetic data. Expectations calculated independently from the source rows.
+    <a href="/products/crossfield/docs/quickstart">Read the walkthrough →</a>
+  </p>
+  <p class="sr-only" role="status" aria-live="polite" aria-atomic="true" data-jaffle-status></p>
+</div>
+
+<script>
+  function setupJaffleDemos() {
+    document.querySelectorAll<HTMLElement>('[data-jaffle-demo]').forEach(demo => {
+      if (demo.dataset.jaffleReady === 'true') return;
+
+      const controls = demo.querySelector<HTMLElement>('[data-jaffle-controls]');
+      const buttons = Array.from(demo.querySelectorAll<HTMLButtonElement>('[data-jaffle-view]'));
+      const panels = Array.from(demo.querySelectorAll<HTMLElement>('[data-jaffle-panel]'));
+      const status = demo.querySelector<HTMLElement>('[data-jaffle-status]');
+      if (!controls || buttons.length !== 2 || panels.length !== 2) return;
+
+      panels.forEach(panel => {
+        const scroll = panel.querySelector<HTMLElement>('.result-scroll');
+        const hint = panel.querySelector<HTMLElement>('.table-hint');
+        if (!scroll || !hint) return;
+        const updateHint = () => { hint.hidden = scroll.scrollWidth <= scroll.clientWidth + 1; };
+        new ResizeObserver(updateHint).observe(scroll);
+        updateHint();
+      });
+
+      buttons.forEach(button => {
+        button.addEventListener('click', () => {
+          const view = button.dataset.jaffleView;
+          buttons.forEach(option => {
+            option.setAttribute('aria-pressed', String(option.dataset.jaffleView === view));
+          });
+          panels.forEach(panel => {
+            panel.hidden = panel.dataset.jafflePanel !== view;
+          });
+          if (status) {
+            status.textContent = view === 'store'
+              ? 'Showing SQL and precomputed expected results by store.'
+              : 'Showing SQL and precomputed expected overall totals.';
+          }
+        });
+      });
+
+      demo.dataset.jaffleReady = 'true';
+      controls.hidden = false;
+    });
+  }
+
+  setupJaffleDemos();
+  document.addEventListener('astro:page-load', setupJaffleDemos);
+</script>
+
+<style>
+  .jaffle-demo {
+    container-type: inline-size;
+    min-width: 0;
+    overflow: hidden;
+    border: 1px solid var(--color-soil-300);
+    border-radius: 1rem;
+    background: #fffdf7;
+    box-shadow: 0 12px 36px rgb(33 26 18 / 5%);
+  }
+
+  .demo-heading {
+    padding: 1.5rem 1.5rem 1.1rem;
+  }
+
+  .demo-label {
+    color: var(--color-soil-700);
+    font-size: 0.75rem;
+    font-weight: 500;
+  }
+
+  .demo-heading p {
+    margin-top: 0.4rem;
+    color: var(--color-soil-900);
+    font-family: var(--font-display);
+    font-size: 1.35rem;
+    font-weight: 600;
+    letter-spacing: -0.022em;
+    line-height: 1.25;
+  }
+
+  .demo-controls {
+    display: flex;
+    gap: 0.35rem;
+    padding: 0 1.5rem 1.25rem;
+  }
+
+  .demo-controls[hidden],
+  .demo-panel[hidden] {
+    display: none;
+  }
+
+  .demo-controls button {
+    min-height: 2.75rem;
+    padding: 0.5rem 0.85rem;
+    border: 1px solid var(--color-soil-300);
+    border-radius: 0.5rem;
+    background: transparent;
+    color: var(--color-soil-700);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 150ms, border-color 150ms;
+  }
+
+  .demo-controls button:hover {
+    border-color: var(--color-soil-900);
+  }
+
+  .demo-controls button[aria-pressed='true'] {
+    border-color: var(--color-soil-900);
+    background: var(--color-soil-900);
+    color: var(--color-cream);
+  }
+
+  .demo-controls button:focus-visible,
+  .result-scroll:focus-visible {
+    outline: 2px solid var(--color-link);
+    outline-offset: 3px;
+  }
+
+  .demo-panel {
+    min-height: 0;
+  }
+
+  .table-hint { display: none; margin: 0 1rem .5rem; color: var(--color-soil-700); font-size: .75rem; line-height: 1.6; }
+  .table-hint[hidden] { display: none; }
+
+  .demo-panel :global(.code-block-wrapper) {
+    border-right: 0;
+    border-left: 0;
+    border-radius: 0;
+  }
+
+  .demo-panel :global(pre) {
+    min-height: 9rem;
+    padding: 1.1rem 1.5rem;
+    font-size: 0.75rem;
+  }
+
+  .result-scroll {
+    overflow-x: auto;
+    margin: 0 1.5rem;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    color: var(--color-soil-900);
+    font-size: 0.8125rem;
+    white-space: nowrap;
+  }
+
+  caption {
+    padding: 1rem 0 0.65rem;
+    color: var(--color-soil-700);
+    font-size: 0.75rem;
+    text-align: left;
+  }
+
+  th,
+  td {
+    padding: 0.65rem 0.65rem;
+    border-bottom: 1px solid var(--color-soil-200);
+    text-align: left;
+  }
+
+  th:first-child,
+  td:first-child {
+    padding-left: 0;
+  }
+
+  th:last-child,
+  td:last-child {
+    padding-right: 0;
+  }
+
+  thead th {
+    color: var(--color-soil-700);
+    font-size: 0.6875rem;
+    font-weight: 500;
+  }
+
+  tbody th {
+    font-weight: 400;
+  }
+
+  [data-numeric] {
+    text-align: right;
+  }
+
+  .demo-note {
+    padding: 1rem 1.5rem 1.4rem;
+    color: var(--color-soil-700);
+    font-size: 0.75rem;
+    line-height: 1.7;
+  }
+
+  .demo-note a {
+    display: block;
+    width: fit-content;
+    margin-top: 0.25rem;
+    color: var(--color-link);
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .demo-controls button {
+      transition: none;
+    }
+  }
+  @container(max-width:420px) {
+    .demo-heading { padding-inline: 1rem; }
+    .demo-controls { padding-inline: 1rem; flex-wrap: wrap; }
+    .result-scroll { margin-inline: 1rem; }
+    .demo-note { padding-inline: 1rem; font-size: .8125rem; }
+    .demo-panel :global(pre) { padding-inline: 1rem; }
+    .table-hint { display: block; }
+  }
+</style>
