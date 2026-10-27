@@ -101,3 +101,14 @@ GROUP BY 1;
 CREATE OR REPLACE TABLE readings AS
 SELECT i::DOUBLE AS temp
 FROM range(1, 11) t(i);
+
+----------------------------------------------------------------------
+-- orders: product + revenue BIGINT for the weighted Frequent Items
+-- examples (top-K by revenue rather than by row count).
+----------------------------------------------------------------------
+CREATE OR REPLACE TABLE orders AS
+SELECT
+    (['widget','widget','gadget','gizmo','doohickey','sprocket'])[1 + (i % 6)]
+        AS product,
+    (10 + (i * 37 % 90))::BIGINT AS revenue
+FROM range(0, 300) t(i);

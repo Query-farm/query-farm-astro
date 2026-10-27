@@ -21,18 +21,19 @@ SELECT date_trunc('day', ts)        AS day,
 FROM events
 GROUP BY 1;
 
--- Rolling 7-day uniques: union the per-day sketches, no rescan
+-- Rolling 7-day uniques: merge the per-day sketches, no rescan
+-- (datasketch_theta over a sketch column is the merge aggregate)
 SELECT datasketch_theta_estimate(
-         datasketch_theta_union(sketch)
+         datasketch_theta(sketch)
        ) AS uniques_last_7d
 FROM daily_uniques
 WHERE day >= CURRENT_DATE - 7;
 
 -- Retention: users active in BOTH last week AND this week
-WITH last_week AS (SELECT datasketch_theta_union(sketch) AS s
+WITH last_week AS (SELECT datasketch_theta(sketch) AS s
                    FROM daily_uniques
                    WHERE day BETWEEN CURRENT_DATE - 14 AND CURRENT_DATE - 7),
-     this_week AS (SELECT datasketch_theta_union(sketch) AS s
+     this_week AS (SELECT datasketch_theta(sketch) AS s
                    FROM daily_uniques
                    WHERE day >= CURRENT_DATE - 7)
 SELECT datasketch_theta_estimate(
@@ -54,7 +55,9 @@ This extension is a thin DuckDB wrapper around the [Apache DataSketches C++ libr
 - **An aggregate** (`datasketch_kll`, `datasketch_hll`, `datasketch_theta`, …) that builds the sketch in one pass over input values.
 - **A typed BLOB column type** (`sketch_kll_double`, `sketch_hll`, `sketch_theta`, …) — a strict superset of `BLOB` carrying the serialized sketch.
 - **Reader scalars** (`datasketch_*_quantile`, `datasketch_*_estimate`, `datasketch_*_cdf`, …) that decode the BLOB and return values without rebuilding from rows.
-- **Mergers** (`datasketch_hll_union`, `datasketch_theta_union`, …) — aggregates over a sketch column that produce a rolled-up sketch.
+- **Mergers** — aggregates over a sketch column that produce a rolled-up sketch (`datasketch_hll_union`, `datasketch_cpc_union`, and the merge form of every other aggregate, e.g. `datasketch_theta(sketch)` or `datasketch_kll(200, sketch)`). Theta also has two-sketch scalars for set algebra: `datasketch_theta_union`, `datasketch_theta_intersect`, `datasketch_theta_a_not_b`.
+
+Every aggregate returns `NULL` when it sees no input rows, so wrap an estimate in `coalesce(..., 0)` where an empty group should read as zero.
 
 The serialization format is the same one the [Java reference implementation](https://github.com/apache/datasketches-java) writes, which is the format Druid, Pinot, BigQuery, and Spark integrations consume. A sketch built in DuckDB and written to Parquet can be merged inside Druid or vice versa — no re-aggregation across systems.
 
@@ -67,21 +70,36 @@ The right sketch depends on what you're estimating and which constraint binds fi
 | Family | When to pick                                                        | Notes                                              |
 |--------|---------------------------------------------------------------------|----------------------------------------------------|
 | HLL    | Default — fastest reads, broad cross-system interop                 | `lg_k` 4–21; 12 is a good default (~4 KB sketch)   |
-| CPC    | Storage-bound — many sketches at rest                               | ~40% smaller than HLL at the same accuracy         |
-| Theta  | You need union, intersection, or A-not-B (funnel, retention, churn) | Only family with full set algebra                  |
+| CPC    | Storage-bound — many sketches at rest                               | `lg_k` 4–26; ~40% smaller than HLL at the same accuracy |
+| Theta  | You need union, intersection, or A-not-B (funnel, retention, churn) | `lg_k` 5–26; only family with full set algebra     |
 
 **Quantiles**
 
 | Family    | When to pick                          | Notes                                        |
 |-----------|---------------------------------------|----------------------------------------------|
-| KLL       | Default — best accuracy/size balance  | `K = 200` is a sensible production starting point |
-| TDigest   | p99 / p999 SLO reporting              | FLOAT/DOUBLE only; tail-accurate             |
-| REQ       | Skewed distributions                  | Error scales with rank, not fixed            |
-| Quantiles | Compatibility with classic pipelines  | Use KLL for new work                         |
+| KLL       | Default — best accuracy/size balance  | `K` 8–65535; 200 is a sensible production starting point |
+| TDigest   | p99 / p999 SLO reporting              | `K` 10–65535; FLOAT/DOUBLE only; tail-accurate |
+| REQ       | Skewed distributions                  | `K` 4–1024; error scales with rank, not fixed |
+| Quantiles | Compatibility with classic pipelines  | `K` a power of 2 from 2 to 32768; use KLL for new work |
+
+A size argument outside its family's range is rejected when the query binds, rather than being silently truncated.
 
 **Frequency**
 
-A single family — [Frequent Items](https://datasketches.apache.org/docs/Frequency/FrequentItemsOverview.html) — for top-K heavy hitters with confidence-bounded frequencies. Use `'NO_FALSE_POSITIVES'` to get items that are *definitely* heavy, `'NO_FALSE_NEGATIVES'` to get every candidate that *might* be.
+A single family — [Frequent Items](https://datasketches.apache.org/docs/Frequency/FrequentItemsOverview.html) — for top-K heavy hitters with confidence-bounded frequencies. Use `'NO_FALSE_POSITIVES'` to get items that are *definitely* heavy, `'NO_FALSE_NEGATIVES'` to get every candidate that *might* be (the error type is case-insensitive; anything else is an error). `datasketch_frequent_items` counts each row once; `datasketch_frequent_items_weighted` adds a per-row `BIGINT`/`UBIGINT` weight, for top-K by revenue, bytes, or any other metric.
+
+Items are stored as strings. `FLOAT` and `DOUBLE` items are spelled the way `CAST(x AS VARCHAR)` spells them (the shortest string that round-trips), so distinct values stay distinct and lookups match what a VARCHAR cast prints.
+
+## Merging HLL and CPC sketches across types
+
+HLL and CPC accept integers, floats, strings, blobs, `UUID`, `HUGEINT` and `UHUGEINT`, and hash each value according to its column type. Merge only sketches built from the same type — across types, equal values can hash differently:
+
+- Integers up to 64 bits hash by value (`5::UTINYINT` and `5::BIGINT` match), but an unsigned value is first read as the signed value of the same width, so `200::UTINYINT` hashes like `-56`.
+- A `HUGEINT` or `UHUGEINT` that fits in a `BIGINT` hashes like that `BIGINT` — so sketches of `sum()` results (which DuckDB returns as `HUGEINT`) merge with sketches of the same `BIGINT` values. Wider values hash all 16 bytes.
+- Integers and floating-point values never match: `5::BIGINT` and `5::DOUBLE` differ.
+- A `UUID` hashes the same 16 bytes as `uuid::BLOB`.
+
+If values arrive in different types, cast them to one type before sketching.
 
 ## Compared to alternatives
 
