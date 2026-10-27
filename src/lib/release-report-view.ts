@@ -8,6 +8,7 @@ export const core = report.packages.find(p => p.repo === 'duckdb')!;
 export const clients = groups.find(g => g.id === 'clients')!;
 export const recentCore = report.packageGroupsRecent.find(g => g.id === 'core')!;
 export const recentClients = report.packageGroupsRecent.find(g => g.id === 'clients')!;
+export const newReporters = report.reporterBreadth['2.0.0'].new;
 export const outside = report.counts.issuesOpened - core.counts['2.0.0'].actual;
 export const ratio = (id: keyof typeof report.windows, version = '2.0.0', window: 'post' | 'runup' = 'post', digits = 1, baseline: 'prerun' | 'recent' = 'prerun') => {
   const values = report.windows[id][baseline] as Record<string, { post: number; runup: number }>;

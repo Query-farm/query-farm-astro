@@ -90,6 +90,22 @@ response, or that these are defect rates. These groups describe where reports
 were filed, not which component caused a problem. All 30 exported rows were
 independently checked against the materialized DuckDB tables with UTC boundaries.
 
+`reporter-repository-breadth.csv` counts distinct people over each matched
+post-release window, for all, first-observed and recurring issue reporters.
+First observed is scope-wide across all 46 repositories, separately from PR
+history. Moving to a different repository does not make an existing issue
+reporter new again. In the 2.0 window, 67 of 72 first-time reporters filed in one
+repository and five filed in two; collectively they used 16 repositories.
+Each person's cohort stays fixed for the window, so later issues from a new
+reporter remain in the new cohort. Whole-window counts do not sum daily unique people, and the new cohort
+reconciles with the saved daily first-time counts. No identities are exported.
+The conclusion describes what would reduce confidence in 2.0.1 as a conditional
+judgment; closures alone do not measure confirmed fixes or resolution speed.
+The conclusion uses the blog's existing pull-quote style for the engine finding
+and the conditional concern about 2.0.1. It states that the report will be kept
+updated as more data becomes available; this is editorial copy, not a scheduled
+refresh or a claim that collection runs automatically.
+
 The article links the [VGI connector](https://github.com/Query-farm/vgi-github)
 and [VGI](https://query.farm/vgi/). More reporters includes more first-observed
 reporters; a wider mix of users or workloads has not been established.
