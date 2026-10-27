@@ -44,12 +44,12 @@ Nearby patch releases have dark gray vertical lines as well as boxed labels.
 The issue benchmark also shows a dotted line for
 the planned 2.0.1 release, taken from the saved release calendar; no future 2.0
 activity is fabricated. Each figure, title and caption sits inside one bordered
-panel on a lighter `#fffdf7` canvas. Comparison colors are navy `#004488`, rust
-`#b44b32` and teal `#137c78`, with dotted, dashed and solid lines respectively;
-2.0 has the heavier stroke. Contrast against that canvas is 9.46:1, 5.17:1 and
-4.94:1. The calendar retains the requested blue line and pale blue fill.
+panel on a lighter `#fffdf7` canvas. Comparison colors are blue `#0057b8`, burnt
+orange `#b54708` and purple `#7a1fa2`. All data series use solid lines, as requested;
+2.0 has the heavier stroke. Contrast against that canvas is 6.76:1, 5.34:1 and
+8.11:1. The calendar retains the requested blue line and pale blue fill.
 Neutral gray gridlines separate the chart from the site's warm gold accents.
-This uses the qualitative-palette and redundant-encoding principles discussed
+This uses the qualitative-palette principles discussed
 in [Paul Tol's colour-scheme guidance](https://sronpersonalpages.nl/~pault/data/colourschemes.pdf);
 the custom palette is not claimed to have passed a color-vision simulation.
 Static and interactive charts use the same treatment.
