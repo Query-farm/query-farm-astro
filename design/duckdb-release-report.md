@@ -20,6 +20,13 @@ frames the upgrade and patch-release questions before investigating the data. Fi
 are visible without using controls. Charts gain hover details when in view;
 Matplotlib figures and repository lists remain available without JavaScript.
 
+Use first-person plural for our collection, calculations and recommendations,
+and name the actor when describing others' work. State findings directly; cut
+transitions that merely announce their importance and repeated caveats. The
+opening asks whether 2.0 had more quality problems than expected after a release;
+the evidence measures issue activity, so preserve that limitation without
+restating it in every section.
+
 The seven measures, two baselines, and two chart views come from the saved
 `duckdb-velocity-analysis` snapshot. The report does not fetch GitHub in the
 browser or at Astro build time. Daily bins, release day 0, actual observation
