@@ -15,7 +15,7 @@ The report opens with the upgrade question and DuckDB's own migration guidance,
 then presents the calendar, release-aligned issue benchmark, package distribution,
 repository comparisons, first-time reporters and contributor trends. Findings
 are visible without using controls. Charts gain hover details when in view;
-Matplotlib figures and all tables remain available without JavaScript.
+Matplotlib figures and repository lists remain available without JavaScript.
 
 The seven measures, two baselines, and two chart views come from the saved
 `duckdb-velocity-analysis` snapshot. The report does not fetch GitHub in the
@@ -34,14 +34,21 @@ Source: `../duckdb-velocity-analysis/web_report.py`, using the dashboard's
 The JSON records the collection time and SHA-256 of the downloadable aligned CSV.
 `issue-calendar.csv` retains raw daily issue counts and trailing seven-day means.
 `package-comparison.csv` includes all 46 repositories, each release's actual and
-weekday-matched expected counts, and baseline-availability flags. The visible
-table includes every repository with an issue in the 2.0 window. Ratios are
+weekday-matched expected counts, and baseline-availability flags. On the page,
+repository links are grouped by engine, clients, extensions, ecosystem and docs,
+with category icons. The main list includes active repositories with an
+established baseline, at least one expected issue, and observed issues above
+expectation. This is a descriptive filter, not a significance test or a severity
+classification. Active repositories with expectations below one issue or
+unestablished baselines are listed separately. The package section intentionally
+has no ratio ranking or numeric matrix. The calendar and release benchmarks
+remain visible above it; exact package comparisons are in the CSV. Ratios are
 withheld for zero expectations or when saved history does not establish activity
 before the baseline began. This does not infer repository creation dates.
 The exporter reconciles repository counts and expectations against the existing
 scope-level analysis for all three releases. Issue location is not a confirmed
-affected component/version or regression classification. Small denominators
-remain visible next to large multiples.
+affected component/version or regression classification. Exact counts and
+expectations remain available in the downloadable evidence.
 
 The migration guidance and release planning dates were reviewed against official
 DuckDB sources on 2026-10-27. Review this editorial copy, support dates, and package

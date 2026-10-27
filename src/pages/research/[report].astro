@@ -3,6 +3,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 import Button from '../../components/ui/Button.astro';
 import NewsletterForm from '../../components/forms/NewsletterForm.astro';
 import ReportFigure from '../../components/research/ReportFigure.astro';
+import RepositoryActivity from '../../components/research/RepositoryActivity.astro';
 import report from '../../data/research/duckdb-2-release-activity.json';
 
 export function getStaticPaths() {
@@ -19,11 +20,6 @@ const ratio = (id: keyof typeof report.windows, version = '2.0.0', window: 'post
 const groups = report.packageGroups;
 const core = report.packages.find(p => p.repo === 'duckdb')!;
 const outside = report.counts.issuesOpened - core.counts['2.0.0'].actual;
-const countFormat = (n: number) => Number(n.toFixed(2)).toLocaleString('en-GB');
-const comparisonGroups = groups.map(group => ({
-  ...group, packages: report.packages.filter(p => p.group === group.id && p.counts['2.0.0'].actual > 0),
-}));
-const issueLink = (repo: string) => `https://github.com/duckdb/${repo}/issues?q=${encodeURIComponent(`is:issue created:${report.releases[2].date}..${report.through}`)}`;
 const newsletter = '/company/newsletter?source=duckdb-2-release-activity';
 const schedule = '/company/schedule?source=duckdb-2-release-activity';
 const title = 'Upgrading to DuckDB 2.0 — a preliminary report';
@@ -108,35 +104,10 @@ const jsonLd = {
           <p class="figure-note">Documentation and ecosystem projects are shown separately from the engine, language clients and extensions. Repository groups are recorded in the downloadable scope.</p>
         </figure>
 
-        <h3 class="subsection-heading">Find the packages in your stack.</h3>
-        <p class="section-intro">Read each row across to compare the release responses. The large number is a multiple of that repository’s own baseline; the smaller numbers show the issues observed and expected. Rows include every repository with an issue in the <span class="qf-figure">2.0</span> window.</p>
-        <div class="package-table-wrap" tabindex="0" role="region" aria-label="Package comparison table; scroll horizontally on narrow screens">
-          <table class="package-table">
-            <caption class="sr-only">Issues opened in release day plus the next five days, relative to each repository’s weekday-matched baseline. Counts for all releases are shown beneath the ratios.</caption>
-            <thead><tr><th scope="col">Package / repository</th>{report.releases.map(r => <th scope="col" class:list={[{ current: r.version==='2.0.0' }]}><strong class="qf-figure">{r.label}</strong><span>{date(r.date)}</span></th>)}</tr></thead>
-            <tbody>{comparisonGroups.map(group => <>
-              <tr class="package-group"><th colspan="4" scope="rowgroup">{group.label}</th></tr>
-              {group.packages.map(pkg => <tr>
-                <th scope="row"><a href={issueLink(pkg.repo)}>{pkg.label} <span aria-hidden="true">↗</span></a><span class="repo-name">{pkg.repo}</span></th>
-                {report.releases.map(release => {
-                  const c = pkg.counts[release.version as keyof typeof pkg.counts];
-                  return <td class:list={[{ current: release.version === '2.0.0' }]}>
-                    <span class:list={['package-ratio', 'qf-figure', { unavailable: c.ratio === null }]}>{c.ratio === null ? '—' : `${c.ratio.toFixed(1)}×`}</span>
-                    <span class="package-counts"><b class="qf-figure">{c.actual}</b> observed / <span class="qf-figure">{countFormat(c.expected)}</span> expected</span>
-                    {c.ratio === null && <span class="baseline-note">{c.baselineEstablished ? 'No matched baseline activity' : 'Baseline not established'}</span>}
-                  </td>;
-                })}
-              </tr>)}
-            </>)}</tbody>
-          </table>
-        </div>
-        <p class="figure-note">Matched windows: 16–21 September 2025 (1.4), 9–14 March 2026 (1.5), 21–26 October 2026 (2.0), all UTC. A dash means a ratio cannot be established; it does not mean no issues. Repository boundaries and filing habits can change between releases. <a href={`${assets}/package-comparison.csv`} download>All {report.repositoryCount} repositories, counts and expectations ↓</a></p>
-
-        <div class="package-findings">
-          <div><h3>Client activity is uneven.</h3><p>R’s eight issues are close to its usual level (<span class="qf-figure">1.1×</span>). WebAssembly has five (<span class="qf-figure">10×</span>), Node.js Neo four (<span class="qf-figure">16×</span>) and Python three (<span class="qf-figure">4×</span>). Follow the linked issues for the client you actually deploy.</p></div>
-          <div><h3>Integration counts need context.</h3><p>Quack and Iceberg each have eight issues, with different baselines (<span class="qf-figure">4×</span> and <span class="qf-figure">1.8×</span>). The PostgreSQL extension has six (<span class="qf-figure">12×</span>). These are useful places to inspect when those integrations are part of your workload.</p></div>
-          <div><h3>A large multiple can be a few issues.</h3><p>pg_duckdb’s <span class="qf-figure">32×</span> represents eight issues against an expectation of <span class="qf-figure">0.25</span>. Rust and MySQL had no activity on the matched baseline weekdays, so there is no finite multiple. None of these ratios is a failure rate.</p></div>
-        </div>
+        <h3 class="subsection-heading">Repositories with activity above expected levels</h3>
+        <p class="section-intro">Start with the repositories that matter to your stack. These received more issues than their own weekday-matched baseline predicted after <span class="qf-figure">2.0</span>. Each link opens the issues filed in the observed window.</p>
+        <RepositoryActivity />
+        <p class="figure-note">Links cover 21–26 October 2026 UTC, including release day. Repository boundaries and filing habits can change between releases. <a href={`${assets}/package-comparison.csv`} download>Download counts, baselines and comparisons with 1.4 and 1.5 ↓</a></p>
       </section>
 
       <section id="reporters" class="report-section" aria-labelledby="reporters-heading">
@@ -171,7 +142,7 @@ const jsonLd = {
       <section id="migration" class="report-section" aria-labelledby="migration-heading">
         <p class="section-number">05 / Applying this to an upgrade</p>
         <h2 id="migration-heading">Test the parts your application depends on.</h2>
-        <p class="section-intro">Use the package table to choose which issue trackers to read. Then run representative queries and integrations against <span class="qf-figure">2.0</span>, comparing results and timings with your current deployment. The migration guide identifies several concrete compatibility checks:</p>
+        <p class="section-intro">Use the repository links to choose which issue trackers to read. Then run representative queries and integrations against <span class="qf-figure">2.0</span>, comparing results and timings with your current deployment. The migration guide identifies several concrete compatibility checks:</p>
         <div class="migration-list">
           <div><h3>Database files & rollback</h3><p>New files use the <span class="qf-figure">2.0</span> storage format by default; older DuckDB versions cannot read them. Existing files retain their earlier format when written by <span class="qf-figure">2.0</span>. Check every process that shares a database file. <a href="https://duckdb.org/docs/2.0/operations_manual/migration#storage-format">Storage migration ↗</a></p></div>
           <div><h3>SQL behavior</h3><p>The old single-arrow lambda syntax is disabled by default. The new parser also changes some expression behavior, including regular-expression matching. Compare query results as well as execution success. <a href="https://duckdb.org/docs/2.0/operations_manual/migration#lambda-syntax">SQL changes ↗</a></p></div>
@@ -250,25 +221,6 @@ const jsonLd = {
   #release-report .distribution-row strong { text-align: right; font-weight: 500; }
   #release-report .distribution-share { font-size: 12px; color: #5d4632; text-align: right; }
   #release-report .subsection-heading { font-size: 27px; margin-top: 40px; }
-  #release-report .package-table-wrap { overflow-x: auto; margin-top: 30px; }
-  #release-report .package-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 690px; }
-  #release-report .package-table th { text-align: left; font-weight: 500; }
-  #release-report .package-table thead th { padding: 16px 18px; border-bottom: 1px solid #211a12; }
-  #release-report .package-table thead th:first-child { padding-left: 0; width: 32%; }
-  #release-report .package-table thead strong { display: block; font-size: 20px; font-weight: 500; }
-  #release-report .package-table thead span { font-size: 11px; color: #5d4632; }
-  #release-report .package-table td { padding: 13px 18px; border-bottom: 1px solid #ded5c5; vertical-align: top; }
-  #release-report .package-table tbody th { padding: 13px 12px 13px 0; border-bottom: 1px solid #ded5c5; }
-  #release-report .package-table .current { background: #efe7d5; }
-  #release-report .package-table .package-group th { padding-top: 28px; padding-bottom: 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #5d4632; border-bottom: 1px solid #cfc4ad; }
-  #release-report .repo-name { display: block; margin-top: 5px; font-size: 11px; color: #5d4632; font-weight: 400; }
-  #release-report .package-ratio { display: block; font-size: 23px; line-height: 1.2; }
-  #release-report .package-ratio.unavailable { color: #8a7560; }
-  #release-report .package-counts { display: block; margin-top: 6px; font-size: 10px; color: #5d4632; white-space: nowrap; }
-  #release-report .baseline-note { display: block; font-size: 10px; margin-top: 4px; color: #5d4632; }
-  #release-report .package-findings { display: grid; grid-template-columns: repeat(3,1fr); gap: 30px; margin-top: 36px; }
-  #release-report .package-findings h3 { font-size: 22px; }
-  #release-report .package-findings p { margin-top: 12px; font-size: 14px; color: #5d4632; }
   #release-report .finding-with-chart { display: grid; grid-template-columns: 260px minmax(0,1fr); gap: 38px; margin-top: 20px; }
   #release-report .finding-value { font-size: 65px; line-height: 1 !important; color: #7d5714; margin-top: 27px; }
   #release-report .finding-label { font-size: 17px; line-height: 1.4 !important; margin: 10px 0 18px; }
@@ -309,7 +261,7 @@ const jsonLd = {
     #release-report .report-wrap { padding: 0 20px; }
     #release-report .report-masthead { flex-direction: column; gap: 6px; font-size: 11px; }
     #release-report .report-deck { font-size: 18px; }
-    #release-report .opening, #release-report .split-reading, #release-report .method-columns, #release-report .report-newsletter, #release-report .package-findings { grid-template-columns: 1fr; gap: 24px; }
+    #release-report .opening, #release-report .split-reading, #release-report .method-columns, #release-report .report-newsletter { grid-template-columns: 1fr; gap: 24px; }
     #release-report .release-dates { padding-left: 18px; }
     #release-report .report-section { margin-top: 42px; }
     #release-report .distribution-row { grid-template-columns: 145px minmax(0,1fr) 32px; gap: 8px; font-size: 12px; min-height: 43px; }
