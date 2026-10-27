@@ -20,7 +20,7 @@ export function trackSiteEvent(name: EventName, params: EventParams, runtime: An
 
 export function newsletterSource(pathname: string, search: string) {
   const report = 'duckdb-2-release-activity';
-  return pathname === `/research/${report}` || pathname === `/research/${report}/` || new URLSearchParams(search).get('source') === report
+  return [`/research/${report}`, `/research/${report}/`, `/blog/${report}`, `/blog/${report}/`].includes(pathname) || new URLSearchParams(search).get('source') === report
     ? report : 'site';
 }
 

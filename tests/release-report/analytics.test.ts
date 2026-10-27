@@ -27,6 +27,8 @@ test('development, preview hosts, and blocked GA do not emit production events',
 
 test('only a known report ID can be carried through the signup link', () => {
   assert.equal(newsletterSource('/research/duckdb-2-release-activity/', ''), 'duckdb-2-release-activity');
+  assert.equal(newsletterSource('/blog/duckdb-2-release-activity/', ''), 'duckdb-2-release-activity');
+  assert.equal(newsletterSource('/blog/duckdb-2-release-activity', ''), 'duckdb-2-release-activity');
   assert.equal(newsletterSource('/company/newsletter', '?source=duckdb-2-release-activity'), 'duckdb-2-release-activity');
   assert.equal(newsletterSource('/company/newsletter', '?source=someone@example.test'), 'site');
   assert.equal(newsletterEvent('someone@example.test', 'someone@example.test').placement, 'site');

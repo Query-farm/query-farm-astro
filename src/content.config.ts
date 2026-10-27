@@ -7,7 +7,7 @@ import { docsSchema } from '@astrojs/starlight/schema';
 const docs = defineCollection({ loader: docsLoader(), schema: docsSchema() });
 
 const blog = defineCollection({
-  loader: glob({ pattern: '**/*.md', base: './src/content/blog' }),
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/blog' }),
   schema: z.object({
     title: z.string(),
     description: z.string(),
@@ -17,6 +17,7 @@ const blog = defineCollection({
     author: z.string().default('Query.Farm Team'),
     tags: z.array(z.string()).default([]),
     draft: z.boolean().default(false),
+    showLeadVisual: z.boolean().default(true),
     showTableOfContents: z.boolean().default(true),
     heroImage: z.string().optional(),
     heroImageAlt: z.string().optional(),

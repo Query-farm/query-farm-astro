@@ -74,7 +74,8 @@ Visual changes should follow `DESIGN_BRIEF.md`.
 
 ## DuckDB release report prototype
 
-Preview `/research/duckdb-2-release-activity/` with `npm run dev`. It includes
+Preview `/blog/duckdb-2-release-activity/` with `npm run dev`. The old research
+preview URL redirects to the blog post. It includes
 the saved release analysis, interactive comparisons, a project-discussion CTA,
 Open Graph artwork, and newsletter links/forms with GA4 click and submission
 events. The report follows the draft-post build convention (`INCLUDE_DRAFTS=true`
