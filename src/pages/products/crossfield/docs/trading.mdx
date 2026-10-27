@@ -1,0 +1,138 @@
+---
+layout: '../../../../layouts/CrossfieldDocs.astro'
+title: 'Portfolio exposure and execution price'
+description: 'A runnable trading example: define gross and net exposure, calculate a weighted execution price, join issuer limits, and compare model revisions.'
+---
+
+import CodeBlock from '../../../../components/ui/CodeBlock.astro';
+import ExposureExample from '../../../../components/crossfield/ExposureExample.astro';
+import ExecutionPriceExample from '../../../../components/crossfield/ExecutionPriceExample.astro';
+import queries from '../../../../../public/crossfield/examples/finance/queries.json';
+
+A portfolio team and a risk team can work from the same position records and still report different exposure numbers. A shared model makes the choice of measure, valuation date, and included books explicit.
+
+This example uses independently authored, synthetic cash-equity data. The positions have already been valued in USD. We are modeling reporting definitions, not pricing instruments or calculating total portfolio risk.
+
+## Understand the positions
+
+Each row is one position at a valuation date. Atlas and Boreal are fictional issuer identifiers. The Atlas positions hold the same common share class, valued at the same USD closing price on each date.
+
+| Date | Book | Issuer | Signed market value (USD) | Current scope? |
+|---|---|---|---:|---|
+| 2024-01-31 | Book A | Atlas | +12,000,000 | Yes |
+| 2024-01-31 | Book B | Atlas | −8,000,000 | Yes |
+| 2024-01-31 | Book A | Boreal | +3,000,000 | Yes |
+| 2024-01-31 | Expansion | Atlas | +5,000,000 | No: proposed additional book |
+| 2024-01-30 | Book A | Atlas | +300,000,000 | No: older valuation date |
+
+For Atlas, gross exposure is the sum of absolute position values: $20 million. Net exposure is the signed sum: $4 million. Neither is a substitute for the other.
+
+<ExposureExample />
+
+## Load the example
+
+[Download finance.zip](/crossfield/examples/finance.zip). It contains the data setup, complete models, two revision packages, queries, independently specified answers, and captured explanation. No API account or Python package is required.
+
+Use the [matching native engine and extension](/products/crossfield/docs/compatibility). [Request evaluation access](/company/contact) if you need the development build; the example download contains data and models only. The verified shared-engine CLI is named `haybarn`; use its actual path:
+
+```sh
+unzip finance.zip
+cd finance
+/path/to/matched/haybarn -unsigned -init /dev/null :memory: \
+  -cmd "LOAD '/absolute/path/to/crossfield.duckdb_extension';" < session.sql
+```
+
+For an interactive session, omit `< session.sql`, then run:
+
+```sql
+.bail on
+.read setup.sql
+.read run.sql
+.read explain.sql
+```
+
+The [setup](/crossfield/examples/finance/setup.sql) creates a `warehouse` attachment with positions, limits, and fills. It attaches four semantic catalogs: `portfolio`, `proposed`, `risk`, and `trading`. Explicit bindings connect the models' logical source to the physical warehouse. Run setup once per fresh connection.
+
+## Select named measures
+
+<CodeBlock code={queries.issuer} title="SQL · Gross and net exposure by issuer" tryable={false} />
+
+| issuer | gross_exposure | net_exposure |
+|---|---:|---:|
+| Atlas | 20,000,000 | 4,000,000 |
+| Boreal | 3,000,000 | 3,000,000 |
+
+<CodeBlock code={queries.total} title="SQL · Portfolio totals" tryable={false} />
+
+The totals are **$23 million gross and $7 million net**. The older position and Expansion book are excluded by the current model, even though the query has no `WHERE` clause.
+
+<CodeBlock code={queries.book} title="SQL · The same measures by trading book" tryable={false} />
+
+Book A: **$15m gross, $15m net**. Book B: **$8m gross, −$8m net**.
+
+The [Ossie document](/crossfield/examples/finance/exposure.ossie.json) defines the position fields and metric expressions. The [Crossfield manifest](/crossfield/examples/finance/exposure-current.crossfield.json) declares approved dimensions, units, binding identity, and this population:
+
+```sql
+as_of = DATE '2024-01-31' AND book IN ('Book A', 'Book B')
+```
+
+That fragment is a **model-authored population expression**, not an additional query the user must remember. This fixture intentionally fixes the reporting date. A production model with selectable dates needs an explicit as-of interface and temporal aggregation rules; positions should not simply be summed across dates.
+
+## Calculate the price actually paid
+
+The `fills` table contains two active fills for buy order ORD-101: 100 shares at $100 and 900 shares at $102. A third, voided fill at $999 tests the model's active-fill filter.
+
+<ExecutionPriceExample />
+
+<CodeBlock code={queries.execution} title="SQL · Approved execution-price calculation" tryable={false} />
+
+| order_id | filled_shares | execution_cost | execution_price |
+|---|---:|---:|---:|
+| ORD-101 | 1,000 | 101,800 | 101.80 |
+
+The [execution model](/crossfield/examples/finance/executions.ossie.json) defines `execution_price` as `SUM(shares * price) / NULLIF(SUM(shares), 0)`. Crossfield recomputes this ratio from the selected fill population. It does not average precomputed order prices. The metric is marked non-additive; zero total shares yields NULL. Prices are USD per share, excluding fees, for our own order—not a market-wide VWAP benchmark.
+
+## Compare exposure with limits
+
+The `risk` model contains one Atlas limit of $22 million at the same reporting date. Both models explicitly approve semantic joins and identify their issuer fields as the same shared dimension. This is stronger than merely naming both columns `issuer`.
+
+```sql
+SET crossfield_mode = 'semantic';
+```
+
+<CodeBlock code={queries.join} title="SQL · Independently calculated exposure and limits" tryable={false} />
+
+| issuer | gross_exposure | gross_limit |
+|---|---:|---:|
+| Atlas | 20,000,000 | 22,000,000 |
+| Boreal | 3,000,000 | NULL |
+
+The left join preserves Boreal. A missing limit remains NULL. This query reports exposure alongside a limit; it does not block a trade or establish that a portfolio is within every applicable risk limit.
+
+Cross-model queries use semantic or off mode. Strict mode keeps each business query within one attachment. See [query composition](/products/crossfield/docs/querying) for full grouping and compatibility rules.
+
+## Review a model revision
+
+The proposed revision includes the Expansion book's $5 million position. It uses the same source records and exposure formulas as the current revision. The two packages have the same package identity and revisions 1 and 2; separate attachment names keep both definitions available.
+
+<CodeBlock code={queries.revision} title="SQL · Measure the effect of a reporting scope change" tryable={false} />
+
+| current_exposure | proposed_exposure | change |
+|---:|---:|---:|
+| 23,000,000 | 28,000,000 | 5,000,000 |
+
+The $5 million difference comes from model scope, not a new trade or changed price. The outer subtraction is an analyst's reconciliation. It is not a newly approved semantic metric. A model revision preserves a definition; it does not freeze the underlying data.
+
+The [model versions guide](/products/crossfield/docs/model-versions) explains how to keep earlier definitions available and select a reviewed version for future reporting.
+
+## Inspect the generated SQL
+
+<CodeBlock code={`EXPLAIN (SEMANTIC)\n${queries.issuer}`} title="SQL · Inspect the reporting rules" tryable={false} />
+
+The [captured native SQL](/crossfield/examples/finance/expanded.sql) contains the January 31/book filter, both exposure formulas, and grouping by issuer. [Download the full explanation](/crossfield/examples/finance/explain-semantic.json). `EXPLAIN (SEMANTIC)` does not execute the report or call providers. Execute the original semantic query to retain its validation.
+
+## Verification and scope
+
+The numerical expectations are specified directly from the source rows in [expected-results.txt](/crossfield/examples/finance/expected-results.txt), independently of the compiler. The focused native regression runs with optimization enabled and disabled. The complete downloadable CLI session also runs in both modes. [Read the exact verification record](/crossfield/examples/finance/verification.txt).
+
+No live connector, customer account, pricing feed, FX model, derivatives netting, or trading-limit enforcement is included. The [retail walkthrough](/products/crossfield/docs/quickstart) remains a separate example of relationships between facts at different grains.

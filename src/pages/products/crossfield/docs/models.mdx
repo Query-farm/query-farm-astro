@@ -1,0 +1,138 @@
+---
+layout: '../../../../layouts/CrossfieldDocs.astro'
+title: 'Author a model'
+description: 'Start with source tables and business meaning, then describe them in a semantic model.'
+---
+
+import JaffleDataModel from '../../../../components/crossfield/JaffleDataModel.astro';
+
+Start by writing down the decision a report should support. Identify which records count, how the metric is calculated, and which ways of grouping it remain meaningful. The model is where those choices become reusable rules.
+
+The [fulfillment model](/crossfield/examples/fulfillment/fulfillment-current.ossie.json) and [investment model](/crossfield/examples/finance/exposure.ossie.json) are complete starting points from the homepage examples. This guide uses a retail example to explain an additional modeling problem: orders and receipt lines represent different levels of detail, but a report needs measures from both.
+
+## Start with the source tables
+
+The retail sample contains purchases at two stores. Customers place orders, and each order contains product lines. The files call this fictional retailer Jaffle Shop. The [retail walkthrough](/products/crossfield/docs/quickstart) loads these tables into a catalog named `warehouse`:
+
+<JaffleDataModel showKeys />
+
+Before writing a model, decide what each row represents and which rows contribute to each calculation. Here, order totals live on `orders`, while the lines live on `items`. Counting lines answers a different question from counting purchases.
+
+The reporting definitions are: count orders, count order lines, sum order subtotals as revenue excluding tax, and allow grouping by store. A store's name is reached directly from an order; an order line reaches the store through its order. These are the facts and relationships the model below describes.
+
+## Describe the data and its reporting rules
+
+[Apache Ossie (incubating)](https://ossie.apache.org/) is an open semantic model definition project. Crossfield implements a documented profile, not a blanket claim of portability. The shop's model uses its dataset, relationship and metric definitions with expressions pinned to the `OSSIE_SQL_2026` dialect; the Crossfield policy declares which members and operations callers may use.
+
+Inspect `models/jaffle-v2.ossie.json` and `models/jaffle-v2.crossfield.json` in the [retail bundle](/crossfield/examples/retail.zip), or the same files under `examples/jaffle-shop/` in your source checkout. The excerpts below illustrate those existing files; they are not standalone models.
+
+## Declare sources and grain
+
+Datasets contain typed source expressions and a declared primary key. Jaffle orders use source `main.orders` with primary key `id`; items use `main.items` with primary key `id`.
+
+This field excerpt maps a physical decimal column into the orders dataset:
+
+```json
+{
+  "name": "subtotal",
+  "datatype": "Decimal",
+  "expression": {
+    "dialects": [
+      {"dialect": "OSSIE_SQL_2026", "expression": "subtotal"}
+    ]
+  }
+}
+```
+
+A relationship declares the path between grains:
+
+```json
+{
+  "name": "items_orders",
+  "from": "items",
+  "to": "orders",
+  "from_columns": ["order_id"],
+  "to_columns": ["id"]
+}
+```
+
+The complete model also maps `orders.store_id` to `stores.id`. Those paths let line measures and order measures share the store dimension. The fixture policy uses trusted key evidence; a declared relationship is not a general certificate of live data quality.
+
+## Define metric recipes
+
+These are entries from the shop model’s root `metrics` array. The counts and subtotal use qualified dataset fields. The final `revenue` recipe references another metric: **that metric composition is a Crossfield extension**. The [Ossie guide](/products/crossfield/ossie) starts with a dataset-local metric and explains the boundary.
+
+```json
+[
+  {
+    "name": "order_count",
+    "expression": {
+      "dialects": [
+        {"dialect": "OSSIE_SQL_2026", "expression": "COUNT(orders.id)"}
+      ]
+    }
+  },
+  {
+    "name": "item_count",
+    "expression": {
+      "dialects": [
+        {"dialect": "OSSIE_SQL_2026", "expression": "COUNT(items.id)"}
+      ]
+    }
+  },
+  {
+    "name": "subtotal",
+    "expression": {
+      "dialects": [
+        {"dialect": "OSSIE_SQL_2026", "expression": "SUM(orders.subtotal)"}
+      ]
+    }
+  },
+  {
+    "name": "revenue",
+    "datatype": "Decimal",
+    "description": "Revenue excludes collected tax (current reporting definition).",
+    "expression": {
+      "dialects": [
+        {"dialect": "OSSIE_SQL_2026", "expression": "subtotal"}
+      ]
+    }
+  }
+]
+```
+
+The revenue recipe references the subtotal metric. A model-owned expression does not authorize callers to repeat arbitrary functions or arithmetic in their own projections.
+
+## Publish an explicit policy
+
+The Crossfield manifest imports the Ossie file. Its `policy` enumerates approved metrics, dimensions, detail fields and relationships, then adds semantic contracts. Selected policy entries:
+
+```json
+{
+  "metric_semantics": {
+    "revenue": {
+      "additivity": "additive",
+      "unit": "USD",
+      "tags": {"owner": "finance", "format": "currency"}
+    }
+  },
+  "field_semantics": {
+    "orders.subtotal": {"decimal_type": "DECIMAL(18,2)", "unit": "USD"},
+    "stores.name": {"sql_name": "store_name"}
+  }
+}
+```
+
+The model identifies the field as `stores.name`, while SQL users see the clearer column name `store_name`. Unique names such as `order_month` are automatic; duplicate short names receive dataset prefixes unless overridden. Discovery exposes both `name` and `sql_name`, so tools can relate the query column to its model definition.
+
+Dataset bindings associate orders/items with logical key `sales` and reference datasets with `reference`. The [walkthrough](/products/crossfield/docs/quickstart) maps both keys to physical catalog `warehouse`.
+
+## Version the definition
+
+Jaffle revision 1 defines revenue through `order_total`, including tax. Revision 2 defines it through `subtotal`, excluding tax. Package revisions retain those definitions and their reports independently.
+
+Attachment captures document bytes. Editing adjacent source files does not change an embedded package or an attached model. Use an updated package and explicit `ATTACH OR REPLACE`, or a separate alias. Reprepare queries after attachment replacement.
+
+Attachment validates dependencies and report schemas; numerical acceptance still needs independently authored expected results.
+
+Use the [native validator](/products/crossfield/docs/validation) to check the model and its source references, then test the numerical answers independently. Follow [model versions](/products/crossfield/docs/model-versions) to review a change against the same data before changing reports.

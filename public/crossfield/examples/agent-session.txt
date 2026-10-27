@@ -1,0 +1,60 @@
+Crossfield native discovery and repair session — October 24, 2026
+
+Fresh EC2 execution through ./dev shell; matching patched DuckDB/Crossfield, Linux ARM64.
+Retail bundle setup in a fresh connection. Outputs are verbatim below.
+
+Queries (successful connection):
+SELECT database_name,model_name,package_revision,sql_reference,is_callable FROM crossfield_models() ORDER BY database_name;
+SELECT name,sql_name,unit,comment FROM crossfield_metrics() WHERE database_name='jaffle_current' ORDER BY name;
+SELECT name,supported,compatible_dimensions FROM crossfield_member_capabilities() WHERE database_name='jaffle_current' AND name='revenue';
+SELECT database_name,sql_name,signature_id,signature,parameters FROM crossfield_signatures() ORDER BY database_name,sql_name,signature_id;
+USE jaffle_current.semantic;
+SET crossfield_mode='strict';
+SELECT revenue,order_total FROM SEMANTIC jaffle_current.jaffle;
+
+Deliberate rejection (separate fresh connection after the same setup):
+USE jaffle_current.semantic;
+SET errors_as_json=true;
+SET crossfield_mode='strict';
+SELECT SUM(subtotal) FROM warehouse.orders;
+
+The rejection returned exit status 1; it was checked independently from the successful queries.
+No callable signatures are listed because this retail model is not callable.
+
+┌────────────────┬────────────┬──────────────────┬────────────────────────────────┬─────────────┐
+│ database_name  │ model_name │ package_revision │         sql_reference          │ is_callable │
+├────────────────┼────────────┼──────────────────┼────────────────────────────────┼─────────────┤
+│ jaffle_current │ jaffle     │ 2                │ jaffle_current.semantic.jaffle │ false       │
+│ jaffle_old     │ jaffle     │ 1                │ jaffle_old.semantic.jaffle     │ false       │
+└────────────────┴────────────┴──────────────────┴────────────────────────────────┴─────────────┘
+┌─────────────────────┬─────────────────────┬──────┬────────────────────────────────────────────────────────────────┐
+│        name         │      sql_name       │ unit │                            comment                             │
+├─────────────────────┼─────────────────────┼──────┼────────────────────────────────────────────────────────────────┤
+│ average_order_value │ average_order_value │ USD  │                                                                │
+│ customer_count      │ customer_count      │      │                                                                │
+│ first_orders        │ first_orders        │      │                                                                │
+│ item_count          │ item_count          │      │ Order-line count, including repeated products.                 │
+│ order_count         │ order_count         │      │ Order count; independent of the number of order lines.         │
+│ order_total         │ order_total         │ USD  │ Order amounts including tax, in USD.                           │
+│ repeat_orders       │ repeat_orders       │      │                                                                │
+│ revenue             │ revenue             │ USD  │ Revenue excludes collected tax (current reporting definition). │
+│ subtotal            │ subtotal            │ USD  │ Order amounts excluding tax, in USD.                           │
+│ tax                 │ tax                 │ USD  │ Tax collected, in USD.                                         │
+└─────────────────────┴─────────────────────┴──────┴────────────────────────────────────────────────────────────────┘
+┌─────────┬───────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  name   │ supported │                                             compatible_dimensions                                             │
+├─────────┼───────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ revenue │ true      │ [customers.id, customers.name, orders.is_first, orders.order_day, orders.order_month, stores.id, stores.name] │
+└─────────┴───────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌───────────────┬──────────┬──────────────┬───────────┬────────────┐
+│ database_name │ sql_name │ signature_id │ signature │ parameters │
+├───────────────┼──────────┼──────────────┼───────────┼────────────┤
+└───────────────┴──────────┴──────────────┴───────────┴────────────┘
+┌─────────┬─────────────┐
+│ revenue │ order_total │
+├─────────┼─────────────┤
+│ 6355.00 │ 6730.75     │
+└─────────┴─────────────┘
+{"exception_type":"Invalid Input","exception_message":"CROSSFIELD_RAW_SOURCE: Read approved definitions with FROM SEMANTIC; physical sources are not approved","crossfield_diagnostic_version":"1","crossfield_stage":"compile","statement_lifecycle_terminal":"true","crossfield_query_coordinate":"normalized_parse_input_bytes","crossfield_code":"RAW_SOURCE","location":"[26,16]","position":"26"}
+hint: -agent renders errors as JSON and results compactly for AI coding agents (duckdb -help lists all options)
+

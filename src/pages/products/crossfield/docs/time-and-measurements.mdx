@@ -1,0 +1,82 @@
+---
+layout: '../../../../layouts/CrossfieldDocs.astro'
+title: 'Time and measurements'
+description: 'Report a measurement in the period it represents, rather than just the date printed on its timestamp.'
+---
+
+import MeasurementTimeline from '../../../../components/crossfield/MeasurementTimeline.astro';
+
+An hourly row does not tell you whether its value is an instantaneous reading, an amount accumulated over the previous hour, or a provider-defined daily statistic. These meanings require different calculations.
+
+## The midnight problem
+
+Suppose a station reports **5 mm** at `2024-01-02 00:00 UTC`, covering `2024-01-01 23:00` through midnight. Grouping by the timestamp’s date puts it on January 2. Whole-interval reporting assigns it to January 1.
+
+<MeasurementTimeline />
+
+The [measurement download](/crossfield/examples/measurements.zip) contains a local-table fixture, full model, setup and expected answers. It requires the matching engine and extension plus ICU, with no weather API dependency. Follow the [bundle instructions](/products/crossfield/docs/examples#measurement-intervals), then run:
+
+```sql
+SELECT location, report_day, rainfall, weighted_flux
+FROM SEMANTIC weather_model.measurements
+GROUP BY location, report_day
+ORDER BY location, report_day;
+```
+
+| location | report_day | rainfall, mm | weighted_flux, W/m² |
+|---|---|---:|---:|
+| A | 2024-01-01 | 5 | 10 |
+| A | 2024-01-02 | 7 | 40 |
+| B | 2024-01-01 | 11 | 30 |
+
+Location B has the same timestamps as A but a separate series. Its coverage does not conflict with A’s.
+
+## Declare support for each field
+
+This excerpt from `models/utc.crossfield.json` describes precipitation under `policy.measurements.fields`. It is not a complete model:
+
+```json
+{
+  "weather.amount": {
+    "support": "interval",
+    "statistic": "sum",
+    "time_field": "weather.time",
+    "start_field": "weather.start_at",
+    "end_field": "weather.end_at",
+    "duration_field": "weather.seconds",
+    "anchor": "end",
+    "time_basis": {"kind": "utc"},
+    "series": ["weather.location"]
+  }
+}
+```
+
+The versioned contract also declares the reporting period and metric’s rule. Here `rainfall` uses `assignment: "whole_interval"`, `reduction: "sum"`, and `coverage: "available"`. Read the [complete declaration](/crossfield/examples/measurements/models/utc.crossfield.json) alongside its [source fields](/crossfield/examples/measurements/models/source.ossie.json).
+
+The fixture deliberately includes unsafe metrics to demonstrate rejections. It is a teaching and regression model, not a suggested production metric inventory.
+
+## Preserve the statistic
+
+On January 2, A has a one-hour mean of 20 and a two-hour mean of 50. Its approved duration-weighted mean is `(20 × 1 + 50 × 2) / 3 = 40`. An unweighted average would produce 35 and misrepresent the measurement.
+
+Crossfield rejects unsupported reductions such as summing interval probabilities, averaging interval means without the required rule, or summing mean flux as though it were energy. Integration needs duration and appropriate unit semantics; a sum of samples is not a substitute.
+
+## Decide whether the report needs complete coverage
+
+`coverage: "available"` aggregates the valid measurements supplied. The result is **not a claim of complete daily coverage**. A model using `require_complete` must supply the whole period; missing intervals or NULL measurements cannot silently become zero.
+
+The native contract checks invalid bounds, overlap and duplicate coverage within each declared series. A whole interval must fit inside one reporting period. Partial overlap and intervals spanning periods are rejected; this interface does not split or prorate them.
+
+A fixed-offset provider day is not a civil day in a named timezone. Civil days can change length at daylight-saving transitions. The time basis must make that choice explicit.
+
+## Keep raw observations available
+
+Instantaneous readings, event times and unknown/source-dependent values can remain available through approved detail fields. They do not inherit an accumulation window from adjacent columns. Unknown support remains unknown; only operations requiring unavailable temporal knowledge are rejected.
+
+Existing models without measurement metadata retain their existing behavior. They are not retroactively interval-validated.
+
+## Recorded worker qualification
+
+The local numerical example and native interval regressions validate Crossfield’s measurement rules. The Open-Meteo adapter maps the worker’s per-field temporal metadata into that explicit contract; provider metadata alone does not approve an operation.
+
+The worker check recorded for this guide stopped before semantic execution: that native VGI client advertised protocol `2.1.0`, while the worker required `2.2.0`. Earlier worker passes do not qualify that pair. The local download remains a way to inspect and test the measurement rules independently. See [build and provider qualifications](/products/crossfield/docs/compatibility) before choosing a live worker setup.

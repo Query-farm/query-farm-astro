@@ -1,0 +1,116 @@
+require crossfield
+
+require-env WEBSITE_EXAMPLE_DIR
+
+statement ok
+-- Independently authored synthetic order and shipment data. Dates are UTC business dates.
+ATTACH ':memory:' AS warehouse;
+
+statement ok
+CREATE TABLE warehouse.orders(id VARCHAR PRIMARY KEY, region VARCHAR, status VARCHAR,
+ original_promised_date DATE, revised_promised_date DATE, ordered_units INTEGER);
+
+statement ok
+INSERT INTO warehouse.orders VALUES
+ ('A100','North','open','2024-01-31','2024-01-31',2),
+ ('A101','North','open','2024-01-31','2024-02-02',2),
+ ('A102','South','open','2024-01-31','2024-01-31',2),
+ ('A103','South','open','2024-01-31','2024-01-31',1),
+ ('A104','North','cancelled','2024-01-31','2024-01-31',1),
+ ('A105','South','open','2024-02-05','2024-02-05',1),
+ ('A106','North','open','2024-01-30','2024-01-30',1);
+
+statement ok
+CREATE TABLE warehouse.shipments(id INTEGER PRIMARY KEY, order_id VARCHAR, delivered_date DATE, units INTEGER);
+
+statement ok
+INSERT INTO warehouse.shipments VALUES
+ (1,'A100','2024-01-30',1), (2,'A100','2024-01-31',1),
+ (3,'A101','2024-01-31',1), (4,'A101','2024-02-02',1),
+ (5,'A102','2024-01-31',1), (6,'A103','2024-01-31',1),
+ (7,'A106','2024-01-30',1), (8,'A102','2024-02-05',1);
+
+statement ok
+-- Normalize the source to one fact per order, using only deliveries observed through Feb 3.
+-- No delivery means zero delivered units, and its last-delivery date remains NULL.
+CREATE TABLE warehouse.order_facts AS
+SELECT o.*, COALESCE(s.delivered_units,0) AS delivered_units, s.last_delivered_date
+FROM warehouse.orders o LEFT JOIN (
+ SELECT order_id, SUM(units) AS delivered_units, MAX(delivered_date) AS last_delivered_date
+ FROM warehouse.shipments WHERE delivered_date < DATE '2024-02-04' GROUP BY order_id
+) s ON o.id = s.order_id;
+
+statement ok
+ALTER TABLE warehouse.order_facts ADD PRIMARY KEY (id);
+
+statement ok
+ATTACH '{WEBSITE_EXAMPLE_DIR}/fulfillment-current.package.json' AS operations (TYPE crossfield, BINDINGS '{"warehouse":"warehouse"}');
+
+statement ok
+ATTACH '{WEBSITE_EXAMPLE_DIR}/fulfillment-revised.package.json' AS revised (TYPE crossfield, BINDINGS '{"warehouse":"warehouse"}');
+
+query II
+SELECT COUNT(*), SUM(CASE WHEN s.delivered_date <= o.original_promised_date THEN 1 ELSE 0 END)
+FROM warehouse.shipments s JOIN warehouse.orders o ON o.id=s.order_id
+WHERE o.original_promised_date=DATE '2024-01-31' AND o.status <> 'cancelled'
+AND s.delivered_date < DATE '2024-02-04';
+----
+6	5
+
+statement ok
+USE operations.semantic;
+
+statement ok
+SET crossfield_mode = 'strict';
+
+statement error
+SELECT COUNT(*) FROM warehouse.orders;
+----
+CROSSFIELD_RAW_SOURCE
+
+statement error
+SELECT SUM(ordered_units) FROM SEMANTIC operations.fulfillment;
+----
+CROSSFIELD_UNAPPROVED_PROJECTION
+
+query TIIR
+SELECT region, eligible_orders, on_time_orders, on_time_percent
+FROM SEMANTIC operations.fulfillment
+GROUP BY region
+ORDER BY region;
+----
+North	2	1	50
+South	2	1	50
+
+query IIR
+SELECT eligible_orders, on_time_orders, on_time_percent
+FROM SEMANTIC operations.fulfillment;
+----
+4	2	50
+
+query IIR
+SELECT eligible_orders, on_time_orders, on_time_percent FROM SEMANTIC operations.fulfillment WHERE region='West';
+----
+0	NULL	NULL
+
+query IIR
+WITH report AS (SELECT eligible_orders, on_time_orders, on_time_percent
+FROM SEMANTIC operations.fulfillment) SELECT * FROM report;
+----
+4	2	50
+
+statement ok
+SET crossfield_mode = 'semantic';
+
+query RRR
+WITH current AS (
+    SELECT on_time_percent FROM SEMANTIC operations.fulfillment
+), proposed AS (
+    SELECT on_time_percent FROM SEMANTIC revised.fulfillment
+)
+SELECT current.on_time_percent AS original_promise_percent,
+       proposed.on_time_percent AS revised_promise_percent,
+       proposed.on_time_percent - current.on_time_percent AS percentage_point_change
+FROM current CROSS JOIN proposed;
+----
+50	75	25

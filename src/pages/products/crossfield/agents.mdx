@@ -1,0 +1,129 @@
+---
+layout: '../../../layouts/CrossfieldArticle.astro'
+title: 'Help AI agents use the reporting rules your team agreed on'
+description: 'Show an AI agent which metrics answer the question, let it inspect the calculation, and return useful errors when a request breaks the model’s rules.'
+eyebrow: 'For AI agents'
+---
+
+import SemanticExplain from '../../../components/crossfield/SemanticExplain.astro';
+import AgentWorkflow from '../../../components/crossfield/AgentWorkflow.astro';
+import EditorialArt from '../../../components/crossfield/EditorialArt.astro';
+import SQLExample from '../../../components/crossfield/SQLExample.astro';
+
+An AI agent asked for sales before tax should not have to guess whether a column called `total` includes tax, which transactions count, or how to combine orders and receipt lines. Those decisions belong in the model. The agent’s job is to find the relevant definition and use it to answer the question.
+
+This guide follows a recorded SQL session over the [retail example](/products/crossfield/docs/quickstart). The same discovery and validation interfaces apply to the fulfillment and investment models. The session demonstrates the engine behavior without requiring a particular AI framework.
+
+<AgentWorkflow />
+
+## Find the definition before writing the query
+
+The request is for before-tax sales, grouped by store. The agent first finds the attached model, reads what its revenue metric means, and checks whether store is an allowed grouping. These are structured metadata queries, so the application does not have to extract the rules from a prompt or a paragraph of documentation.
+
+<SQLExample summary="See the discovery queries" purpose="These metadata calls let an AI agent find the model revision, metric meaning and allowed dimensions before constructing a request.">
+
+```sql
+SELECT database_name, model_name, package_revision,
+       sql_reference, is_callable
+FROM crossfield_models()
+ORDER BY database_name;
+
+SELECT name, sql_name, unit, comment
+FROM crossfield_metrics()
+WHERE database_name = 'jaffle_current'
+ORDER BY name;
+
+SELECT name, supported, compatible_dimensions
+FROM crossfield_member_capabilities()
+WHERE database_name = 'jaffle_current'
+  AND name = 'revenue';
+```
+
+</SQLExample>
+
+Two attached models can both offer a metric called `revenue` and calculate it differently. Keep the selected model and revision with the query. In this example, `revenue` excludes tax and `order_total` includes it.
+
+These metadata calls do not execute providers. A list of individually compatible dimensions is guidance, not approval of every possible combination. Validate the complete query.
+
+## Explain the request before executing it
+
+The explanation identifies the definitions, dependencies and grouping and exports the generated SQL. It does not run the report. This gives the application an inspectable record of the intended calculation before it asks a provider to retrieve data.
+
+<SemanticExplain />
+
+Executing that semantic SELECT returns Brooklyn's 19 orders, 36 lines and 255.00 before-tax revenue, and Philadelphia's 506 orders, 798 lines and 6100.00. A successful explanation does not remove runtime checks for source identity, provider behavior or data-dependent contracts.
+
+## Correct a rejected query without changing the question
+
+<EditorialArt variant="governed-paths" />
+
+Select the current model and enable strict mode in this development session:
+
+<SQLExample summary="See the rejected request" purpose="The raw subtotal calculation is outside this strict session’s approved query interface. This is an intentional rejection, not a working report.">
+
+```sql
+USE jaffle_current.semantic;
+SET crossfield_mode = 'strict';
+
+-- Deliberately rejected: ordinary raw-source aggregation.
+SELECT SUM(subtotal) FROM warehouse.orders;
+```
+
+</SQLExample>
+
+The [recorded discovery session](/products/crossfield/docs/examples#discovery-and-repair) includes the native rejection. These fields are excerpted from its structured error:
+
+<SQLExample language="JSON" summary="Inspect the structured diagnostic" purpose="These fields come from the actual native error. Tools can recognize the rejection without parsing prose; they still need to preserve the user’s intended question.">
+
+```json
+{
+  "crossfield_code": "RAW_SOURCE",
+  "crossfield_stage": "compile",
+  "exception_message": "CROSSFIELD_RAW_SOURCE: Read approved definitions with FROM SEMANTIC; physical sources are not approved"
+}
+```
+
+</SQLExample>
+
+The approved equivalent for this **before-tax** question is:
+
+<SQLExample summary="See the approved query" purpose="Revenue is the model’s approved before-tax definition. This replacement preserves the subtotal question; replacing a tax-inclusive total would not.">
+
+```sql
+SELECT revenue FROM SEMANTIC jaffle_current.jaffle;
+-- 6355.00
+```
+
+</SQLExample>
+
+`SUM(total)` asks a different question: the shop's totals include tax. Its corresponding approved metric is `order_total`, with expected result 6730.75. Substituting `revenue` would silently change the question.
+
+If the caller asks to apply an unapproved transformation to revenue, renaming the result does not grant that permission. If no approved definition preserves the requested calculation, report the missing capability and ask the model owner for a definition. A repair must preserve the filters, included records, and governing policy. If it cannot, the application should identify the missing definition for review.
+
+Hosts can configure `errors_as_json=true` before entering strict mode and sealing the session. Diagnostics provide native codes and structured repair information, distinguishing a query correction from model-owner action, a source refresh or a runtime failure. [Discovery reference](/products/crossfield/docs/discovery) describes the interfaces.
+
+## Find which inputs a model accepts
+
+Some models need an input scope: a repository, an organization, a date range or another approved argument. Discover the complete signatures rather than reconstructing combinations from prose:
+
+<SQLExample summary="See signature discovery" purpose="This query returns complete callable signatures. It helps a client choose a valid scope without inferring mutually exclusive inputs from prose.">
+
+```sql
+SELECT database_name, sql_name, signature_id, signature, parameters
+FROM crossfield_signatures()
+ORDER BY database_name, sql_name, signature_id;
+```
+
+</SQLExample>
+
+A signature identifier is for metadata and diagnostics; callers do not supply it in SQL. DuckDB matches the declared argument names and types. Crossfield validates the approved values before execution. Optional inputs are keyword-only; a nullable required input is still required.
+
+The [runnable pipeline example](/products/crossfield/docs/providers) demonstrates positional input and an alternative named scope over one set of semantic definitions. In a provider model, the chosen signature can select a model-owned retrieval pipeline. The caller need not choose a provider ID or write the dependency's lateral join.
+
+## Set up the application’s controls
+
+Strict mode controls supported SQL authoring, not the application around it. An unsealed caller can change modes. A trusted host must establish and seal the intended context if users must not be able to disable restrictions.
+
+Keep authentication, source credentials, function/module loading and native isolation under host control. A permitted query can still select an approved metric or set of records that does not match the intended business question. Use the explanation's canonical output identities, not a column label alone, when presenting a result as an approved metric.
+
+Read the [host boundaries](/products/crossfield/docs/compatibility#host-controlled-sessions) and [engine lifecycle rationale](/products/crossfield/engine). These controls support an AI agent's work; they are not a claim that every generated answer is correct.

@@ -1,0 +1,127 @@
+require crossfield
+
+require-env WEBSITE_EXAMPLE_DIR
+
+statement ok
+ATTACH ':memory:' AS warehouse;
+
+statement ok
+CREATE TABLE warehouse.positions(id INTEGER PRIMARY KEY, as_of DATE, book VARCHAR, issuer VARCHAR, market_value_usd DECIMAL(18,2));
+
+statement ok
+INSERT INTO warehouse.positions VALUES
+ (1, '2024-01-31', 'Book A', 'Atlas', 12000000),
+ (2, '2024-01-31', 'Book B', 'Atlas', -8000000),
+ (3, '2024-01-31', 'Book A', 'Boreal', 3000000),
+ (4, '2024-01-31', 'Expansion', 'Atlas', 5000000),
+ (5, '2024-01-30', 'Book A', 'Atlas', 300000000);
+
+statement ok
+CREATE TABLE warehouse.issuer_limits(id INTEGER PRIMARY KEY, issuer VARCHAR, as_of DATE, limit_usd DECIMAL(18,2));
+
+statement ok
+INSERT INTO warehouse.issuer_limits VALUES (1, 'Atlas', '2024-01-31', 22000000);
+
+statement ok
+CREATE TABLE warehouse.fills(id INTEGER PRIMARY KEY, order_id VARCHAR, shares INTEGER, price DECIMAL(18,2), status VARCHAR);
+
+statement ok
+INSERT INTO warehouse.fills VALUES (1, 'ORD-101', 100, 100, 'active'), (2, 'ORD-101', 900, 102, 'active'), (3, 'ORD-101', 100, 999, 'void');
+
+statement ok
+ATTACH '{WEBSITE_EXAMPLE_DIR}/exposure-current.package.json' AS portfolio (TYPE crossfield, BINDINGS '{"warehouse":"warehouse"}');
+
+statement ok
+ATTACH '{WEBSITE_EXAMPLE_DIR}/exposure-proposed.package.json' AS proposed (TYPE crossfield, BINDINGS '{"warehouse":"warehouse"}');
+
+statement ok
+ATTACH '{WEBSITE_EXAMPLE_DIR}/limits.crossfield.json' AS risk (TYPE crossfield, BINDINGS '{"warehouse":"warehouse"}');
+
+statement ok
+ATTACH '{WEBSITE_EXAMPLE_DIR}/executions.crossfield.json' AS trading (TYPE crossfield, BINDINGS '{"warehouse":"warehouse"}');
+
+# The deliberately wrong unweighted mean is 101; the model-owned weighted answer is 101.8.
+query R
+SELECT AVG(price) FROM warehouse.fills WHERE status = 'active';
+----
+101
+
+statement ok
+USE portfolio.semantic;
+
+statement ok
+SET crossfield_mode = 'strict';
+
+statement error
+SELECT SUM(market_value_usd) FROM warehouse.positions;
+----
+CROSSFIELD_RAW_SOURCE
+
+statement error
+SELECT AVG(price) FROM SEMANTIC trading.executions;
+----
+CROSSFIELD_UNAPPROVED_PROJECTION
+
+query IR
+SELECT filled_shares, execution_price FROM SEMANTIC trading.executions WHERE order_id = 'NONE';
+----
+NULL	NULL
+
+query TII
+SELECT issuer, gross_exposure, net_exposure
+FROM SEMANTIC portfolio.exposure
+GROUP BY issuer
+ORDER BY issuer;
+----
+Atlas	20000000	4000000
+Boreal	3000000	3000000
+
+query TII
+SELECT book, gross_exposure, net_exposure
+FROM SEMANTIC portfolio.exposure
+GROUP BY book
+ORDER BY book;
+----
+Book A	15000000	15000000
+Book B	8000000	-8000000
+
+query II
+SELECT gross_exposure, net_exposure
+FROM SEMANTIC portfolio.exposure;
+----
+23000000	7000000
+
+query TIIR
+SELECT order_id, filled_shares, execution_cost, execution_price
+FROM SEMANTIC trading.executions
+GROUP BY order_id;
+----
+ORD-101	1000	101800	101.8
+
+statement ok
+SET crossfield_mode = 'semantic';
+
+query TII
+SELECT p.issuer, p.gross_exposure, l.gross_limit
+FROM SEMANTIC portfolio.exposure AS p
+LEFT JOIN SEMANTIC risk.limits AS l
+  ON p.issuer = l.issuer
+GROUP BY p.issuer
+ORDER BY p.issuer;
+----
+Atlas	20000000	22000000
+Boreal	3000000	NULL
+
+query III
+WITH current AS (
+  SELECT gross_exposure FROM SEMANTIC portfolio.exposure
+), candidate AS (
+  SELECT gross_exposure FROM SEMANTIC proposed.exposure
+)
+SELECT current.gross_exposure AS current_exposure,
+       candidate.gross_exposure AS proposed_exposure,
+       candidate.gross_exposure - current.gross_exposure AS change
+FROM current CROSS JOIN candidate;
+----
+23000000	28000000	5000000
+

@@ -1,0 +1,82 @@
+---
+layout: '../../../../layouts/CrossfieldDocs.astro'
+title: 'Validate a model and review its changes'
+description: 'Check a model before attachment, review definition changes, and test numerical answers independently.'
+---
+
+A model can be well formed and still answer the wrong business question. Check it in three ways: validate its definitions, confirm that its sources match, and compare its results with independently worked-out answers. Crossfield’s native validator handles the first two; your numerical tests establish the third.
+
+## Validate without querying a provider
+
+Use `crossfield-validate` from the same qualified build as your runtime. The default `authoring` phase checks definitions, references, expressions and approval contracts offline:
+
+```sh
+crossfield-validate --output-file validation.json model.crossfield.yaml
+```
+
+The report uses the versioned `crossfield.validation` interface. Diagnostics include a stable code, message, file, JSON pointer, available source position, repair hint and native details. Physical checks that need live sources remain deferred; they are not silently treated as evidence.
+
+| Phase | Checks | Can consult sources? |
+|---|---|---|
+| `structure` | Parsing, closed schemas, imports and package integrity | No provider execution |
+| `authoring` | Structure plus semantic expressions, references and approval contracts | Offline; physical evidence can remain deferred |
+| `binding` | Attachment against configured physical dependencies | Yes; setup SQL and source binding are executable work |
+
+```sh
+crossfield-validate --phase structure model.policy.json
+crossfield-validate --phase binding --setup fixtures.sql model.crossfield.yaml
+```
+
+Only run trusted setup SQL. Exit status `0` means the requested validation completed, `1` means failure or incomplete validation, and `2` means a CLI or output error. **Numerical results are always `not_checked` by this validator.** A valid model can still express the wrong business definition.
+
+## Put the validator in a GitHub Action
+
+The Action adapter formats native diagnostics for a pull request and saves the structured report. There is no published validator release to install yet. This example requires a Crossfield checkout under `crossfield/`, a matching qualified Linux x64 bundle already placed in `artifacts/`, and your model files under `models/`:
+
+```yaml
+# Steps inside an existing job, after provisioning the stated artifacts.
+- name: Validate semantic models
+  uses: ./crossfield/actions/validate-model
+  with:
+    crossfield-version: '0.1.0-dev'
+    local-bundle: artifacts/crossfield-validator-0.1.0-dev-linux-x64.tar.gz
+    models: models/**/*.crossfield.yaml
+    phase: authoring
+    report: crossfield-validation.json
+    timeout-seconds: '120'
+```
+
+The version must exactly match the bundle. The adapter checks artifact identity and captures failures with a deadline. This is a development qualification path, not a public download recipe. The maintained workflow and Action contract live in `.github/workflows/validator-release.yml` and `actions/validate-model/README.md` in the source checkout.
+
+## Review a changed definition
+
+```sh
+crossfield-validate --baseline previous.crossfield.yaml model.crossfield.yaml
+```
+
+The baseline report marks relevant changes `review_required`. A change does not automatically fail validation, and a clean comparison does not establish numerical equivalence. Review the business meaning and run explicit answer tests.
+
+Crossfield keeps several kinds of version separate:
+
+| Version or identity | What it identifies |
+|---|---|
+| Software version, currently `0.1.0-dev` | Compiler and validator release |
+| `crossfield: 1`, `policy_version: 1` | Model-document contracts |
+| Package ID, revision and hashes | A particular set of business definitions |
+| Build manifest | Engine source, ordered patches, compiler source, schemas and build state |
+
+Model `requires` gates can request a software version and capabilities such as `typed_signatures` or `invocation_pipelines`. Those requirements assert compatibility; they do not grant permission to use a member.
+
+## Compare answers before adoption
+
+Attach the current and proposed packages under different names and query both over the same data. The [model versions guide](/products/crossfield/docs/model-versions) uses the delivery example: the revised promise date changes which orders count as on time.
+
+| Original promise | Revised promise | Difference |
+|---:|---:|---:|
+| 50% | 75% | +25 percentage points |
+
+Work out the expected difference from the source records before running the query. Here, one of four orders changes classification, so the expected increase is 25 percentage points. A test that simply accepts whatever the new model returns cannot establish that the change is correct.
+
+`MODEL_VERSION '2'` checks that the supplied package has revision 2. It does not fetch or select another package, and it does not select a historical snapshot of the source data.
+
+For authoring details, see [models](/products/crossfield/docs/models). For the exact runtime pairing, see [availability](/products/crossfield/docs/compatibility).

@@ -1,0 +1,164 @@
+---
+import { crossfieldScenarios } from '../../data/crossfield-scenarios';
+import FulfillmentExample from './FulfillmentExample.astro';
+import ExposureExample from './ExposureExample.astro';
+import FinanceModelFlow from './FinanceModelFlow.astro';
+import SQLExample from './SQLExample.astro';
+import CodeBlock from '../ui/CodeBlock.astro';
+import ReportingOutcome from './ReportingOutcome.astro';
+import SemanticModelOverview from './SemanticModelOverview.astro';
+import QueryModes from './QueryModes.astro';
+---
+<section class="walkthrough" id="walkthrough" data-scenarios aria-labelledby="walkthrough-heading">
+  <header class="walkthrough-header">
+    <h2 id="walkthrough-heading">See how teams define a business measure and reuse it across reports.</h2>
+    <p>Choose order fulfillment or investment reporting. Each example shows how different calculations or reporting scopes produce different answers, then follows the team’s chosen definition into a reusable model. Both examples use synthetic data with independently checked results.</p>
+    <fieldset class="scenario-selector" aria-describedby="scenario-instructions" data-scenario-controls hidden>
+      <legend>Choose an example</legend>
+      <p id="scenario-instructions">Select either option to change the walkthrough below. You can switch at any time.</p>
+      <div class="scenario-choices">
+        {crossfieldScenarios.map((s,i) => <label class="scenario-choice" for={`scenario-choice-${s.id}`}>
+          <input id={`scenario-choice-${s.id}`} type="radio" name="crossfield-scenario" value={s.id} checked={i===0} aria-controls={`scenario-${s.id} scenario-query-${s.id} scenario-revision-${s.id}`} aria-labelledby={`scenario-name-${s.id}`} aria-describedby={`scenario-description-${s.id}`} data-scenario-choice={s.id} />
+          <span class="choice-content">
+            <strong id={`scenario-name-${s.id}`}>{s.label}</strong>
+            <span class="choice-description" id={`scenario-description-${s.id}`}>{s.choiceDescription}</span>
+            <span class="choice-action" aria-hidden="true"><span class="choice-select">Select example <span aria-hidden="true">→</span></span><span class="choice-selected">Selected · shown below <span aria-hidden="true">✓</span></span></span>
+          </span>
+        </label>)}
+      </div>
+    </fieldset>
+    <noscript><p>The order fulfillment walkthrough is shown below. You can also <a href="/products/crossfield/docs/trading">read the investment reporting example</a>.</p></noscript>
+  </header>
+  {crossfieldScenarios.map((s,i) => <div class="scenario-panel" id={`scenario-${s.id}`} role="region" aria-labelledby={`scenario-name-${s.id}`} tabindex="0" hidden={i!==0} data-scenario-panel={s.id}>
+    <div class="scenario-topline"><span>{s.label} · Illustrative data</span><a href={`?scenario=${s.id}#walkthrough`} data-scenario-link>Link to this scenario <span aria-hidden="true">↗</span></a></div>
+    <div class="scenario-story"><h3>{s.heading}</h3>{s.paragraphs.map(p=><p>{p}</p>)}</div>
+    <ReportingOutcome scenario={s} />
+    <details class="source-details"><summary>Inspect the source records behind these figures</summary>{s.id==='investment' && <p class="note">This close-up shows the two Atlas positions. The current portfolio also includes a $3 million Boreal position; the proposed scope adds the $5 million Expansion book.</p>}<div class="source-diagram">{s.id==='fulfillment' ? <FulfillmentExample /> : <ExposureExample />}</div><p class="note">{s.sourceNote} <a href={s.guide}>Read the full source setup →</a></p></details>
+  </div>)}
+  <SemanticModelOverview />
+  <div id="inspect-sql">
+  {crossfieldScenarios.map((s,i) => <div class="scenario-technical" id={`scenario-query-${s.id}`} role="region" aria-label={`${s.label} SQL walkthrough`} hidden={i!==0} data-scenario-panel={s.id}>
+    <div class="step attach-step">
+      <div class="step-heading"><h2>Attach a model and query its business definitions.</h2><p>The model becomes a named catalog alongside your data. Attach it as <code>{s.attachment}</code>, then select its metrics with <code>FROM SEMANTIC</code>. <code>BINDINGS</code> maps the model’s source to your existing <code>warehouse</code> catalog.</p></div>
+      <div class="semantic-example"><CodeBlock code={`${s.attach}\n\n${s.explainQuery}`} title="SQL · Attach and query the model" tryable={false} /><p class="note">The <a href={`${s.guide}#load-the-example`}>runnable guide</a> includes the source data, model package and expected results. Its setup already performs the attachment shown here.</p></div>
+    </div>
+    <details class="execution-details" id={`explain-${s.id}`}>
+      <summary>Inspect how DuckDB executes this example.</summary>
+      <div class="explain-step">
+      <div class="scenario-grid">
+        <div><h3>Review how each result is calculated.</h3><p>{s.explanation}</p><p><code>EXPLAIN (SEMANTIC)</code> shows the selected definitions and generated SQL without executing the report or calling providers.</p></div>
+        {s.id==='investment' ? <FinanceModelFlow kind="explain" /> : <figure class="calculation-flow" aria-label="Four eligible orders, two completely delivered on time, an on-time order rate of 50 percent">
+          <div><span>Reporting population</span><strong>4 eligible orders</strong><p>Originally due January 31. Canceled orders excluded.</p></div>
+          <span class="flow-arrow" aria-hidden="true">↓</span>
+          <div><span>Approved calculation</span><strong>2 delivered in full, on time</strong><p>Count incomplete orders in the denominator.</p></div>
+          <span class="flow-arrow" aria-hidden="true">↓</span>
+          <figcaption><span class="qf-figure">2 ÷ 4 × 100 = 50%</span></figcaption>
+        </figure>}
+      </div>
+      <div class="explain-query"><CodeBlock code={`EXPLAIN (SEMANTIC)\n${s.explainQuery}`} title="SQL · Explain the report" tryable={false} /></div>
+      <SQLExample summary="Read the complete generated SQL" purpose="Actual native engine output, including generated aliases. Review the population filters and metric calculations."><CodeBlock code={s.expanded} title="expanded_sql · Complete captured output" tryable={false} /></SQLExample>
+      <p class="note">Captured from the matching build and <a href={s.guide}>runnable fixture</a>. <a href={`/crossfield/examples/${s.bundle}/expanded.sql`} download>Download the SQL</a> · <a href={`/crossfield/examples/${s.bundle}/explain-semantic.json`} download>Download the full explanation as JSON</a>. Generated aliases are not stable identities.</p>
+      <p class="note">Execute the original semantic query to retain Crossfield’s validation. <code>EXPLAIN (SQL)</code> also binds and optimizes; binding can invoke provider callbacks. <code>EXPLAIN ANALYZE</code> executes.</p>
+      </div>
+    </details>
+    <QueryModes id={s.id} strictSQL={s.strict} />
+  </div>)}
+  </div>
+</section>
+<script>
+  function setupScenarios() {
+    document.querySelectorAll<HTMLElement>('[data-scenarios]').forEach(root => {
+      if (root.dataset.ready) return;
+      const choices = Array.from(root.querySelectorAll<HTMLInputElement>('[data-scenario-choice]'));
+      // The revision comparison farther down the page follows this same choice.
+      const panels = Array.from(document.querySelectorAll<HTMLElement>('[data-scenario-panel]'));
+      const controls = root.querySelector<HTMLElement>('[data-scenario-controls]');
+      if (!controls || !choices.length || !panels.length) return;
+      const readScenario = () => new URL(location.href).searchParams.get('scenario');
+      const select = (requested: string | null, updateURL = false) => {
+        const active = choices.find(choice => choice.value === requested) || choices[0];
+        const id = active.value;
+        choices.forEach(choice => { choice.checked=choice===active; });
+        panels.forEach(panel => { panel.hidden=panel.dataset.scenarioPanel!==id; });
+        if (updateURL && readScenario() !== id) {
+          const url = new URL(location.href); url.searchParams.set('scenario', id);
+          history.pushState(history.state, '', url);
+        }
+      };
+      choices.forEach(choice => {
+        choice.addEventListener('change', () => { if(choice.checked) select(choice.value, true); });
+        choice.addEventListener('keydown', event => {
+          let target: HTMLInputElement;
+          if (event.key==='Home') target=choices[0];
+          else if (event.key==='End') target=choices[choices.length-1];
+          else return;
+          event.preventDefault(); target.focus(); select(target.value, true);
+        });
+      });
+      select(readScenario()); controls.hidden=false; root.dataset.ready='true';
+      window.addEventListener('popstate', () => { if(root.isConnected) select(readScenario()); });
+    });
+  }
+  setupScenarios(); document.addEventListener('astro:page-load', setupScenarios);
+</script>
+<style>
+  .walkthrough { padding-block: 1.5rem 4.75rem; scroll-margin-top: 9rem; }
+  .walkthrough-header { scroll-margin-top: 9rem; }
+  h2 { font-size: clamp(2rem,3.5vw,3rem); line-height: 1.15; }
+  h3 { margin-top: 0; font-size: clamp(1.65rem,2.5vw,2.1rem); line-height: 1.25; }
+  p { margin-top: 1rem; color: var(--color-soil-700); font-size: .9375rem; line-height: 1.8; }
+  .walkthrough-header > p { max-width: 68ch; font-size: 1.1rem; }
+  a { color: var(--color-link); text-decoration: underline; text-underline-offset: 4px; }
+  p code { font-size: .85em; overflow-wrap: anywhere; }
+  .scenario-selector { min-width:0; margin:2rem 0 0; padding:0; border:0; }
+  .scenario-selector[hidden],.scenario-panel[hidden],.scenario-technical[hidden] { display:none; }
+  .scenario-selector legend { padding:0; font-size:1.125rem; font-weight:600; color:var(--color-soil-900); }
+  .scenario-selector > p { margin-top:.4rem; font-size:.875rem; }
+  .scenario-choices { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; margin-top:1rem; max-width:960px; }
+  .scenario-choice { display:flex; align-items:start; gap:.85rem; min-width:0; padding:1.25rem; border:2px solid var(--color-soil-300); border-radius:.5rem; color:var(--color-soil-900); background:#fffdf7; cursor:pointer; }
+  .scenario-choice:hover { border-color:var(--color-field-700); }
+  .scenario-choice:has(input:checked) { border-color:var(--color-field-700); background:#f0f3e9; }
+  .scenario-choice:has(input:focus-visible),.scenario-panel:focus-visible { outline:2px solid var(--color-link); outline-offset:4px; }
+  .scenario-choice input { appearance:auto; flex:0 0 auto; width:1.25rem; height:1.25rem; margin:.15rem 0 0; accent-color:var(--color-field-700); cursor:pointer; }
+  .choice-content { display:flex; flex-direction:column; gap:.65rem; min-width:0; height:100%; }
+  .choice-content strong { font-size:1.0625rem; line-height:1.5; font-weight:600; }
+  .choice-description { color:var(--color-soil-700); font-size:.875rem; line-height:1.65; }
+  .choice-action { display:block; margin-top:auto; padding-top:.25rem; color:var(--color-field-700); font-size:.8125rem; line-height:1.5; font-weight:600; }
+  .choice-select { text-decoration:underline; text-underline-offset:4px; }
+  .choice-selected,input:checked + .choice-content .choice-select { display:none; }
+  input:checked + .choice-content .choice-selected { display:inline; }
+  .scenario-panel { border-top:1px solid var(--color-soil-300); padding-top:1.25rem; margin-top:1.25rem; min-width:0; }
+  .scenario-topline { display:flex; flex-wrap:wrap; justify-content:space-between; gap:.5rem 1rem; margin-bottom:2rem; font-size:.8125rem; color:var(--color-soil-700); }
+  .scenario-topline a { min-height:44px; display:inline-flex; align-items:center; gap:.35rem; }
+  .scenario-topline > span { display:flex; align-items:center; }
+  .scenario-story { max-width:850px; }
+  .scenario-story h3 { max-width:34ch; }
+  .source-details { margin-top:2rem; border-block:1px solid var(--color-soil-300); padding:1rem 0; }
+  .source-details summary { cursor:pointer; color:var(--color-link); font-size:.9375rem; min-height:44px; align-content:center; }
+  .source-details summary:focus-visible { outline:2px solid var(--color-link); outline-offset:4px; }
+  .source-diagram { max-width:700px; margin-top:1.5rem; }
+  #inspect-sql { scroll-margin-top:9rem; }
+  .scenario-technical > .step:first-child { border-top:0; margin-top:2rem; padding-top:0; }
+  .scenario-grid { display:grid; gap:2.5rem; align-items:start; }
+  .scenario-grid > * { min-width:0; }
+  .step { margin-top:3.25rem; padding-top:3.25rem; border-top:1px solid var(--color-soil-300); }
+  .step-heading { max-width:800px; margin-bottom:2rem; }
+  .note { font-size:.8125rem; }
+  .attach-step :global(.code-toolbar-button),.explain-step :global(.code-toolbar-button) { min-width:44px; min-height:44px; }
+  .semantic-example { max-width:850px; }
+  .execution-details { margin-top:1.5rem; border-block:1px solid var(--color-soil-300); padding:1rem 0; scroll-margin-top:9rem; }
+  .execution-details > summary { cursor:pointer; color:var(--color-link); font-size:1rem; font-weight:500; min-height:44px; align-content:center; }
+  .execution-details > summary:focus-visible { outline:2px solid var(--color-link); outline-offset:4px; }
+  .explain-step { padding:1.5rem 0 .5rem; }
+  .explain-query { margin-top:1.5rem; }
+  .explain-step :global(.sql-example) { margin-top:1.5rem; }
+  .calculation-flow { margin:0; min-width:0; text-align:center; }
+  .calculation-flow div { padding:1.2rem; background:#fffdf7; border:1px solid var(--color-soil-300); border-radius:.4rem; }
+  .calculation-flow div > span { display:block; font-size:.8125rem; color:var(--color-soil-700); }
+  .calculation-flow strong { display:block; font-family:var(--font-display); font-size:1.4rem; margin-top:.4rem; }
+  .calculation-flow p { margin-top:.5rem; font-size:.8125rem; }
+  .flow-arrow { display:block; padding:.35rem; color:var(--color-field-700); }
+  .calculation-flow figcaption { border:1px solid var(--color-field-700); background:#f0f3e9; padding:1rem; border-radius:.4rem; font-size:1.5rem; }
+  @media(min-width:1024px) { .scenario-grid { grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:3.5rem; } }
+  @media(max-width:640px) { .walkthrough { padding-bottom:3.25rem; } .scenario-choices { grid-template-columns:1fr; gap:.75rem; } .scenario-choice { padding:1rem; } .step { margin-top:2.5rem; padding-top:2.5rem; } }
+</style>

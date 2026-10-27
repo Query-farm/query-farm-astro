@@ -1,0 +1,126 @@
+# Website download regression. Run from the extracted retail directory.
+# Expected values are independently specified; native SQLLogicTest runner only.
+require crossfield
+
+require-env WEBSITE_EXAMPLE_DIR
+
+statement ok
+ATTACH ':memory:' AS warehouse;
+
+statement ok
+CREATE TABLE warehouse.orders (
+    id VARCHAR PRIMARY KEY, customer_id VARCHAR NOT NULL,
+    store_id VARCHAR NOT NULL, ordered_at TIMESTAMP NOT NULL,
+    subtotal DECIMAL(18,2), tax DECIMAL(18,2), total DECIMAL(18,2),
+    is_first BOOLEAN NOT NULL
+);
+
+statement ok
+INSERT INTO warehouse.orders
+SELECT id, customer, store_id, ordered_at::TIMESTAMP,
+       (subtotal::BIGINT * 0.01)::DECIMAL(18,2),
+       (tax_paid::BIGINT * 0.01)::DECIMAL(18,2),
+       (order_total::BIGINT * 0.01)::DECIMAL(18,2),
+       row_number() OVER (PARTITION BY customer ORDER BY ordered_at::TIMESTAMP, id) = 1
+FROM read_csv('{WEBSITE_EXAMPLE_DIR}/data/orders.csv', header=true, all_varchar=true);
+
+statement ok
+CREATE TABLE warehouse.items (id VARCHAR PRIMARY KEY, order_id VARCHAR NOT NULL, sku VARCHAR NOT NULL);
+
+statement ok
+INSERT INTO warehouse.items
+SELECT id, order_id, sku
+FROM read_csv('{WEBSITE_EXAMPLE_DIR}/data/items.csv', header=true, all_varchar=true);
+
+statement ok
+CREATE TABLE warehouse.products (sku VARCHAR PRIMARY KEY, name VARCHAR, category VARCHAR, price DECIMAL(18,2));
+
+statement ok
+INSERT INTO warehouse.products
+SELECT sku, name, type, (price::BIGINT * 0.01)::DECIMAL(18,2)
+FROM read_csv('{WEBSITE_EXAMPLE_DIR}/data/products.csv', header=true, all_varchar=true);
+
+statement ok
+CREATE TABLE warehouse.stores (id VARCHAR PRIMARY KEY, name VARCHAR);
+
+statement ok
+INSERT INTO warehouse.stores
+SELECT id, name FROM read_csv('{WEBSITE_EXAMPLE_DIR}/data/stores.csv', header=true, all_varchar=true);
+
+statement ok
+CREATE TABLE warehouse.customers (id VARCHAR PRIMARY KEY, name VARCHAR);
+
+statement ok
+INSERT INTO warehouse.customers
+SELECT id, name FROM read_csv('{WEBSITE_EXAMPLE_DIR}/data/customers.csv', header=true, all_varchar=true);
+
+statement ok
+ATTACH '{WEBSITE_EXAMPLE_DIR}/jaffle-v1.package.json' AS jaffle_old (
+    TYPE crossfield, MODEL_VERSION '1',
+    BINDINGS '{"sales":"warehouse","reference":"warehouse"}'
+);
+
+statement ok
+ATTACH '{WEBSITE_EXAMPLE_DIR}/jaffle-v2.package.json' AS jaffle_current (
+    TYPE crossfield, MODEL_VERSION '2',
+    BINDINGS '{"sales":"warehouse","reference":"warehouse"}'
+);
+
+statement ok
+SET crossfield_mode = 'strict';
+
+query TIIR
+SELECT store_name, order_count, item_count, revenue
+FROM SEMANTIC jaffle_current.jaffle
+GROUP BY store_name ORDER BY store_name;
+----
+Brooklyn	19	36	255.00
+Philadelphia	506	798	6100.00
+
+query IIR
+SELECT order_count, item_count, revenue
+FROM SEMANTIC jaffle_current.jaffle;
+----
+525	834	6355.00
+
+statement ok
+SET crossfield_mode = 'semantic';
+
+query RRR
+WITH previous AS (
+    SELECT revenue FROM SEMANTIC jaffle_old.jaffle
+), current AS (
+    SELECT revenue FROM SEMANTIC jaffle_current.jaffle
+)
+SELECT p.revenue AS previous_revenue, c.revenue AS current_revenue,
+       c.revenue - p.revenue AS change
+FROM previous p CROSS JOIN current c;
+----
+6730.75	6355.00	-375.75
+
+statement ok
+USE jaffle_current.semantic;
+
+statement ok
+SET crossfield_mode='strict';
+
+statement error
+SELECT SUM(subtotal) FROM warehouse.orders;
+----
+CROSSFIELD_RAW_SOURCE
+
+query R
+SELECT revenue FROM SEMANTIC jaffle_current.jaffle;
+----
+6355.00
+
+query R
+SELECT order_total FROM SEMANTIC jaffle_current.jaffle;
+----
+6730.75
+
+query TT
+SELECT database_name,model_name FROM crossfield_models() ORDER BY database_name;
+----
+jaffle_current	jaffle
+jaffle_old	jaffle

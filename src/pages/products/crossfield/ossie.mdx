@@ -1,0 +1,67 @@
+---
+layout: '../../../layouts/CrossfieldArticle.astro'
+title: 'Keep business definitions in an open model'
+description: 'Apache Ossie describes datasets, relationships and metrics. Crossfield makes a supported set of those definitions queryable in DuckDB.'
+eyebrow: 'Apache Ossie'
+---
+
+import ExecutionPriceExample from '../../../components/crossfield/ExecutionPriceExample.astro';
+import SQLExample from '../../../components/crossfield/SQLExample.astro';
+import CodeBlock from '../../../components/ui/CodeBlock.astro';
+import executions from '../../../../public/crossfield/examples/finance/executions.ossie.json';
+import queries from '../../../../public/crossfield/examples/finance/queries.json';
+
+## Give teams a definition they can inspect and maintain
+
+A metric should remain understandable when a report is rebuilt or a new AI application starts using the data. Recording its definition in a model gives the team a place to review the calculation, its source fields and its relationships independently of any individual report.
+
+[Apache Ossie (incubating)](https://ossie.apache.org/) defines a format for exchanging semantic metadata across tools. Its vocabulary includes datasets, fields, relationships and metrics. Crossfield reads a documented subset of that format and adds the rules needed to execute approved queries in DuckDB.
+
+Crossfield is independent Query Farm work. It is not an Apache product or a certified implementation. Supported expressions and execution policies still need checking when moving a model between engines.
+
+## Describe a calculation the business recognizes
+
+Consider the price paid for a buy order filled in two parts: 100 shares at $100, then 900 shares at $102. Averaging the two prices gives $101, but the larger fill should have more influence. Total cost divided by total shares gives the actual quantity-weighted price: **$101.80**.
+
+<ExecutionPriceExample />
+
+The [investment example](/products/crossfield/docs/trading#calculate-the-price-actually-paid) records this definition in its Ossie document. This metric entry comes directly from that example’s complete model:
+
+<SQLExample language="JSON" summary="Read the execution-price definition" purpose="The expression calculates total fill cost divided by total shares. NULLIF handles a zero denominator.">
+  <CodeBlock code={JSON.stringify(executions.metrics[2], null, 2)} lang="json" title="Ossie metric · Excerpt from executions.ossie.json" tryable={false} />
+</SQLExample>
+
+The full document also describes the fills dataset and its typed fields. Crossfield’s companion policy approves the metric, fixes the included fills, declares units and records that the price must be recomputed from its contributing quantities when grouping changes.
+
+After [loading the investment example](/products/crossfield/docs/trading#load-the-example), a caller selects the named metric:
+
+<SQLExample summary="Query the approved execution price" purpose="This is the query from the checked trading example. The caller selects the order and metrics; the model supplies the formula.">
+  <CodeBlock code={queries.execution} title="SQL · Execution price for our order" tryable={false} />
+</SQLExample>
+
+The result for ORD-101 is 1,000 shares, $101,800 executed value and $101.80 per share. It measures our own active fills in one currency, excluding fees; it is not a market-wide VWAP calculation.
+
+## Understand what each part supplies
+
+| Part | What it does in this example |
+|---|---|
+| Ossie model | Describes fills, their fields and the execution-price expression. |
+| Crossfield policy | Defines the allowed query interface, active-fill population, units and aggregation rules. |
+| Crossfield SQL | Lets a caller attach the model, discover its members and select the named metric. |
+| Haybarn engine integration | Lets Crossfield validate the query while DuckDB binds and executes it. |
+
+`FROM SEMANTIC` is Crossfield’s query syntax; Ossie does not mandate it. Accepting an Ossie document also does not grant permission to execute every expression or provider it describes. Crossfield requires its explicit policy and resolvable source dependencies.
+
+For a full authoring example, see [models and their policies](/products/crossfield/docs/models). That retail example also demonstrates a Crossfield extension: a root metric referencing another root metric. Qualified logical-field dependencies in field recipes are another extension to the supported profile.
+
+## Check the compatibility profile you need
+
+The reviewed profile follows the [core specification at revision 01a5488](https://github.com/apache/ossie/blob/01a5488d840deda309aac68cc0b312c195369b8d/core-spec/spec.md) and its [expression language](https://github.com/apache/ossie/blob/01a5488d840deda309aac68cc0b312c195369b8d/core-spec/expression_language.md). The core document identifies itself as draft version `0.2.0.dev0`.
+
+Crossfield supports dataset-scoped metrics and local-field resolution in this profile. Expressions require a supported dialect, optional function families have limits, and Ossie’s relational `AGG()` draft is not implemented. Decimal `AVG` has a result-type difference: DuckDB returns DOUBLE where the reference profile expects decimal semantics.
+
+The [small Ossie compatibility example](/products/crossfield/docs/examples#ossie-dataset-metrics) tests field resolution independently of the trading example. Its deliberately simple `raw_amount * 2` field produces an orders metric of 84; a separate returns dataset produces 7. This checks whether the compiler honors the declared field and keeps identically named dataset metrics separate.
+
+The exact limits are recorded in `docs/MODEL_FORMAT.md` and `docs/PUBLIC_WORKLOADS.md` in the Crossfield checkout. Use [model validation](/products/crossfield/docs/validation) for structural and authoring checks, then test the numerical answers your reporting depends on.
+
+The [Apache project](https://ossie.apache.org/) and [public specification](https://github.com/apache/ossie/tree/01a5488d840deda309aac68cc0b312c195369b8d/core-spec) are the authoritative places to follow Ossie’s development. The model format makes definitions available for inspection and exchange; each engine’s supported behavior determines how they can be executed.

@@ -1,0 +1,80 @@
+---
+layout: '../../../../layouts/CrossfieldDocs.astro'
+title: 'Compare and keep model versions'
+description: 'Run two definitions against the same data, review the difference, and keep earlier rules available for later reporting questions.'
+---
+
+import CodeBlock from '../../../../components/ui/CodeBlock.astro';
+import RevisionComparison from '../../../../components/crossfield/RevisionComparison.astro';
+import { crossfieldScenarios } from '../../../../data/crossfield-scenarios';
+import queries from '../../../../../public/crossfield/examples/fulfillment/queries.json';
+
+Changing a delivery standard can improve a reported percentage even when no additional orders were delivered. Before adopting the change, run the old and proposed definitions against the same data. Reviewers can then decide whether the new result answers the question the business wants to ask.
+
+## Save the current and proposed definitions
+
+The [fulfillment bundle](/crossfield/examples/fulfillment.zip) contains two packages. Each package holds one business revision of the same model:
+
+| File | Revision | Delivery standard |
+|---|---|---|
+| `fulfillment-current.package.json` | 1 | Every unit delivered by the original promise |
+| `fulfillment-revised.package.json` | 2 | Every unit delivered by the revised promise |
+
+Both definitions select the same four orders in this example, originally due January 31, with deliveries observed through February 3. The proposed version changes the deadline used to evaluate each order.
+
+For your own model, keep the current package, author and [validate the proposed definition](/products/crossfield/docs/validation), and publish it as a new revision. A package’s business revision is separate from the Crossfield software version and the package format version.
+
+## Attach both versions under different names
+
+Follow the [fulfillment setup](/products/crossfield/docs/fulfillment#load-the-example). It creates the source tables and performs these two attachments; do not repeat them after running setup:
+
+```sql
+ATTACH 'fulfillment-current.package.json' AS operations
+    (TYPE crossfield, BINDINGS '{"warehouse":"warehouse"}');
+ATTACH 'fulfillment-revised.package.json' AS revised
+    (TYPE crossfield, BINDINGS '{"warehouse":"warehouse"}');
+```
+
+Each catalog keeps the definition it loaded. Editing a package file later does not change an existing attachment. The two aliases make it possible to select either definition in one DuckDB connection.
+
+If you supply `MODEL_VERSION '2'`, attachment checks that the supplied package has revision 2. It does not fetch an older version, choose a version from a service or select historical source data.
+
+## Query the difference
+
+Use semantic mode for this comparison. Strict business queries stay within one attachment.
+
+```sql
+SET crossfield_mode = 'semantic';
+```
+
+<CodeBlock code={queries.revision} title="SQL · Compare the delivery definitions" tryable={false} />
+
+| original_promise_percent | revised_promise_percent | percentage_point_change |
+|---:|---:|---:|
+| 50 | 75 | 25 |
+
+<RevisionComparison scenario={crossfieldScenarios[0]} />
+
+Order A101 arrived after its original January 31 promise but by its revised February 2 promise. It is the only order whose classification changes. The new rule raises the rate by 25 percentage points; it does not describe an improvement in deliveries.
+
+The subtraction is an ordinary SQL comparison of two semantic results. It is the query author’s analysis, not a newly approved metric. For a second example, [compare portfolio scopes](/products/crossfield/docs/trading#review-a-model-revision).
+
+## Choose the version future reports should use
+
+Once the business has reviewed the result, point new reporting sessions at the accepted package. Keep the earlier package available so you can inspect its rules or query it again.
+
+A separate attachment is useful during review because it leaves the current one available. If you explicitly replace an attachment with `ATTACH OR REPLACE`, affected prepared queries must be prepared again. A failed attachment replacement preserves the previous attachment.
+
+## Keep a release history in DuckDB
+
+You can store package files in your existing version-control system. Applications can also use Crossfield’s native release store to keep published packages and validation records in a persistent DuckDB database.
+
+The application stages an attached package, runs its declared checks and publishes the reviewed version. Published revision contents cannot be overwritten. It can later select a previously published version for subsequent activations. Existing sessions keep their attached definitions.
+
+This workflow uses the native host API described in `docs/MODEL_PACKAGES.md` in the Crossfield checkout. It is not an automatic effect of `ATTACH`, and the SQL examples above do not initialize or publish to that store. The application remains responsible for administrator access and release selection.
+
+## Reproduce the data as well as the definition
+
+An older model can still read today’s data. To reproduce an earlier report exactly, keep the source snapshot, query inputs and filters used at the time as well as its model version. Selecting an earlier definition does not restore old rows.
+
+The examples here use a fixed local dataset. Their expected values and recorded native execution are documented in the [fulfillment verification record](/crossfield/examples/fulfillment/verification.txt); this guide reuses that SQL and those results.
