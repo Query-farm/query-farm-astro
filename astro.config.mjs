@@ -533,6 +533,8 @@ export default defineConfig({
       serialize: blogSitemap.serialize,
       filter: page => {
         const { pathname } = new URL(page);
+        // The report's original preview URL redirects to its published blog post.
+        if (pathname === '/research/duckdb-2-release-activity/') return false;
         // Current release archives resolve to the stable reference canonical;
         // older release references keep their own indexable URLs.
         const currentArchive = `/products/haybarn/functions/releases/${defaultSnapshotId}`;
