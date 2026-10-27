@@ -128,6 +128,12 @@ The vendored Plotly bundle retains its upstream MIT license header.
 The page uses the site's BaseLayout metadata, canonical URL, organization
 attribution, and a dedicated Open Graph / Twitter card. It is a preliminary
 report; observation dates stay visible without a separate small-sample warning.
+The headline is “DuckDB 2.0: Upgrade Now or Wait for 2.0.1?”. The 1200×630 card
+reads that headline from the article's JSON-quoted frontmatter title and plots
+the same `issue_new_filers` / `prerun` / `trailing` series as the first-time
+reporter figure, with solid release colors, baseline ratios and release markers.
+The article description and image alt text also describe this comparison.
+BaseLayout versions the shared OG/Twitter image URL with the PNG content hash.
 
 ## Analytics
 
