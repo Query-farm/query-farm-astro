@@ -4,7 +4,7 @@
     "categories": [
       "HLL"
     ],
-    "description": "Aggregate input values into a HyperLogLog sketch for distinct counting. Returns a `sketch_hll` BLOB you can persist, ship between processes, or merge later. The first argument is `lg_k` — base-2 log of the number of buckets — which controls the size/accuracy trade-off. `lg_k = 12` (4096 buckets, ~4 KB sketch, ~1.6% standard error) is a common default; raise it for tighter bounds, lower it for smaller sketches. An optional third argument picks the register encoding: `'HLL_4'` (the default, smallest), `'HLL_6'` or `'HLL_8'` (largest, fastest to update); it must be a constant, and parallel combines keep the chosen encoding.",
+    "description": "Aggregate input values into a HyperLogLog sketch for distinct counting. Returns a `sketch_hll` BLOB you can persist, ship between processes, or merge later. The first argument is `lg_k` — base-2 log of the number of buckets — which controls the size/accuracy trade-off. `lg_k = 12` (4096 buckets, ~4 KB sketch, ~1.6% standard error) is a common default; raise it for tighter bounds, lower it for smaller sketches. An optional third argument picks the register encoding: `'HLL_4'` (the default, smallest), `'HLL_6'` or `'HLL_8'` (largest, fastest to update); it must be a constant, and parallel combines keep the chosen encoding. `lg_k` must be between 4 and 21. Input can be any integer, float, string, blob, `UUID`, `HUGEINT`, or `UHUGEINT` column; merge only sketches built from the same type, since values are hashed according to their column type. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Approximate distinct users (lg_k = 12, ~1.6% error)",
@@ -48,7 +48,7 @@
     "categories": [
       "HLL"
     ],
-    "description": "Merge multiple HLL sketches into one. Aggregate over a column of `sketch_hll` BLOBs to roll per-partition or per-day sketches up to whatever window you need — without rescanning the underlying rows. The leading `lg_k` argument is the precision of the output sketch. An optional third argument (`'HLL_4'`, `'HLL_6'` or `'HLL_8'`) sets the encoding of the result. To union just two sketches in a row-wise expression, use the scalar `datasketch_hll_merge`.",
+    "description": "Merge multiple HLL sketches into one. Aggregate over a column of `sketch_hll` BLOBs to roll per-partition or per-day sketches up to whatever window you need — without rescanning the underlying rows. The leading `lg_k` argument is the precision of the output sketch. An optional third argument (`'HLL_4'`, `'HLL_6'` or `'HLL_8'`) sets the encoding of the result. To union just two sketches in a row-wise expression, use the scalar `datasketch_hll_merge`. Merge only sketches built from the same input type.",
     "examples": [
       {
         "description": "Rolling 7-day distinct users from per-day sketches",
@@ -103,7 +103,7 @@
     "categories": [
       "HLL"
     ],
-    "description": "Lower bound of the HLL distinct-count estimate at a given number of standard deviations.",
+    "description": "Lower bound of the HLL distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error.",
     "relatedFunctions": [
       "datasketch_hll",
       "datasketch_hll_estimate",
@@ -115,7 +115,7 @@
     "categories": [
       "HLL"
     ],
-    "description": "Upper bound of the HLL distinct-count estimate at a given number of standard deviations.",
+    "description": "Upper bound of the HLL distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error.",
     "relatedFunctions": [
       "datasketch_hll",
       "datasketch_hll_estimate",
@@ -165,7 +165,7 @@
     "categories": [
       "CPC"
     ],
-    "description": "Aggregate input values into a Compressed Probability Counting sketch — a distinct-count sketch that's roughly 40% smaller than HLL at the same accuracy, traded against slower serialization. Choose CPC when you store many sketches at rest and reads are infrequent. The leading `lg_k` controls the size/accuracy trade-off the same way it does for HLL.",
+    "description": "Aggregate input values into a Compressed Probability Counting sketch — a distinct-count sketch that's roughly 40% smaller than HLL at the same accuracy, traded against slower serialization. Choose CPC when you store many sketches at rest and reads are infrequent. The leading `lg_k` controls the size/accuracy trade-off the same way it does for HLL. `lg_k` must be between 4 and 26. Accepts the same input types as HLL, including `UUID`, `HUGEINT`, and `UHUGEINT`. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Distinct-count with CPC",
@@ -195,7 +195,7 @@
     "categories": [
       "CPC"
     ],
-    "description": "Merge a column of `sketch_cpc` BLOBs into one rollup sketch — the standard per-partition / per-day rollup pattern. For a scalar union of two sketches in the same row, use `datasketch_cpc_merge`.",
+    "description": "Merge a column of `sketch_cpc` BLOBs into one rollup sketch — the standard per-partition / per-day rollup pattern. For a scalar union of two sketches in the same row, use `datasketch_cpc_merge`. Merge only sketches built from the same input type.",
     "relatedFunctions": [
       "datasketch_cpc",
       "datasketch_cpc_estimate",
@@ -228,7 +228,8 @@
     "relatedFunctions": [
       "datasketch_cpc",
       "datasketch_cpc_upper_bound"
-    ]
+    ],
+    "description": "Lower bound of the CPC distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error."
   },
   {
     "name": "datasketch_cpc_upper_bound",
@@ -238,7 +239,8 @@
     "relatedFunctions": [
       "datasketch_cpc",
       "datasketch_cpc_lower_bound"
-    ]
+    ],
+    "description": "Upper bound of the CPC distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error."
   },
   {
     "name": "datasketch_cpc_merge",
@@ -263,7 +265,7 @@
     "categories": [
       "Theta"
     ],
-    "description": "Aggregate input values into a Theta sketch — the distinct-count family that supports set operations (union, intersect, A-not-B) beyond simple merge. The optional leading `lg_k` (4–26, default 12) is base-2 log of the nominal sketch entries. Accepts signed and unsigned integers, floats and VARCHAR; passing a `sketch_theta` (or a BLOB of serialized sketches, e.g. read back from Parquet) merges sketches instead, growing to the largest `lg_k` of the inputs unless one is given. Keyword options: `seed :=` (hash seed — sketches can only be combined with sketches built from the same seed) and `p :=` (up-front sampling probability in (0, 1]). Results are stored in the compressed compact format (serial version 4) when it applies; versions 1–4 are all readable.",
+    "description": "Aggregate input values into a Theta sketch — the distinct-count family that supports set operations (union, intersect, A-not-B) beyond simple merge. The optional leading `lg_k` (4–26, default 12) is base-2 log of the nominal sketch entries. Accepts signed and unsigned integers, floats and VARCHAR; passing a `sketch_theta` (or a BLOB of serialized sketches, e.g. read back from Parquet) merges sketches instead, growing to the largest `lg_k` of the inputs unless one is given. Keyword options: `seed :=` (hash seed — sketches can only be combined with sketches built from the same seed) and `p :=` (up-front sampling probability in (0, 1]). Results are stored in the compressed compact format (serial version 4) when it applies; versions 1–4 are all readable. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Build per-cohort sketches",
@@ -405,7 +407,8 @@
     "relatedFunctions": [
       "datasketch_theta",
       "datasketch_theta_upper_bound"
-    ]
+    ],
+    "description": "Lower bound of the Theta distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error."
   },
   {
     "name": "datasketch_theta_upper_bound",
@@ -415,7 +418,8 @@
     "relatedFunctions": [
       "datasketch_theta",
       "datasketch_theta_lower_bound"
-    ]
+    ],
+    "description": "Upper bound of the Theta distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error."
   },
   {
     "name": "datasketch_theta_num_retained",
@@ -519,7 +523,7 @@
     "categories": [
       "Tuple"
     ],
-    "description": "Aggregate `(key, value)` rows into a Tuple sketch (`sketch_tuple_double`): a Theta sketch of the distinct keys in which every retained key carries a DOUBLE summary of its values. `mode :=` combines a key's values — `'sum'` (default), `'min'`, `'max'` or `'one'` (presence only). The optional leading `lg_k` (4–26, default 12) sets the nominal size, and `seed :=` / `p :=` work as for `datasketch_theta`. NULL keys or values are skipped. Passing a `sketch_tuple_double` merges sketches (keeping the inputs' `lg_k` unless one is given); the mode is not stored in the sketch, so pass the same `mode :=` when merging.",
+    "description": "Aggregate `(key, value)` rows into a Tuple sketch (`sketch_tuple_double`): a Theta sketch of the distinct keys in which every retained key carries a DOUBLE summary of its values. `mode :=` combines a key's values — `'sum'` (default), `'min'`, `'max'` or `'one'` (presence only). The optional leading `lg_k` (4–26, default 12) sets the nominal size, and `seed :=` / `p :=` work as for `datasketch_theta`. NULL keys or values are skipped. Passing a `sketch_tuple_double` merges sketches (keeping the inputs' `lg_k` unless one is given); the mode is not stored in the sketch, so pass the same `mode :=` when merging. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Distinct customers and their revenue from one pass",
@@ -758,7 +762,7 @@
     "categories": [
       "Array of Doubles"
     ],
-    "description": "Aggregate `(key, values DOUBLE[])` rows into an array-of-doubles Tuple sketch (`sketch_aod`): a Theta sketch of the distinct keys where each retained key carries a fixed-length array of DOUBLE values (1–255 values, the same length on every row, inferred from the data and stored in the sketch), summed element-wise per key. The optional leading `lg_k` (4–26, default 12) and `seed :=` / `p :=` work as for `datasketch_theta`. Passing a `sketch_aod` merges sketches. Combining sketches with different numbers of values or different seeds is an error.",
+    "description": "Aggregate `(key, values DOUBLE[])` rows into an array-of-doubles Tuple sketch (`sketch_aod`): a Theta sketch of the distinct keys where each retained key carries a fixed-length array of DOUBLE values (1–255 values, the same length on every row, inferred from the data and stored in the sketch), summed element-wise per key. The optional leading `lg_k` (4–26, default 12) and `seed :=` / `p :=` work as for `datasketch_theta`. Passing a `sketch_aod` merges sketches. Combining sketches with different numbers of values or different seeds is an error. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Distinct customers with per-customer revenue and item totals",
@@ -998,7 +1002,7 @@
     "categories": [
       "Frequent Items"
     ],
-    "description": "Aggregate input values into a Frequent Items (heavy-hitter) sketch. The optional first argument is `lg_max_k` (default 10) — log₂ of the maximum number of tracked items, so `8` → up to 256 candidates, `12` → up to 4096. Bigger values track more candidates and tighten the per-item error bound. Valid values are 3–30 (anything else is rejected at bind time); typical values run 4–12. FLOAT and DOUBLE items are keyed by their shortest round-trip spelling (the same text as `CAST(x AS VARCHAR)`), so nearby values such as `0.1234567` and `0.1234568` stay distinct.",
+    "description": "Aggregate input values into a Frequent Items (heavy-hitter) sketch. The optional first argument is `lg_max_k` (default 10) — log₂ of the maximum number of tracked items, so `8` → up to 256 candidates, `12` → up to 4096. Bigger values track more candidates and tighten the per-item error bound. Valid values are 3–30 (anything else is rejected at bind time); typical values run 4–12. FLOAT and DOUBLE items are keyed by their shortest round-trip spelling (the same text as `CAST(x AS VARCHAR)`), so nearby values such as `0.1234567` and `0.1234568` stay distinct. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Top countries by page views",
@@ -1018,7 +1022,7 @@
     "categories": [
       "Frequent Items"
     ],
-    "description": "Return the heavy-hitter candidates with per-item estimate, lower bound, and upper bound. The second argument selects the error mode: `'NO_FALSE_POSITIVES'` returns only items that are *definitely* heavy (every returned item really is frequent); `'NO_FALSE_NEGATIVES'` returns the union of all candidates that *might* be — every truly-frequent item is included, plus some that may not be.",
+    "description": "Return the heavy-hitter candidates with per-item estimate, lower bound, and upper bound. The second argument selects the error mode: `'NO_FALSE_POSITIVES'` returns only items that are *definitely* heavy (every returned item really is frequent); `'NO_FALSE_NEGATIVES'` returns the union of all candidates that *might* be — every truly-frequent item is included, plus some that may not be. The error type is case-insensitive; any other value is an error.",
     "relatedFunctions": [
       "datasketch_frequent_items",
       "datasketch_frequent_items_estimate",
@@ -1098,7 +1102,7 @@
     "categories": [
       "Frequent Items"
     ],
-    "description": "Like `datasketch_frequent_items`, but each row adds a weight (`BIGINT` or `UBIGINT`; negative weights are rejected) instead of a count of one — approximate top-K by a metric such as revenue or bytes. The optional leading `lg_max_k` (log₂ of the maximum number of tracked items, default 10, valid range 3–30) works as in `datasketch_frequent_items`.",
+    "description": "Like `datasketch_frequent_items`, but each row adds a weight (`BIGINT` or `UBIGINT`; negative weights are rejected) instead of a count of one — approximate top-K by a metric such as revenue or bytes. The optional leading `lg_max_k` (log₂ of the maximum number of tracked items, default 10, valid range 3–30) works as in `datasketch_frequent_items`. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Regions by revenue",
@@ -1115,7 +1119,7 @@
     "categories": [
       "KLL"
     ],
-    "description": "Aggregate input values into a KLL quantile sketch. Best balance of accuracy, speed, and size — the modern default for general-purpose quantile estimation. The first argument `K` controls accuracy: higher K → smaller error and bigger sketch. `K = 200` is a sensible production starting point. Accepts every numeric type and VARCHAR (strings are ordered bytewise and give a `sketch_kll_varchar`).",
+    "description": "Aggregate input values into a KLL quantile sketch. Best balance of accuracy, speed, and size — the modern default for general-purpose quantile estimation. The first argument `K` controls accuracy: higher K → smaller error and bigger sketch. `K = 200` is a sensible production starting point. Accepts every numeric type and VARCHAR (strings are ordered bytewise and give a `sketch_kll_varchar`). `K` must be between 8 and 65535. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "p50 / p95 / p99 latency from one KLL sketch",
@@ -1317,7 +1321,7 @@
     "categories": [
       "TDigest"
     ],
-    "description": "Aggregate input values into a t-digest quantile sketch — most accurate at the tails (p99, p999), exactly where SLOs live. FLOAT/DOUBLE input only. The first argument controls the centroid budget; larger sketches give tighter tail estimates.",
+    "description": "Aggregate input values into a t-digest quantile sketch — most accurate at the tails (p99, p999), exactly where SLOs live. FLOAT/DOUBLE input only. The first argument controls the centroid budget; larger sketches give tighter tail estimates. `K` must be between 10 and 65535. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Tail latency",
@@ -1442,7 +1446,7 @@
     "categories": [
       "REQ"
     ],
-    "description": "Aggregate input values into a Relative Error Quantile sketch. Error scales with rank rather than being a fixed fraction of `n` — predictable accuracy on highly skewed distributions where a fixed-error sketch over- or under-spends precision at the extremes. An optional third argument `hra` (a constant, default `true`) picks high-rank accuracy (best for p99-style tails); pass `false` for low-rank accuracy. Merging starts from the first input's mode; mixing HRA and LRA sketches is an error.",
+    "description": "Aggregate input values into a Relative Error Quantile sketch. Error scales with rank rather than being a fixed fraction of `n` — predictable accuracy on highly skewed distributions where a fixed-error sketch over- or under-spends precision at the extremes. An optional third argument `hra` (a constant, default `true`) picks high-rank accuracy (best for p99-style tails); pass `false` for low-rank accuracy. Merging starts from the first input's mode; mixing HRA and LRA sketches is an error. `K` must be between 4 and 1024. Returns `NULL` over no rows.",
     "relatedFunctions": [
       "datasketch_req_quantile",
       "datasketch_req_rank",
@@ -1657,7 +1661,7 @@
     "categories": [
       "Quantiles"
     ],
-    "description": "Aggregate input values into the classic mergeable quantiles sketch from the original DataSketches paper. Solid general-purpose choice supporting all numeric input types; for new projects prefer `datasketch_kll`, which gives the same merge semantics with better accuracy/size trade-off. Also accepts VARCHAR items (ordered bytewise, `sketch_quantiles_varchar`).",
+    "description": "Aggregate input values into the classic mergeable quantiles sketch from the original DataSketches paper. Solid general-purpose choice supporting all numeric input types; for new projects prefer `datasketch_kll`, which gives the same merge semantics with better accuracy/size trade-off. Also accepts VARCHAR items (ordered bytewise, `sketch_quantiles_varchar`). `K` must be a power of 2 from 2 to 32768. Returns `NULL` over no rows.",
     "relatedFunctions": [
       "datasketch_quantiles_quantile",
       "datasketch_quantiles_rank",

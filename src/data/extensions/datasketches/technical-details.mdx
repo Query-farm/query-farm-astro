@@ -56,6 +56,8 @@ This extension is a thin DuckDB wrapper around the [Apache DataSketches C++ libr
 - **Reader scalars** (`datasketch_*_quantile`, `datasketch_*_estimate`, `datasketch_*_cdf`, …) that decode the BLOB and return values without rebuilding from rows.
 - **Mergers** — aggregates over a sketch column that produce a rolled-up sketch (`datasketch_hll_union`, `datasketch_cpc_union`, or the sketch aggregate itself given a sketch, e.g. `datasketch_theta(sketch)`, `datasketch_kll(200, sketch)`), plus scalar unions of sketches in the same row (`datasketch_hll_merge`, `datasketch_cpc_merge`, `datasketch_theta_union(a, b, …)`).
 
+Every sketch aggregate returns `NULL` when it sees no input rows (or only NULLs), like any SQL aggregate, so wrap an estimate in `coalesce(..., 0)` where an empty group should read as zero.
+
 The serialization format is the same one the [Java reference implementation](https://github.com/apache/datasketches-java) writes, which is the format Druid, Pinot, BigQuery, and Spark integrations consume. A sketch built in DuckDB and written to Parquet can be merged inside Druid or vice versa — no re-aggregation across systems.
 
 ## Choosing a sketch
@@ -67,8 +69,8 @@ The right sketch depends on what you're estimating and which constraint binds fi
 | Family | When to pick                                                        | Notes                                              |
 |--------|---------------------------------------------------------------------|----------------------------------------------------|
 | HLL    | Default — fastest reads, broad cross-system interop                 | `lg_k` 4–21; 12 is a good default (~4 KB sketch)   |
-| CPC    | Storage-bound — many sketches at rest                               | ~40% smaller than HLL at the same accuracy         |
-| Theta  | You need union, intersection, or A-not-B (funnel, retention, churn) | Only family with full set algebra                  |
+| CPC    | Storage-bound — many sketches at rest                               | `lg_k` 4–26; ~40% smaller than HLL at the same accuracy |
+| Theta  | You need union, intersection, or A-not-B (funnel, retention, churn) | `lg_k` 4–26; only family with full set algebra |
 
 **Distinct keys with per-key metrics**
 
@@ -81,14 +83,16 @@ The right sketch depends on what you're estimating and which constraint binds fi
 
 | Family    | When to pick                          | Notes                                        |
 |-----------|---------------------------------------|----------------------------------------------|
-| KLL       | Default — best accuracy/size balance  | `K = 200` is a sensible production starting point; numeric or VARCHAR items |
-| TDigest   | p99 / p999 SLO reporting              | FLOAT/DOUBLE only; tail-accurate             |
-| REQ       | Skewed distributions                  | Error scales with rank; high-rank (default) or low-rank accuracy |
-| Quantiles | Compatibility with classic pipelines  | Use KLL for new work; numeric or VARCHAR items |
+| KLL       | Default — best accuracy/size balance  | `K` 8–65535; 200 is a sensible production starting point; numeric or VARCHAR items |
+| TDigest   | p99 / p999 SLO reporting              | `K` 10–65535; FLOAT/DOUBLE only; tail-accurate |
+| REQ       | Skewed distributions                  | `K` 4–1024; error scales with rank; high-rank (default) or low-rank accuracy |
+| Quantiles | Compatibility with classic pipelines  | `K` a power of 2 from 2 to 32768; use KLL for new work; numeric or VARCHAR items |
+
+A size argument outside its family's range is rejected when the query binds, rather than failing mid-query or being silently truncated.
 
 **Frequency**
 
-A single family — [Frequent Items](https://datasketches.apache.org/docs/Frequency/FrequentItemsOverview.html) — for top-K heavy hitters with confidence-bounded frequencies. Use `'NO_FALSE_POSITIVES'` to get items that are *definitely* heavy, `'NO_FALSE_NEGATIVES'` to get every candidate that *might* be.
+A single family — [Frequent Items](https://datasketches.apache.org/docs/Frequency/FrequentItemsOverview.html) — for top-K heavy hitters with confidence-bounded frequencies. Use `'NO_FALSE_POSITIVES'` to get items that are *definitely* heavy, `'NO_FALSE_NEGATIVES'` to get every candidate that *might* be (the error type is case-insensitive; anything else is an error). `datasketch_frequent_items_weighted` adds a per-row `BIGINT`/`UBIGINT` weight for top-K by revenue, bytes, or any other metric.
 
 ## Compared to alternatives
 
@@ -100,6 +104,17 @@ A single family — [Frequent Items](https://datasketches.apache.org/docs/Freque
 ## Persistence and portability
 
 Every sketch round-trips through a typed BLOB column (`sketch_kll_double`, `sketch_hll`, `sketch_theta`, etc.) that's a strict superset of `BLOB`. Sketches written into a Parquet file can be read back into any DuckDB instance with this extension loaded, or into any other DataSketches-aware system, and merged without a re-scan. Aggregate functions accept either raw input values *or* an existing sketch column, so incremental rollup is just another `SELECT`.
+
+## Merging HLL and CPC sketches across types
+
+HLL and CPC accept integers, floats, strings, blobs, `UUID`, `HUGEINT` and `UHUGEINT`, and hash each value according to its column type. Merge only sketches built from the same type — across types, equal values can hash differently:
+
+- Integers up to 64 bits hash by value (`5::UTINYINT` and `5::BIGINT` match), but an unsigned value is first read as the signed value of the same width, so `200::UTINYINT` hashes like `-56`.
+- A `HUGEINT` or `UHUGEINT` that fits in a `BIGINT` hashes like that `BIGINT` — so sketches of `sum()` results (which DuckDB returns as `HUGEINT`) merge with sketches of the same `BIGINT` values. Wider values hash all 16 bytes.
+- Integers and floating-point values never match: `5::BIGINT` and `5::DOUBLE` differ.
+- A `UUID` hashes the same 16 bytes as `uuid::BLOB`.
+
+If values arrive in different types, cast them to one type before sketching.
 
 ## Tuple sketches: distinct keys that carry values
 
@@ -126,4 +141,9 @@ The October 2026 releases (Apache DataSketches C++ 5.3.0) change a few behaviors
 - **Frequent Items keys for FLOAT/DOUBLE are exact.** Items are now keyed by their shortest round-trip text (like `CAST(x AS VARCHAR)`) instead of six fixed decimals, so `0.1234567` and `0.1234568` stay distinct. Sketches of FLOAT/DOUBLE items built by earlier versions hold the old spellings: lookups against them usually return 0 and merges keep both spellings, so rebuild them from source data. VARCHAR and integer sketches are unaffected. `lg_max_k` must now be between 3 and 30 (out-of-range values used to be silently truncated).
 - **Theta unions keep their size.** `datasketch_theta_union` and the `datasketch_theta(sketch)` merge used to run at `lg_k` 12 regardless of their inputs; they now keep the inputs' `lg_k`.
 - **Constant arguments are honored.** Queries that combined the same aggregate with different constant sizes (e.g. `datasketch_kll(12, v)` and `datasketch_kll(16, v)` in one `UNION ALL`) could previously return the first sketch twice.
+- **Empty input gives `NULL`.** Every sketch aggregate now returns `NULL` over no rows. Theta, Tuple, array-of-doubles and Frequent Items used to return an empty sketch, so an estimate over an empty group is now `NULL` rather than 0 — wrap it in `coalesce(..., 0)` for the old result. Merging only empty sketches still returns an empty sketch.
+- **Size arguments are validated.** `K` / `lg_k` values outside each family's range (see the tables above) are bind errors; previously some failed mid-query and others were silently changed (a REQ `K` of 256 became 4, a T-Digest `K` of 70000 became 4464).
+- **HLL and CPC bounds take `num_std_devs`.** `datasketch_{hll,cpc}_{lower,upper}_bound` now take `num_std_devs INTEGER` (1, 2 or 3), like the Theta bounds, instead of `std_dev UTINYINT`; other values are an error.
+- **HLL and CPC accept `UUID`, `HUGEINT` and `UHUGEINT`.** `HUGEINT`/`UHUGEINT` used to go through `DOUBLE`, so values beyond 2^53 collapsed; see [Merging HLL and CPC sketches across types](#merging-hll-and-cpc-sketches-across-types). HUGEINT sketches built by earlier versions do not merge with new ones.
+- **Stricter errors.** A `NULL` split point in a CDF or PMF is an error (it used to read whatever value sat in the vector); library failures surface as `Invalid Input Error: <function>: …`; corrupt Theta and Frequent Items sketches report `Failed to deserialize … sketch`; a `NULL` `lg_max_k` is an error; and casts to `sketch_hll`, `sketch_cpc`, `sketch_theta` and `sketch_frequent_items` keep the sketch type instead of `BLOB`.
 - **New in the DuckDB 2.0 build:** Tuple and array-of-doubles sketches; batch `_quantiles` / `_ranks` and `_sorted_view` for KLL, Quantiles and REQ; VARCHAR items for KLL and Quantiles; REQ accuracy mode and rank bounds; T-Digest exact min/max; HLL register encodings, composite estimate and `datasketch_hll_merge` / `datasketch_cpc_merge`; Theta Jaccard similarity, `datasketch_theta_intersect_agg`, variadic union/intersect, `seed :=` / `p :=` options, unsigned-integer input, `datasketch_theta_blob` and compressed storage. `datasketch_theta_get_seed` is now documented as an alias of `datasketch_theta_seed_hash` (it always returned the seed hash).
