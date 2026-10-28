@@ -3,12 +3,15 @@
 | Need | Pick |
 |---|---|
 | One score, 0–100, sane default | `rapidfuzz_ratio` |
+| Don't know how the strings differ | `rapidfuzz_wratio` |
+| Best match from a list | `rapidfuzz_extract_one` |
 | Match a fragment inside a longer string | `rapidfuzz_partial_ratio` |
 | Words in different orders | `rapidfuzz_token_sort_ratio` |
 | Tolerate duplicated words | `rapidfuzz_token_set_ratio` |
 | Names / typos | `rapidfuzz_jaro_winkler_normalized_similarity` |
 | Spelling distance with transpositions | `rapidfuzz_osa_distance` |
 | Strings of identical length | `rapidfuzz_hamming_distance` |
+| Where two strings differ | `rapidfuzz_levenshtein_opcodes` |
 
 ## Record linkage
 
@@ -54,42 +57,72 @@ SELECT * FROM pairs ORDER BY sim DESC;
 
 Use the pair list to assign cluster IDs (graph-walk in Python or with a recursive CTE).
 
-## Spell check / typo tolerance
+## Canonicalize against a known list
 
-For a known-good dictionary, score a candidate against every entry and pick the closest:
+Map messy values onto a short list of canonical ones in a single pass — no join, no window function:
 
 ```sql
-SELECT word
+SELECT name,
+       rapidfuzz_extract_one(name, ['Acme Corporation', 'Globex Industries', 'Initech', 'Soylent Green Foods'],
+                             scorer := 'token_set_ratio', score_cutoff := 80) AS match
+FROM customers
+ORDER BY id;
+```
+
+Rows whose best score is under 80 get NULL, ready for manual review.
+
+## Spell check / typo tolerance
+
+For a known-good dictionary, score a candidate against every entry and pick the closest. `score_cutoff` lets OSA give up on words that are already more than two edits away:
+
+```sql
+SELECT word, rapidfuzz_osa_distance(word, :input, score_cutoff := 2) AS edits
 FROM dictionary
-WHERE rapidfuzz_osa_distance(word, :input) <= 2
-ORDER BY rapidfuzz_osa_distance(word, :input)
+WHERE rapidfuzz_osa_distance(word, :input, score_cutoff := 2) <= 2
+ORDER BY edits, word
 LIMIT 5;
 ```
 
-OSA (Optimal String Alignment) handles single-character typos and adjacent transpositions naturally.
+OSA (Optimal String Alignment) handles single-character typos and adjacent transpositions naturally. With the dictionary in a list, `rapidfuzz_extract(:input, words, scorer := 'osa_normalized_similarity', top_k := 5)` gives the same ranking as a normalized score.
+
+## Highlight differences
+
+`rapidfuzz_levenshtein_opcodes` describes both strings as equal and changed blocks — enough to render a diff:
+
+```sql
+SELECT op.operation,
+       substr('kitten', op.s1_start + 1, op.s1_end - op.s1_start) AS from_s1,
+       substr('sitting', op.s2_start + 1, op.s2_end - op.s2_start) AS from_s2
+FROM (SELECT unnest(rapidfuzz_levenshtein_opcodes('kitten', 'sitting')) AS op);
+```
+
+Positions are 0-based character offsets, hence the `+ 1` for `substr`.
 
 ## Ratio choice — visual guide
 
 ```
-input1: 'New York City'
+input1: 'new york city'
 input2: 'new york new york city'
 
-rapidfuzz_ratio                    → 56  (different overall)
-rapidfuzz_partial_ratio            → 100 (one is a substring)
-rapidfuzz_token_sort_ratio         → 78  (sorted tokens differ in count)
-rapidfuzz_token_set_ratio          → 100 (token sets identical)
-rapidfuzz_partial_token_set_ratio  → 100 (sets identical, partial fallback)
+rapidfuzz_ratio                    → 74.3  (extra words lower the score)
+rapidfuzz_partial_ratio            → 100   (one is a substring)
+rapidfuzz_token_sort_ratio         → 74.3  (sorted tokens differ in count)
+rapidfuzz_token_set_ratio          → 100   (token sets identical)
+rapidfuzz_partial_token_set_ratio  → 100   (sets identical, partial fallback)
+rapidfuzz_wratio                   → 90    (weighted blend, scaled for the length difference)
 ```
+
+All scorers are case-sensitive: with `'New York City'` as the first input, `rapidfuzz_partial_ratio` drops to 80. Lowercase both sides first (see [pre-normalize once, score many](#pre-normalize-once-score-many)) when case should not matter.
 
 The differences matter — pick the one that matches your data semantics. For *names with reordered words*, `token_sort_ratio` is usually right. For *names with stray duplicates*, `token_set_ratio`. For *substring matching*, `partial_ratio`.
 
 ## Algorithm function naming
 
-Each of the 8 algorithms exposes 4 variants:
+Each of the 10 metrics (Levenshtein, Damerau-Levenshtein, OSA, Indel, LCS, Hamming, Jaro, Jaro-Winkler, Prefix, Postfix) exposes 4 variants:
 
-- `rapidfuzz_<algo>_distance(a, b)` — raw edit count.
-- `rapidfuzz_<algo>_similarity(a, b)` — raw match count.
+- `rapidfuzz_<algo>_distance(a, b)` — raw edit count (`BIGINT`; `DOUBLE` for Jaro and Jaro-Winkler).
+- `rapidfuzz_<algo>_similarity(a, b)` — raw match count (`BIGINT`; `DOUBLE` for Jaro and Jaro-Winkler).
 - `rapidfuzz_<algo>_normalized_distance(a, b)` — `[0, 1]`, 0 = identical.
 - `rapidfuzz_<algo>_normalized_similarity(a, b)` — `[0, 1]`, 1 = identical.
 
-For comparisons across pairs of unequal length, the `normalized_*` variants are usually what you want — they don't punish longer strings.
+For comparisons across pairs of unequal length, the `normalized_*` variants are usually what you want — they don't punish longer strings. Every variant accepts `score_cutoff := n`.
