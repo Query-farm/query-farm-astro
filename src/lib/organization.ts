@@ -13,5 +13,6 @@ export const organization = {
   sameAs: [
     'https://github.com/Query-farm',
     'https://www.linkedin.com/company/query-farm/',
+    'https://bsky.app/profile/did:plc:xmzbjevihrv3rr4u6sks2hbr',
   ],
 };

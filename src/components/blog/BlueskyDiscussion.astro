@@ -1,0 +1,291 @@
+---
+/**
+ * BlueskyDiscussion — the conversation about a post, hosted on Bluesky.
+ *
+ * Every post ends with a follow prompt for the Query.Farm account. When the
+ * account has shared the post (query-farm-social does this on publish), the
+ * browser finds that share in the account's feed and shows its replies here,
+ * so the comments live where readers can follow us and join in.
+ *
+ * Nothing is fetched at build time: a post shared after its deploy picks up
+ * its thread without a rebuild. The fetch waits until the section is near the
+ * viewport. Replies hidden from the Bluesky app (thread gate) and replies or
+ * authors carrying a hide/adult moderation label are not shown.
+ */
+import Button from '../ui/Button.astro';
+import { bluesky, blueskyIconPath } from '../../data/bluesky';
+
+interface Props {
+  /** Canonical URL of the post; a share's link card must point here. */
+  postUrl: string;
+}
+
+const { postUrl } = Astro.props;
+---
+
+<section
+  class="mx-auto max-w-[720px] px-6 pt-8"
+  aria-labelledby="bluesky-discussion-title"
+  data-bluesky-discussion
+  data-did={bluesky.did}
+  data-post-url={postUrl}
+>
+  <div class="rounded-xl border border-soil-300 px-6 py-5 sm:px-7">
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <h2 id="bluesky-discussion-title" class="text-lg leading-tight text-soil-900">Discuss this on Bluesky</h2>
+        <p data-discussion-summary class="mt-1.5 text-[14.5px] leading-relaxed text-soil-600">
+          Follow @{bluesky.handle} for new articles, releases, and the conversation around them.
+        </p>
+      </div>
+      <svg class="mt-0.5 h-6 w-6 shrink-0 text-[#1185fe]" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path d={blueskyIconPath} />
+      </svg>
+    </div>
+
+    <div class="mt-4 flex flex-wrap gap-3">
+      <span data-discussion-reply hidden>
+        <Button href={bluesky.profileUrl} external size="sm">Reply on Bluesky</Button>
+      </span>
+      <Button href={bluesky.profileUrl} external variant="secondary" size="sm">Follow @{bluesky.handle}</Button>
+    </div>
+
+    <ol data-discussion-replies hidden class="mt-5 flex list-none flex-col gap-4 border-t border-soil-200 pt-5"></ol>
+    <a
+      data-discussion-more
+      hidden
+      target="_blank"
+      rel="noopener noreferrer"
+      class="mt-4 inline-block text-[13px] font-medium text-link no-underline hover:underline"
+    >See the whole thread on Bluesky →</a>
+  </div>
+</section>
+
+<script>
+  const API = 'https://public.api.bsky.app/xrpc';
+  /** Pages of the account's feed searched for the post's share. */
+  const FEED_PAGES = 3;
+  const MAX_TOP_LEVEL = 12;
+  const MAX_DEPTH = 3;
+  const HIDDEN_LABELS = new Set(['!hide', '!warn', 'porn', 'sexual', 'nudity', 'graphic-media', 'gore']);
+
+  interface Facet {
+    index: { byteStart: number; byteEnd: number };
+    features: { $type: string; uri?: string; did?: string; tag?: string }[];
+  }
+  interface Author { did: string; handle: string; displayName?: string; avatar?: string; labels?: { val: string }[] }
+  interface PostView {
+    uri: string;
+    author: Author;
+    record: { text: string; createdAt: string; facets?: Facet[]; embed?: { external?: { uri: string } } };
+    embed?: { external?: { uri: string } };
+    replyCount?: number;
+    repostCount?: number;
+    likeCount?: number;
+    labels?: { val: string }[];
+  }
+  interface ThreadView { $type: string; post?: PostView; replies?: ThreadView[] }
+
+  const normalize = (url: string) => {
+    try {
+      const u = new URL(url);
+      return `${u.host}${u.pathname.replace(/\/+$/, '')}`.toLowerCase();
+    } catch {
+      return url;
+    }
+  };
+
+  async function xrpc<T>(method: string, params: Record<string, string>): Promise<T> {
+    const res = await fetch(`${API}/${method}?${new URLSearchParams(params)}`);
+    if (!res.ok) throw new Error(`${method}: ${res.status}`);
+    return res.json();
+  }
+
+  /** The account's first share of this post: a link card for it, else a link in the text. */
+  async function findShare(did: string, postUrl: string): Promise<string | undefined> {
+    const target = normalize(postUrl);
+    let card: string | undefined;
+    let mention: string | undefined;
+    let cursor: string | undefined;
+    for (let page = 0; page < FEED_PAGES; page++) {
+      const params: Record<string, string> = { actor: did, limit: '100', filter: 'posts_no_replies' };
+      if (cursor) params.cursor = cursor;
+      const data = await xrpc<{ feed: { post: PostView; reason?: unknown }[]; cursor?: string }>(
+        'app.bsky.feed.getAuthorFeed', params,
+      );
+      // The feed is newest first, so the last match seen is the earliest share.
+      for (const { post, reason } of data.feed) {
+        if (reason || post.author.did !== did) continue;
+        const external = post.embed?.external?.uri ?? post.record.embed?.external?.uri;
+        if (external && normalize(external) === target) card = post.uri;
+        const linked = post.record.facets?.some(f => f.features.some(feat => feat.uri && normalize(feat.uri) === target));
+        if (linked) mention = post.uri;
+      }
+      cursor = data.cursor;
+      if (!cursor) break;
+    }
+    return card ?? mention;
+  }
+
+  const webUrl = (post: PostView) =>
+    `https://bsky.app/profile/${post.author.did}/post/${post.uri.split('/').pop()}`;
+
+  const isHidden = (post: PostView, hiddenReplies: Set<string>) =>
+    hiddenReplies.has(post.uri) ||
+    [...(post.labels ?? []), ...(post.author.labels ?? [])].some(label => HIDDEN_LABELS.has(label.val));
+
+  function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function link(href: string, className: string, text: string) {
+    const a = el('a', className, text);
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer nofollow ugc';
+    return a;
+  }
+
+  /** Post text with its links, mentions, and hashtags. Facet offsets are UTF-8 bytes. */
+  function richText(text: string, facets: Facet[] = []) {
+    const p = el('p', 'mt-1 whitespace-pre-wrap break-words text-[14.5px] leading-relaxed text-soil-800');
+    const bytes = new TextEncoder().encode(text);
+    const decode = (start: number, end: number) => new TextDecoder().decode(bytes.slice(start, end));
+    let at = 0;
+    for (const facet of [...facets].sort((a, b) => a.index.byteStart - b.index.byteStart)) {
+      const { byteStart, byteEnd } = facet.index;
+      if (byteStart < at || byteEnd > bytes.length) continue;
+      p.append(decode(at, byteStart));
+      const label = decode(byteStart, byteEnd);
+      const feature = facet.features[0];
+      let href: string | undefined;
+      if (feature?.uri && /^https?:\/\//.test(feature.uri)) href = feature.uri;
+      else if (feature?.did) href = `https://bsky.app/profile/${feature.did}`;
+      else if (feature?.tag) href = `https://bsky.app/hashtag/${encodeURIComponent(feature.tag)}`;
+      p.append(href ? link(href, 'text-link underline-offset-2 hover:underline', label) : label);
+      at = byteEnd;
+    }
+    p.append(decode(at, bytes.length));
+    return p;
+  }
+
+  function renderReply(thread: ThreadView, depth: number, hiddenReplies: Set<string>): HTMLLIElement | null {
+    const post = thread.post;
+    if (thread.$type !== 'app.bsky.feed.defs#threadViewPost' || !post || isHidden(post, hiddenReplies)) return null;
+
+    const li = el('li', depth > 0 ? 'border-l-2 border-soil-200 pl-4' : '');
+    const head = el('div', 'flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] text-soil-500');
+    if (post.author.avatar) {
+      const img = el('img', 'h-6 w-6 rounded-full bg-soil-200');
+      img.src = post.author.avatar;
+      img.alt = '';
+      img.loading = 'lazy';
+      img.width = img.height = 24;
+      head.append(img);
+    }
+    head.append(link(`https://bsky.app/profile/${post.author.did}`, 'font-medium text-soil-900 no-underline hover:text-link',
+      post.author.displayName || `@${post.author.handle}`));
+    if (post.author.displayName) head.append(el('span', 'text-soil-500', `@${post.author.handle}`));
+    head.append(el('span', 'text-soil-400', '·'));
+    const when = new Date(post.record.createdAt);
+    const time = el('time', 'qf-figure', when.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }));
+    time.dateTime = when.toISOString();
+    const permalink = link(webUrl(post), 'text-soil-500 no-underline hover:text-link', '');
+    permalink.append(time);
+    head.append(permalink);
+    li.append(head, richText(post.record.text, post.record.facets));
+
+    if (post.likeCount) {
+      li.append(el('p', 'qf-figure mt-1 text-[12.5px] text-soil-500', `♥ ${post.likeCount}`));
+    }
+
+    const replies = depth + 1 < MAX_DEPTH ? sortReplies(thread.replies) : [];
+    const children = replies.map(r => renderReply(r, depth + 1, hiddenReplies)).filter(Boolean) as HTMLLIElement[];
+    if (children.length) {
+      const ol = el('ol', 'mt-3 flex list-none flex-col gap-3');
+      ol.append(...children);
+      li.append(ol);
+    }
+    return li;
+  }
+
+  /** Most-liked first; ties keep conversation order. */
+  const sortReplies = (replies: ThreadView[] = []) =>
+    [...replies].sort((a, b) =>
+      (b.post?.likeCount ?? 0) - (a.post?.likeCount ?? 0) ||
+      (a.post?.record.createdAt ?? '').localeCompare(b.post?.record.createdAt ?? ''));
+
+  const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+  async function load(section: HTMLElement) {
+    const { did, postUrl } = section.dataset;
+    if (!did || !postUrl) return;
+    const uri = await findShare(did, postUrl);
+    if (!uri) return;
+
+    const { thread, threadgate } = await xrpc<{
+      thread: ThreadView;
+      threadgate?: { record?: { hiddenReplies?: string[] } };
+    }>('app.bsky.feed.getPostThread', { uri, depth: String(MAX_DEPTH), parentHeight: '0' });
+    const root = thread.post;
+    if (!root) return;
+    const hiddenReplies = new Set(threadgate?.record?.hiddenReplies ?? []);
+    const url = webUrl(root);
+
+    const replyButton = section.querySelector<HTMLElement>('[data-discussion-reply]');
+    const replyLink = replyButton?.querySelector('a');
+    if (replyButton && replyLink) {
+      replyLink.href = url;
+      replyButton.hidden = false;
+    }
+
+    const summary = section.querySelector('[data-discussion-summary]');
+    const replyCount = root.replyCount ?? 0;
+    if (summary) {
+      const counts = [
+        plural(replyCount, 'reply', 'replies'),
+        root.likeCount ? plural(root.likeCount, 'like') : '',
+        root.repostCount ? plural(root.repostCount, 'repost') : '',
+      ].filter(Boolean);
+      summary.textContent = replyCount
+        ? `${counts.join(' · ')} on Bluesky.`
+        : 'No replies yet. Questions, corrections, and war stories are welcome.';
+    }
+
+    const items = sortReplies(thread.replies)
+      .slice(0, MAX_TOP_LEVEL)
+      .map(r => renderReply(r, 0, hiddenReplies))
+      .filter(Boolean) as HTMLLIElement[];
+    const list = section.querySelector<HTMLOListElement>('[data-discussion-replies]');
+    if (list && items.length) {
+      list.append(...items);
+      list.hidden = false;
+    }
+
+    const more = section.querySelector<HTMLAnchorElement>('[data-discussion-more]');
+    if (more && items.length && replyCount > items.length) {
+      more.href = url;
+      more.hidden = false;
+    }
+  }
+
+  for (const section of document.querySelectorAll<HTMLElement>('[data-bluesky-discussion]')) {
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some(entry => entry.isIntersecting)) return;
+      observer.disconnect();
+      // A failed lookup leaves the follow prompt, which stands on its own.
+      load(section).catch(() => {});
+    }, { rootMargin: '600px 0px' });
+    observer.observe(section);
+
+    section.addEventListener('click', (event) => {
+      const anchor = (event.target as Element).closest('a');
+      if (!anchor) return;
+      const gtag = (window as unknown as { gtag?: (...args: unknown[]) => void }).gtag;
+      gtag?.('event', 'bluesky_discussion_click', { link_url: anchor.href });
+    });
+  }
+</script>
