@@ -18,7 +18,21 @@ SELECT lower(to_hex(crypto_hmac('sha2-256', :secret, request_body))) AS signatur
 FROM api_requests;
 ```
 
-Compare signatures byte-for-byte (or in DuckDB, `=`) to verify authenticity. The verification side performs the same HMAC and rejects on mismatch.
+The key and message may be `VARCHAR` or `BLOB`, so a key from `crypto_random_bytes` or `unhex()` works directly:
+
+```sql
+-- RFC 4231 test case 1
+SELECT lower(to_hex(crypto_hmac('sha2-256', unhex('0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b'), 'Hi There'))) AS mac;
+-- b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7
+```
+
+To verify, the receiving side computes the same HMAC and compares it with the one it was sent. Use `crypto_equals` for that comparison — it runs in constant time, so response timing doesn't leak how many leading bytes matched:
+
+```sql
+SELECT crypto_equals(crypto_hmac('sha2-256', 'k', 'm'), crypto_hmac('sha2-256', 'k', 'm')) AS valid,
+       crypto_equals(crypto_hmac('sha2-256', 'k', 'm'), crypto_hmac('sha2-256', 'k', 'n')) AS tampered;
+-- true, false
+```
 
 ## Generate a Salt
 
@@ -27,7 +41,66 @@ Compare signatures byte-for-byte (or in DuckDB, `=`) to verify authenticity. The
 SELECT crypto_random_bytes(16) AS salt;
 ```
 
-The bytes come from OpenSSL's CSPRNG — suitable for cryptographic use. Length is unbounded up to 4 GB − 1.
+The bytes come from OpenSSL's CSPRNG — suitable for cryptographic use. Length can be anything from 1 byte to 4 GB − 1, and large requests count against DuckDB's `memory_limit`.
+
+## Hash a Password
+
+A fast hash such as SHA-256 is not a password hash. Use a deliberately slow, memory-hard KDF — Argon2id is the usual first choice — with a random salt per user, and store the salt and parameters next to the hash:
+
+```sql
+SELECT lower(to_hex(crypto_argon2('argon2id', 'password', 'somesalt', 2, 65536, 4, 32))) AS hash;
+-- 1a9677b0afe81fda7b548895e7a1bfeb8668ffc19a530e37e088a668fab1c02a
+```
+
+The arguments are the variant, password, salt (at least 8 bytes), iterations, memory in KiB (64 MiB here), parallelism, and output length. `crypto_scrypt` and `crypto_pbkdf2` are there when a system you interoperate with requires them:
+
+```sql
+-- RFC 7914 scrypt test vector: n = 1024, r = 8, p = 16
+SELECT lower(to_hex(crypto_scrypt('password', 'NaCl', 1024, 8, 16, 64))) AS scrypt;
+-- fdbabe1c9d3472007856e7190d01e9fe7c6ad7cbc8237830e77376634b3731622eaf30d92e22a3886ff109279d9830dac727afb94a83ee6d8360cbdfa2cc0640
+
+-- RFC 6070 PBKDF2-HMAC-SHA1 test vector
+SELECT lower(to_hex(crypto_pbkdf2('sha1', 'password', 'salt', 4096, 20))) AS pbkdf2;
+-- 4b007901b765489abead49d926f721d065a429c1
+```
+
+To check a login, recompute the hash from the stored salt and parameters and compare with `crypto_equals`. scrypt and Argon2 working memory counts against `memory_limit`, so a cost that is too high for the session fails with `Out of Memory Error`.
+
+## Derive Keys from a Secret
+
+HKDF turns one high-entropy secret (a random master key, a key-exchange result) into as many independent keys as you need, separated by the `info` string. It is fast, so don't use it on passwords:
+
+```sql
+-- RFC 5869 test case 1
+SELECT lower(to_hex(crypto_hkdf('sha2-256',
+         unhex('0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b'),
+         unhex('000102030405060708090a0b0c'),
+         unhex('f0f1f2f3f4f5f6f7f8f9'),
+         42))) AS okm;
+-- 3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865
+```
+
+The output can be up to 255 × the digest length — 8,160 bytes for `sha2-256`.
+
+## Variable-Length Digests
+
+`crypto_hash_xof` asks BLAKE3, SHAKE128, or SHAKE256 for exactly as many bytes as you need — a 100-byte fingerprint, a long keystream for a test fixture. Longer outputs extend shorter ones:
+
+```sql
+SELECT lower(to_hex(crypto_hash_xof('blake3', 'abc', 64))) AS digest;
+-- 6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d851fb250ae7393f5d02813b65d521a0d492d9ba09cf7ce7f4cffd900f23374bf0b
+```
+
+## Ethereum Keccak-256
+
+Ethereum uses the original Keccak padding, not the standardized SHA-3. `keccak256` computes the Ethereum variant:
+
+```sql
+SELECT lower(to_hex(crypto_hash('keccak256', ''))) AS empty_keccak;
+-- c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+```
+
+Builds before the DuckDB 2.0 release returned SHA-3 for the `keccak*` names; see [Changes in the DuckDB 2.0 release](#changes-in-the-duckdb-20-release).
 
 ## Dataset Checksum
 
@@ -48,7 +121,26 @@ GROUP BY day
 ORDER BY day;
 ```
 
-The `ORDER BY` is required — without it, hashes would be non-deterministic across query plans.
+The `ORDER BY` is required — without it, hashes would be non-deterministic across query plans, so the query is rejected with `Hash aggregation requires a distinct total ordering`. Ordering by the group key alone isn't enough; order by something that is unique within each group.
+
+NULL values raise an error rather than being skipped silently. Leave them out explicitly:
+
+```sql
+SELECT crypto_hash_agg('sha2-256', x ORDER BY x) FILTER (WHERE x IS NOT NULL)
+     = crypto_hash('sha2-256', [1, 3]) AS matches
+FROM (VALUES (1), (NULL), (3)) t(x);
+-- true
+```
+
+`crypto_hash_agg` also works as a window function — a running checksum, or one per sliding frame. Give the window (or the aggregate) an `ORDER BY`; with neither, the missing ordering isn't detected:
+
+```sql
+SELECT day, id,
+       lower(to_hex(crypto_hash_agg('sha2-256', payload ORDER BY id)
+                    OVER (PARTITION BY day ORDER BY id))) AS running_hash
+FROM events
+ORDER BY day, id;
+```
 
 ## Tamper-Evident Audit Log
 
@@ -93,13 +185,20 @@ Pair with [`hashfuncs`](/products/extensions/hashfuncs) when you want the same p
 
 ## Algorithm Reference
 
-| Algorithm     | Output | Notes                                        |
-|---------------|--------|----------------------------------------------|
-| `blake3`      | 32 B   | Modern, fast — recommended default           |
-| `blake2b-512` | 64 B   | Strong all-rounder, no BLAKE3 hardware needed|
-| `sha2-256`    | 32 B   | Industry standard SHA-2                      |
-| `sha2-512`    | 64 B   | Larger SHA-2 output                          |
-| `sha3-256`    | 32 B   | Keccak-based, post-SHA-2 standard            |
-| `keccak256`   | 32 B   | Original Keccak (mapped to SHA3-256 here)    |
-| `md5`         | 16 B   | Legacy — fast but **not** cryptographically secure |
-| `sha1`        | 20 B   | Legacy — **not** cryptographically secure    |
+| Algorithm      | Output | Notes                                        |
+|----------------|--------|----------------------------------------------|
+| `blake3`       | 32 B   | Modern, fast — recommended default; any length via `crypto_hash_xof` |
+| `blake2b-512`  | 64 B   | Strong all-rounder, no BLAKE3 hardware needed|
+| `blake2s-256`  | 32 B   | BLAKE2 tuned for 32-bit and small platforms  |
+| `sha2-256`     | 32 B   | Industry standard SHA-2                      |
+| `sha2-512`     | 64 B   | Larger SHA-2 output                          |
+| `sha2-512/256` | 32 B   | Truncated SHA-512 — 32 bytes, faster than SHA-256 on 64-bit CPUs |
+| `sha3-256`     | 32 B   | Keccak-based, post-SHA-2 standard            |
+| `shake256`     | 64 B   | SHA-3 XOF; any length via `crypto_hash_xof`  |
+| `keccak256`    | 32 B   | Original Keccak, as used by Ethereum — differs from `sha3-256` |
+| `sm3`          | 32 B   | Chinese national standard                    |
+| `ripemd160`    | 20 B   | Bitcoin addresses                            |
+| `md5`          | 16 B   | Legacy — fast but **not** cryptographically secure |
+| `sha1`         | 20 B   | Legacy — **not** cryptographically secure    |
+
+`SELECT * FROM crypto_algorithms()` lists every algorithm, including `sha2-224`, `sha2-384`, `sha2-512/224`, the remaining SHA-3, SHAKE and Keccak sizes, and whether each one is available in your OpenSSL build (`md4` is not).
