@@ -16,71 +16,186 @@ FROM samples;
 
 The same shape — generate, filter, aggregate — handles portfolio [VaR](https://en.wikipedia.org/wiki/Value_at_risk), payoff integration, queueing simulation, or generating a million-row synthetic dataset for a load test. Every `dist_<family>_sample` is a vectorized scalar function, so a million draws is one columnar scan.
 
+Going the other way — from data to a distribution — is one aggregate:
+
+```sql
+SELECT dist_normal_fit(x) AS fit,
+       dist_normal_ks_test(x, 0.0, 1.0).p_value AS standard_normal_p
+FROM (SELECT dist_normal_sample(0.0, 1.0) AS x FROM range(10000));
+```
+
 <Callout type="note" title="Best fit, scoped honestly">
-This extension is a **statistical-distributions library**, not a full simulation framework. It covers the 22 [most common distributions](https://en.wikipedia.org/wiki/List_of_probability_distributions) with the full PDF / CDF / quantile / hazard / sampling / properties surface — built on the [Boost.Math distributions library](https://www.boost.org/doc/libs/release/libs/math/doc/html/dist.html).
+This extension is a **statistical-distributions library**, not a full simulation or modeling framework. It covers 36 [common distributions](https://en.wikipedia.org/wiki/List_of_probability_distributions) with the full PDF / CDF / quantile / hazard / sampling / properties surface — built on the [Boost.Math distributions library](https://www.boost.org/doc/libs/release/libs/math/doc/html/dist.html) — plus maximum likelihood fits for 11 of them and the everyday hypothesis tests.
 
 What it deliberately doesn't ship:
 
-- **No copulas / multivariate distributions.** The 22 families are univariate; correlated draws need a Cholesky-style transform you write yourself.
-- **No user-controlled RNG seed.** For exactly-reproducible runs, materialize the draws into a table and treat that as the seed.
-- **No fitters or hypothesis-test wrappers.** Compute the test statistic in SQL, then call the appropriate `_cdf_complement` for the p-value.
+- **No copulas or multivariate Normal.** Dirichlet and multinomial are the only multivariate distributions; correlated Normal draws need a Cholesky-style transform you write yourself.
+- **No regression or model fitting.** Fits estimate one distribution's parameters from one column.
 
-For production-grade simulation, MCMC, or anything needing [SciPy](https://docs.scipy.org/doc/scipy/reference/stats.html)-level fitting, keep a Python notebook with NumPy and SciPy. For quick analysis, what-if exploration, and synthetic data right next to your warehouse data, this is the right tool.
+For production-grade simulation, MCMC, or anything needing [SciPy](https://docs.scipy.org/doc/scipy/reference/stats.html)-level modeling, keep a Python notebook with NumPy and SciPy. For quick analysis, what-if exploration, inference and synthetic data right next to your warehouse data, this is the right tool.
 </Callout>
 
 ## What this extension covers
 
-22 named probability distributions — 16 continuous, 6 discrete — each exposed through the same uniform set of operations:
+36 named probability distributions — 28 continuous and 8 discrete, including the multivariate Dirichlet and multinomial. Every univariate distribution exposes the same set of operations:
 
-- **Sampling** (`_sample`) — draw a random value.
-- **Density / mass** (`_pdf`, `_log_pdf`) — point density.
+- **Sampling** (`_sample`, `_samples`) — draw a random value, or a list of `n` values.
+- **Density / mass** (`_pdf`, `_log_pdf`; discrete distributions also have `_pmf`, `_log_pmf`) — point density or probability.
 - **Cumulative** (`_cdf`, `_log_cdf`, `_cdf_complement`, `_log_cdf_complement`) — left tail and survival.
 - **Quantile** (`_quantile`, `_quantile_complement`) — inverse CDF.
 - **Hazard** (`_hazard`, `_chf`) — instantaneous and cumulative hazard.
 - **Properties** (`_mean`, `_median`, `_mode`, `_variance`, `_stddev`, `_skewness`, `_kurtosis`, `_kurtosis_excess`, `_range`, `_support`).
+- **Kolmogorov-Smirnov test** (`_ks_test`, continuous distributions) — aggregate goodness-of-fit test against given parameters.
 
-The same naming scheme across all 22 means once you know one distribution's surface you know them all. Browse the categories sidebar to jump straight to the distribution you need.
+The same naming scheme across every distribution means once you know one distribution's surface you know them all. Browse the categories sidebar to jump straight to the distribution you need. The **Fitting** and **Hypothesis Tests** categories list the aggregates.
 
 ## Why DuckDB instead of Python / R / Excel?
 
-- **No data movement.** Stats happen where the rows live — no export to NumPy or pandas just to compute a CDF.
+- **No data movement.** Stats happen where the rows live — no export to NumPy or pandas just to compute a CDF or fit a column.
 - **Vectorized.** All functions run column-at-a-time over DuckDB's columnar engine.
-- **SQL composition.** Probability calculations chain cleanly with joins, window functions, CTEs, and CTAS.
-- **Reproducibility.** A `WITH` clause containing distribution functions is a complete, self-describing analysis you can paste into any DuckDB session.
+- **SQL composition.** Probability calculations chain cleanly with joins, window functions, CTEs, and CTAS; fits and tests work per `GROUP BY` group.
+- **Reproducibility.** A `WITH` clause containing distribution functions is a complete, self-describing analysis you can paste into any DuckDB session, and `setseed` makes its samples repeatable.
 
 ## Parameter validation
 
-Every function validates its parameters and raises a SQL error on illegal inputs — no silent NaN propagation:
+Every function validates its parameters and raises a SQL error on illegal inputs — no silent NaN propagation. Errors name the distribution and the parameter:
 
 {/* check: skip intentional-error-demo */}
 ```sql
 SELECT dist_normal_pdf(0.0, -1.0, 0.5);
--- Error: normal: Standard deviation must be > 0 was: -1.000000
+-- Invalid Input Error: normal: stddev must be > 0, got -1
 
 SELECT dist_binomial_pdf(10, 1.5, 5);
--- Error: binomial: Probability must be between 0 and 1 was: 1.500000
+-- Invalid Input Error: binomial: prob must be between 0 and 1, got 1.5
+
+SELECT dist_normal_quantile(0.0, 1.0, 1.5);
+-- Invalid Input Error: normal: Probability argument is 1.5, but must be >= 0 and <= 1
 ```
+
+NaN and infinite parameters are rejected the same way. Evaluation points may be infinite, and a quantile at p = 0 or 1 of an unbounded distribution is `-inf` or `inf`:
+
+```sql
+SELECT dist_normal_quantile(0.0, 1.0, 1.0) AS upper, dist_normal_cdf(0.0, 1.0, '-inf'::DOUBLE) AS lower_tail;
+```
+
+## Undefined properties return NULL
+
+Some moments do not exist for some parameters — the Cauchy distribution has no mean or variance, and Student's t has no variance for df ≤ 2. Those calls return NULL instead of raising an error:
+
+```sql
+SELECT dist_cauchy_mean(0.0, 1.0) AS cauchy_mean,
+       dist_cauchy_median(0.0, 1.0) AS cauchy_median,
+       dist_students_t_variance(1.5) AS t_variance_df_1_5;
+```
+
+## Discrete quantiles
+
+Quantiles of discrete distributions are integers: the smallest `x` with `P(X <= x) >= p`, the same definition R uses for `qpois` and `qbinom`.
+
+```sql
+SELECT dist_poisson_quantile(5.0, 0.3) AS q30,
+       dist_binomial_quantile(10, 0.5, 0.2) AS q20,
+       dist_geometric_quantile(0.5, 0.95) AS q95;
+```
+
+The binomial, negative binomial, hypergeometric and integer uniform quantiles return `BIGINT`; the others return a whole-number `DOUBLE`. A `BIGINT` quantile that would be infinite — such as the negative binomial quantile at p = 1 — raises an error.
+
+Samplers for discrete distributions reject parameters whose samples could exceed 2^53, the range where `DOUBLE` represents every integer exactly. For example, `dist_poisson_sample(1e300)` is an error rather than a hang.
+
+## Fit reference
+
+`dist_<name>_fit(x)` is an aggregate that estimates a distribution's parameters by [maximum likelihood](https://en.wikipedia.org/wiki/Maximum_likelihood_estimation). It returns a `STRUCT` whose fields are named like the distribution's parameters, so the result plugs straight back into the other functions:
+
+| Fit | Returns |
+|---|---|
+| `dist_normal_fit` | `{mean, stddev}` |
+| `dist_lognormal_fit` | `{mean, stddev}` of `ln(x)` |
+| `dist_exponential_fit` | `{rate}` |
+| `dist_poisson_fit` | `{rate}` |
+| `dist_bernoulli_fit` | `{prob}` (x is 0 or 1) |
+| `dist_geometric_fit` | `{prob}` (x counts failures before the first success) |
+| `dist_rayleigh_fit` | `{scale}` |
+| `dist_uniform_real_fit` | `{min, max}` |
+| `dist_pareto_fit` | `{scale, shape}` |
+| `dist_gamma_fit` | `{shape, scale}` (Newton's method) |
+| `dist_beta_fit` | `{alpha, beta}` (Newton's method) |
+
+NULL inputs are ignored. An empty sample, or one whose values are all the same, returns NULL. Values outside the distribution's support raise an error — a negative value for gamma, or 1 for beta. The normal and log-normal fits return the maximum likelihood standard deviation, which divides by `n`, not `n - 1`.
+
+## Hypothesis test reference
+
+Each test is an aggregate that returns a `STRUCT` with the statistic, the degrees of freedom and the p-value:
+
+| Test | Arguments | Returns |
+|---|---|---|
+| `dist_<name>_ks_test` | `x` and the distribution's parameters | `{statistic, p_value}` |
+| `welch_t_test` | `x`, `sample_index` (0 or 1) | `{t_statistic, degrees_of_freedom, p_value}` |
+| `student_t_test` | `x`, `sample_index` (0 or 1) | `{t_statistic, degrees_of_freedom, p_value}` |
+| `one_sample_t_test` | `x`, `mu` | `{t_statistic, degrees_of_freedom, p_value}` |
+| `chi_squared_test` | `observed`, `expected` (one row per category) | `{statistic, degrees_of_freedom, p_value}` |
+
+The t-test p-values are two-sided. The Kolmogorov-Smirnov p-value uses the asymptotic distribution of √n·D, which is approximate for small samples, and the distribution parameters must be the same for every row of a group. `chi_squared_test` rescales the expected values to the observed total, so they can be counts or probabilities.
+
+```sql
+SELECT welch_t_test(x, grp) AS welch, student_t_test(x, grp).p_value AS pooled_p
+FROM (VALUES (5.1, 0), (4.8, 0), (5.6, 0), (5.0, 0), (6.2, 1), (5.9, 1), (7.1, 1), (6.4, 1)) t(x, grp);
+```
+
+## Seeding with setseed
+
+Sampling uses DuckDB's per-connection random engine, so [`setseed`](https://duckdb.org/docs/sql/functions/numeric#setseedx) makes the samples that follow it reproducible — including when the query runs on many threads:
+
+```sql
+SELECT setseed(0.42);
+SELECT sum(dist_normal_sample(0.0, 1.0)) AS total FROM range(100000);
+```
+
+Run the pair again and the total is identical.
 
 ## When to use which family
 
 | Pick this when… | Reach for |
 |---|---|
 | Test scores, measurement noise, anything CLT-flavoured | **Normal** |
+| Bell-shaped but skewed measurements | **Skew Normal** |
 | Small-sample inference (df ≤ 30) | **Student's t** |
 | Counts of independent events at a rate | **Poisson** |
 | Yes/no per-trial outcomes | **Bernoulli**, **Binomial** |
-| Time between events / time-to-failure | **Exponential**, **Weibull** |
+| Draws without replacement from a finite population | **Hypergeometric** |
+| Counts across several categories | **Multinomial** |
+| Time between events / time-to-failure | **Exponential**, **Weibull**, **Inverse Gaussian** |
 | Heavy-tailed wealth or file-size data | **Pareto**, **Cauchy**, **Log-normal** |
-| Bayesian priors over probabilities | **Beta** |
+| Bayesian priors over probabilities | **Beta**, **Dirichlet** |
+| Bayesian priors over a variance | **Inverse Gamma**, **Inverse Chi-squared** |
+| Estimates from a minimum, most likely and maximum | **Triangular** |
 | Ratios of variances (ANOVA / regression) | **Fisher F** |
-| Goodness-of-fit, variance tests | **Chi-squared** |
+| Goodness-of-fit, variance tests | **Chi-squared**, **Kolmogorov-Smirnov** |
+| Power and sample-size calculations | **Non-central t**, **Non-central F**, **Non-central Chi-squared**, **Non-central Beta** |
 | Block maxima / rare-event tails | **Extreme Value** |
 | Robust regression / sparse priors | **Laplace** |
+| Random walks, values concentrated at both ends | **Arcsine** |
 | Inverse-transform sampling, dice, random index | **Uniform (Real)**, **Uniform (Integer)** |
+
+## Changes in the DuckDB 2.0 build
+
+The DuckDB 2.0 build of the extension adds:
+
+- 14 distributions: arcsine, hypergeometric, inverse gamma, scaled inverse chi-squared, inverse Gaussian, Kolmogorov-Smirnov, non-central beta / chi-squared / F / t, skew normal, triangular, Dirichlet and multinomial.
+- Fit aggregates for 11 distributions and the hypothesis test aggregates above.
+- `_samples` (a list of `n` samples) for every univariate distribution, and `_pmf` / `_log_pmf` for discrete ones.
+- Function categories in `duckdb_functions()`: `[statistics, <kind>, <distribution>]`.
+
+It also changes behavior:
+
+- Errors name the distribution and parameter. Out-of-range probabilities no longer surface as raw Boost.Math errors, and quantiles at p = 0 or 1 return `±inf` instead of an overflow error.
+- Undefined properties return NULL. Properties that were missing before — such as the binomial and negative binomial mean and standard deviation — are now available.
+- Discrete quantiles use the smallest-x definition above. `dist_poisson_quantile(5, 0.3)` is now 4 (it was 3), and `dist_geometric_quantile(0.5, 0.95)` is now 4 (it was 3.32).
+- The gamma parameters are named `shape, scale`, and the extreme value and logistic location parameters are named `location`. Arguments are positional, so queries are unaffected.
+- Continuous CDFs and quantiles are faster on Linux ARM64: calculations stay in `DOUBLE`, which also makes results the same on every platform.
 
 ## Integer uniform and Pareto compatibility
 
-The [October 7, 2026 `v1.5` source fix](https://github.com/Query-farm/stochastic/commit/abdab24201d911501b924744c13c30739b4f6c28) makes the `uniform_int` analytical functions agree with integer sampling on the inclusive interval `[min, max]`. Community packages may lag this source change. Earlier builds, including `234c881`, used continuous-uniform formulas and truncated several moments.
+The [October 7, 2026 `v1.5` source fix](https://github.com/Query-farm/stochastic/commit/abdab24201d911501b924744c13c30739b4f6c28) makes the `uniform_int` analytical functions agree with integer sampling on the inclusive interval `[min, max]`. The DuckDB 2.0 build includes it. Earlier builds, including `234c881`, used continuous-uniform formulas and truncated several moments.
 
 ```sql
 SELECT dist_uniform_int_pdf(1, 6, 3) AS mass,

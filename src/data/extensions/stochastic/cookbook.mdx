@@ -1,4 +1,4 @@
-Recipes are organized by distribution family. Every distribution exposes the same operations — `sample`, `pdf` / `log_pdf`, `cdf` / `log_cdf` / `cdf_complement`, `quantile`, plus property functions (`mean`, `variance`, `skewness`, …). Once you've used one family, the rest follow the same shape.
+Recipes are organized by task and distribution family. Every univariate distribution exposes the same operations — `sample` / `samples`, `pdf` / `log_pdf` (and `pmf` for discrete ones), `cdf` / `log_cdf` / `cdf_complement`, `quantile`, plus property functions (`mean`, `variance`, `skewness`, …). Once you've used one family, the rest follow the same shape. Fitting and hypothesis tests are aggregates.
 
 ## Normal — the workhorse
 
@@ -89,7 +89,63 @@ SELECT
 
 See [`dist_beta_mean`](#dist_beta_mean), [`dist_beta_quantile`](#dist_beta_quantile).
 
-## Hypothesis testing — t, chi-squared, F
+## Fit a distribution, then test the fit
+
+`dist_<name>_fit` estimates parameters from a column by maximum likelihood. Its fields are named like the distribution's parameters, so the fitted values feed straight into the other functions:
+
+```sql
+WITH durations AS (
+  SELECT * FROM (VALUES (1.2), (0.7), (2.9), (1.8), (0.4), (3.6), (1.1), (2.2)) t(x)
+), fit AS (
+  SELECT dist_gamma_fit(x) AS f FROM durations
+)
+SELECT f.shape, f.scale,
+       dist_gamma_quantile(f.shape, f.scale, 0.95) AS p95_duration,
+       dist_gamma_ks_test(x, f.shape, f.scale).p_value AS ks_p_value
+FROM durations, fit
+GROUP BY f;
+```
+
+Fits and tests are ordinary aggregates, so they work per group:
+
+```sql
+SELECT region, dist_poisson_fit(orders).rate AS orders_per_day
+FROM (VALUES ('north', 4), ('north', 6), ('north', 5), ('south', 9), ('south', 7), ('south', 11)) t(region, orders)
+GROUP BY region
+ORDER BY region;
+```
+
+See [`dist_gamma_fit`](#dist_gamma_fit), [`dist_gamma_ks_test`](#dist_gamma_ks_test), [`dist_poisson_fit`](#dist_poisson_fit).
+
+## Hypothesis tests
+
+The test aggregates compute the statistic and p-value from your rows:
+
+```sql
+-- Welch's t-test: did the treated group (1) differ from control (0)?
+SELECT welch_t_test(x, grp) AS result
+FROM (VALUES (5.1, 0), (4.8, 0), (5.6, 0), (5.0, 0), (6.2, 1), (5.9, 1), (7.1, 1), (6.4, 1)) t(x, grp);
+```
+
+```sql
+-- One-sample t-test against a target mean of 5
+SELECT one_sample_t_test(x, 5.0).p_value AS p_value
+FROM (VALUES (5.1), (4.8), (5.6), (5.0), (5.4), (5.3)) t(x);
+```
+
+```sql
+-- Chi-squared goodness of fit: expected values may be counts or proportions
+SELECT chi_squared_test(observed, expected) AS result
+FROM (VALUES (18, 0.2), (22, 0.2), (31, 0.3), (29, 0.3)) t(observed, expected);
+```
+
+```sql
+-- Kolmogorov-Smirnov: do these values look standard normal?
+SELECT dist_normal_ks_test(x, 0.0, 1.0) AS ks
+FROM (VALUES (-1.2), (0.3), (0.8), (-0.4), (1.9), (0.1), (-0.7), (0.5)) t(x);
+```
+
+When you already have a statistic, the CDF complement gives the p-value directly:
 
 ```sql
 -- Two-sided t-test p-value, df=29
@@ -99,20 +155,29 @@ FROM t;
 ```
 
 ```sql
--- Chi-squared goodness-of-fit p-value, df=4
-WITH chi AS (SELECT 9.488 AS stat)
-SELECT dist_chi_squared_cdf_complement(4, stat) AS p_value
-FROM chi;
-```
-
-```sql
 -- F-test (ANOVA) p-value, df1=3 df2=20
 WITH f AS (SELECT 4.94 AS stat)
 SELECT dist_fisher_f_cdf_complement(3, 20, stat) AS p_value
 FROM f;
 ```
 
-See [`dist_students_t_cdf_complement`](#dist_students_t_cdf_complement), [`dist_chi_squared_cdf_complement`](#dist_chi_squared_cdf_complement), [`dist_fisher_f_cdf_complement`](#dist_fisher_f_cdf_complement).
+See [`welch_t_test`](#welch_t_test), [`one_sample_t_test`](#one_sample_t_test), [`chi_squared_test`](#chi_squared_test), [`dist_normal_ks_test`](#dist_normal_ks_test), [`dist_students_t_cdf_complement`](#dist_students_t_cdf_complement).
+
+## Power analysis — the non-central family
+
+The non-central distributions describe a test statistic when the null hypothesis is false, which is what power calculations need:
+
+```sql
+-- Power of a one-sided t-test (df=20) when the true effect gives a non-centrality of 2.5
+SELECT dist_non_central_t_cdf_complement(20.0, 2.5, dist_students_t_quantile(20.0, 0.95)) AS power;
+```
+
+```sql
+-- Power of an ANOVA F-test (df1=3, df2=20) at non-centrality 8
+SELECT dist_non_central_f_cdf_complement(3.0, 20.0, 8.0, dist_fisher_f_quantile(3.0, 20.0, 0.95)) AS power;
+```
+
+See [`dist_non_central_t_cdf_complement`](#dist_non_central_t_cdf_complement), [`dist_non_central_f_cdf_complement`](#dist_non_central_f_cdf_complement).
 
 ## Heavy-tailed families — Pareto, Cauchy, Log-normal
 
@@ -147,6 +212,39 @@ FROM range(100000) t(i);
 ```
 
 One query, 100k rows of realistic-looking fixture data — heights from a [Normal](https://en.wikipedia.org/wiki/Normal_distribution), incomes from a [Log-normal](https://en.wikipedia.org/wiki/Log-normal_distribution), session counts from a [Poisson](https://en.wikipedia.org/wiki/Poisson_distribution), conversions from a [Bernoulli](https://en.wikipedia.org/wiki/Bernoulli_distribution).
+
+## Lists of samples
+
+`_samples(params..., n)` returns `n` draws as one list, which suits per-row simulations:
+
+```sql
+-- 1,000 simulated daily demands per product, summarized per row
+SELECT product,
+       list_avg(d) AS mean_demand,
+       list_max(d) AS worst_day
+FROM (
+  SELECT product, dist_poisson_samples(rate, 1000) AS d
+  FROM (VALUES ('widget', 4.0), ('gadget', 12.5)) t(product, rate)
+)
+ORDER BY product;
+```
+
+## Multivariate — Dirichlet and multinomial
+
+The [Dirichlet](https://en.wikipedia.org/wiki/Dirichlet_distribution) samples probability vectors and the [multinomial](https://en.wikipedia.org/wiki/Multinomial_distribution) samples category counts. Both take and return lists:
+
+```sql
+-- Random market shares around 20% / 30% / 50%
+SELECT dist_dirichlet_sample([20.0, 30.0, 50.0]) AS shares;
+```
+
+```sql
+-- 100 visitors split across three landing pages
+SELECT dist_multinomial_sample(100, [0.2, 0.3, 0.5]) AS visits,
+       dist_multinomial_pmf(10, [0.2, 0.3, 0.5], [2, 3, 5]) AS prob_of_2_3_5;
+```
+
+See [`dist_dirichlet_sample`](#dist_dirichlet_sample), [`dist_multinomial_sample`](#dist_multinomial_sample), [`dist_multinomial_pmf`](#dist_multinomial_pmf).
 
 ## Monte Carlo — the canonical example
 
@@ -192,12 +290,13 @@ See [`dist_normal_log_pdf`](#dist_normal_log_pdf), [`dist_normal_log_cdf_complem
 
 ## Reproducibility
 
-`_sample` functions don't take a seed parameter. For exactly-reproducible runs, materialize the draws once into a table and treat that table as the seed:
+Sampling uses DuckDB's per-connection random engine, so `setseed` makes the following samples reproducible — including in parallel:
 
 ```sql
-CREATE TABLE rng_pool AS
+SELECT setseed(0.42);
+CREATE TABLE draws AS
 SELECT i, dist_normal_sample(0, 1) AS z
 FROM range(1000000) t(i);
-
--- Subsequent analyses read from rng_pool — fully reproducible
 ```
+
+Running the same pair again produces the same table. To share exactly the same draws across sessions or tools, keep the materialized table.

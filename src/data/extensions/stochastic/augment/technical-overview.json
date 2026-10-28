@@ -1,25 +1,29 @@
 {
   "eyebrow": "Technical Overview",
-  "title": "22 distributions, callable from a SELECT",
-  "description": "22 named [probability distributions](https://en.wikipedia.org/wiki/List_of_probability_distributions), each callable from DuckDB SQL — [PDF](https://en.wikipedia.org/wiki/Probability_density_function), [CDF](https://en.wikipedia.org/wiki/Cumulative_distribution_function), [quantile](https://en.wikipedia.org/wiki/Quantile_function), [hazard](https://en.wikipedia.org/wiki/Failure_rate), and random sampling for 22 named distributions, all under a uniform `dist_<family>_<op>` naming scheme. Built for Monte Carlo sketches, what-if analysis, and synthetic data generation without leaving SQL.",
+  "title": "36 distributions, fitting and tests, callable from a SELECT",
+  "description": "36 named [probability distributions](https://en.wikipedia.org/wiki/List_of_probability_distributions), each callable from DuckDB SQL — [PDF](https://en.wikipedia.org/wiki/Probability_density_function), [CDF](https://en.wikipedia.org/wiki/Cumulative_distribution_function), [quantile](https://en.wikipedia.org/wiki/Quantile_function), [hazard](https://en.wikipedia.org/wiki/Failure_rate), properties and random sampling under a uniform `dist_<family>_<op>` naming scheme — plus [maximum likelihood](https://en.wikipedia.org/wiki/Maximum_likelihood_estimation) fit aggregates and hypothesis test aggregates. Built for Monte Carlo sketches, what-if analysis, synthetic data generation and quick inference without leaving SQL.",
   "sections": [
     {
       "icon": "🎲",
       "title": "What it is",
-      "description": "A complete statistical-distributions library exposed as scalar SQL functions. The usual reason to leave SQL for statistics is that the math lives somewhere else — you export rows into NumPy or pandas, compute a CDF or draw samples, and bring the result back. Stochastic puts that math where the rows already are: probability calculations become ordinary expressions that chain with joins, window functions, CTEs, and `CREATE TABLE AS`. It is the right tool for ad-hoc analysis, [Monte Carlo](https://en.wikipedia.org/wiki/Monte_Carlo_method) sketches, [synthetic data](https://en.wikipedia.org/wiki/Synthetic_data), and inline p-values that live next to your warehouse data — not a replacement for a full simulation or model-fitting stack."
+      "description": "A complete statistical-distributions library exposed as SQL functions. The usual reason to leave SQL for statistics is that the math lives somewhere else — you export rows into NumPy or pandas, compute a CDF, fit a model or draw samples, and bring the result back. Stochastic puts that math where the rows already are: probability calculations become ordinary expressions that chain with joins, window functions, CTEs, and `CREATE TABLE AS`, and fitting or testing a column is a single aggregate. It is the right tool for ad-hoc analysis, [Monte Carlo](https://en.wikipedia.org/wiki/Monte_Carlo_method) sketches, [synthetic data](https://en.wikipedia.org/wiki/Synthetic_data), and inline p-values that live next to your warehouse data — not a replacement for a full simulation or modeling stack."
     },
     {
       "icon": "📐",
       "title": "How it works",
-      "description": "The extension wraps the [Boost.Math statistical-distributions library](https://www.boost.org/doc/libs/release/libs/math/doc/html/dist.html) — the same battle-tested implementations used across C++ statistics tooling. Each of the 22 distributions exposes the same ~21-operation surface (sampling, density, cumulative, quantile, hazard, and the distribution moments and properties), using shared registration and execution helpers. Corrected integer-uniform analytics use discrete formulas on the same inclusive support as the sampler. The payoff is uniformity: once you know one distribution's functions you know all of them, since the family name simply swaps in the function name.",
+      "description": "The extension wraps the [Boost.Math statistical-distributions library](https://www.boost.org/doc/libs/release/libs/math/doc/html/dist.html) — the same battle-tested implementations used across C++ statistics tooling. Each univariate distribution exposes the same surface (sampling, density, cumulative, quantile, hazard, and the distribution moments and properties) through one shared registration and execution layer, so once you know one distribution's functions you know all of them. The multivariate Dirichlet and multinomial distributions take and return lists.",
       "bulletPoints": [
         {
           "label": "Vectorized scalar execution",
-          "description": "Every function is a scalar that runs column-at-a-time over DuckDB's columnar engine. A million sampling calls inside a `SELECT` is one vectorized scan, not a Python loop — so Monte Carlo over `range(N)` stays fast."
+          "description": "Every function runs column-at-a-time over DuckDB's columnar engine. A million sampling calls inside a `SELECT` is one vectorized scan, not a Python loop — so Monte Carlo over `range(N)` stays fast. When the parameters are constant, the distribution is built once per chunk."
         },
         {
           "label": "Strict input validation",
-          "description": "Illegal parameters (a negative standard deviation, a probability above 1) raise a SQL error rather than silently returning `NaN`, so a typo in a long pipeline fails fast instead of quietly poisoning every downstream value."
+          "description": "Illegal parameters (a negative standard deviation, a probability above 1, a NaN) raise a SQL error that names the distribution rather than silently returning `NaN`, so a typo in a long pipeline fails fast. Properties that do not exist for the given parameters, such as the mean of a Cauchy distribution, return NULL."
+        },
+        {
+          "label": "Mergeable aggregates",
+          "description": "The fit and test aggregates keep mergeable state, so they work with `GROUP BY`, window frames and parallel execution. Results are checked against SciPy."
         }
       ]
     },
@@ -29,20 +33,20 @@
       "description": "A deep distributions library, but intentionally not a full simulation framework.",
       "bulletPoints": [
         {
-          "label": "Univariate only",
-          "description": "No [copula](https://en.wikipedia.org/wiki/Copula_(probability_theory)) or multivariate-normal sampler. For correlated draws, sample independently and apply a [Cholesky-style transform](https://en.wikipedia.org/wiki/Cholesky_decomposition) yourself."
+          "label": "Multivariate support is limited to Dirichlet and multinomial",
+          "description": "There is no [copula](https://en.wikipedia.org/wiki/Copula_(probability_theory)) or multivariate-normal sampler. For correlated Normal draws, sample independently and apply a [Cholesky-style transform](https://en.wikipedia.org/wiki/Cholesky_decomposition) yourself."
         },
         {
-          "label": "RNG seeding is not user-controlled",
-          "description": "There is no documented per-query seed. For exactly-reproducible runs, generate the draws once into a table and treat that table as the seed."
+          "label": "Seeding is per session",
+          "description": "`SELECT setseed(x)` makes the next queries' samples reproducible, including in parallel. There is no per-call seed argument."
         },
         {
-          "label": "No fitting or inference helpers",
-          "description": "One-way: parameters → distribution. No MLE / method-of-moments fitters, no built-in tests. Compute the test statistic in SQL and call the appropriate CDF complement for the p-value."
+          "label": "Fits cover 11 distributions",
+          "description": "Maximum likelihood fits exist for normal, log-normal, exponential, Poisson, Bernoulli, geometric, Rayleigh, continuous uniform, Pareto, gamma and beta. The Kolmogorov-Smirnov test uses the asymptotic distribution, which is approximate for small samples."
         },
         {
           "label": "Large simulations may want a notebook",
-          "description": "For large-scale agent-based simulation, MCMC, or [SciPy](https://docs.scipy.org/doc/scipy/reference/stats.html)-grade fitting, keep a Python notebook. Stochastic shines for analyses that live next to warehouse data."
+          "description": "For large-scale agent-based simulation, MCMC, or [SciPy](https://docs.scipy.org/doc/scipy/reference/stats.html)-grade model fitting, keep a Python notebook. Stochastic shines for analyses that live next to warehouse data."
         }
       ]
     }
