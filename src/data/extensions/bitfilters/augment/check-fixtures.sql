@@ -43,33 +43,43 @@ FROM range(0, 40) t(i);
 -- A pre-built filter referenced by `the_filter` in the FPR snippet.
 -- Stored as a single-row table containing one xor8 filter blob.
 CREATE OR REPLACE TABLE the_filter AS
-SELECT xor8_filter(hash(id)) AS filter FROM source_set;
+SELECT xor8_filter(id) AS filter FROM source_set;
 
 -- Typed filter columns referenced by *_contains examples in functions.json.
 -- Filter blobs are family/width-specific: passing an xor8 blob to a
--- binary_fuse16 probe is invalid and can crash native extension code.
+-- binary_fuse16 probe raises an error.
 CREATE OR REPLACE TABLE filter_table AS
-SELECT xor8_filter(hash(id))          AS xor8_filter_value,
-       xor16_filter(hash(id))         AS xor16_filter_value,
-       binary_fuse8_filter(hash(id))  AS binary_fuse8_filter_value,
-       binary_fuse16_filter(hash(id)) AS binary_fuse16_filter_value
+SELECT xor8_filter(id)              AS xor8_filter_value,
+       xor16_filter(id)             AS xor16_filter_value,
+       binary_fuse8_filter(id)      AS binary_fuse8_filter_value,
+       binary_fuse16_filter(id)     AS binary_fuse16_filter_value,
+       quotient_filter(16, 8, id)   AS quotient_filter_value,
+       bloom_filter(1000, 0.01, id) AS bloom_filter_value
 FROM ids;
 
 -- Pre-built `interesting_filter` and `partition_filters` tables so that
 -- snippets which both CREATE and reference these tables can EXPLAIN-parse
 -- their reference statements (EXPLAIN doesn't actually run the CREATE).
 CREATE OR REPLACE TABLE interesting_filter AS
-SELECT xor8_filter(hash(key)) AS filter FROM interesting_keys;
+SELECT xor8_filter(key) AS filter FROM interesting_keys;
 
 CREATE OR REPLACE TABLE partition_filters AS
 SELECT day,
-       binary_fuse8_filter(hash(user_id)) AS users_in_partition
+       binary_fuse8_filter(user_id) AS users_in_partition
 FROM events
 GROUP BY day;
 
 -- Quotient-filter example references `series_data` and groups by id % 2.
 CREATE OR REPLACE TABLE series_data AS
 SELECT i AS id FROM range(0, 50) t(i);
+
+-- `filters` (per-remainder quotient filters) for the quotient_filter merge /
+-- quotient_filter_contains examples and the generic bitfilter_* examples.
+CREATE OR REPLACE TABLE filters AS
+SELECT id % 2 AS remainder,
+       quotient_filter(16, 8, id) AS filter
+FROM series_data
+GROUP BY id % 2;
 
 -- Users / new_signups for the metadata.json quickStart snippet.
 CREATE OR REPLACE TABLE users AS
@@ -93,5 +103,13 @@ CREATE OR REPLACE TABLE zone_filters AS
 SELECT bucket,
        bitfilters_duckdb_bloom_filter_create(
          'v2.0', 16384, bitfilters_duckdb_hash('v2.0', key)) AS bf
+FROM keys
+GROUP BY bucket;
+
+-- Per-bucket split block Bloom filters for the bloom_filter_merge /
+-- bloom_filter_contains examples.
+CREATE OR REPLACE TABLE bucket_blooms AS
+SELECT bucket,
+       bloom_filter(1000, 0.01, key) AS bf
 FROM keys
 GROUP BY bucket;

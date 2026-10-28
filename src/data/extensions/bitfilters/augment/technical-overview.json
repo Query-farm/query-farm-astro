@@ -6,7 +6,7 @@
     {
       "icon": "🎯",
       "title": "What this extension is for",
-      "description": "Bitfilters materializes four families of [approximate-membership-query (AMQ) data structures](https://en.wikipedia.org/wiki/Approximate_membership_query_filter) as DuckDB aggregate functions. Build the filter once, store the BLOB as an ordinary column, probe it later — locally, in another DuckDB instance, or shipped over the network.",
+      "description": "Bitfilters materializes five families of [approximate-membership-query (AMQ) data structures](https://en.wikipedia.org/wiki/Approximate_membership_query_filter) as DuckDB aggregate functions. Build the filter once, store the BLOB as an ordinary column, probe it later — locally, in another DuckDB instance, or shipped over the network.",
       "bulletPoints": [
         {
           "label": "Skip a join when the answer is definitely no",
@@ -21,6 +21,10 @@
           "description": "A [Binary Fuse 8](https://arxiv.org/abs/1912.08258) filter is under 9 bits per key — three orders of magnitude smaller than the source set for typical UUID workloads. Persist it in a Parquet column, ship it to another process, embed it in a manifest."
         },
         {
+          "label": "Parquet-compatible Bloom filters",
+          "description": "`bloom_filter` builds the split block Bloom filter Parquet uses — for the same values and sizing it is byte-for-byte the filter DuckDB writes into Parquet files."
+        },
+        {
           "label": "DuckDB-native join filters",
           "description": "One family emits filters in the same internal format DuckDB uses for its own runtime join filters — persist a filter, then re-use it in custom data-skipping logic the optimizer recognizes."
         }
@@ -29,38 +33,46 @@
     {
       "icon": "🧪",
       "title": "Filter families",
-      "description": "Four families, three design points. Pick on **mutation**, **memory**, and **false-positive rate** in that order — not the other way around.",
+      "description": "Five families, each with its own design point. Pick on **how the filter is built and combined**, **memory**, and **false-positive rate** in that order — not the other way around.",
       "bulletPoints": [
         {
-          "label": "Quotient — dynamic sets",
-          "description": "The only family here that supports deletion and resize. Pick it when the underlying set evolves at runtime. Tunable slot count and FPR. See [Quotient filter](https://en.wikipedia.org/wiki/Quotient_filter)."
+          "label": "Quotient — mergeable, self-sizing option",
+          "description": "Merge per-partition filters into one with `quotient_filter(q, r, filter)`, or let `quotient_filter(r, value)` choose the slot count for you. Tunable slot count and FPR (~2^−r). See [Quotient filter](https://en.wikipedia.org/wiki/Quotient_filter)."
         },
         {
-          "label": "XOR — static, cross-system compatible",
+          "label": "XOR — static, compact",
           "description": "~9 bits per key at ~0.39% FPR (8-bit) or ~18 bits per key at ~0.0015% FPR (16-bit) — about 20% smaller than a Bloom at the same FPR. Built once, queried many times. See the [Xor filters paper (Graf & Lemire, 2019)](https://arxiv.org/abs/1912.08258)."
         },
         {
-          "label": "Binary Fuse — modern best-in-class",
-          "description": "Typically lands under 9 bits per key with very fast construction and lookups — currently the most space-efficient static filter family. Default choice for read-heavy, append-only sets."
+          "label": "Binary Fuse — smallest, build-once",
+          "description": "Typically lands under 9 bits per key with very fast construction and lookups — currently the most space-efficient static filter family. Default choice for read-heavy sets you build once."
+        },
+        {
+          "label": "Bloom — incremental, mergeable, Parquet-compatible",
+          "description": "`bloom_filter` builds a split block [Bloom filter](https://en.wikipedia.org/wiki/Bloom_filter) sized for an expected number of distinct values and a target FPR. Merge filters with `bloom_filter_merge`; it never gets \"full\" — past its sizing the FPR just degrades gradually. Byte-for-byte the format DuckDB writes into Parquet files."
         },
         {
           "label": "DuckDB Bloom — native compatibility",
-          "description": "Speaks DuckDB's internal [Bloom filter](https://en.wikipedia.org/wiki/Bloom_filter) format and hash layout, so a persisted filter slots into the engine's own data-skipping path."
+          "description": "The `bitfilters_duckdb_*` functions speak DuckDB's internal Bloom filter format and hash layout, so a persisted filter slots into the engine's own data-skipping path."
         }
       ]
     },
     {
       "icon": "⚙️",
       "title": "How it works",
-      "description": "Every filter constructor is a DuckDB **aggregate function** that takes `UBIGINT` hashes as input and returns a single `BLOB`. The result is dense, self-contained, and storable like any other column.",
+      "description": "Every filter constructor is a DuckDB **aggregate function** that takes values of any type and returns a single `BLOB`. The result is dense, self-contained, and storable like any other column.",
       "bulletPoints": [
         {
-          "label": "Hashes go in, BLOBs come out",
-          "description": "Hash your input first — DuckDB's built-in [`hash()`](https://duckdb.org/docs/sql/functions/utility#hashvalue) is fine for most cases. For specific algorithms (xxh3_64, MurmurHash3, rapidhash), pair with the [`hashfuncs`](/products/extensions/hashfuncs) extension. Filters distribute keys based on hash bits — quality of the hash matters."
+          "label": "Values go in, BLOBs come out",
+          "description": "Pass the column itself — `xor8_filter(email)`, no `hash()` needed. Values are hashed with XXH64 of a fixed byte encoding (the Parquet plain encoding where Parquet defines one, otherwise DuckDB's on-disk representation), which is deliberately stable across DuckDB versions — unlike DuckDB's `hash()`, which may change. `UBIGINT` values are used as keys exactly as given, for when you compute your own keys (e.g. with [`hashfuncs`](/products/extensions/hashfuncs)). LIST, STRUCT, MAP, ARRAY, UNION and ENUM values are rejected — cast them to VARCHAR or compute a `UBIGINT` key."
         },
         {
           "label": "Filters as columns",
-          "description": "Every filter is just a `BLOB`. Store it in a regular column, persist to Parquet, send over the wire, hold in a CTE, partition by anything — there is no special filter type, only the matching `*_contains` probe function."
+          "description": "Every filter is just a `BLOB` that starts with a 16-byte header recording the filter type, how values were hashed and the value type. Store it in a regular column, persist to Parquet, send over the wire, hold in a CTE, partition by anything — probe it with its `*_contains` function or the generic `bitfilter_contains`, and inspect it with `bitfilter_info`."
+        },
+        {
+          "label": "Building is charged to memory_limit",
+          "description": "Filter construction counts against DuckDB's `memory_limit` — you get an Out of Memory error rather than unbounded memory use, and grouped xor, binary fuse and self-sizing quotient filter builds spill to disk when they don't fit in memory."
         },
         {
           "label": "No false negatives, ever",
@@ -86,12 +98,20 @@
           "description": "There's no way to list the members from a filter — it's set-membership only. If you need the elements themselves, store them; if you need cardinality, use [`datasketches`](/products/extensions/datasketches)."
         },
         {
-          "label": "Static families don't support updates",
-          "description": "XOR, Binary Fuse, and DuckDB-Bloom filters are built once and immutable. Adding a single key requires a full rebuild. Use `quotient_filter` when the set genuinely churns, or rebuild on a cadence that matches your write throughput."
+          "label": "XOR and Binary Fuse filters are build-once",
+          "description": "XOR and Binary Fuse filters are built once and immutable — adding a key requires a full rebuild, and they can't be merged. When the set grows over time, use `bloom_filter` (merge with `bloom_filter_merge`) or `quotient_filter` (merge with `quotient_filter(q, r, filter)`), or rebuild on a cadence that matches your write throughput."
         },
         {
           "label": "Tiny sets don't earn the filter",
           "description": "For a few thousand elements an in-memory hash set or a sorted array is faster and exact. Bitfilters earns its keep when the source set is large enough that **storing the full set is what hurts** — millions of keys, per-partition replication, network ship costs."
+        },
+        {
+          "label": "Quotient filters have a hard capacity",
+          "description": "A Quotient filter holds at most 2^q − 1 values and errors when full. A merge can grow `q` only by giving up as many remainder bits, so merging `(16, 8)` filters gives `(20, 4)`, not `(20, 8)`. Use `quotient_filter(r, value)` to size a filter to its input."
+        },
+        {
+          "label": "New filter format",
+          "description": "Filters now carry a 16-byte header, so they are 16 bytes larger and older versions of the extension can't read them. BLOBs written by older versions are still read by the type-specific functions (e.g. `xor8_filter_contains`), but not by the generic `bitfilter_*` ones."
         }
       ]
     },
