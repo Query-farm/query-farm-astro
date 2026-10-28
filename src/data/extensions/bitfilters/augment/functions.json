@@ -4,17 +4,26 @@
     "categories": [
       "Quotient Filter"
     ],
-    "description": "Aggregate that builds a Quotient filter from hashed keys. `q` controls slot count (2^q slots), `r` controls remainder bits per slot. Quotient filters support deletion and resize \u2014 use them when the underlying set evolves over time.",
+    "description": "Aggregate that builds a Quotient filter. Three forms:\n\n- `quotient_filter(q, r, value)` \u2014 `q` quotient bits (the filter holds at most 2^q \u2212 1 values; one slot always stays empty) and `r` remainder bits per slot (false positive rate ~2^\u2212r). `q + r` must be at most 64. Inserting more than 2^q \u2212 1 distinct values raises `the filter is full`.\n- `quotient_filter(r, value)` \u2014 self-sizing: collects the values and picks `q` so the distinct values fill at most 3/4 of the 2^q slots. No need to guess `q`.\n- `quotient_filter(q, r, filter)` \u2014 merges Quotient filter BLOBs into one filter with exactly the given `q` and `r`. Each input must have `q_in + r_in >= q + r`, since a filter only keeps `q + r` bits of each hash \u2014 so a merge can grow `q` only by giving up as many remainder bits (merge `(16, 8)` filters into `(20, 4)`, not `(20, 8)`). Inputs must be built from the same value type; overflowing the merged filter is an error.\n\nAccepts values of any type: `UBIGINT` values are used as 64-bit keys exactly as given; every other type is hashed with XXH64 of a fixed encoding that does not change between DuckDB versions.",
     "examples": [
       {
         "description": "Build a Quotient filter per partition",
-        "code": "CREATE TABLE filters AS\nSELECT id % 2 AS remainder,\n       quotient_filter(16, 4, hash(id)) AS filter\nFROM series_data\nGROUP BY id % 2;"
+        "code": "CREATE TABLE filters AS\nSELECT id % 2 AS remainder,\n       quotient_filter(16, 8, id) AS filter\nFROM series_data\nGROUP BY id % 2;"
+      },
+      {
+        "description": "Let the filter size itself (~0.4% FPR)",
+        "code": "SELECT quotient_filter(8, id) AS filter FROM ids;"
+      },
+      {
+        "description": "Merge per-partition filters into one",
+        "code": "SELECT quotient_filter(16, 8, filter) AS merged FROM filters;"
       }
     ],
     "relatedFunctions": [
       "quotient_filter_contains",
-      "xor8_filter",
-      "binary_fuse8_filter"
+      "quotient_filter_info",
+      "bloom_filter",
+      "xor8_filter"
     ]
   },
   {
@@ -22,15 +31,16 @@
     "categories": [
       "Quotient Filter"
     ],
-    "description": "Test whether a hash value is a member of a Quotient filter. Returns BOOLEAN \u2014 false means definitely-not-present; true means probably-present (within the filter's configured false-positive rate).",
+    "description": "Test whether a value is a member of a Quotient filter. Returns BOOLEAN \u2014 false means definitely-not-present; true means probably-present (within the filter's configured false-positive rate). The probe value is cast to the type the filter was built from, so `42` and `'42'` both work against a `BIGINT` filter; a value that cannot be cast (e.g. `'abc'` against an integer filter) returns false, and a NULL probe returns NULL.",
     "examples": [
       {
         "description": "Membership test against a stored filter",
-        "code": "SELECT quotient_filter_contains(filter, hash(12345)) AS might_exist\nFROM filters WHERE remainder = 1;"
+        "code": "SELECT quotient_filter_contains(filter, 12345) AS might_exist\nFROM filters WHERE remainder = 1;"
       }
     ],
     "relatedFunctions": [
-      "quotient_filter"
+      "quotient_filter",
+      "bitfilter_contains"
     ]
   },
   {
@@ -38,11 +48,11 @@
     "categories": [
       "XOR Filters"
     ],
-    "description": "Aggregate that builds an 8-bit XOR filter from hashed keys. ~9 bits per key, ~0.39% false positive rate. Static \u2014 built once, queried many times. ~20% smaller than Bloom for the same FPR.",
+    "description": "Aggregate that builds an 8-bit XOR filter. ~9 bits per key, ~0.39% false positive rate. Static \u2014 built once, queried many times. ~20% smaller than Bloom for the same FPR. Accepts values of any type: `UBIGINT` values are used as 64-bit keys exactly as given; every other type is hashed with XXH64 of a fixed encoding that does not change between DuckDB versions.",
     "examples": [
       {
-        "description": "Build an xor8 filter from a column of hashed IDs",
-        "code": "SELECT xor8_filter(hash(id)) AS filter FROM ids;"
+        "description": "Build an xor8 filter from a column",
+        "code": "SELECT xor8_filter(id) AS filter FROM ids;"
       }
     ],
     "relatedFunctions": [
@@ -57,11 +67,11 @@
     "categories": [
       "XOR Filters"
     ],
-    "description": "Aggregate that builds a 16-bit XOR filter from hashed keys. ~18 bits per key, ~0.0015% false positive rate. Use when you need a much lower FPR than xor8 and can afford 2\u00d7 the memory.",
+    "description": "Aggregate that builds a 16-bit XOR filter. ~18 bits per key, ~0.0015% false positive rate. Use when you need a much lower FPR than xor8 and can afford 2\u00d7 the memory. Accepts values of any type: `UBIGINT` values are used as 64-bit keys exactly as given; every other type is hashed with XXH64 of a fixed encoding that does not change between DuckDB versions.",
     "examples": [
       {
         "description": "Build an xor16 filter for low FPR",
-        "code": "SELECT xor16_filter(hash(id)) AS filter FROM ids;"
+        "code": "SELECT xor16_filter(id) AS filter FROM ids;"
       }
     ],
     "relatedFunctions": [
@@ -74,16 +84,17 @@
     "categories": [
       "XOR Filters"
     ],
-    "description": "Test whether a hash value is a member of an 8-bit XOR filter.",
+    "description": "Test whether a value is a member of an 8-bit XOR filter. The probe value is cast to the type the filter was built from, so `42` and `'42'` both work against a `BIGINT` filter; a value that cannot be cast (e.g. `'abc'` against an integer filter) returns false, and a NULL probe returns NULL.",
     "examples": [
       {
         "description": "Membership test",
-        "code": "SELECT xor8_filter_contains(xor8_filter_value, hash(:candidate)) FROM filter_table;"
+        "code": "SELECT xor8_filter_contains(xor8_filter_value, :candidate) FROM filter_table;"
       }
     ],
     "relatedFunctions": [
       "xor8_filter",
-      "xor16_filter_contains"
+      "xor16_filter_contains",
+      "bitfilter_contains"
     ]
   },
   {
@@ -91,16 +102,17 @@
     "categories": [
       "XOR Filters"
     ],
-    "description": "Test whether a hash value is a member of a 16-bit XOR filter.",
+    "description": "Test whether a value is a member of a 16-bit XOR filter. The probe value is cast to the type the filter was built from, so `42` and `'42'` both work against a `BIGINT` filter; a value that cannot be cast (e.g. `'abc'` against an integer filter) returns false, and a NULL probe returns NULL.",
     "examples": [
       {
         "description": "Membership test",
-        "code": "SELECT xor16_filter_contains(xor16_filter_value, hash(:candidate)) FROM filter_table;"
+        "code": "SELECT xor16_filter_contains(xor16_filter_value, :candidate) FROM filter_table;"
       }
     ],
     "relatedFunctions": [
       "xor16_filter",
-      "xor8_filter_contains"
+      "xor8_filter_contains",
+      "bitfilter_contains"
     ]
   },
   {
@@ -108,11 +120,11 @@
     "categories": [
       "Binary Fuse Filters"
     ],
-    "description": "Aggregate that builds an 8-bit Binary Fuse filter from hashed keys. The most space-efficient filter family \u2014 typically <9 bits per key \u2014 with very fast construction and lookups. Static structure.",
+    "description": "Aggregate that builds an 8-bit Binary Fuse filter. The most space-efficient filter family \u2014 typically <9 bits per key \u2014 with very fast construction and lookups. Static structure. Accepts values of any type: `UBIGINT` values are used as 64-bit keys exactly as given; every other type is hashed with XXH64 of a fixed encoding that does not change between DuckDB versions.",
     "examples": [
       {
         "description": "Build a Binary Fuse 8 filter",
-        "code": "SELECT binary_fuse8_filter(hash(id)) AS filter FROM ids;"
+        "code": "SELECT binary_fuse8_filter(id) AS filter FROM ids;"
       }
     ],
     "relatedFunctions": [
@@ -126,11 +138,11 @@
     "categories": [
       "Binary Fuse Filters"
     ],
-    "description": "Aggregate that builds a 16-bit Binary Fuse filter \u2014 same family as binary_fuse8 but with much lower false-positive rate at the cost of ~2\u00d7 the memory.",
+    "description": "Aggregate that builds a 16-bit Binary Fuse filter \u2014 same family as binary_fuse8 but with much lower false-positive rate at the cost of ~2\u00d7 the memory. Accepts values of any type: `UBIGINT` values are used as 64-bit keys exactly as given; every other type is hashed with XXH64 of a fixed encoding that does not change between DuckDB versions.",
     "examples": [
       {
         "description": "Build a Binary Fuse 16 filter",
-        "code": "SELECT binary_fuse16_filter(hash(id)) AS filter FROM ids;"
+        "code": "SELECT binary_fuse16_filter(id) AS filter FROM ids;"
       }
     ],
     "relatedFunctions": [
@@ -143,15 +155,16 @@
     "categories": [
       "Binary Fuse Filters"
     ],
-    "description": "Test whether a hash value is a member of an 8-bit Binary Fuse filter.",
+    "description": "Test whether a value is a member of an 8-bit Binary Fuse filter. The probe value is cast to the type the filter was built from, so `42` and `'42'` both work against a `BIGINT` filter; a value that cannot be cast (e.g. `'abc'` against an integer filter) returns false, and a NULL probe returns NULL.",
     "examples": [
       {
         "description": "Membership test",
-        "code": "SELECT binary_fuse8_filter_contains(binary_fuse8_filter_value, hash(:candidate)) FROM filter_table;"
+        "code": "SELECT binary_fuse8_filter_contains(binary_fuse8_filter_value, :candidate) FROM filter_table;"
       }
     ],
     "relatedFunctions": [
-      "binary_fuse8_filter"
+      "binary_fuse8_filter",
+      "bitfilter_contains"
     ]
   },
   {
@@ -159,15 +172,552 @@
     "categories": [
       "Binary Fuse Filters"
     ],
-    "description": "Test whether a hash value is a member of a 16-bit Binary Fuse filter.",
+    "description": "Test whether a value is a member of a 16-bit Binary Fuse filter. The probe value is cast to the type the filter was built from, so `42` and `'42'` both work against a `BIGINT` filter; a value that cannot be cast (e.g. `'abc'` against an integer filter) returns false, and a NULL probe returns NULL.",
     "examples": [
       {
         "description": "Membership test",
-        "code": "SELECT binary_fuse16_filter_contains(binary_fuse16_filter_value, hash(:candidate)) FROM filter_table;"
+        "code": "SELECT binary_fuse16_filter_contains(binary_fuse16_filter_value, :candidate) FROM filter_table;"
       }
     ],
     "relatedFunctions": [
-      "binary_fuse16_filter"
+      "binary_fuse16_filter",
+      "bitfilter_contains"
+    ]
+  },
+  {
+    "id": "bloom_filter",
+    "name": "bloom_filter",
+    "type": "aggregate",
+    "categories": [
+      "Bloom Filters"
+    ],
+    "returnType": "BLOB",
+    "parameters": [
+      {
+        "name": "ndv",
+        "type": "BIGINT",
+        "paramType": "positional",
+        "description": "Expected number of distinct values. Must be a positive constant."
+      },
+      {
+        "name": "fpp",
+        "type": "DOUBLE",
+        "paramType": "positional",
+        "description": "Target false positive rate, between 0 and 1. Must be a constant."
+      },
+      {
+        "name": "value",
+        "type": "ANY",
+        "paramType": "positional",
+        "description": "The values to insert."
+      }
+    ],
+    "description": "Aggregate that builds a split block Bloom filter \u2014 the Parquet Bloom filter format \u2014 sized for `ndv` distinct values at false positive rate `fpp`. Sizing uses the same formula as DuckDB's Parquet writer, rounded up to a power of two of 32-byte blocks (at most 2 GB). For the same values and sizing the result is byte-for-byte the filter DuckDB writes into Parquet files. Values of any type are hashed with XXH64 of their Parquet plain encoding \u2014 unlike the other filters, `UBIGINT` values are hashed too, for Parquet compatibility. A Bloom filter never gets \"full\": insert more than `ndv` values and the false positive rate degrades gradually.",
+    "examples": [
+      {
+        "description": "Bloom filter for ~1,000 keys at 1% FPR",
+        "code": "SELECT bloom_filter(1000, 0.01, key) AS filter FROM keys;"
+      }
+    ],
+    "relatedFunctions": [
+      "bloom_filter_contains",
+      "bloom_filter_merge",
+      "bloom_filter_info"
+    ]
+  },
+  {
+    "id": "bloom_filter_merge",
+    "name": "bloom_filter_merge",
+    "type": "aggregate",
+    "categories": [
+      "Bloom Filters"
+    ],
+    "returnType": "BLOB",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "Bloom filter BLOBs produced by `bloom_filter`."
+      }
+    ],
+    "description": "Aggregate that merges Bloom filters into one filter containing every value of the inputs (a bitwise OR). All inputs must be built with the same `ndv` and `fpp` and from the same value type; otherwise it raises an error. The union of per-group filters is exactly the filter of all the values.",
+    "examples": [
+      {
+        "description": "Roll per-bucket filters up into one",
+        "code": "SELECT bloom_filter_merge(bf) AS filter FROM bucket_blooms;"
+      }
+    ],
+    "relatedFunctions": [
+      "bloom_filter",
+      "bloom_filter_contains"
+    ]
+  },
+  {
+    "id": "bloom_filter_contains",
+    "name": "bloom_filter_contains",
+    "type": "scalar",
+    "categories": [
+      "Bloom Filters"
+    ],
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "A filter BLOB."
+      },
+      {
+        "name": "value",
+        "type": "ANY",
+        "paramType": "positional",
+        "description": "The value to test."
+      }
+    ],
+    "description": "Test whether a value might be a member of a Bloom filter built by `bloom_filter` or `bloom_filter_merge`. False means definitely-not-present; true means probably-present. The probe value is cast to the type the filter was built from, so `42` and `'42'` both work against a `BIGINT` filter; a value that cannot be cast (e.g. `'abc'` against an integer filter) returns false, and a NULL probe returns NULL.",
+    "examples": [
+      {
+        "description": "Membership test",
+        "code": "SELECT bucket, bloom_filter_contains(bf, 42) FROM bucket_blooms;"
+      }
+    ],
+    "relatedFunctions": [
+      "bloom_filter",
+      "bitfilter_contains"
+    ]
+  },
+  {
+    "id": "bitfilter_contains",
+    "name": "bitfilter_contains",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "A filter BLOB."
+      },
+      {
+        "name": "value",
+        "type": "ANY",
+        "paramType": "positional",
+        "description": "The value to test."
+      }
+    ],
+    "description": "Test whether any bitfilters filter may contain a value. The filter's header says what kind of filter it is and how its values were hashed, so one function probes Quotient, XOR, Binary Fuse and Bloom filters alike. Requires a BLOB with a header \u2014 filters written by older versions of the extension must be probed with their type-specific `*_contains` function. The probe value is cast to the type the filter was built from, so `42` and `'42'` both work against a `BIGINT` filter; a value that cannot be cast (e.g. `'abc'` against an integer filter) returns false, and a NULL probe returns NULL.",
+    "examples": [
+      {
+        "description": "Probe a column holding mixed filter types",
+        "code": "SELECT bitfilter_contains(filter, 42) FROM filters;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_info",
+      "bitfilter_is_valid"
+    ]
+  },
+  {
+    "id": "bitfilter_info",
+    "name": "bitfilter_info",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "STRUCT",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "A filter BLOB with a bitfilters header."
+      }
+    ],
+    "returns": "A STRUCT with `filter_type`, `format_version`, `key_hash` (`'none'` or `'xxhash64'`), `key_type`, `size_bytes`, `entries`, `capacity`, `load_factor`, `fingerprint_bits`, `bits_per_entry`, `expected_fpr`, `q`, `r` and `seed`. Fields a filter type doesn't have are NULL.",
+    "description": "Describe any bitfilters filter BLOB: what kind of filter it is, how its values became keys, its size and its expected false positive rate. Requires a header; use the type-specific `*_info` function for BLOBs written by older versions.",
+    "examples": [
+      {
+        "description": "Inspect a filter",
+        "code": "SELECT bitfilter_info(filter) FROM filters;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_contains",
+      "bitfilter_is_valid"
+    ]
+  },
+  {
+    "id": "bitfilter_is_valid",
+    "name": "bitfilter_is_valid",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "The BLOB to check."
+      }
+    ],
+    "description": "Return whether a BLOB is a structurally valid bitfilters filter with a header, instead of raising the error a probe would. BLOBs written by older versions (no header) return false here; check them with the type-specific `*_is_valid` function.",
+    "examples": [
+      {
+        "description": "Find BLOBs that aren't valid filters",
+        "code": "SELECT * FROM filters WHERE NOT bitfilter_is_valid(filter);"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_info",
+      "bitfilter_contains"
+    ]
+  },
+  {
+    "id": "quotient_filter_info",
+    "name": "quotient_filter_info",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "STRUCT",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "A quotient_filter BLOB."
+      }
+    ],
+    "returns": "A STRUCT with `filter_type`, `format_version` (0 for an older BLOB without a header), `key_hash` (`'none'` or `'xxhash64'`), `key_type`, `size_bytes`, `entries`, `capacity`, `load_factor`, `fingerprint_bits`, `bits_per_entry`, `expected_fpr`, `q`, `r` and `seed`. Fields a filter type doesn't have are NULL.",
+    "description": "Describe a quotient_filter BLOB. Reports `entries`, `capacity` (2^q \u2212 1), `load_factor`, `q`, `r` and `expected_fpr` (\u2248 1 \u2212 exp(\u2212load_factor / 2^r)). Also reads quotient_filter BLOBs written by older versions of the extension (no header), reporting `format_version` 0.",
+    "examples": [
+      {
+        "description": "Inspect a stored quotient_filter",
+        "code": "SELECT quotient_filter_info(quotient_filter_value) FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_info",
+      "quotient_filter_is_valid"
+    ]
+  },
+  {
+    "id": "xor8_filter_info",
+    "name": "xor8_filter_info",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "STRUCT",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "A xor8_filter BLOB."
+      }
+    ],
+    "returns": "A STRUCT with `filter_type`, `format_version` (0 for an older BLOB without a header), `key_hash` (`'none'` or `'xxhash64'`), `key_type`, `size_bytes`, `entries`, `capacity`, `load_factor`, `fingerprint_bits`, `bits_per_entry`, `expected_fpr`, `q`, `r` and `seed`. Fields a filter type doesn't have are NULL.",
+    "description": "Describe a xor8_filter BLOB. Reports `fingerprint_bits`, `seed` and `expected_fpr`; `entries` and `capacity` are NULL. Also reads xor8_filter BLOBs written by older versions of the extension (no header), reporting `format_version` 0.",
+    "examples": [
+      {
+        "description": "Inspect a stored xor8_filter",
+        "code": "SELECT xor8_filter_info(xor8_filter_value) FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_info",
+      "xor8_filter_is_valid"
+    ]
+  },
+  {
+    "id": "xor16_filter_info",
+    "name": "xor16_filter_info",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "STRUCT",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "A xor16_filter BLOB."
+      }
+    ],
+    "returns": "A STRUCT with `filter_type`, `format_version` (0 for an older BLOB without a header), `key_hash` (`'none'` or `'xxhash64'`), `key_type`, `size_bytes`, `entries`, `capacity`, `load_factor`, `fingerprint_bits`, `bits_per_entry`, `expected_fpr`, `q`, `r` and `seed`. Fields a filter type doesn't have are NULL.",
+    "description": "Describe a xor16_filter BLOB. Reports `fingerprint_bits`, `seed` and `expected_fpr`; `entries` and `capacity` are NULL. Also reads xor16_filter BLOBs written by older versions of the extension (no header), reporting `format_version` 0.",
+    "examples": [
+      {
+        "description": "Inspect a stored xor16_filter",
+        "code": "SELECT xor16_filter_info(xor16_filter_value) FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_info",
+      "xor16_filter_is_valid"
+    ]
+  },
+  {
+    "id": "binary_fuse8_filter_info",
+    "name": "binary_fuse8_filter_info",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "STRUCT",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "A binary_fuse8_filter BLOB."
+      }
+    ],
+    "returns": "A STRUCT with `filter_type`, `format_version` (0 for an older BLOB without a header), `key_hash` (`'none'` or `'xxhash64'`), `key_type`, `size_bytes`, `entries`, `capacity`, `load_factor`, `fingerprint_bits`, `bits_per_entry`, `expected_fpr`, `q`, `r` and `seed`. Fields a filter type doesn't have are NULL.",
+    "description": "Describe a binary_fuse8_filter BLOB. Reports `entries`, `fingerprint_bits`, `seed` and `expected_fpr`. Also reads binary_fuse8_filter BLOBs written by older versions of the extension (no header), reporting `format_version` 0.",
+    "examples": [
+      {
+        "description": "Inspect a stored binary_fuse8_filter",
+        "code": "SELECT binary_fuse8_filter_info(binary_fuse8_filter_value) FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_info",
+      "binary_fuse8_filter_is_valid"
+    ]
+  },
+  {
+    "id": "binary_fuse16_filter_info",
+    "name": "binary_fuse16_filter_info",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "STRUCT",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "A binary_fuse16_filter BLOB."
+      }
+    ],
+    "returns": "A STRUCT with `filter_type`, `format_version` (0 for an older BLOB without a header), `key_hash` (`'none'` or `'xxhash64'`), `key_type`, `size_bytes`, `entries`, `capacity`, `load_factor`, `fingerprint_bits`, `bits_per_entry`, `expected_fpr`, `q`, `r` and `seed`. Fields a filter type doesn't have are NULL.",
+    "description": "Describe a binary_fuse16_filter BLOB. Reports `entries`, `fingerprint_bits`, `seed` and `expected_fpr`. Also reads binary_fuse16_filter BLOBs written by older versions of the extension (no header), reporting `format_version` 0.",
+    "examples": [
+      {
+        "description": "Inspect a stored binary_fuse16_filter",
+        "code": "SELECT binary_fuse16_filter_info(binary_fuse16_filter_value) FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_info",
+      "binary_fuse16_filter_is_valid"
+    ]
+  },
+  {
+    "id": "bloom_filter_info",
+    "name": "bloom_filter_info",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "STRUCT",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "A bloom_filter BLOB."
+      }
+    ],
+    "returns": "A STRUCT with `filter_type`, `format_version` (0 for an older BLOB without a header), `key_hash` (`'none'` or `'xxhash64'`), `key_type`, `size_bytes`, `entries`, `capacity`, `load_factor`, `fingerprint_bits`, `bits_per_entry`, `expected_fpr`, `q`, `r` and `seed`. Fields a filter type doesn't have are NULL.",
+    "description": "Describe a bloom_filter BLOB. `load_factor` is the fraction of bits set, and `expected_fpr` is computed from the bits actually set. Also reads bloom_filter BLOBs written by older versions of the extension (no header), reporting `format_version` 0.",
+    "examples": [
+      {
+        "description": "Inspect a stored bloom_filter",
+        "code": "SELECT bloom_filter_info(bloom_filter_value) FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_info",
+      "bloom_filter_is_valid"
+    ]
+  },
+  {
+    "id": "quotient_filter_is_valid",
+    "name": "quotient_filter_is_valid",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "The BLOB to check."
+      }
+    ],
+    "description": "Return whether a BLOB is a structurally valid quotient_filter, instead of raising the error `quotient_filter_contains` would. Returns NULL for a NULL BLOB.",
+    "examples": [
+      {
+        "description": "Check a stored filter",
+        "code": "SELECT quotient_filter_is_valid(quotient_filter_value) AS ok FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_is_valid",
+      "quotient_filter_info"
+    ]
+  },
+  {
+    "id": "xor8_filter_is_valid",
+    "name": "xor8_filter_is_valid",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "The BLOB to check."
+      }
+    ],
+    "description": "Return whether a BLOB is a structurally valid xor8_filter, instead of raising the error `xor8_filter_contains` would. Returns NULL for a NULL BLOB.",
+    "examples": [
+      {
+        "description": "Check a stored filter",
+        "code": "SELECT xor8_filter_is_valid(xor8_filter_value) AS ok FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_is_valid",
+      "xor8_filter_info"
+    ]
+  },
+  {
+    "id": "xor16_filter_is_valid",
+    "name": "xor16_filter_is_valid",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "The BLOB to check."
+      }
+    ],
+    "description": "Return whether a BLOB is a structurally valid xor16_filter, instead of raising the error `xor16_filter_contains` would. Returns NULL for a NULL BLOB.",
+    "examples": [
+      {
+        "description": "Check a stored filter",
+        "code": "SELECT xor16_filter_is_valid(xor16_filter_value) AS ok FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_is_valid",
+      "xor16_filter_info"
+    ]
+  },
+  {
+    "id": "binary_fuse8_filter_is_valid",
+    "name": "binary_fuse8_filter_is_valid",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "The BLOB to check."
+      }
+    ],
+    "description": "Return whether a BLOB is a structurally valid binary_fuse8_filter, instead of raising the error `binary_fuse8_filter_contains` would. Returns NULL for a NULL BLOB.",
+    "examples": [
+      {
+        "description": "Check a stored filter",
+        "code": "SELECT binary_fuse8_filter_is_valid(binary_fuse8_filter_value) AS ok FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_is_valid",
+      "binary_fuse8_filter_info"
+    ]
+  },
+  {
+    "id": "binary_fuse16_filter_is_valid",
+    "name": "binary_fuse16_filter_is_valid",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "The BLOB to check."
+      }
+    ],
+    "description": "Return whether a BLOB is a structurally valid binary_fuse16_filter, instead of raising the error `binary_fuse16_filter_contains` would. Returns NULL for a NULL BLOB.",
+    "examples": [
+      {
+        "description": "Check a stored filter",
+        "code": "SELECT binary_fuse16_filter_is_valid(binary_fuse16_filter_value) AS ok FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_is_valid",
+      "binary_fuse16_filter_info"
+    ]
+  },
+  {
+    "id": "bloom_filter_is_valid",
+    "name": "bloom_filter_is_valid",
+    "type": "scalar",
+    "categories": [
+      "Inspection"
+    ],
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": "The BLOB to check."
+      }
+    ],
+    "description": "Return whether a BLOB is a structurally valid bloom_filter, instead of raising the error `bloom_filter_contains` would. Returns NULL for a NULL BLOB.",
+    "examples": [
+      {
+        "description": "Check a stored filter",
+        "code": "SELECT bloom_filter_is_valid(bloom_filter_value) AS ok FROM filter_table;"
+      }
+    ],
+    "relatedFunctions": [
+      "bitfilter_is_valid",
+      "bloom_filter_info"
     ]
   },
   {

@@ -16,24 +16,27 @@ Use cases include join pre-filtering, data skipping, dedupe pre-checks, cache hi
 
 | Family | Memory (≈, per element) | False positive rate | Mutation | Best for |
 |---|---|---|---|---|
-| **Quotient** | tunable (q, r) | ~2^(−r) | **Add, delete, resize** | Dynamic sets |
+| **Quotient** | tunable (q, r) | ~2^(−r) | **Mergeable** (holds ≤ 2^q − 1 values) | Mergeable sets, self-sizing |
 | **XOR-8** | ~9 bits | ~0.39% | Static | General-purpose |
 | **XOR-16** | ~18 bits | ~0.0015% | Static | Very low FPR needed |
 | **Binary Fuse-8** | &lt;9 bits | ~0.39% | Static | Smallest static filter |
 | **Binary Fuse-16** | ~18 bits | ~0.0015% | Static | Smallest very-low-FPR filter |
+| **Bloom** (split block) | tunable (ndv, fpp) | tunable | **Mergeable**, never "full" | Incremental sets, Parquet compat |
 | **DuckDB Bloom** | tunable | tunable | Static | DuckDB-native compat |
 
-For most read-heavy workloads, **Binary Fuse 8** is the right default. Switch to **Quotient** when the underlying set changes; switch to a 16-bit variant when even 0.4% false positives are too many.
+For most read-heavy workloads, **Binary Fuse 8** is the right default — the smallest filter, but build-once. Switch to **Bloom** when you need to merge filters built separately, want to add to a set over time, or want filters compatible with Parquet Bloom filters; switch to **Quotient** for a mergeable filter that can size itself to its input; switch to a 16-bit variant when even 0.4% false positives are too many.
 
-## Hashing the input
+## Values and keys
 
-Every filter takes `UBIGINT` hashes as input — the algorithm-quality of the hash matters because filters distribute keys based on the hash bits. Three options, in increasing fanciness:
+Every filter accepts values of any type — pass the column directly, e.g. `xor8_filter(email)`:
 
-1. **`hash(value)`** — DuckDB's built-in. Good distribution, very fast, no extension needed.
-2. **`xxh3_64(value)`** from [`hashfuncs`](/products/extensions/hashfuncs) — slightly faster, well-distributed, cross-language compatible.
-3. **`crypto_hash('sha2-256', value)`** from [`crypto`](/products/extensions/crypto) cast to UBIGINT — only when adversarial inputs matter (cryptographic resistance to filter-poisoning).
+- **`UBIGINT` values** are used as 64-bit keys exactly as given, for when you compute your own keys — for example with `xxh3_64(value)` from [`hashfuncs`](/products/extensions/hashfuncs). (The Bloom filter is the exception: it hashes `UBIGINT` values too, for Parquet compatibility.)
+- **Every other type** is hashed with XXH64 of a fixed byte encoding: the Parquet plain encoding where Parquet defines one (the same keys Parquet Bloom filters use), otherwise DuckDB's on-disk representation.
+- **LIST, STRUCT, MAP, ARRAY, UNION and ENUM** have no stable encoding and are rejected when the query is bound. Cast them to `VARCHAR`, or compute your own `UBIGINT` key.
 
-For 99% of cases use option 1 or 2. Option 3 is correct but ~10× slower.
+The encoding is deliberately stable across DuckDB versions. Filters do **not** use DuckDB's `hash()`, which may change between versions — a filter you store today still answers correctly after you upgrade DuckDB.
+
+When you probe, the value is cast to the type the filter was built from: `xor8_filter_contains(f, 42)` and `xor8_filter_contains(f, '42')` both work on a `BIGINT` filter. A value that can't be cast (`'abc'` against an integer filter) returns false, and a NULL probe returns NULL. Filters built from `UBIGINT` keys accept other integer probes but reject non-integer probes with an error.
 
 ## Filters as columns
 
@@ -42,13 +45,24 @@ Every filter constructor is an *aggregate* function and produces a single BLOB. 
 - Store in a regular column (`CREATE TABLE filters (bucket INT, filter BLOB)`).
 - Persist in Parquet for cross-process reuse.
 - Pass to other queries via CTE or table valued.
-- Combine via UNION (build per-partition filters separately, then probe each).
+- Combine via UNION (build per-partition filters separately, then probe each), or merge Bloom and Quotient filters into one with `bloom_filter_merge` / `quotient_filter(q, r, filter)`.
 
-There's no special filter type — just BLOB plus the matching `*_contains` function.
+There's no special filter type — just a BLOB plus the matching `*_contains` function, or the generic `bitfilter_contains`.
+
+### The filter header
+
+Every filter BLOB starts with a 16-byte header: the magic bytes `BFLT`, a format version, the filter type, the key hash (none or XXH64) and the value type. That's what lets `bitfilter_contains`, `bitfilter_info` and `bitfilter_is_valid` work on any filter, and why passing one filter type to another's function gives a clear error (*the filter BLOB is a xor8_filter, not a quotient_filter*).
+
+- Filters are 16 bytes larger than before, and older versions of the extension can't read them.
+- BLOBs written by older versions (no header) are still read by the type-specific functions such as `xor8_filter_contains` and `xor8_filter_info` (which reports `format_version` 0), but not by the generic `bitfilter_*` functions.
+
+## Memory
+
+Building a filter is charged against DuckDB's `memory_limit`: a build that doesn't fit raises an Out of Memory error instead of growing without bound. Grouped `xor*`, `binary_fuse*` and self-sizing `quotient_filter(r, value)` builds spill to disk when they don't fit in memory.
 
 ## When *not* to use a filter
 
 - **You actually need the elements**, not membership. Filters can't enumerate; they're set-only.
 - **The set is tiny.** A 10K-element set in a HashMap is faster than a filter.
 - **You can't tolerate any false positives**, including in a probe-then-verify pattern. (Though probe-then-verify makes filters exact for correctness purposes — you just pay the verify cost on FPR-rate of inputs.)
-- **The set churns continuously.** Even Quotient filters have construction cost; if you rebuild on every query, the filter isn't earning its keep.
+- **The set churns continuously.** Every filter has construction cost, and none of them support deleting a value; if you rebuild on every query, the filter isn't earning its keep.

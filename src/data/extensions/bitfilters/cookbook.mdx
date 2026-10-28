@@ -4,26 +4,28 @@
 |---|---|
 | Static set, smallest possible memory | **`binary_fuse8_filter`** |
 | Static set, very low FPR | **`binary_fuse16_filter`** or **`xor16_filter`** |
-| Dynamic set with deletion / resize | **`quotient_filter`** |
-| Maximum cross-system compatibility | **`xor8_filter`** |
+| Add to it over time, merge per-partition filters, read alongside Parquet Bloom filters | **`bloom_filter`** |
+| Mergeable, sized to its input without guessing | **`quotient_filter(r, value)`** |
 | Plug into DuckDB's join optimizer | **`bitfilters_duckdb_bloom_filter_*`** |
 
-All filter constructors take `UBIGINT` hash values as input. Use DuckDB's built-in `hash()` for general purpose, or pair with [`hashfuncs`](/products/extensions/hashfuncs) when you want a specific algorithm (xxh3_64, rapidhash, MurmurHash3).
+In short: **Bloom** is incremental, mergeable and Parquet-compatible; **XOR / Binary Fuse** are the smallest but build-once; **Quotient** is mergeable and can size itself.
+
+Filter constructors accept values of any type — pass the column itself. Values are hashed with XXH64 of a fixed encoding that stays the same across DuckDB versions, so you don't need `hash()`. `UBIGINT` values are used as keys exactly as given, if you'd rather compute your own (for example with [`hashfuncs`](/products/extensions/hashfuncs)).
 
 ## Build a Filter
 
-Filter constructors are **aggregate functions** — pass the hashes of every member of the set and the result is a single BLOB you can store anywhere DuckDB stores BLOBs:
+Filter constructors are **aggregate functions** — pass every member of the set and the result is a single BLOB you can store anywhere DuckDB stores BLOBs:
 
 ```sql
 -- Materialize a filter per partition
 CREATE TABLE allowed_filters AS
 SELECT bucket,
-       binary_fuse8_filter(hash(id)) AS filter
+       binary_fuse8_filter(id) AS filter
 FROM allowed_ids
 GROUP BY bucket;
 ```
 
-The filter is dense and self-contained — no separate hash function metadata needed at probe time, just call the matching `*_contains` function with the same hash.
+The filter is self-contained: its header records the filter type, how values were hashed and the value type. At probe time just call the matching `*_contains` function (or `bitfilter_contains`) with the value — it is cast to the type the filter was built from, so `42` and `'42'` both work against a `BIGINT` filter.
 
 ## Pre-Filter an Expensive Join
 
@@ -32,12 +34,12 @@ The classic use case — avoid an expensive lookup or cross-partition join when 
 ```sql
 -- 1. Build a filter from "interesting" keys, once
 CREATE OR REPLACE TABLE interesting_filter AS
-SELECT xor8_filter(hash(key)) AS filter FROM interesting_keys;
+SELECT xor8_filter(key) AS filter FROM interesting_keys;
 
 -- 2. Probe the filter to skip the expensive operation entirely for non-members
 SELECT e.*
 FROM events e, interesting_filter f
-WHERE xor8_filter_contains(f.filter, hash(e.key))   -- fast: maybe-member
+WHERE xor8_filter_contains(f.filter, e.key)          -- fast: maybe-member
   AND e.key IN (SELECT key FROM interesting_keys);   -- slow: confirm if maybe
 ```
 
@@ -51,7 +53,7 @@ Materialize one filter per logical partition; use it to skip whole partitions at
 -- Build filters at write time
 CREATE OR REPLACE TABLE partition_filters AS
 SELECT day,
-       binary_fuse8_filter(hash(user_id)) AS users_in_partition
+       binary_fuse8_filter(user_id) AS users_in_partition
 FROM events
 GROUP BY day;
 
@@ -60,7 +62,7 @@ SELECT day, COUNT(*) AS hits
 FROM events
 WHERE day IN (
   SELECT day FROM partition_filters
-  WHERE binary_fuse8_filter_contains(users_in_partition, hash(7))
+  WHERE binary_fuse8_filter_contains(users_in_partition, 7)
 )
   AND user_id = 7
 GROUP BY day;
@@ -76,32 +78,80 @@ If you want to confirm the FPR on your data, count probes that the filter says y
 -- Real members
 SELECT COUNT(*) AS true_positives
 FROM source_set s, the_filter f
-WHERE xor8_filter_contains(f.filter, hash(s.id));
+WHERE xor8_filter_contains(f.filter, s.id);
 ```
 
 ```sql
 -- Non-members that the filter incorrectly accepts
 SELECT COUNT(*) AS false_positives
 FROM unrelated_set u, the_filter f
-WHERE xor8_filter_contains(f.filter, hash(u.id));
+WHERE xor8_filter_contains(f.filter, u.id);
 ```
 
-For xor8, expect ~0.39% false positives across enough probes; binary_fuse8 lower; binary_fuse16 / xor16 nearly zero.
+For xor8, expect ~0.39% false positives across enough probes; binary_fuse8 lower; binary_fuse16 / xor16 nearly zero. `bitfilter_info(filter).expected_fpr` gives the rate the filter expects.
 
-## Quotient Filter — Dynamic Sets
+## Inspect a Filter
 
-Quotient filters are the only family here that supports deletion and resize. The `q` and `r` parameters tune the size/FPR tradeoff:
+`bitfilter_info` describes any filter BLOB — type, key type, size, entries, expected false positive rate. Fields a filter type doesn't have are NULL:
 
-- `q` — number of slot index bits. Filter holds up to ~2^q keys.
+```sql
+SELECT i.filter_type, i.key_type, i.size_bytes, i.expected_fpr
+FROM the_filter, LATERAL (SELECT bitfilter_info(filter) AS i);
+```
+
+Use `bitfilter_is_valid` (or the per-type `*_is_valid`) to find damaged or mismatched BLOBs without raising the error a probe would. Passing one filter type to another's function fails with a clear error, e.g. *the filter BLOB is a xor8_filter, not a quotient_filter*.
+
+## Bloom Filters — Incremental and Parquet-Compatible
+
+`bloom_filter(ndv, fpp, value)` builds a split block Bloom filter sized for `ndv` distinct values at false positive rate `fpp`. It is the Parquet Bloom filter: for the same values and sizing it is byte-for-byte the filter DuckDB writes into Parquet files.
+
+```sql
+-- One filter per bucket, each sized for ~1,000 keys at 1% FPR
+CREATE TABLE bucket_blooms AS
+SELECT bucket,
+       bloom_filter(1000, 0.01, key) AS bf
+FROM keys
+GROUP BY bucket;
+
+-- Roll them up into one filter (bitwise OR)
+SELECT bloom_filter_merge(bf) AS all_keys FROM bucket_blooms;
+```
+
+Filters merge only when they were built with the same `ndv`, `fpp` and value type. A Bloom filter never gets "full" — insert more than `ndv` values and its false positive rate degrades gradually.
+
+## Quotient Filter — Mergeable Sets
+
+Quotient filters can be merged, and can pick their own size. The `q` and `r` parameters tune the size/FPR tradeoff:
+
+- `q` — number of slot index bits. The filter holds at most 2^q − 1 values; inserting more is an error.
 - `r` — remainder bits per slot. Higher `r` → lower FPR, more memory.
 
 Approximate FPR ≈ 2^(−r). At `r = 4`, expect ~6% FPR; at `r = 8`, ~0.4%.
 
 ```sql
 SELECT bucket,
-       quotient_filter(20, 8, hash(id)) AS filter   -- ~1M slots, ~0.4% FPR
+       quotient_filter(20, 8, id) AS filter   -- up to ~1M values, ~0.4% FPR
 FROM ids
 GROUP BY bucket;
+```
+
+Don't know how many values you have? Leave out `q` and the filter sizes itself so the distinct values fill at most 3/4 of the slots:
+
+```sql
+SELECT bucket,
+       quotient_filter(8, id) AS filter   -- ~0.4% FPR, q chosen for you
+FROM ids
+GROUP BY bucket;
+```
+
+To merge, pass filter BLOBs instead of values. The result has exactly the `q` and `r` you give, and each input needs at least `q + r` hash bits — so a merge can grow `q` only by giving up as many remainder bits:
+
+```sql
+-- Per-bucket (16, 8) filters merge into one (20, 4) filter — not (20, 8)
+WITH parts AS (
+  SELECT quotient_filter(16, 8, id) AS filter FROM ids GROUP BY bucket
+)
+SELECT quotient_filter(20, 4, filter) AS merged FROM parts;
 ```
 
 ## DuckDB-Compatible Bloom Filters
