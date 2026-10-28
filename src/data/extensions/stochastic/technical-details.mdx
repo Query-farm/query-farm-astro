@@ -72,7 +72,9 @@ SELECT dist_normal_quantile(0.0, 1.0, 1.5);
 -- Invalid Input Error: normal: Probability argument is 1.5, but must be >= 0 and <= 1
 ```
 
-NaN and infinite parameters are rejected the same way. Evaluation points may be infinite, and a quantile at p = 0 or 1 of an unbounded distribution is `-inf` or `inf`:
+NaN and infinite parameters are rejected the same way. Evaluation points may be infinite, and a quantile at p = 0 or 1 of an unbounded distribution is `-inf` or `inf`.
+
+Results are checked too. A calculation that breaks down numerically at extreme parameters — one that would return NaN, or a probability outside [0, 1] — raises an error such as `rayleigh: the result is not a number for these arguments` instead of returning a wrong value:
 
 ```sql
 SELECT dist_normal_quantile(0.0, 1.0, 1.0) AS upper, dist_normal_cdf(0.0, 1.0, '-inf'::DOUBLE) AS lower_tail;
@@ -100,13 +102,23 @@ SELECT dist_poisson_quantile(5.0, 0.3) AS q30,
 
 The binomial, negative binomial, hypergeometric and integer uniform quantiles return `BIGINT`; the others return a whole-number `DOUBLE`. A `BIGINT` quantile that would be infinite — such as the negative binomial quantile at p = 1 — raises an error.
 
-Samplers for discrete distributions reject parameters whose samples could exceed 2^53, the range where `DOUBLE` represents every integer exactly. For example, `dist_poisson_sample(1e300)` is an error rather than a hang.
+Samplers for discrete distributions reject parameters whose samples could exceed 2^53, the range where `DOUBLE` represents every integer exactly. For example, `dist_poisson_sample(1e300)` is an error rather than a hang. Discrete quantiles and medians above 2^53 are rejected for the same reason.
+
+## Non-central parameter limits
+
+The non-central chi-squared, F and beta distributions accept a noncentrality up to 10^8, and the non-central t up to 1,000 in absolute value. Beyond those limits the underlying series converge too slowly or not at all, so the functions raise an error instead of running for minutes. Power calculations sit far inside them.
 
 ## Fit reference
 
-`dist_<name>_fit(x)` is an aggregate that estimates a distribution's parameters by [maximum likelihood](https://en.wikipedia.org/wiki/Maximum_likelihood_estimation). It returns a `STRUCT` whose fields are named like the distribution's parameters, so the result plugs straight back into the other functions:
+`dist_<name>_fit(x)` is an aggregate that estimates a distribution's parameters by [maximum likelihood](https://en.wikipedia.org/wiki/Maximum_likelihood_estimation). It returns a `STRUCT` whose first fields are named like the distribution's parameters, so the result plugs straight back into the other functions. Every fit also returns:
 
-| Fit | Returns |
+- `log_likelihood` — the log-likelihood of the sample at the fitted parameters
+- `aic` — the [Akaike information criterion](https://en.wikipedia.org/wiki/Akaike_information_criterion), `2k - 2 log L` for `k` estimated parameters
+- `bic` — the [Bayesian information criterion](https://en.wikipedia.org/wiki/Bayesian_information_criterion), `k ln(n) - 2 log L`
+
+Lower AIC and BIC mean a better fit, so they compare candidate distributions on the same column.
+
+| Fit | Parameters |
 |---|---|
 | `dist_normal_fit` | `{mean, stddev}` |
 | `dist_lognormal_fit` | `{mean, stddev}` of `ln(x)` |
@@ -114,13 +126,32 @@ Samplers for discrete distributions reject parameters whose samples could exceed
 | `dist_poisson_fit` | `{rate}` |
 | `dist_bernoulli_fit` | `{prob}` (x is 0 or 1) |
 | `dist_geometric_fit` | `{prob}` (x counts failures before the first success) |
+| `dist_binomial_fit(x, trials)` | `{prob}` for a known number of trials |
+| `dist_negative_binomial_fit` | `{successes, prob}`, with a whole number of successes |
 | `dist_rayleigh_fit` | `{scale}` |
 | `dist_uniform_real_fit` | `{min, max}` |
 | `dist_pareto_fit` | `{scale, shape}` |
-| `dist_gamma_fit` | `{shape, scale}` (Newton's method) |
-| `dist_beta_fit` | `{alpha, beta}` (Newton's method) |
+| `dist_gamma_fit` | `{shape, scale}` |
+| `dist_inverse_gamma_fit` | `{shape, scale}` |
+| `dist_chi_squared_fit` | `{degrees_of_freedom}` |
+| `dist_inverse_gaussian_fit` | `{mean, shape}` |
+| `dist_beta_fit` | `{alpha, beta}` |
+| `dist_weibull_fit` | `{shape, scale}` |
+| `dist_laplace_fit` | `{location, scale}` (the median and the mean absolute deviation from it) |
+| `dist_logistic_fit` | `{location, scale}` |
+| `dist_cauchy_fit` | `{location, scale}` |
+| `dist_extreme_value_fit` | `{location, scale}` (Gumbel) |
+| `dist_students_t_fit` | `{degrees_of_freedom}` of the standard Student's t |
 
 NULL inputs are ignored. An empty sample, or one whose values are all the same, returns NULL. Values outside the distribution's support raise an error — a negative value for gamma, or 1 for beta. The normal and log-normal fits return the maximum likelihood standard deviation, which divides by `n`, not `n - 1`.
+
+A few fits have their own rules:
+
+- The binomial fit takes the known number of trials as its second argument, which must be the same for every row of a group.
+- The negative binomial fit restricts `successes` to a whole number, as the distribution functions require; cast it to `BIGINT` to pass it on. A sample whose variance does not exceed its mean has no negative binomial fit and returns NULL.
+- The Student's t fit returns NULL when the tails are no heavier than normal, where the degrees of freedom grow without bound.
+- The Weibull, Laplace, logistic, Cauchy, extreme value, Student's t and negative binomial fits have no fixed-size summary statistics, so they hold the group's values in memory. The others keep a few running sums.
+- A fit that overflows because the values are extremely large or small in magnitude (around 1e±300) raises an error rather than returning NaN.
 
 ## Hypothesis test reference
 
@@ -181,7 +212,7 @@ Run the pair again and the total is identical.
 The DuckDB 2.0 build of the extension adds:
 
 - 14 distributions: arcsine, hypergeometric, inverse gamma, scaled inverse chi-squared, inverse Gaussian, Kolmogorov-Smirnov, non-central beta / chi-squared / F / t, skew normal, triangular, Dirichlet and multinomial.
-- Fit aggregates for 11 distributions and the hypothesis test aggregates above.
+- Fit aggregates for 22 distributions, each reporting the log-likelihood, AIC and BIC, and the hypothesis test aggregates above.
 - `_samples` (a list of `n` samples) for every univariate distribution, and `_pmf` / `_log_pmf` for discrete ones.
 - Function categories in `duckdb_functions()`: `[statistics, <kind>, <distribution>]`.
 
@@ -191,6 +222,7 @@ It also changes behavior:
 - Undefined properties return NULL. Properties that were missing before — such as the binomial and negative binomial mean and standard deviation — are now available.
 - Discrete quantiles use the smallest-x definition above. `dist_poisson_quantile(5, 0.3)` is now 4 (it was 3), and `dist_geometric_quantile(0.5, 0.95)` is now 4 (it was 3.32).
 - The gamma parameters are named `shape, scale`, and the extreme value and logistic location parameters are named `location`. Arguments are positional, so queries are unaffected.
+- Results that break down numerically at extreme parameters raise an error instead of returning NaN or an out-of-range probability, and the non-central distributions have the [parameter limits](#non-central-parameter-limits) above.
 - Continuous CDFs and quantiles are faster on Linux ARM64: calculations stay in `DOUBLE`, which also makes results the same on every platform.
 
 ## Integer uniform and Pareto compatibility
