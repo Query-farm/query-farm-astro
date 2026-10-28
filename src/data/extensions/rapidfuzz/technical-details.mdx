@@ -6,25 +6,70 @@ A similarity score helps identify records to review. It does not establish that 
 
 ## Architecture
 
-This extension binds the [RapidFuzz](https://maxbachmann.github.io/RapidFuzz/) C++ library — the same engine behind Python's `rapidfuzz` package and the spiritual successor to `fuzzywuzzy` — as a set of DuckDB scalar functions. Each function takes `(VARCHAR, VARCHAR)` and returns a `DOUBLE`. There is no extra state, no secrets, no `ATTACH` interface; calls are pure functions composable into any `SELECT`, `WHERE`, `ON`, or `ORDER BY` clause.
+This extension binds the [RapidFuzz](https://rapidfuzz.github.io/RapidFuzz/) C++ library — the same engine behind Python's `rapidfuzz` package and the spiritual successor to `fuzzywuzzy` — as DuckDB scalar functions. There is no extra state, no secrets, no `ATTACH` interface; calls are pure functions composable into any `SELECT`, `WHERE`, `ON`, or `ORDER BY` clause.
 
-Two function families coexist:
+Four function families coexist:
 
-- **Ratio scores** (`rapidfuzz_ratio` and friends) return 0–100, mirroring the Python [`rapidfuzz.fuzz`](https://maxbachmann.github.io/RapidFuzz/Usage/fuzz.html) family.
-- **Distance algorithms** (Jaro, Jaro-Winkler, Hamming, Indel, [Levenshtein](https://en.wikipedia.org/wiki/Levenshtein_distance) / OSA, LCS, Prefix, Postfix) ship four variants each — `_distance`, `_similarity`, `_normalized_distance`, `_normalized_similarity`. The naming is mechanical: `rapidfuzz_<algo>[_normalized]_<distance|similarity>`.
+- **Ratio scores** (`rapidfuzz_ratio`, `rapidfuzz_wratio` and friends) return a `DOUBLE` from 0 to 100, mirroring the Python [`rapidfuzz.fuzz`](https://rapidfuzz.github.io/RapidFuzz/Usage/fuzz.html) family.
+- **Metrics** (Levenshtein, Damerau-Levenshtein, OSA, Indel, LCS, Hamming, Jaro, Jaro-Winkler, Prefix, Postfix) ship four variants each — `_distance`, `_similarity`, `_normalized_distance`, `_normalized_similarity`. The naming is mechanical: `rapidfuzz_<algo>[_normalized]_<distance|similarity>`.
+- **Best match** — [`rapidfuzz_extract`](#rapidfuzz_extract) and [`rapidfuzz_extract_one`](#rapidfuzz_extract_one) rank a list of choices, like Python's `rapidfuzz.process`.
+- **Alignment** — the edit operations and matching ranges behind a score: [`rapidfuzz_levenshtein_editops`](#rapidfuzz_levenshtein_editops), [`rapidfuzz_levenshtein_opcodes`](#rapidfuzz_levenshtein_opcodes), their Indel counterparts, and [`rapidfuzz_partial_ratio_alignment`](#rapidfuzz_partial_ratio_alignment).
 
-Behavior matches the upstream library closely enough that the [RapidFuzz documentation](https://maxbachmann.github.io/RapidFuzz/) is the authoritative reference for algorithm semantics.
+Behavior matches the upstream library closely enough that the [RapidFuzz documentation](https://rapidfuzz.github.io/RapidFuzz/) is the authoritative reference for algorithm semantics.
+
+### Characters, not bytes
+
+Strings are compared by Unicode character. An accented letter or a CJK character is one character, so scores, distances and alignment positions agree with Python's `rapidfuzz`:
+
+```sql
+SELECT rapidfuzz_levenshtein_distance('café', 'cafe') AS rapidfuzz,
+       levenshtein('café', 'cafe') AS builtin_bytes;
+```
+
+DuckDB's built-in `levenshtein` compares bytes and reports 2 here. Pure ASCII strings take a byte-level fast path.
+
+### Return types
+
+Raw `_distance` and `_similarity` of the counting metrics (Levenshtein, Damerau-Levenshtein, OSA, Indel, LCS, Hamming, Prefix, Postfix) return `BIGINT`. Normalized variants, Jaro, Jaro-Winkler and the ratio scores return `DOUBLE`. A NULL string gives NULL.
+
+### Options
+
+Options are passed by name with `:=` and must be constants:
+
+| Option | Functions | Default |
+|---|---|---|
+| `score_cutoff` | every scorer, `rapidfuzz_extract`, `rapidfuzz_extract_one` | NULL (no cutoff) |
+| `insert_cost`, `delete_cost`, `replace_cost` | `rapidfuzz_levenshtein_*` | 1 |
+| `pad` | `rapidfuzz_hamming_*` | `true` |
+| `prefix_weight` | `rapidfuzz_jaro_winkler_*` (0 to 0.25) | 0.1 |
+| `scorer`, `top_k` | `rapidfuzz_extract` (`scorer` also on `rapidfuzz_extract_one`) | `'wratio'`, 5 |
+
+`score_cutoff` follows RapidFuzz: distances above the cutoff come back as `cutoff + 1` (1.0 when normalized) and similarities below it as 0. Besides making the threshold explicit, it lets RapidFuzz abandon a comparison as soon as it can't reach the cutoff:
+
+```sql
+SELECT name
+FROM customers
+WHERE rapidfuzz_levenshtein_distance(name, 'Acme Corp', score_cutoff := 3) <= 3;
+```
+
+### Changes in the DuckDB 2.0 release
+
+The DuckDB 2.0 build of the extension compares Unicode characters instead of bytes, returns `BIGINT` for the counting metrics (previously `DOUBLE`), and adds Levenshtein, Damerau-Levenshtein, `rapidfuzz_wratio`, `rapidfuzz_qratio`, the `token_ratio` variants, best-match extraction, alignment functions and the options above. Results for ASCII strings are unchanged. The [changelog](https://github.com/Query-farm/rapidfuzz/blob/v2.0/CHANGELOG.md) lists every change.
 
 ## Pick the right algorithm
 
 | Situation | Function |
 |---|---|
 | One score, 0–100, sane default | [`rapidfuzz_ratio`](#rapidfuzz_ratio) |
+| Don't know how the strings differ | [`rapidfuzz_wratio`](#rapidfuzz_wratio) |
+| Best match from a list of choices | [`rapidfuzz_extract_one`](#rapidfuzz_extract_one) |
 | One string is a fragment of the other | [`rapidfuzz_partial_ratio`](#rapidfuzz_partial_ratio) |
 | Same words, different order | [`rapidfuzz_token_sort_ratio`](#rapidfuzz_token_sort_ratio) |
 | Duplicated or stray words | [`rapidfuzz_token_set_ratio`](#rapidfuzz_token_set_ratio) |
 | Human names, typos at the end | [`rapidfuzz_jaro_winkler_normalized_similarity`](#rapidfuzz_jaro_winkler_normalized_similarity) |
 | Single-character typos / adjacent swaps | [`rapidfuzz_osa_distance`](#rapidfuzz_osa_distance) |
+| Edit distance with custom costs | [`rapidfuzz_levenshtein_distance`](#rapidfuzz_levenshtein_distance) |
+| Swaps that are also edited further | [`rapidfuzz_damerau_levenshtein_distance`](#rapidfuzz_damerau_levenshtein_distance) |
 | Equal-length identifiers (SKUs, hashes) | [`rapidfuzz_hamming_distance`](#rapidfuzz_hamming_distance) |
 
 For cross-pair comparisons where strings differ in length, prefer the `_normalized_*` variants — raw distance penalizes longer strings just for being long. See the [Wikipedia article on Jaro–Winkler distance](https://en.wikipedia.org/wiki/Jaro%E2%80%93Winkler_distance) for the formal definitions of the name-matching variants.
@@ -86,6 +131,27 @@ QUALIFY ROW_NUMBER() OVER (
   ORDER BY rapidfuzz_jaro_winkler_normalized_similarity(a.name, b.name) DESC, b.id
 ) = 1;
 ```
+
+## Best match from a list
+
+When the candidates fit in a list — a few hundred canonical names, a product catalog's categories — [`rapidfuzz_extract_one`](#rapidfuzz_extract_one) returns the best one per row without a join or a window function. The query string is preprocessed once and compared with every choice:
+
+```sql
+SELECT a.id, a.name,
+       rapidfuzz_extract_one(a.name, c.names, scorer := 'jaro_winkler_normalized_similarity',
+                             score_cutoff := 0.9) AS best
+FROM left_records a,
+     (SELECT list(name ORDER BY id) AS names FROM right_records) c
+ORDER BY a.id;
+```
+
+The result is a struct with `choice`, `score` and the 1-based `choice_index`, or NULL when nothing reaches the cutoff. [`rapidfuzz_extract`](#rapidfuzz_extract) returns the `top_k` best matches as a list instead.
+
+## Performance
+
+- **Compare against a constant when you can.** When one argument is a constant, it is preprocessed once and reused for every row — about twice as fast as comparing two columns.
+- **The scorer matters more than anything else.** `rapidfuzz_ratio` and the metrics are cheap; `rapidfuzz_partial_ratio` and `rapidfuzz_wratio` try many alignments and are an order of magnitude slower. Pass `score_cutoff` so they can skip hopeless pairs.
+- **Small tables use few threads.** DuckDB parallelizes a scan in row groups of about 122,880 rows, so an expensive scorer over a table of a few hundred thousand rows only uses a few cores. Large tables and joins parallelize normally.
 
 ## When to reach for something else
 
