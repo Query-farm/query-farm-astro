@@ -1,11 +1,15 @@
+import Callout from '../../../components/docs/Callout.astro';
+
 ## What this extension adds
 
 DuckDB ships with `hash()` (non-cryptographic), `md5()`, and `sha256()`. The Crypto extension adds the rest of what production cryptographic workloads need:
 
-- **More algorithms** — BLAKE3, BLAKE2b, the full SHA-2 family (224/256/384/512), the SHA-3 family (224/256/384/512), and Keccak variants.
-- **More input types** — every numeric type, VARCHAR, BLOB, BOOLEAN, DATE, TIME, TIMESTAMP, UUID, and lists of those — not just strings. Different DuckDB types hash to different digests by design.
-- **HMAC** with the same algorithm vocabulary — for keyed message authentication.
-- **`crypto_hash_agg`** — an order-deterministic aggregate hash for dataset checksums and change detection.
+- **More algorithms** — BLAKE3, BLAKE2b, BLAKE2s, the full SHA-2 family (including SHA-512/224 and SHA-512/256), the SHA-3 family, SHAKE128 / SHAKE256, Keccak (the Ethereum variant), RIPEMD-160, and SM3. [`crypto_algorithms()`](#crypto_algorithms) lists them all, with their digest lengths and whether your OpenSSL build provides them.
+- **More input types** — every numeric type, `DECIMAL`, VARCHAR, BLOB, BOOLEAN, DATE, TIME, TIME_TZ, every TIMESTAMP variant, INTERVAL, UUID, ENUM, string-backed types such as JSON and BIT, and lists or fixed-size arrays of those — not just strings. Different DuckDB types hash to different digests by design.
+- **Extendable output** — [`crypto_hash_xof`](#crypto_hash_xof) produces as many bytes as you ask for from BLAKE3, SHAKE128, or SHAKE256.
+- **HMAC** with the same algorithm vocabulary — for keyed message authentication — and [`crypto_equals`](#crypto_equals) for comparing MACs in constant time.
+- **Key derivation** — PBKDF2, HKDF, scrypt, and Argon2 for password hashing and for deriving keys from a secret.
+- **`crypto_hash_agg`** — an order-deterministic aggregate hash for dataset checksums and change detection, usable as a window function.
 - **`crypto_random_bytes`** — cryptographically secure random bytes from OpenSSL's CSPRNG.
 
 ## Cryptographic vs non-cryptographic hashing
@@ -16,6 +20,7 @@ Use **Crypto** when you need:
 - **Authentication** — HMAC for verifying message integrity with a shared secret.
 - **Stable cross-system fingerprints** — agreed-upon algorithm output that other systems can compute identically (e.g. ETags, content-addressed storage).
 - **Secure random** — keys, salts, nonces.
+- **Password hashing and key derivation** — Argon2, scrypt, PBKDF2, HKDF.
 
 Use [**Hashfuncs**](/products/extensions/hashfuncs) instead when you need:
 
@@ -29,13 +34,96 @@ Both extensions can coexist; pick per use case.
 
 `crypto_hash` is deterministic for a given (algorithm, value, type) triple but is **type-sensitive** — `42::INTEGER` and `42::BIGINT` produce different hashes. This is the right behaviour for cryptographic use: it keeps the hash from collapsing across logically distinct domains.
 
-Lists of `VARCHAR` or `BLOB` values include each element's length (as a 64-bit integer) before its content, defending against length-extension-style ambiguity attacks.
+Every value is turned into bytes by one canonical, platform-independent encoding, shared by `crypto_hash`, list hashing, and `crypto_hash_agg`:
+
+| Type | Bytes that are hashed |
+|------|------------------------|
+| VARCHAR, BLOB, JSON, BIT, VARCHAR aliases and collations | The stored bytes, as-is |
+| Integers, FLOAT, DOUBLE, BOOLEAN, DATE, TIME, TIME_TZ, TIMESTAMP variants, INTERVAL | The fixed-width value, little-endian |
+| UUID | The 16 bytes in [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562) order — the same as hashing `unhex()` of the UUID's hex digits |
+| DECIMAL | The unscaled value as a 16-byte integer, so the declared width doesn't matter: `1.00::DECIMAL(4,2)` and `1.00::DECIMAL(38,2)` hash the same (and the same as `100::HUGEINT`) |
+| ENUM | The label, not its index — redefining or reordering the enum doesn't change the hash |
+| LIST, fixed-size ARRAY | Each element in order; an `ARRAY` hashes the same as the equivalent `LIST` |
+
+```sql
+SELECT crypto_hash('sha2-256', UUID '550e8400-e29b-41d4-a716-446655440000')
+     = crypto_hash('sha2-256', unhex('550e8400e29b41d4a716446655440000')) AS same;
+-- true
+```
+
+Lists of `VARCHAR` or `BLOB` values (and ENUM labels) include each element's length (as a 64-bit integer) before its content, defending against length-extension-style ambiguity attacks. Lists can't contain NULL elements or nested types (lists of lists, structs); `UNION` and `VARIANT` values are rejected.
 
 NULLs hash to NULL — `crypto_hash('sha2-256', NULL::VARCHAR) IS NULL` returns true.
 
+## Choosing an algorithm
+
+Algorithm names are case-insensitive. `crypto_algorithms()` reports each one's family, implementation, digest length, and whether it is an extendable-output function (XOF) or can be used with HMAC:
+
+```sql
+SELECT name, family, digest_length, is_xof, supports_hmac
+FROM crypto_algorithms()
+WHERE available
+ORDER BY name;
+```
+
+| Algorithm | Output | Notes |
+|-----------|--------|-------|
+| `blake3` | 32 B | Modern, fast — recommended default. XOF; keyed HMAC mode needs a 32-byte key |
+| `blake2b-512` / `blake2s-256` | 64 B / 32 B | BLAKE2 ([RFC 7693](https://datatracker.ietf.org/doc/html/rfc7693)) |
+| `sha2-224`, `sha2-256`, `sha2-384`, `sha2-512` | 28–64 B | Industry-standard SHA-2 |
+| `sha2-512/224`, `sha2-512/256` | 28 B / 32 B | SHA-512 truncated variants — faster than SHA-256 on 64-bit CPUs |
+| `sha3-224` … `sha3-512` | 28–64 B | FIPS 202 SHA-3 |
+| `shake128`, `shake256` | 32 B / 64 B by default | FIPS 202 XOFs; any length through `crypto_hash_xof`. Not usable with HMAC |
+| `keccak224` … `keccak512` | 28–64 B | Original Keccak padding, as used by Ethereum — **not** SHA-3 |
+| `sm3` | 32 B | Chinese national standard GB/T 32905 |
+| `ripemd160` | 20 B | Used in Bitcoin addresses |
+| `md5`, `sha1` | 16 B / 20 B | Legacy — **not** cryptographically secure |
+| `md4` | — | Only in OpenSSL's legacy provider; reported as unavailable |
+
+An unknown or unavailable algorithm name raises an error that lists the algorithms you can use.
+
+## Extendable output (XOF)
+
+`crypto_hash_xof(algorithm, value, length)` produces `length` bytes (1 to 4,294,967,295) from `blake3`, `shake128`, or `shake256`. A shorter output is a prefix of a longer one, and the default length matches `crypto_hash`:
+
+```sql
+SELECT crypto_hash_xof('blake3', 'abc', 32) = crypto_hash('blake3', 'abc') AS blake3_prefix,
+       crypto_hash_xof('shake128', 'abc', 32) = crypto_hash('shake128', 'abc') AS shake_prefix;
+-- true, true
+```
+
+Any other algorithm is an error: `crypto_hash_xof requires an extendable-output algorithm (blake3, shake128, shake256)`.
+
+## HMAC and constant-time comparison
+
+`crypto_hmac(algorithm, key, message)` accepts `VARCHAR` or `BLOB` for both the key and the message, so a key from `crypto_random_bytes` or `unhex()` works directly. A `VARCHAR` key is used verbatim — `'\x41'` is four characters, not the byte `0x41`. `blake3` uses its keyed mode, which requires a 32-byte key; `shake128` and `shake256` can't be used with HMAC.
+
+When verifying a MAC, compare with `crypto_equals(a, b)` rather than `=`. It compares `VARCHAR`/`BLOB` values with OpenSSL's `CRYPTO_memcmp`, so the time taken doesn't reveal how many leading bytes matched.
+
+## Key derivation
+
+| Function | Standard | Use it for |
+|----------|----------|------------|
+| `crypto_argon2(variant, password, salt, iterations, memory_kib, parallelism, length)` | [RFC 9106](https://datatracker.ietf.org/doc/html/rfc9106) | Password hashing — `argon2id` is the [OWASP](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html) first choice. Variants: `argon2id`, `argon2i`, `argon2d`. Salt must be at least 8 bytes; `memory_kib` at least 32 |
+| `crypto_scrypt(password, salt, n, r, p, length)` | [RFC 7914](https://datatracker.ietf.org/doc/html/rfc7914) | Password hashing; `n` must be a power of 2 |
+| `crypto_pbkdf2(algorithm, password, salt, iterations, length)` | [RFC 8018](https://datatracker.ietf.org/doc/html/rfc8018) | Password hashing where FIPS compliance or interoperability requires PBKDF2-HMAC. Not available with `blake3` |
+| `crypto_hkdf(algorithm, key, salt, info, length)` | [RFC 5869](https://datatracker.ietf.org/doc/html/rfc5869) | Deriving several keys from one high-entropy secret — **not** for passwords. `length` is at most 255 × the digest length (8,160 bytes for `sha2-256`) |
+
+Password, salt, key and info arguments accept `VARCHAR` or `BLOB` and give the same result for the same bytes. Output length is capped at 1 MiB. NULL in any argument returns NULL, and every argument may vary per row.
+
+```sql
+SELECT lower(to_hex(crypto_argon2('argon2id', 'password', 'somesalt', 2, 65536, 4, 32))) AS hash;
+-- 1a9677b0afe81fda7b548895e7a1bfeb8668ffc19a530e37e088a668fab1c02a
+```
+
 ## Aggregate hash semantics
 
-`crypto_hash_agg('algo', col ORDER BY ord)` produces the same digest as `crypto_hash('algo', LIST(col ORDER BY ord))`. The `ORDER BY` is **required** — DuckDB's query planner doesn't guarantee row order, so an unordered aggregate would be non-deterministic.
+`crypto_hash_agg('algo', col ORDER BY ord)` produces the same digest as `crypto_hash('algo', LIST(col ORDER BY ord))`. It accepts the same scalar types as `crypto_hash` (UUID, DECIMAL, ENUM, BOOLEAN, DATE, TIME, TIMESTAMP, INTERVAL, …) with the same encoding, but not lists or structs.
+
+- **`ORDER BY` is required** — DuckDB's query planner doesn't guarantee row order, so an unordered aggregate would be non-deterministic. A query without it is rejected when it is planned, with `Hash aggregation requires a distinct total ordering`. Ordering only by the `GROUP BY` key is not a total ordering of the rows in a group and is rejected too.
+- **NULL values are an error** (`crypto_hash_agg does not support NULL values`). Skip them explicitly with `FILTER (WHERE col IS NOT NULL)`.
+- **It works as a window function.** `crypto_hash_agg('sha2-256', v ORDER BY v) OVER (ORDER BY v)` gives a running digest, equal to `crypto_hash` of the matching `list(v) OVER (...)`. In a window with no `ORDER BY` at all — neither in the aggregate nor in the `OVER` clause — the missing ordering is not detected, so always order the frame.
+- An empty group returns NULL.
 
 This equivalence is useful when comparing datasets across systems: anything that can produce the equivalent ordered list (Python, Go, Rust) can compute the same digest and verify a DuckDB result.
 
@@ -46,3 +134,30 @@ This equivalence is useful when comparing datasets across systems: anything that
 - Minimum length: 1 byte
 - Maximum length: 4,294,967,295 bytes (4 GB − 1, DuckDB's BLOB cap)
 - Length 0 or negative raises `InvalidInputException`
+
+## Memory limits
+
+Large outputs — `crypto_random_bytes`, `crypto_hash_xof`, and the KDFs — are allocated through DuckDB's buffer manager, and the working memory of scrypt (128 × `n` × `r` bytes) and Argon2 (`memory_kib`) is reserved before OpenSSL allocates it. All of it counts against [`memory_limit`](https://duckdb.org/docs/configuration/overview), so an oversized request fails with `Out of Memory Error` instead of exhausting the machine, and the memory is released when the query finishes.
+
+## Changes in the DuckDB 2.0 release
+
+<Callout type="warning" title="Breaking: some stored hashes change in the DuckDB 2.0 build">
+Digests of the following inputs differ from earlier builds. Recompute stored hashes, or keep them on the earlier build until you migrate.
+
+- **`keccak224` / `keccak256` / `keccak384` / `keccak512` now compute real Keccak** (the Ethereum variant). Earlier builds silently returned SHA-3 for these names. `keccak256('abc')` is now `4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45`. If you relied on the old behaviour, use `sha3-256` and friends.
+- **UUID** values hash as their 16 bytes in RFC 9562 order — the same as `crypto_hash(alg, unhex(...))`.
+- **DECIMAL** hashes its unscaled value as a 16-byte integer, so the declared width no longer matters.
+- **ENUM** hashes its label rather than its index.
+- **`crypto_hash_agg` no longer casts DECIMAL input to DOUBLE**; it uses the DECIMAL encoding above.
+- **`md4`** is reported as unavailable (it's only in OpenSSL's legacy provider) instead of failing with an internal error.
+</Callout>
+
+Also new in the DuckDB 2.0 build:
+
+- **New functions:** [`crypto_hash_xof`](#crypto_hash_xof), [`crypto_equals`](#crypto_equals), [`crypto_pbkdf2`](#crypto_pbkdf2), [`crypto_hkdf`](#crypto_hkdf), [`crypto_scrypt`](#crypto_scrypt), [`crypto_argon2`](#crypto_argon2), and the [`crypto_algorithms()`](#crypto_algorithms) table function.
+- **New algorithms:** `blake2s-256`, `ripemd160`, `sha2-512/224`, `sha2-512/256`, `shake128` (32 bytes by default), `shake256` (64 bytes by default), and `sm3`.
+- **`crypto_hmac` takes `VARCHAR` or `BLOB`** for the key and the message.
+- **More `crypto_hash` types:** DECIMAL, ENUM, INTERVAL, TIME_TZ, the TIMESTAMP variants, fixed-size ARRAY (hashed like the equivalent LIST), and JSON, BIT and other string-backed types.
+- **`crypto_hash_agg`** accepts all the same scalar types, works as a window function, raises an error on NULL values, and enforces `ORDER BY` when the query is planned.
+- **Memory:** large outputs and KDF working memory respect `memory_limit` (see [Memory limits](#memory-limits)).
+- **Performance:** scalar hashing and HMAC are roughly 5–16× faster. SHA-256 over 10 million VARCHAR values went from 1.81 s to 0.21 s; HMAC with a constant key from 6.71 s to 0.42 s, because consecutive rows with the same key reuse the expanded key.

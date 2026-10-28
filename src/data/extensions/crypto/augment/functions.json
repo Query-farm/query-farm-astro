@@ -4,7 +4,7 @@
     "categories": [
       "Hashing"
     ],
-    "description": "Compute a cryptographic hash of a value with the given algorithm. Supported algorithms: blake2b-512, blake3, md4, md5, sha1, sha2-{224,256,384,512}, sha3-{224,256,384,512}, keccak{224,256,384,512}. Different DuckDB types of the same numeric value produce different hashes.",
+    "description": "Compute a cryptographic hash of a value with the given algorithm (case-insensitive). Supported algorithms: blake2b-512, blake2s-256, blake3, keccak{224,256,384,512} (original Keccak, as used by Ethereum), md5, ripemd160, sha1, sha2-{224,256,384,512}, sha2-512/224, sha2-512/256, sha3-{224,256,384,512}, shake128, shake256 and sm3 \u2014 `crypto_algorithms()` lists them with their digest lengths. Accepts strings, BLOB and string-backed types (JSON, BIT), every integer and floating-point type, DECIMAL, BOOLEAN, DATE, TIME, TIME_TZ, TIMESTAMP variants, INTERVAL, UUID, ENUM, and lists or fixed-size arrays of those. Different DuckDB types of the same numeric value produce different hashes; UUIDs hash as their 16 RFC 9562 bytes, DECIMALs by unscaled value regardless of width, and ENUMs by label.",
     "examples": [
       {
         "description": "SHA-256 of a string, displayed as hex",
@@ -56,11 +56,81 @@
             ]
           ]
         }
+      },
+      {
+        "description": "Keccak-256 as used by Ethereum (differs from sha3-256)",
+        "code": "SELECT lower(to_hex(crypto_hash('keccak256', 'abc'))) AS keccak256;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "keccak256",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "A UUID hashes as its 16 bytes, the same as hashing unhex() of its digits",
+        "code": "SELECT crypto_hash('sha2-256', UUID '550e8400-e29b-41d4-a716-446655440000')\n     = crypto_hash('sha2-256', unhex('550e8400e29b41d4a716446655440000')) AS same;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "same",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "true"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "DECIMAL hashes by unscaled value, so the declared width doesn't matter",
+        "code": "SELECT crypto_hash('sha2-256', 1.00::DECIMAL(4,2)) = crypto_hash('sha2-256', 1.00::DECIMAL(38,2)) AS same;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "same",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "true"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "A fixed-size ARRAY hashes the same as the equivalent LIST",
+        "code": "SELECT lower(to_hex(crypto_hash('sha2-256', [1, 2, 3]::INTEGER[3]))) AS digest;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "digest",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "4636993d3e1da4e9d6b8f87b79e8f7c6d018580d52661950eabc3845c5897a4d"
+            ]
+          ]
+        }
       }
     ],
     "relatedFunctions": [
+      "crypto_hash_xof",
       "crypto_hash_agg",
-      "crypto_hmac"
+      "crypto_hmac",
+      "crypto_algorithms"
     ]
   },
   {
@@ -68,7 +138,7 @@
     "categories": [
       "Hashing"
     ],
-    "description": "Order-deterministic aggregate hash. Hashes column values sequentially in the ORDER BY order \u2014 yielding the same digest as `crypto_hash` over an equivalent ordered list. Useful for dataset checksums, change detection, and Merkle-style hierarchical hashing.",
+    "description": "Order-deterministic aggregate hash. Hashes column values sequentially in the ORDER BY order \u2014 yielding the same digest as `crypto_hash` over an equivalent ordered list. Accepts the same scalar types as `crypto_hash` (UUID, DECIMAL, ENUM, BOOLEAN, DATE, TIME, TIMESTAMP, INTERVAL, \u2026) and works as a window function. ORDER BY is required and checked when the query is planned (`Hash aggregation requires a distinct total ordering`); NULL values are an error, so skip them with `FILTER (WHERE x IS NOT NULL)`. Returns NULL for an empty group. Useful for dataset checksums, change detection, and Merkle-style hierarchical hashing.",
     "examples": [
       {
         "description": "Per-department checksum of employee IDs",
@@ -90,6 +160,23 @@
             ]
           ]
         }
+      },
+      {
+        "description": "Skip NULLs explicitly with FILTER",
+        "code": "SELECT crypto_hash_agg('sha2-256', x ORDER BY x) FILTER (WHERE x IS NOT NULL)\n     = crypto_hash('sha2-256', [1, 3]) AS matches\nFROM (VALUES (1), (NULL), (3)) t(x);",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "matches",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "true"
+            ]
+          ]
+        }
       }
     ],
     "relatedFunctions": [
@@ -101,7 +188,7 @@
     "categories": [
       "HMAC"
     ],
-    "description": "Hash-based Message Authentication Code (HMAC). Combines a secret key with a message under a specified hash algorithm \u2014 used for message integrity, API request signing, and timing-safe authentication.",
+    "description": "Hash-based Message Authentication Code (HMAC). Combines a secret key with a message under a specified hash algorithm \u2014 used for message integrity and API request signing. The key and message may each be VARCHAR or BLOB, so keys from `crypto_random_bytes` or `unhex()` work directly. blake3 uses its keyed mode and needs a 32-byte key; shake128 and shake256 are not supported. Verify a MAC with `crypto_equals`.",
     "examples": [
       {
         "description": "HMAC-SHA256 over a message with a secret key",
@@ -119,10 +206,29 @@
             ]
           ]
         }
+      },
+      {
+        "description": "RFC 4231 test case 1, with a BLOB key",
+        "code": "SELECT lower(to_hex(crypto_hmac('sha2-256', unhex('0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b'), 'Hi There'))) AS mac;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "mac",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+            ]
+          ]
+        }
       }
     ],
     "relatedFunctions": [
-      "crypto_hash"
+      "crypto_equals",
+      "crypto_hash",
+      "crypto_hkdf"
     ]
   },
   {
@@ -130,7 +236,7 @@
     "categories": [
       "Random"
     ],
-    "description": "Cryptographically secure random bytes from OpenSSL's RAND_bytes. Suitable for keys, salts, nonces, and other cryptographic material. Length must be between 1 and 4 GB \u2212 1.",
+    "description": "Cryptographically secure random bytes from OpenSSL's RAND_bytes. Suitable for keys, salts, nonces, and other cryptographic material. Length must be between 1 and 4 GB \u2212 1; large outputs count against DuckDB's `memory_limit`.",
     "examples": [
       {
         "description": "32 random bytes \u2014 an AES-256 key",
@@ -168,7 +274,415 @@
       }
     ],
     "relatedFunctions": [
-      "crypto_hash"
+      "crypto_hash",
+      "crypto_hmac",
+      "crypto_argon2"
+    ]
+  },
+  {
+    "name": "crypto_hash_xof",
+    "categories": [
+      "Hashing"
+    ],
+    "description": "Extendable-output hash: returns `length` bytes (1 to 4,294,967,295) of a blake3, shake128 or shake256 digest. A shorter output is a prefix of a longer one, and the default length (32 bytes for blake3 and shake128, 64 for shake256) matches `crypto_hash`. Accepts the same input types as `crypto_hash`. Large outputs count against `memory_limit`.",
+    "examples": [
+      {
+        "description": "100 bytes of SHAKE256",
+        "code": "SELECT lower(to_hex(crypto_hash_xof('shake256', 'abc', 100))) AS digest;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "digest",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "483366601360a8771c6863080cc4114d8db44530f8f1e1ee4f94ea37e78b5739d5a15bef186a5386c75744c0527e1faa9f8726e462a12a4feb06bd8801e751e41385141204f329979fd3047a13c5657724ada64d2470157b3cdc288620944d78dbcddbd9"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "The default length matches crypto_hash",
+        "code": "SELECT crypto_hash_xof('blake3', 'abc', 32) = crypto_hash('blake3', 'abc') AS same;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "same",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "true"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "crypto_hash",
+      "crypto_algorithms"
+    ]
+  },
+  {
+    "name": "crypto_equals",
+    "categories": [
+      "HMAC"
+    ],
+    "description": "Constant-time comparison of two VARCHAR or BLOB values, using OpenSSL's `CRYPTO_memcmp`. Returns true when they hold the same bytes. Use it instead of `=` when verifying an HMAC or other secret, so timing doesn't reveal how many leading bytes matched. NULL in either argument returns NULL.",
+    "examples": [
+      {
+        "description": "Verify an HMAC",
+        "code": "SELECT crypto_equals(crypto_hmac('sha2-256', 'k', 'm'), crypto_hmac('sha2-256', 'k', 'm')) AS valid,\n       crypto_equals(crypto_hmac('sha2-256', 'k', 'm'), crypto_hmac('sha2-256', 'k', 'n')) AS tampered;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "valid",
+              "align": "left"
+            },
+            {
+              "name": "tampered",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "true",
+              "false"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Compares bytes, so VARCHAR and BLOB can be mixed",
+        "code": "SELECT crypto_equals('A', unhex('41')) AS same;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "same",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "true"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "crypto_hmac"
+    ]
+  },
+  {
+    "name": "crypto_pbkdf2",
+    "categories": [
+      "Key Derivation"
+    ],
+    "description": "PBKDF2-HMAC key derivation ([RFC 8018](https://datatracker.ietf.org/doc/html/rfc8018)). Derives `length` bytes (1 to 1,048,576) from a password and salt with the given HMAC algorithm and iteration count (at least 1). Password and salt accept VARCHAR or BLOB. blake3 is not supported. Prefer `crypto_argon2` for new password storage; use PBKDF2 where FIPS compliance or interoperability requires it.",
+    "examples": [
+      {
+        "description": "RFC 6070 test vector (PBKDF2-HMAC-SHA1, 4096 iterations)",
+        "code": "SELECT lower(to_hex(crypto_pbkdf2('sha1', 'password', 'salt', 4096, 20))) AS dk;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "dk",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "4b007901b765489abead49d926f721d065a429c1"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "PBKDF2-HMAC-SHA256, 40-byte output",
+        "code": "SELECT lower(to_hex(crypto_pbkdf2('sha2-256', 'passwordPASSWORDpassword', 'saltSALTsaltSALTsaltSALTsaltSALTsalt', 4096, 40))) AS dk;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "dk",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "348c89dbcbd32b2f32d814b8116e84cf2b17347ebc1800181c4e2a1fb8dd53e1c635518c7dac47e9"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "crypto_argon2",
+      "crypto_scrypt",
+      "crypto_hkdf"
+    ]
+  },
+  {
+    "name": "crypto_hkdf",
+    "categories": [
+      "Key Derivation"
+    ],
+    "description": "HKDF extract-and-expand ([RFC 5869](https://datatracker.ietf.org/doc/html/rfc5869)). Derives `length` bytes from high-entropy input key material, an optional salt, and a context `info` string; `length` is at most 255 \u00d7 the digest length (8,160 bytes for sha2-256). Key, salt and info accept VARCHAR or BLOB. HKDF is fast, so it is for deriving keys from a secret, not for hashing passwords.",
+    "examples": [
+      {
+        "description": "RFC 5869 test case 1",
+        "code": "SELECT lower(to_hex(crypto_hkdf('sha2-256',\n         unhex('0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b'),\n         unhex('000102030405060708090a0b0c'),\n         unhex('f0f1f2f3f4f5f6f7f8f9'),\n         42))) AS okm;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "okm",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "RFC 5869 test case 3: empty salt and info",
+        "code": "SELECT lower(to_hex(crypto_hkdf('sha2-256', unhex('0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b'), '', '', 42))) AS okm;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "okm",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "crypto_hmac",
+      "crypto_pbkdf2"
+    ]
+  },
+  {
+    "name": "crypto_scrypt",
+    "categories": [
+      "Key Derivation"
+    ],
+    "description": "scrypt password-based key derivation ([RFC 7914](https://datatracker.ietf.org/doc/html/rfc7914)). `n` is the CPU/memory cost and must be a power of 2, `r` the block size and `p` the parallelism; output is `length` bytes (up to 1 MiB). Password and salt accept VARCHAR or BLOB. Working memory (128 \u00d7 n \u00d7 r bytes) is reserved against DuckDB's `memory_limit` before it is allocated.",
+    "examples": [
+      {
+        "description": "RFC 7914 test vector (n = 1024, r = 8, p = 16)",
+        "code": "SELECT lower(to_hex(crypto_scrypt('password', 'NaCl', 1024, 8, 16, 64))) AS dk;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "dk",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "fdbabe1c9d3472007856e7190d01e9fe7c6ad7cbc8237830e77376634b3731622eaf30d92e22a3886ff109279d9830dac727afb94a83ee6d8360cbdfa2cc0640"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "crypto_argon2",
+      "crypto_pbkdf2"
+    ]
+  },
+  {
+    "name": "crypto_argon2",
+    "categories": [
+      "Key Derivation"
+    ],
+    "description": "Argon2 password hashing ([RFC 9106](https://datatracker.ietf.org/doc/html/rfc9106)). `variant` is 'argon2id' (recommended), 'argon2i' or 'argon2d' (case-insensitive); `memory_kib` is the memory cost in KiB (at least 32) and `parallelism` the number of lanes. The salt must be at least 8 bytes; output is `length` bytes (up to 1 MiB). Password and salt accept VARCHAR or BLOB. Working memory is reserved against DuckDB's `memory_limit` before it is allocated.",
+    "examples": [
+      {
+        "description": "Argon2id with 2 iterations, 64 MiB and 4 lanes",
+        "code": "SELECT lower(to_hex(crypto_argon2('argon2id', 'password', 'somesalt', 2, 65536, 4, 32))) AS hash;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "hash",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "1a9677b0afe81fda7b548895e7a1bfeb8668ffc19a530e37e088a668fab1c02a"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "A small, fast configuration for tests",
+        "code": "SELECT lower(to_hex(crypto_argon2('argon2id', '', 'somesalt', 1, 64, 1, 16))) AS hash;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "hash",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "83b7ea15e3a517fe0455cbe091d0931c"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "crypto_scrypt",
+      "crypto_pbkdf2",
+      "crypto_random_bytes"
+    ]
+  },
+  {
+    "name": "crypto_algorithms",
+    "categories": [
+      "Hashing"
+    ],
+    "description": "Lists every hash algorithm the extension knows, with its family, implementation (openssl or blake3), digest length in bytes, whether it is an extendable-output function, whether it can be used with `crypto_hmac`, and whether the linked OpenSSL library provides it. md4 is listed as unavailable because it lives only in OpenSSL's legacy provider.",
+    "examples": [
+      {
+        "description": "The SHA-3 family and its extendable-output relatives",
+        "code": "SELECT name, digest_length, is_xof, supports_hmac\nFROM crypto_algorithms()\nWHERE family IN ('sha3', 'shake')\nORDER BY name;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "name",
+              "align": "left"
+            },
+            {
+              "name": "digest_length",
+              "align": "left"
+            },
+            {
+              "name": "is_xof",
+              "align": "left"
+            },
+            {
+              "name": "supports_hmac",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "sha3-224",
+              "28",
+              "false",
+              "true"
+            ],
+            [
+              "sha3-256",
+              "32",
+              "false",
+              "true"
+            ],
+            [
+              "sha3-384",
+              "48",
+              "false",
+              "true"
+            ],
+            [
+              "sha3-512",
+              "64",
+              "false",
+              "true"
+            ],
+            [
+              "shake128",
+              "32",
+              "true",
+              "false"
+            ],
+            [
+              "shake256",
+              "64",
+              "true",
+              "false"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Algorithms the linked OpenSSL doesn't provide",
+        "code": "SELECT name, available FROM crypto_algorithms() WHERE NOT available;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "name",
+              "align": "left"
+            },
+            {
+              "name": "available",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "md4",
+              "false"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "crypto_hash",
+      "crypto_hash_xof"
+    ],
+    "returnType": "TABLE",
+    "returnsTable": [
+      {
+        "name": "name",
+        "type": "VARCHAR",
+        "description": "Algorithm name, as passed to crypto_hash and the other functions (case-insensitive)."
+      },
+      {
+        "name": "family",
+        "type": "VARCHAR",
+        "description": "Algorithm family, e.g. sha2, sha3, shake, keccak, blake2."
+      },
+      {
+        "name": "implementation",
+        "type": "VARCHAR",
+        "description": "openssl, or blake3 for the vendored BLAKE3 library."
+      },
+      {
+        "name": "digest_length",
+        "type": "INTEGER",
+        "description": "Output length in bytes (the default length for XOFs); NULL when the algorithm is unavailable."
+      },
+      {
+        "name": "is_xof",
+        "type": "BOOLEAN",
+        "description": "Whether crypto_hash_xof can produce output of any length."
+      },
+      {
+        "name": "supports_hmac",
+        "type": "BOOLEAN",
+        "description": "Whether the algorithm can be used with crypto_hmac."
+      },
+      {
+        "name": "available",
+        "type": "BOOLEAN",
+        "description": "Whether the linked OpenSSL library provides the algorithm."
+      }
     ]
   }
 ]
