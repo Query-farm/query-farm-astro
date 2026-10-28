@@ -4,14 +4,16 @@ const reference = `/products/haybarn/functions/`;
 
 test('table signatures separate positional inputs and named arguments without repeating shared options', async ({ page }) => {
   await page.goto(`${reference}read_csv/`);
-  await expect(page.locator('.signature-group-heading h3')).toHaveText('read_csv(col0, named arguments)');
-  await expect(page.locator('[data-overload]')).toHaveCount(2);
-  await expect(page.locator('[data-named-argument="header"]')).toHaveCount(1);
-  await expect(page.locator('[data-named-argument="header"]')).toContainText('header :=');
-  await expect(page.locator('[data-named-argument="header"]')).toContainText('BOOLEAN');
-  await expect(page.locator('[data-named-argument="col0"]')).toHaveCount(0);
+  await expect(page.locator('.signature-group-heading h3')).toHaveText(['read_csv(path, named arguments)', 'read_csv(paths, named arguments)']);
+  await expect(page.locator('[data-overload]')).toHaveCount(3);
+  await expect(page.locator('[data-named-argument="header"]')).toHaveCount(2);
+  for (const header of await page.locator('[data-named-argument="header"]').all()) {
+    await expect(header).toContainText('header :=');
+    await expect(header).toContainText('BOOLEAN');
+  }
+  await expect(page.locator('[data-named-argument="path"], [data-named-argument="paths"]')).toHaveCount(0);
   await expect(page.locator('[data-overload]').first()).toContainText('VARCHAR');
-  await expect(page.locator('[data-overload]').last()).toContainText('VARCHAR[]');
+  await expect(page.locator('[data-overload]').last()).toContainText('ANY[]');
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: '.cache/named-arguments-mobile.png', fullPage: true });
@@ -35,7 +37,7 @@ test('operators have operand notation while unary and binary forms remain distin
   await expect(page.locator('.signature-group-heading h3')).toHaveText('left * right');
   await page.screenshot({ path: '.cache/operator-reference.png', fullPage: true });
   await page.goto(`${reference}operator-2d/`);
-  await expect(page.locator('.signature-group-heading h3')).toHaveText(['-operand', 'left - right']);
+  await expect(page.locator('.signature-group-heading h3')).toHaveText(['-x', 'left - right']);
   await page.goto(`${reference}operator-215f5f706f7374666978/`);
   await expect(page.locator('.signature-group-heading h3')).toHaveText('x!');
 });

@@ -2,11 +2,8 @@
 //
 // Slimmed for query.farm's static site: no SharedArrayBuffer cancel channel and
 // no OAuth bridge (both require cross-origin isolation, which we deliberately do
-// not enable). Because the page is NOT cross-origin isolated, selectBundle()
-// never picks the threaded `coi` variant — it lands on the single-threaded `eh`
-// build (or `mvp` on browsers without WebAssembly exception handling). That is
-// exactly the lightweight, few-threads behavior we want for an embedded demo
-// shell.
+// not enable). The single-threaded `base` bundle requires WebAssembly exception
+// handling. Haybarn 2.0 no longer publishes the legacy `mvp` bundle.
 //
 // The wasm binary and worker script use the shared, version-pinned CDN bundle
 // configuration. createHaybarnWorker() fetches the cross-origin

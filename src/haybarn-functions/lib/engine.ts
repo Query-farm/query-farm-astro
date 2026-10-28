@@ -3,7 +3,7 @@ import { haybarnBundles } from '../../lib/repl/haybarn-bundles';
 import { createHaybarnWorker } from '../../lib/repl/haybarn-worker';
 
 export { wasmVersion } from '../data/settings';
-export interface Engine { db: AsyncDuckDB; worker: Worker; version: string; bundle: 'eh' | 'mvp'; }
+export interface Engine { db: AsyncDuckDB; worker: Worker; version: string; bundle: 'base'; }
 let pending: Promise<Engine> | undefined;
 let generation = 0;
 let sessionId = 0;
@@ -27,7 +27,7 @@ async function boot(): Promise<Engine> {
     await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
     const conn = await db.connect();
     try { await conn.query("SET TimeZone='UTC';"); } finally { await conn.close(); }
-    return { db, worker, version: await db.getVersion(), bundle: bundle.mainModule === haybarnBundles.eh!.mainModule ? 'eh' : 'mvp' };
+    return { db, worker, version: await db.getVersion(), bundle: 'base' };
   } catch (error) { worker.terminate(); throw error; }
 }
 

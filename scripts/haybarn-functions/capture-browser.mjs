@@ -17,7 +17,7 @@ export async function createCaptureBrowser() {
     optimizeDeps: { noDiscovery: true, exclude: ['@haybarn/haybarn-wasm'] },
     plugins: [{ name: 'capture-shell', configureServer(server) {
       server.middlewares.use((request, response, next) => {
-        const name = request.url?.match(/^\/haybarn-wasm\/(duckdb-(?:eh|mvp)\.wasm|duckdb-browser-(?:eh|mvp)\.worker\.js)$/)?.[1];
+        const name = request.url?.match(/^\/haybarn-wasm\/(duckdb-base\.wasm|duckdb-browser-base\.worker\.js)$/)?.[1];
         if (name) {
           response.setHeader('Content-Type', name.endsWith('.wasm') ? 'application/wasm' : 'text/javascript');
           response.end(readFileSync(new URL(`../../node_modules/@haybarn/haybarn-wasm/dist/${name}`, import.meta.url)));

@@ -175,9 +175,11 @@ test('unknowns remain null and catalog examples are not marked as execution veri
     assert.equal(overload.catalog.return_type, null);
     assert.equal(overload.catalog.description, null);
     assert.equal(overload.callingConvention.source, 'engine-binder');
-    assert.deepEqual(overload.callingConvention.positional.map(arg => arg.name), ['col0']);
+    const input = overload.callingConvention.positional[0];
+    assert.equal(overload.callingConvention.positional.length, 1);
+    assert.ok(['path', 'paths'].includes(input.name));
     assert.ok(overload.callingConvention.named.some(arg => arg.name === 'header' && arg.type === 'BOOLEAN'));
-    assert.ok(overload.signature.startsWith('read_csv(col0: VARCHAR'));
+    assert.ok(overload.signature.startsWith(`read_csv(${input.name}: ${input.type}`));
     assert.ok(overload.signature.includes('header := BOOLEAN'));
   }
   const repeated = readJson(`${base}/repeat_row.json`).overloads[0];

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { parseBinding } from '../../scripts/haybarn-functions/bindings.mjs';
 import { readFileSync } from 'node:fs';
 import { categories, categoryIds } from '../../src/data/haybarn-extensions/taxonomy.mjs';
 
@@ -37,7 +38,7 @@ test('reviewed categories only reference real descriptors', () => {
 test('prototypes use a published native build and arguments confirmed by the binder', () => {
   for (const name of ['sheetreader', 'gsheets']) {
     const inventory = read(`inventories/${name}.json`);
-    const entry = catalog.extensions.find(extension => extension.name === name);
+    const entry = [...catalog.extensions, ...read('reference-releases.generated.json').extensions].find(extension => extension.name === name && extension.availability.some(artifact => `v${artifact.version}` === inventory.engine.library_version));
     const version = inventory.engine.library_version.replace(/^v/, '');
     assert.ok(entry.availability.some(artifact => artifact.version === version && artifact.platform === inventory.engine.platform));
     assert.match(inventory.artifactSHA256, /^[a-f0-9]{64}$/);
@@ -46,7 +47,8 @@ test('prototypes use a published native build and arguments confirmed by the bin
       assert.equal(fn.parameters.length, fn.parameter_types.length);
       for (const name of fn.named_parameters) {
         assert.ok(fn.parameters.includes(name));
-        assert.ok(fn.binding_evidence.includes(name + ' :'));
+        if (version.startsWith('2.')) assert.ok(parseBinding(fn, fn.binding_evidence)?.named.includes(name));
+        else assert.ok(fn.binding_evidence.includes(name + ' :'));
       }
     }
   }

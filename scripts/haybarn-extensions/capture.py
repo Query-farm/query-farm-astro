@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,6 +17,7 @@ import haybarn
 parser = argparse.ArgumentParser()
 parser.add_argument("name")
 parser.add_argument("--version", required=True)
+parser.add_argument("--artifact", type=Path, help="Capture a downloaded, signed artifact from the release channel")
 args = parser.parse_args()
 if not re.fullmatch(r"[a-zA-Z0-9_]+", args.name):
     raise ValueError("Invalid extension name")
@@ -51,7 +53,11 @@ if version["library_version"] != "v" + args.version:
     raise ValueError(f"Engine mismatch: {version}")
 platform = rows(connection, "PRAGMA platform")[0]["platform"]
 before_loaded = {row["extension_name"] for row in loaded(connection)}
-connection.execute(f"FORCE INSTALL {args.name} FROM community")
+if args.artifact:
+    artifact_path = str(args.artifact.resolve()).replace("'", "''")
+    connection.execute(f"FORCE INSTALL '{artifact_path}'")
+else:
+    connection.execute(f"FORCE INSTALL {args.name} FROM community")
 connection.execute(f"LOAD {args.name}")
 after_loaded = loaded(connection)
 extension = next(row for row in after_loaded if row["extension_name"] == args.name)
@@ -84,6 +90,19 @@ for function in inventory["functions"]:
         # candidate signature rather than inferring optionality or defaults.
         candidate = marker.group(1) if marker else message
         named = [p for p in function["parameters"] if re.search(r"\b" + re.escape(p) + r"\s*:\s*", candidate)]
+        if version["library_version"].startswith("v2."):
+            parsed = subprocess.run(
+                ["node", "--input-type=module", "-e",
+                 "import {parseBinding} from './scripts/haybarn-functions/bindings.mjs'; "
+                 "let input=''; for await (const chunk of process.stdin) input+=chunk; "
+                 "const {row, diagnostic}=JSON.parse(input); console.log(JSON.stringify(parseBinding(row, diagnostic)));"],
+                input=json.dumps({"row": function, "diagnostic": message}),
+                text=True, capture_output=True, check=True, cwd=root,
+            )
+            binding = json.loads(parsed.stdout)
+            if binding is None:
+                raise ValueError(f"Could not confirm 2.0 arguments for {name}: {message}")
+            named = binding["named"]
         function["named_parameters"] = named
         function["binding_evidence"] = message
 

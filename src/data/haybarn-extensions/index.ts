@@ -1,4 +1,5 @@
 import snapshot from './catalog.generated.json';
+import referenceReleases from './reference-releases.generated.json';
 import importedDocs from './docs.generated.json';
 import sheetreaderInventory from './inventories/sheetreader.json';
 import gsheetsInventory from './inventories/gsheets.json';
@@ -11,6 +12,8 @@ export { categories };
 // snapshot that still contains availability from earlier releases.
 export const catalog = {
   ...snapshot,
+  platforms: snapshot.platforms.filter(platform => snapshot.extensions.some(entry =>
+    entry.availability.some(item => item.version === snapshot.latestVersion && item.platform === platform))),
   releases: snapshot.releases.filter(release => release.version === snapshot.latestVersion),
   extensions: snapshot.extensions
     .map(entry => ({ ...entry, availability: entry.availability.filter(item => item.version === snapshot.latestVersion) }))
@@ -41,7 +44,7 @@ export const platformLabel = (platform: string) => ({
 const queryFarmPages = new Map(publicExtensions.map(extension => [extension.id, extension]));
 const plain = (value: unknown) => String(value ?? '').replace(/<[^>]+>/g, ' ').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/[`*#]/g, '').replace(/\s+/g, ' ').trim();
 
-export const extensions = catalog.extensions.map(entry => {
+function describeExtension(entry: typeof snapshot.extensions[number]) {
   const prototype = prototypes[entry.name as PrototypeName];
   const queryFarm = /^(query-farm|query-farm-haybarn)\//i.test(entry.repo.github ?? '');
   const existing = queryFarm ? queryFarmPages.get(entry.name) : undefined;
@@ -60,7 +63,18 @@ export const extensions = catalog.extensions.map(entry => {
     searchText: plain([entry.name, name, entry.description, ...aliases, ...categoryList.map(id => categories.find(c => c.id === id)?.name), prototype?.inventory.functions.map(fn => fn.function_name).join(' ')].join(' ')),
     searchContent: plain([entry.description, entry.docs.hello_world, entry.docs.extended_description, ...aliases, ...(prototype?.inventory.functions.map(fn => `${fn.function_name} ${fn.parameters.join(' ')} ${fn.description ?? ''}`) ?? [])].join(' ')),
   };
-}).sort((a, b) => a.name.localeCompare(b.name));
+}
+export const extensions = catalog.extensions.map(describeExtension).sort((a, b) => a.name.localeCompare(b.name));
+
+// Keep references for previously captured builds reachable across major releases.
+// Only the current catalog participates in extension discovery.
+export const referenceExtensions = Object.entries(prototypes).map(([name, prototype]) => {
+  const version = prototype.inventory.engine.library_version.replace(/^v/, '');
+  const entry = [...catalog.extensions, ...referenceReleases.extensions].find(entry =>
+    entry.name === name && entry.availability.some(item => item.version === version));
+  if (!entry) throw new Error(`Missing published artifact evidence for ${name} on ${version}`);
+  return describeExtension(entry);
+});
 
 export type CommunityExtension = typeof extensions[number];
 export function matchesAvailability(availability: Availability[], version = '', platform = '') {

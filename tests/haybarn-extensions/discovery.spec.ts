@@ -7,6 +7,8 @@ test('only current-release extensions are listed and Query Farm entries reuse th
   await page.goto(root);
   await expect(page.locator('[data-extension]:visible')).toHaveCount(currentExtensions.length);
   await expect(page.locator('#extension-release')).toHaveCount(0);
+  const platforms = [...new Set(currentExtensions.flatMap(extension => extension.availability.filter(artifact => artifact.version === snapshot.latestVersion).map(artifact => artifact.platform)))].sort();
+  expect((await page.locator('#extension-platform option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value))).filter(Boolean).sort()).toEqual(platforms);
   const exported = await (await request.get(`${root}/catalog.json`)).json();
   expect(exported.extensions.map((extension: any) => extension.name).sort()).toEqual(currentExtensions.map(extension => extension.name).sort());
   expect(exported.releases.map((release: any) => release.version)).toEqual([snapshot.latestVersion]);
@@ -15,15 +17,14 @@ test('only current-release extensions are listed and Query Farm entries reuse th
   for (const name of snapshot.unavailable) await expect(page.locator(`[data-extension="${name}"]`)).toHaveCount(0);
 });
 
-test('Pagefind discovers extensions by task and function name', async ({ page }) => {
+test('Pagefind discovers extensions by task and captured function arguments', async ({ page }) => {
   await page.goto(root);
   const input = page.getByRole('searchbox', { name: 'What do you want to do?' });
   await input.fill('read Excel');
   await expect(page.locator('[data-extension="sheetreader"]')).toBeVisible();
   await expect(page.locator('[data-extension="crypto"]')).toBeHidden();
-  await input.fill('read_gsheet');
-  await expect(page.locator('[data-extension="gsheets"]')).toBeVisible();
-  await expect(page.locator('[data-extension="sheetreader"]')).toBeHidden();
+  await input.fill('coerce_to_string');
+  await expect(page.locator('[data-extension="sheetreader"]')).toBeVisible();
   await input.fill('misspelled names');
   await expect(page.locator('[data-extension="rapidfuzz"]')).toBeVisible();
   // Verify the production index itself, so a fallback string match cannot
@@ -31,13 +32,13 @@ test('Pagefind discovers extensions by task and function name', async ({ page })
   const indexed = await page.evaluate(async () => {
     const asset = '/pagefind/pagefind.js';
     const engine = await import(/* @vite-ignore */ asset);
-    const result = await engine.search('read_gsheet', { filters: { kind: 'haybarn-extension' } });
+    const result = await engine.search('coerce_to_string', { filters: { kind: 'haybarn-extension' } });
     return {
       names: await Promise.all(result.results.map(async (item: any) => (await item.data()).meta.extension_slug)),
       count: (await engine.filters()).kind['haybarn-extension'],
     };
   });
-  expect(indexed.names).toContain('gsheets');
+  expect(indexed.names).toContain('sheetreader');
   expect(indexed.count).toBe(currentExtensions.length);
 });
 

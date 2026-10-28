@@ -70,7 +70,7 @@ test('search, category filters, empty state and release navigation work', async 
 test('all overloads are visible, directly linked, and retained across releases', async ({ page, request }) => {
   await page.goto(`${reference}regexp_extract/`);
   await expect(page.locator('#overload-select')).toHaveCount(0);
-  await expect(page.locator('[data-overload]:visible')).toHaveCount(5);
+  await expect(page.locator('[data-overload]:visible')).toHaveCount(6);
   expect(await page.locator('#signatures').evaluate(element => Boolean(element.compareDocumentPosition(document.querySelector('#examples')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
   expect(await page.locator('#more-examples').evaluate(element => Boolean(element.compareDocumentPosition(document.querySelector('#availability')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
   const last = page.locator('[data-overload]').last();

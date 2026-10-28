@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Build-time fetch of the featured Haybarn release from the status service.
+// Explicit refresh of the featured Haybarn release from the status service.
 //
 // The query.farm site features a single "latest" Haybarn release across the
 // hero pill, install commands, status route, and extension package suffixes
 // (all derived in src/data/haybarn-versions.ts). Rather than hand-bump a
 // constant every time a new rc tag lands, we snapshot the latest version here
-// at build time and write it to the generated JSON the .ts module imports.
+// on `npm run fetch:versions` and write the generated JSON the .ts module imports.
 //
 // Source of truth: https://haybarn-status.query.farm/api/versions — derived
 // from the engine's discovered `haybarn-v*` tags. See the haybarn-status repo.

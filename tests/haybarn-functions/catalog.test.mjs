@@ -45,6 +45,18 @@ test('binding parser leaves ambiguous or unrelated diagnostics unknown', () => {
   assert.equal(parseBinding({ ...row, parameters: ['filename', 'header'] }, diagnostic), null);
 });
 
+test('2.0 signatures preserve positional order, keyword boundaries and nested types', () => {
+  const row = { function_name: 'example', parameters: ['header', 'path', 'shape'], parameter_types: ['BOOLEAN', 'VARCHAR', 'STRUCT(x INTEGER, y DECIMAL(10,2))'], varargs: null };
+  const diagnostic = 'Binder Error: No function matches the given name and argument types\n\tCandidate functions:\n\texample(path VARCHAR, shape STRUCT(x INTEGER, y DECIMAL(10,2)), /, **"options" ANY)\n';
+  assert.deepEqual(parseBinding(row, diagnostic), { positional: ['path', 'shape'], named: ['header'] });
+  assert.equal(parseBinding({ ...row, parameter_types: ['BOOLEAN', 'INTEGER', row.parameter_types[2]] }, diagnostic), null);
+  const named = { function_name: 'repeat_row', parameters: ['num_rows'], parameter_types: ['BIGINT'], varargs: 'ANY' };
+  assert.deepEqual(parseBinding(named, 'Binder Error: No function matches\n\tCandidate functions:\n\trepeat_row(*values ANY, num_rows BIGINT)\n'), { positional: [], named: ['num_rows'] });
+  const optional = { function_name: 'example', parameters: ['value'], parameter_types: ['VARCHAR'], varargs: null };
+  assert.deepEqual(parseBinding(optional, 'Binder Error: No function matches\n\tCandidate functions:\n\texample(*, value VARCHAR := \'a,b\')\n'), { positional: [], named: ['value'] });
+  assert.equal(parseBinding(optional, 'Binder Error: No function matches\n\tCandidate functions:\n\texample(value VARCHAR, /)\n\texample(*, value VARCHAR)\n'), null);
+});
+
 test('operator notation distinguishes binary, unary and postfix forms without inventing variadic syntax', () => {
   const row = { function_name: '*', parameters: ['col0', 'col1'], parameter_types: ['INTEGER', 'INTEGER'], varargs: null };
   assert.equal(operatorNotation(row).expression, 'left * right');

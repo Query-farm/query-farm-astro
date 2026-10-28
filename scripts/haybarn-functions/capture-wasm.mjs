@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { normalizeRows, groupFunctions, overloadId } from './catalog.mjs';
-import { bindingQuery, parseBinding } from './bindings.mjs';
+import { bindingQuery, signatureBindingQuery, parseBinding } from './bindings.mjs';
 import { createCaptureBrowser } from './capture-browser.mjs';
 import { defaultSnapshotId as id, wasmVersion as version } from '../../src/haybarn-functions/data/haybarn-release.mjs';
 
@@ -37,8 +37,10 @@ try {
     if (JSON.stringify({ ...previous, capturedAt: null }) === JSON.stringify({ ...snapshot, capturedAt: null })) snapshot.capturedAt = previous.capturedAt;
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const overloads = {}, unresolved = [];
-  for (const row of snapshot.functions.filter(row => row.function_type === 'table')) {
-    const key = overloadId(row), query = bindingQuery(row);
+  const tableFunctions = snapshot.functions.filter(row => row.function_type === 'table');
+  for (const row of tableFunctions) {
+    const key = overloadId(row);
+    const query = Number(version.split('.')[0]) >= 2 ? signatureBindingQuery(row, tableFunctions) : bindingQuery(row);
     if (!query) { unresolved.push(key); continue; }
     const diagnostic = await page.evaluate(async query => {
       try { await window.captureConnection.query(query); return ''; }

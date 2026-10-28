@@ -18,7 +18,16 @@ try {
       try {
         const result = await window.exampleConnection.query(sql);
         return { ok: true, rowCount: result.numRows };
-      } catch (error) { return { ok: false, error: error.message }; }
+      } catch (error) {
+        // Some catalog examples require capabilities absent from this bundle.
+        // A fatal engine error must not invalidate every subsequent example.
+        if (error.message.includes('FATAL Error:')) {
+          const engine = await import('/src/haybarn-functions/lib/engine.ts');
+          await engine.resetEngine();
+          window.exampleConnection = (await engine.createConnection()).conn;
+        }
+        return { ok: false, error: error.message };
+      }
     }, candidate.sql);
     if (result.ok) examples.push({ ...candidate, verification: { engine: 'haybarn-wasm', packageVersion: version, sourceId: snapshot.sourceId, binarySha256: snapshot.binarySha256, rowCount: result.rowCount } });
     else failures.push({ ...candidate, error: result.error });

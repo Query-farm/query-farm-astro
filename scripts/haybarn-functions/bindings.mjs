@@ -9,6 +9,7 @@ import { overloadId } from './catalog.mjs';
 // invalid option stops before the table function binds or executes. Never turn
 // an unrecognized diagnostic (or a renamed positional parameter) into a guess.
 export function parseBinding(row, diagnostic) {
+  if (diagnostic.startsWith('Binder Error: No function matches')) return parseSignatureBinding(row, diagnostic);
   if (!diagnostic.startsWith('Binder Error: Invalid named parameter "__guide_invalid_named_parameter__" for function ')) return null;
   const candidates = diagnostic.includes('Function does not accept any named parameters.') ? [] :
     diagnostic.split('Candidates:\n')[1]?.split('\n').filter(line => /^ {4}\S/.test(line)).map(line => {
@@ -21,6 +22,74 @@ export function parseBinding(row, diagnostic) {
   const positional = row.parameters.filter(name => !named.includes(name)).sort((a, b) => Number(a.slice(3)) - Number(b.slice(3)));
   if (positional.some((name, i) => name !== `col${i}`)) return null;
   return { positional, named };
+}
+
+// DuckDB 2.0 reports full signatures on overload mismatch. Its unknown-option
+// error only suggests nearby names, so it cannot enumerate named arguments.
+function signatureParts(text) {
+  const parts = [];
+  let start = 0, depth = 0, quote = null;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (quote) {
+      if (char === quote) { if (text[i + 1] === quote) i++; else quote = null; }
+    } else if (char === '"' || char === "'") quote = char;
+    else if ('([{'.includes(char)) depth++;
+    else if (')]}'.includes(char)) depth--;
+    else if (char === ',' && depth === 0) { parts.push(text.slice(start, i).trim()); start = i + 1; }
+    if (depth < 0) return null;
+  }
+  if (quote || depth !== 0) return null;
+  parts.push(text.slice(start).trim());
+  return parts;
+}
+
+function parseSignatureBinding(row, diagnostic) {
+  const candidates = diagnostic.split('Candidate functions:\n')[1]?.split('\n').filter(line => line.startsWith('\t'));
+  if (!candidates?.length) return null;
+  const layouts = [];
+  for (const candidate of candidates) {
+    const signature = candidate.trim().match(/^("(?:[^"]|"")*"|[\w]+)\((.*)\)$/);
+    if (!signature) continue;
+    const unquote = name => name.startsWith('"') ? name.slice(1, -1).replaceAll('""', '"') : name;
+    if (unquote(signature[1]) !== row.function_name) continue;
+    const parts = signatureParts(signature[2]);
+    if (!parts) continue;
+    const positional = [], named = [], seen = new Set();
+    let keywordOnly = false, kwargs = false, valid = true, variadic = null;
+    for (const part of parts) {
+      if (!part || part === '/') continue;
+      if (part === '*') { keywordOnly = true; continue; }
+      const parameter = part.match(/^(\*\*|\*)?("(?:[^"]|"")*"|[\w]+) (.+)$/);
+      if (!parameter) { valid = false; break; }
+      const [, prefix, quotedName, declaration] = parameter;
+      const name = unquote(quotedName), type = declaration.split(/\s+:?=\s+/)[0];
+      if (prefix === '**') { kwargs = true; continue; }
+      if (prefix === '*') { variadic = type; keywordOnly = true; continue; }
+      const index = row.parameters.indexOf(name);
+      if (index < 0 || row.parameter_types[index] !== type || seen.has(name)) { valid = false; break; }
+      seen.add(name);
+      (keywordOnly ? named : positional).push(name);
+    }
+    if (!valid || variadic !== row.varargs) continue;
+    // The catalog enumerates typed **kwargs options after the fixed parameters.
+    const options = row.parameters.filter(name => !seen.has(name));
+    if (options.length && !kwargs) continue;
+    named.push(...options);
+    layouts.push({ positional, named });
+  }
+  const unique = new Map(layouts.map(layout => [JSON.stringify(layout), layout]));
+  return unique.size === 1 ? [...unique.values()][0] : null;
+}
+
+export function signatureBindingQuery(row, overloads = [row]) {
+  // Too many positional arguments prevents fixed-arity functions from binding.
+  const quote = name => `"${name.replaceAll('"', '""')}"`;
+  const args = row.varargs
+    ? row.parameters.map(name => `${quote(name)} := NULL::STRUCT(__guide_invalid_type__ INTEGER)`)
+    : Array(Math.max(...overloads.filter(other => other.function_name === row.function_name).map(other => other.parameters.length)) + 1).fill('NULL');
+  if (row.parameter_types.includes('TABLE')) args[0] = '(SELECT 1)';
+  return `EXPLAIN SELECT * FROM ${quote(row.function_name)}(${args.join(', ')});`;
 }
 
 export function bindingQuery(row) {

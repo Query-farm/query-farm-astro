@@ -4,7 +4,7 @@ import { wasmVersion } from '../../src/haybarn-functions/data/haybarn-release.mj
 
 const base = process.env.PUBLIC_HAYBARN_WASM_BASE_URL || `https://unpkg.com/@haybarn/haybarn-wasm@${wasmVersion}/dist`;
 const wasm = [];
-for (const bundle of ['eh', 'mvp']) {
+for (const bundle of ['base']) {
   const name = `duckdb-${bundle}.wasm`;
   const bytes = await readFile(`node_modules/@haybarn/haybarn-wasm/dist/${name}`);
   wasm.push({ path: `${base}/${name}`, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });

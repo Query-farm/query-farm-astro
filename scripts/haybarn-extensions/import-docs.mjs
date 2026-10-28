@@ -4,10 +4,12 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 process.chdir(fileURLToPath(new URL('../../', import.meta.url)));
 const catalog = JSON.parse(await readFile('src/data/haybarn-extensions/catalog.generated.json', 'utf8'));
+const historical = JSON.parse(await readFile('src/data/haybarn-extensions/reference-releases.generated.json', 'utf8'));
 const output = {};
 for (const name of ['sheetreader', 'gsheets']) {
-  const entry = catalog.extensions.find(e => e.name === name);
   const inventory = JSON.parse(await readFile(`src/data/haybarn-extensions/inventories/${name}.json`, 'utf8'));
+  const version = inventory.engine.library_version.replace(/^v/, '');
+  const entry = [...catalog.extensions, ...historical.extensions].find(e => e.name === name && e.availability.some(a => a.version === version));
   const ref = entry.repo.haybarn_ref || entry.repo.ref;
   if (!ref.startsWith(inventory.extensionVersion)) throw new Error(`${name}: descriptor commit does not match the installed extension; review the source revision before importing documentation.`);
   const repo = entry.repo.haybarn_fork || entry.repo.github;

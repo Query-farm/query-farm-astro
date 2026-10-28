@@ -10,6 +10,5 @@ const configuredBase = import.meta.env.PUBLIC_HAYBARN_WASM_BASE_URL ||
 export const haybarnWasmBase = new URL(configuredBase, typeof location === 'undefined' ? 'https://query.farm' : location.origin).href.replace(/\/$/, '');
 
 export const haybarnBundles: DuckDBBundles = {
-  mvp: { mainModule: `${haybarnWasmBase}/duckdb-mvp.wasm`, mainWorker: `${haybarnWasmBase}/duckdb-browser-mvp.worker.js` },
-  eh: { mainModule: `${haybarnWasmBase}/duckdb-eh.wasm`, mainWorker: `${haybarnWasmBase}/duckdb-browser-eh.worker.js` },
+  base: { mainModule: `${haybarnWasmBase}/duckdb-base.wasm`, mainWorker: `${haybarnWasmBase}/duckdb-browser-base.worker.js` },
 };
