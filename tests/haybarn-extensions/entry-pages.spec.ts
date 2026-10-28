@@ -28,7 +28,8 @@ test('extension search matches tasks, preserves the URL, and recovers from no re
 
 test('native DuckDB 2.0 examples use Query.Farm while browser examples keep the pinned community runtime', async ({ page }) => {
   await page.goto('/products/extensions/rapidfuzz/');
-  const example = page.locator('[data-entry-example-panel]');
+  // The page has one panel per quick-start example; the first is the browser-runnable one.
+  const example = page.locator('[data-entry-example-panel]').first();
   const browser = example.locator('[role="tabpanel"][data-tab="v1.5"]');
   const native = example.locator('[role="tabpanel"][data-tab="v2.0"]');
   await expect(browser).toBeVisible();
