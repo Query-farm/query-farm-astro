@@ -316,7 +316,7 @@ class Result:
 NONDETERMINISTIC_OUTPUT_RE = re.compile(
     # datasketch_quantiles / datasketch_req compact with random choices, so the
     # exact quantiles, ranks and sorted views they return vary between runs.
-    r"\b(?:crypto_random_bytes|adbc_connect|dist_[a-z0-9_]+_sample|dist_uniform_int_range"
+    r"\b(?:crypto_random_bytes|adbc_connect|dist_[a-z0-9_]+_samples?|dist_uniform_int_range"
     r"|datasketch_quantiles|datasketch_req)\s*\(",
     re.IGNORECASE,
 )

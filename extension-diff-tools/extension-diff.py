@@ -232,8 +232,9 @@ class _UnreadableOutput(Exception):
 
 
 def _serialize_value(v) -> str:
+    # Matches check-examples.py, which renders NULL cells as "NULL" when comparing outputs.
     if v is None:
-        return ""
+        return "NULL"
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, (bytes, bytearray, memoryview)):
