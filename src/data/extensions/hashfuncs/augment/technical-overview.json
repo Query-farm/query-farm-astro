@@ -1,7 +1,7 @@
 {
   "eyebrow": "Technical Overview",
   "title": "Fast, non-cryptographic hashes for keys and buckets",
-  "description": "Industry-standard, non-cryptographic hashes inside DuckDB SQL — [xxHash](https://cyan4973.github.io/xxHash/), [MurmurHash3](https://github.com/aappleby/smhasher), and [RapidHash](https://github.com/Nicoshev/rapidhash). These are speed-first hashes: fast and well-distributed against random input, where the only \"adversary\" is randomness, not a person who controls the bytes. For digests, signatures, or HMAC, use the [crypto](/products/extensions/crypto) extension instead.",
+  "description": "Industry-standard, non-cryptographic hashes inside DuckDB SQL — [xxHash](https://cyan4973.github.io/xxHash/), [MurmurHash3](https://github.com/aappleby/smhasher), [RapidHash](https://github.com/Nicoshev/rapidhash), wyhash, komihash, SipHash, CRC-32C and FNV-1a — plus functions that reproduce BigQuery, Spark, Kafka, Iceberg and ClickHouse hashes exactly, and Jump consistent hashing. These are speed-first hashes: fast and well-distributed against random input, where the only \"adversary\" is randomness, not a person who controls the bytes. For digests, signatures, or HMAC, use the [crypto](/products/extensions/crypto) extension instead.",
   "sections": [
     {
       "icon": "⚡",
@@ -34,11 +34,23 @@
     {
       "icon": "🔧",
       "title": "How it works",
-      "description": "Every function is a scalar SQL function with one or two arguments — the value, and an optional seed. Each family is an upstream-faithful C/C++ implementation linked into the extension binary: no catalog, no secrets, no network, every call pure CPU.",
+      "description": "Every function is a scalar SQL function: the value, plus an optional seed (or key). Each algorithm is an upstream-faithful C/C++ implementation linked into the extension binary: no catalog, no secrets, no network, every call pure CPU.",
       "bulletPoints": [
         {
-          "label": "Three families, one interface",
-          "description": "[xxHash](https://github.com/Cyan4973/xxHash) (32 / 64 / 128-bit, including a hex digest; XXH3 variants are tuned for SSE2 / AVX2 / NEON), [MurmurHash3](https://github.com/aappleby/smhasher) (32-bit plus x86 and x64 128-bit forms), and [RapidHash](https://github.com/Nicoshev/rapidhash), a newer 64-bit hash that often wins published throughput benchmarks. Every function accepts strings, blobs, fixed-width integers, floating-point values, dates, and times as input; a `NULL` input or seed returns `NULL`."
+          "label": "Many algorithms, one interface",
+          "description": "[xxHash](https://github.com/Cyan4973/xxHash) (32 / 64 / 128-bit, including a hex digest; XXH3 variants are tuned for SSE2 / AVX2 / NEON), [MurmurHash3](https://github.com/aappleby/smhasher) (32-bit plus x86 and x64 128-bit forms), [RapidHash](https://github.com/Nicoshev/rapidhash), wyhash, komihash, keyed SipHash, CRC-32C and FNV-1a. Every function accepts booleans, numbers, `DECIMAL`, dates and timestamps, `INTERVAL`, `UUID`, `ENUM`, `VARCHAR` and `BLOB` — and unsupported types are rejected when the query is planned, not halfway through it."
+        },
+        {
+          "label": "Row hashing for multi-column keys",
+          "description": "Pass a tuple, struct, list, map or array — `xxh3_64((a, b, c))` — and the whole value is hashed through one documented, unambiguous encoding. Unlike concatenating strings, `('a|', 'b')` and `('a', '|b')` hash differently, and `NULL` fields are distinguished from empty ones."
+        },
+        {
+          "label": "Exact matches for other systems",
+          "description": "`farm_fingerprint` returns BigQuery's `FARM_FINGERPRINT`, `spark_hash` and `spark_xxhash64` return Spark's `hash()` and `xxhash64()` (including Spark's type rules), `kafka_partition` returns the partition Kafka's default partitioner picks, `iceberg_bucket` returns Iceberg's `bucket[N]` partition, and `clickhouse_cityhash64` returns ClickHouse's `cityHash64`. Each is tested against values produced by the real system."
+        },
+        {
+          "label": "Consistent hashing for resharding",
+          "description": "`jump_hash(xxh3_64(key), n)` assigns keys to `n` shards so that adding a shard moves only about 1/(n + 1) of the keys, instead of nearly all of them with `hash % n`."
         },
         {
           "label": "Optional seeds for independent hash spaces",

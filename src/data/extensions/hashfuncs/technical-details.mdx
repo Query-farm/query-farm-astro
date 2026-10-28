@@ -25,13 +25,18 @@ For digital signatures, HMAC, content-addressed storage with adversarial input, 
 
 Hashfuncs is a small, focused extension: a set of scalar SQL functions, each a thin wrapper around an upstream-faithful C/C++ implementation linked into the extension binary. There is no catalog, no secrets, no network — every call is pure CPU.
 
-Three families ship in the box:
+What ships in the box:
 
 - **[xxHash](https://cyan4973.github.io/xxHash/)** — Yann Collet's family. [`xxh32`](#xxh32) and [`xxh64`](#xxh64) are the original 32- and 64-bit forms; [`xxh3_64`](#xxh3_64) and [`xxh3_128`](#xxh3_128) are the modern XXH3 variants tuned for SSE2 / AVX2 / NEON. [`xxh3_128_hex`](#xxh3_128_hex) emits the canonical 32-character hex digest defined by the [xxHash specification](https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md).
-- **[MurmurHash3](https://github.com/aappleby/smhasher)** — Austin Appleby's classic. Three forms are exposed: [`murmurhash3_32`](#murmurhash3_32), [`murmurhash3_128`](#murmurhash3_128) (x86 variant), and [`murmurhash3_x64_128`](#murmurhash3_x64_128) (x64 variant). The x64 form is what [Apache Cassandra](https://cassandra.apache.org/_/index.html)'s `Murmur3Partitioner` and [Apache Spark](https://spark.apache.org/)'s default hash partitioner use.
-- **[RapidHash](https://github.com/Nicoshev/rapidhash)** — a newer 64-bit hash optimized purely for throughput. Exposed as [`rapidhash`](#rapidhash); generally wins published benchmarks against XXH3_64 on x86_64.
+- **[MurmurHash3](https://github.com/aappleby/smhasher)** — Austin Appleby's classic. Three standard forms are exposed: [`murmurhash3_32`](#murmurhash3_32), [`murmurhash3_128`](#murmurhash3_128) (x86 variant), and [`murmurhash3_x64_128`](#murmurhash3_x64_128) (x64 variant).
+- **[RapidHash](https://github.com/Nicoshev/rapidhash)** — a newer 64-bit hash optimized purely for throughput. Exposed as [`rapidhash`](#rapidhash); generally wins published benchmarks against XXH3_64 on x86_64. [`rapidhash_micro`](#rapidhash_micro) and [`rapidhash_nano`](#rapidhash_nano) are its compact upstream variants.
+- **[wyhash](https://github.com/wangyi-fudan/wyhash) and [komihash](https://github.com/avaneev/komihash)** — compact, very fast 64-bit hashes common in hash tables and language runtimes: [`wyhash`](#wyhash) and [`komihash`](#komihash).
+- **[SipHash](https://en.wikipedia.org/wiki/SipHash)** — keyed hashing that resists hash-flooding when the key is secret: [`siphash24`](#siphash24) and [`siphash13`](#siphash13).
+- **Checksums and classic hashes** — [`crc32c`](#crc32c) (CRC-32C, extendable across pieces), [`fnv1a_32`](#fnv1a_32) and [`fnv1a_64`](#fnv1a_64).
+- **Exact matches for other systems** — [`farm_fingerprint`](#farm_fingerprint) (BigQuery), [`spark_hash`](#spark_hash) and [`spark_xxhash64`](#spark_xxhash64) (Spark), [`kafka_murmur2`](#kafka_murmur2) and [`kafka_partition`](#kafka_partition) (Kafka), [`iceberg_bucket`](#iceberg_bucket) and [`iceberg_hash`](#iceberg_hash) (Iceberg), and [`clickhouse_cityhash64`](#clickhouse_cityhash64) (ClickHouse). See [Matching other systems](#matching-other-systems).
+- **Consistent hashing** — [`jump_hash`](#jump_hash) assigns keys to shards so that adding a shard moves as few keys as possible. See [Consistent hashing for resharding](#consistent-hashing-for-resharding).
 
-Every function accepts a `VARCHAR`, a `BLOB`, any fixed-width integer (`TINYINT` through `UHUGEINT`), a `FLOAT` or `DOUBLE`, a `DATE`, or a `TIME`, plus (optionally) a seed. Other types — `BOOLEAN`, `DECIMAL`, `TIMESTAMP`, `UUID`, and nested types such as `LIST` or `STRUCT` — raise a `Not implemented Error: Unsupported type …` at execution time; cast them (for example `ts::VARCHAR` or `epoch_us(ts)`) before hashing. A `NULL` input or a `NULL` seed returns `NULL`. Two different seeds produce two uncorrelated hash spaces from the same input — useful for double-hashing in [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter) or running parallel shardings without correlation.
+Every hash function accepts any [supported value](#input-types--what-gets-hashed) — including whole rows, structs and lists — and (optionally) a seed. Two different seeds produce two uncorrelated hash spaces from the same input — useful for double-hashing in [Bloom filters](https://en.wikipedia.org/wiki/Bloom_filter) or running parallel shardings without correlation.
 
 ## Hashfuncs vs. crypto — picking the right extension
 
@@ -42,7 +47,10 @@ Both extensions output deterministic hashes, but they answer different questions
 | Partitioning / sharding | [`xxh3_64`](#xxh3_64), [`murmurhash3_x64_128`](#murmurhash3_x64_128) | Speed; well-distributed for random input |
 | [Bloom](https://en.wikipedia.org/wiki/Bloom_filter) / XOR / Cuckoo filter input | [`xxh3_64`](#xxh3_64), [`rapidhash`](#rapidhash) | `UBIGINT` output, near-RAM bandwidth |
 | Cross-language fingerprint | [`xxh3_128_hex`](#xxh3_128_hex) | Canonical hex; matches Python / Rust / C |
-| Cassandra / Spark interop | [`murmurhash3_x64_128`](#murmurhash3_x64_128) | Standard hash for those routers |
+| Multi-column row keys | [`xxh3_64`](#xxh3_64) / [`xxh3_128`](#xxh3_128) of a tuple | Unambiguous [row encoding](#hashing-several-columns-at-once) |
+| Same hash as BigQuery / Spark / Kafka / Iceberg / ClickHouse | [`farm_fingerprint`](#farm_fingerprint), [`spark_hash`](#spark_hash), [`kafka_partition`](#kafka_partition), [`iceberg_bucket`](#iceberg_bucket), [`clickhouse_cityhash64`](#clickhouse_cityhash64) | Tested against each system |
+| Resharding with minimal data movement | [`jump_hash`](#jump_hash) | Adding a shard moves ~1/(n + 1) of keys |
+| Hash-flooding resistance (secret key) | [`siphash24`](#siphash24), [`siphash13`](#siphash13) | Keyed; still not a MAC |
 | Cheap deduplication | [`xxh3_64`](#xxh3_64) or [`xxh3_128`](#xxh3_128) | 64 vs 128 bits = collision-safety vs speed |
 | Digital signatures, HMAC | [`crypto`](/products/extensions/crypto) | Adversarial collision resistance |
 | Tamper-evident logs / chains | [`crypto`](/products/extensions/crypto) | SHA-2 / SHA-3 / BLAKE3 |
@@ -61,13 +69,106 @@ The two extensions compose. A common pattern is a [`crypto`](/products/extension
 
 ## Seeds and overloads
 
-Every function has both an unseeded form and a seeded form. The seed type follows the hash width:
+Every hash function has an unseeded form and a seeded form, except FNV-1a, which has no seed. The seed type follows the upstream API:
 
-- 32-bit functions ([`xxh32`](#xxh32), [`murmurhash3_32`](#murmurhash3_32), [`murmurhash3_128`](#murmurhash3_128)) take a `UINTEGER` seed.
-- 64-bit and 128-bit xxHash variants ([`xxh64`](#xxh64), [`xxh3_64`](#xxh3_64), [`xxh3_128`](#xxh3_128), [`xxh3_128_hex`](#xxh3_128_hex)) and [`rapidhash`](#rapidhash) take a `UBIGINT` seed.
-- [`murmurhash3_x64_128`](#murmurhash3_x64_128) takes a `UINTEGER` seed (matching the upstream MurmurHash3 API).
+- [`xxh32`](#xxh32), [`murmurhash3_32`](#murmurhash3_32), [`murmurhash3_128`](#murmurhash3_128) and [`murmurhash3_x64_128`](#murmurhash3_x64_128) take a `UINTEGER` seed (matching the upstream MurmurHash3 API).
+- [`xxh64`](#xxh64), [`xxh3_64`](#xxh3_64), [`xxh3_128`](#xxh3_128), [`xxh3_128_hex`](#xxh3_128_hex), the RapidHash variants, [`wyhash`](#wyhash) and [`komihash`](#komihash) take a `UBIGINT` seed.
+- [`siphash24`](#siphash24) and [`siphash13`](#siphash13) take a 128-bit `key` as `UHUGEINT`; its 16 little-endian bytes are the SipHash key. Without a key, all key bytes are zero.
+- [`crc32c`](#crc32c)'s second argument is the CRC of the data before this value, so `crc32c(b, crc32c(a))` is the checksum of `a` followed by `b`.
+
+The unseeded form always equals the seeded form with seed `0`.
 
 Seeded variants are the right tool whenever you want the same column to participate in two different hash spaces — for example, a Bloom filter that uses two independent hash functions, or two independent shardings with no correlation between bucket assignments.
+
+## Input types — what gets hashed
+
+The hash functions hash a value's bytes, so it matters which bytes those are:
+
+| Input | Bytes hashed |
+|---|---|
+| `VARCHAR`, `BLOB` | The string's UTF-8 bytes or the blob's bytes |
+| Integers, `FLOAT`, `DOUBLE`, `BOOLEAN` | The value's little-endian in-memory bytes — so the width matters: `xxh64(42::INTEGER)` and `xxh64(42::BIGINT)` differ |
+| `DECIMAL` | The stored integer (unscaled value), whose width follows the precision |
+| `DATE`, `TIME`, `TIMESTAMP` (all precisions and `WITH TIME ZONE`) | The stored count (days, microseconds, …) |
+| `INTERVAL` | Months, days and microseconds as stored — `INTERVAL '1 day'` and `INTERVAL '24 hours'` hash differently |
+| `UUID` | Its 16 bytes in standard ([RFC 4122](https://www.rfc-editor.org/rfc/rfc4122)) order, matching a hash of the UUID's binary form elsewhere |
+| `ENUM` | Its label, so it hashes like the same `VARCHAR` |
+| `STRUCT`, `LIST`, `MAP`, `ARRAY`, tuples | The [row encoding](#hashing-several-columns-at-once) below |
+| `NULL` | Returns `NULL` |
+
+`0.0` and `-0.0` have different bytes and so hash differently, as do NaNs with different bit patterns. Cast to a canonical type first (for example `CAST(x AS BIGINT)`) when values that compare equal in SQL must hash equal.
+
+Types without a stable byte representation (`BIT`, `UNION`, `VARIANT`, …) are rejected when the query is planned, with an error naming the function and type — never halfway through a query.
+
+## Hashing several columns at once
+
+Pass a tuple — `xxh3_64((customer_id, order_date, sku))` — or any `STRUCT`, `LIST`, `MAP` or `ARRAY`, and the whole value is hashed through one encoding. This is the right way to build multi-column keys: concatenating strings is slower and collides (`'a|' || 'b'` equals `'a' || '|b'`), while the encoding below never does for values of the same type.
+
+```sql
+-- One 64-bit key per (event_id, payload) pair
+SELECT event_id, payload, xxh3_64((event_id, payload)) AS row_key
+FROM events;
+```
+
+The encoding is stable — stored row hashes stay valid across releases — and simple enough to reproduce in other languages:
+
+| Part | Encoding |
+|---|---|
+| Field | `0x00` if `NULL`; otherwise `0x01` followed by the value |
+| `VARCHAR`, `BLOB` | Length as a little-endian 64-bit integer, then the bytes |
+| `LIST`, `ARRAY` | Element count as a little-endian 64-bit integer, then each element as a field |
+| `MAP` | A list of `(key, value)` structs |
+| `STRUCT`, tuple | Each child as a field, in order; field names are not encoded |
+| `UUID` | Its 16 RFC 4122 bytes |
+| Anything else | The same bytes it hashes as on its own |
+
+So `xxh64((1, 'ab'))` hashes the bytes `01` `01000000` `01` `0200000000000000` `6162`. An `ARRAY` hashes the same as a `LIST` with the same elements, and `{'x': 1, 'y': 2}` hashes the same as `(1, 2)`. A `NULL` row returns `NULL`; a row whose fields are all `NULL` does not.
+
+## Matching other systems
+
+These functions reproduce another system's hash exactly — the same algorithm, byte encoding, seed and signed or unsigned result. Their tests compare against values produced by the real systems: BigQuery's documented examples, Spark 4.2.1, Kafka's own partitioner code (kafka-clients 4.4.0), the Iceberg spec's test values and Iceberg's own Java library (1.12.0), and ClickHouse.
+
+| System | Their function | Hashfuncs |
+|---|---|---|
+| [BigQuery](https://cloud.google.com/bigquery/docs/reference/standard-sql/hash_functions#farm_fingerprint) | `FARM_FINGERPRINT(x)` | [`farm_fingerprint(x)`](#farm_fingerprint) |
+| [Spark](https://spark.apache.org/docs/latest/api/sql/index.html#hash) | `hash(a, b, ...)` | [`spark_hash(a, b, ...)`](#spark_hash) |
+| [Spark](https://spark.apache.org/docs/latest/api/sql/index.html#xxhash64) | `xxhash64(a, b, ...)` | [`spark_xxhash64(a, b, ...)`](#spark_xxhash64) |
+| Spark bucketing | `pmod(hash(cols), n)` | `((spark_hash(cols) % n) + n) % n` |
+| [Kafka](https://kafka.apache.org/) default partitioner | partition of a keyed record | [`kafka_partition(key, n)`](#kafka_partition) |
+| [Iceberg](https://iceberg.apache.org/spec/#bucket-transform-details) | `bucket[N]` partition transform | [`iceberg_bucket(value, n)`](#iceberg_bucket) |
+| [ClickHouse](https://clickhouse.com/docs/sql-reference/functions/hash-functions) | `cityHash64(s)` | [`clickhouse_cityhash64(s)`](#clickhouse_cityhash64) |
+| ClickHouse | `sipHash64(s)` | [`siphash24(s)`](#siphash24) |
+
+```sql
+-- BigQuery's documented FARM_FINGERPRINT example, in DuckDB
+SELECT farm_fingerprint('1footrue') AS row_fingerprint;
+-- -1541654101129638711
+
+-- Spark's documented hash() example
+SELECT spark_hash('Spark', [123], 2);
+-- -1321691492
+```
+
+A few rules to know:
+
+- **Spark** hashes values by its own type rules, not by DuckDB's bytes: `BOOLEAN`, `TINYINT`, `SMALLINT`, `INTEGER` and `DATE` as a 32-bit int, `BIGINT` and timestamps as a 64-bit long (microseconds — DuckDB `TIMESTAMP` corresponds to Spark's `TIMESTAMP_NTZ` and `TIMESTAMPTZ` to Spark's `TIMESTAMP`), `-0.0` as `0.0`, `DECIMAL` by its unscaled value, and lists, arrays and structs element by element. Each argument's hash seeds the next, starting from 42, and `NULL`s are skipped. Spark's string hashing mixes trailing bytes non-standardly, so [`murmurhash3_32`](#murmurhash3_32) does **not** match Spark — use [`spark_hash`](#spark_hash). Types Spark doesn't have (unsigned integers, `UUID`, `MAP`, …) are rejected; cast them to a Spark type first.
+- **Kafka** hashes the record key's serialized bytes. A `VARCHAR` is hashed as UTF-8, which matches Kafka's `StringSerializer`; pass a `BLOB` for keys serialized another way. Records without a key aren't hashed by Kafka, so a `NULL` key returns `NULL`.
+- **Iceberg** hashes each type by its spec encoding, not DuckDB's bytes: every integer width as an 8-byte long (so `34` and `34::BIGINT` share a bucket), `DECIMAL` by its unscaled value regardless of scale, dates as days, and times and timestamps as microseconds — nanosecond timestamps are floored to microseconds first. Iceberg can't bucket `BOOLEAN`, `FLOAT` or `DOUBLE`, so those are rejected.
+- **ClickHouse** hashes numbers and multiple arguments differently from strings, so the ClickHouse functions take a single `VARCHAR` or `BLOB`.
+- **Cassandra**'s `Murmur3Partitioner` is derived from MurmurHash3 x64-128 but its token is not the raw [`murmurhash3_x64_128`](#murmurhash3_x64_128) value; verify against Cassandra before relying on it for routing.
+
+## Consistent hashing for resharding
+
+`hash % n` reassigns almost every key when `n` changes, so growing a cluster from 10 to 11 shards moves about 90% of the data. [`jump_hash`](#jump_hash) implements [Jump consistent hash](https://arxiv.org/abs/1406.2294): going from `n` to `n + 1` buckets moves only about `1/(n + 1)` of the keys, and every key that moves goes to the new bucket. It returns the same buckets as Guava's `Hashing.consistentHash`.
+
+```sql
+-- How many of 100,000 keys move when an 11th shard is added?
+SELECT count(*) FILTER (WHERE xxh3_64(i) % 11 <> xxh3_64(i) % 10) AS moved_with_modulo,
+       count(*) FILTER (WHERE jump_hash(xxh3_64(i), 11) <> jump_hash(xxh3_64(i), 10)) AS moved_with_jump_hash
+FROM range(100000) t(i);
+```
+
+Hash the value first — `jump_hash` takes a 64-bit key, and buckets are numbered `0` to `n - 1`. Jump hash suits shards that are numbered and only added or removed at the end; for removing arbitrary nodes from the middle, use a ring or rendezvous scheme instead.
 
 ## Pairing with [`bitfilters`](/products/extensions/bitfilters)
 
