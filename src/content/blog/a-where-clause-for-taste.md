@@ -5,6 +5,7 @@ pubDate: 2026-09-18
 author: "Query Farm Team"
 tags: ["DuckDB", "VGI", "SQL", "TypeSafe", "Jev"]
 heroImage: "/media/posts/a-where-clause-for-taste/social.png"
+thumbnail: "/blog/a-where-clause-for-taste/noul-distribution.svg"
 leadVisual:
   src: "/blog/a-where-clause-for-taste/taste-bezier-lead.svg"
   alt: ""

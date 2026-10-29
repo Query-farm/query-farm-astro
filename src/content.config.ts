@@ -27,6 +27,9 @@ const blog = defineCollection({
     showTableOfContents: z.boolean().default(true),
     heroImage: z.string().optional(),
     heroImageAlt: z.string().optional(),
+    // Image for the /blog index. Use one of the post's own figures; it falls back
+    // to leadVisual. heroImage is the OG card and is never shown on the index.
+    thumbnail: z.string().optional(),
     // The product the article is about, offered as a "Try it" card after the
     // body (PostNextStep.astro). Omit it for posts with no product to try.
     nextStep: z.object({
