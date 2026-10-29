@@ -1,6 +1,6 @@
 ---
-title: "Stochastic for DuckDB 2.0: 22 distribution fits with AIC and BIC, hardened by fuzzing"
-description: "The Stochastic extension for DuckDB 2.0 now fits 22 distributions, reports log-likelihood, AIC and BIC for model choice, and has been fuzzed until every function returns an answer or a clear error. We follow a support team answering a question about repair times in SQL."
+title: "Stochastic for DuckDB 2.0: fit, compare and test distributions in SQL"
+description: "The Stochastic extension for DuckDB 2.0 fits 22 distributions, ranks candidate fits by AICc with dist_fits, and adds hypothesis tests and 14 new distributions, all fuzzed until every function returns an answer or a clear error. We follow a support team answering a question about repair times in SQL."
 pubDate: 2026-10-28
 author: "Query Farm Team"
 tags: ["DuckDB", "Extensions", "Statistics", "SQL"]
