@@ -6,6 +6,7 @@ updatedDate: 2026-10-22
 author: "Query Farm Team"
 tags: ["DuckDB", "ADBC", "PostgreSQL", "Performance", "Extensions"]
 heroImage: "/media/posts/one-query-one-arrow-stream-adbc-duckdb-2/social.png"
+thumbnail: "/blog/one-query-one-arrow-stream-adbc-duckdb-2/adbc-query-pushdown.svg"
 draft: false
 nextStep:
   title: "ADBC Scanner"

@@ -7,6 +7,7 @@ tags: ["DuckDB", "DuckDB-Wasm", "WebAssembly", "Haybarn", "Performance", "Extens
 draft: false
 heroImage: "/media/posts/duckdb-wasm-startup-time/social.png"
 heroImageAlt: "DuckDB-Wasm startup: from 6.8 to 2.3 seconds with Haybarn-Wasm."
+thumbnail: "/blog/duckdb-wasm-startup-time/timeline-eh-cdn.svg"
 ---
 
 [Cupola](/products/cupola/), our browser-based environment for querying and exploring data, runs on [Haybarn-Wasm](https://github.com/Query-farm-haybarn/haybarn-wasm), and its users were waiting several seconds before they could do anything. I was waiting too. I use Safari with the multithreaded build enabled, and every page load meant watching the engine download and compile, then load each extension, one at a time.
