@@ -16,6 +16,11 @@ const blog = defineCollection({
     updatedDate: z.coerce.date().optional(),
     author: z.string().default('Query Farm Team'),
     tags: z.array(z.string()).default([]),
+    // Extension slugs the article is about. Each listed extension's docs page
+    // links back to it under "From the blog" (src/lib/blog-extensions.ts).
+    // nextStep.extension is included automatically; list it here only for
+    // posts that cover several extensions or have no nextStep card.
+    extensions: z.array(z.string()).default([]),
     draft: z.boolean().default(false),
     showDescription: z.boolean().default(true),
     showLeadVisual: z.boolean().default(true),
