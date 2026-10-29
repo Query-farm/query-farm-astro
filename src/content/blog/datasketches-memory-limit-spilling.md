@@ -1,5 +1,5 @@
 ---
-title: "DataSketches for DuckDB 2.0: sketch aggregates now obey memory_limit and spill to disk"
+title: "DataSketches for DuckDB 2.0: sketch aggregates now stay within the memory limit and spill to disk"
 description: "A grouped KLL query used 39 GB under a 1 GB memory limit. Now it uses 0.77 GB and runs 3.7× faster. Here's how we moved 15 sketch families into DuckDB's spillable memory, and the library bugs we fixed along the way."
 showDescription: false
 pubDate: 2026-10-28
