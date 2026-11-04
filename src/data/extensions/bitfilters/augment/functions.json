@@ -8,7 +8,7 @@
     "examples": [
       {
         "description": "Build a Quotient filter per partition",
-        "code": "CREATE TABLE filters AS\nSELECT id % 2 AS remainder,\n       quotient_filter(16, 8, id) AS filter\nFROM series_data\nGROUP BY id % 2;"
+        "code": "CREATE OR REPLACE TABLE filters AS\nSELECT id % 2 AS remainder,\n       quotient_filter(16, 8, id) AS filter\nFROM series_data\nGROUP BY id % 2;"
       },
       {
         "description": "Let the filter size itself (~0.4% FPR)",
@@ -88,7 +88,7 @@
     "examples": [
       {
         "description": "Membership test",
-        "code": "SELECT xor8_filter_contains(xor8_filter_value, :candidate) FROM filter_table;"
+        "code": "SELECT xor8_filter_contains(xor8_filter_value, 42) FROM filter_table;"
       }
     ],
     "relatedFunctions": [
@@ -106,7 +106,7 @@
     "examples": [
       {
         "description": "Membership test",
-        "code": "SELECT xor16_filter_contains(xor16_filter_value, :candidate) FROM filter_table;"
+        "code": "SELECT xor16_filter_contains(xor16_filter_value, 42) FROM filter_table;"
       }
     ],
     "relatedFunctions": [
@@ -159,7 +159,7 @@
     "examples": [
       {
         "description": "Membership test",
-        "code": "SELECT binary_fuse8_filter_contains(binary_fuse8_filter_value, :candidate) FROM filter_table;"
+        "code": "SELECT binary_fuse8_filter_contains(binary_fuse8_filter_value, 42) FROM filter_table;"
       }
     ],
     "relatedFunctions": [
@@ -176,7 +176,7 @@
     "examples": [
       {
         "description": "Membership test",
-        "code": "SELECT binary_fuse16_filter_contains(binary_fuse16_filter_value, :candidate) FROM filter_table;"
+        "code": "SELECT binary_fuse16_filter_contains(binary_fuse16_filter_value, 42) FROM filter_table;"
       }
     ],
     "relatedFunctions": [
@@ -212,7 +212,7 @@
         "description": "The values to insert."
       }
     ],
-    "description": "Aggregate that builds a split block Bloom filter \u2014 the Parquet Bloom filter format \u2014 sized for `ndv` distinct values at false positive rate `fpp`. Sizing uses the same formula as DuckDB's Parquet writer, rounded up to a power of two of 32-byte blocks (at most 2 GB). For the same values and sizing the result is byte-for-byte the filter DuckDB writes into Parquet files. Values of any type are hashed with XXH64 of their Parquet plain encoding \u2014 unlike the other filters, `UBIGINT` values are hashed too, for Parquet compatibility. A Bloom filter never gets \"full\": insert more than `ndv` values and the false positive rate degrades gradually.",
+    "description": "Aggregate that builds a split block Bloom filter \u2014 the Parquet Bloom filter format \u2014 sized for `ndv` distinct values at false positive rate `fpp`. Sizing uses the same formula as DuckDB's Parquet writer, rounded up to a power of two of 32-byte blocks (at most 2 GB). For the same values and sizing the payload after the 16-byte Bitfilters header is byte-for-byte the Bloom filter blocks DuckDB writes into Parquet files. Values of any type are hashed with XXH64 of their Parquet plain encoding \u2014 unlike the other filters, `UBIGINT` values are hashed too, for Parquet compatibility. A Bloom filter never gets \"full\": insert more than `ndv` values and the false positive rate degrades gradually.",
     "examples": [
       {
         "description": "Bloom filter for ~1,000 keys at 1% FPR",
@@ -241,7 +241,7 @@
         "description": "Bloom filter BLOBs produced by `bloom_filter`."
       }
     ],
-    "description": "Aggregate that merges Bloom filters into one filter containing every value of the inputs (a bitwise OR). All inputs must be built with the same `ndv` and `fpp` and from the same value type; otherwise it raises an error. The union of per-group filters is exactly the filter of all the values.",
+    "description": "Aggregate that merges Bloom filters into one filter containing every value of the inputs (a bitwise OR). All inputs must have the same payload size and value type; otherwise it raises an error. Using the same `ndv` and `fpp` guarantees matching sizes, but different settings can also produce the same size. The union of per-group filters is exactly the filter of all the values.",
     "examples": [
       {
         "description": "Roll per-bucket filters up into one",
@@ -725,10 +725,16 @@
     "categories": [
       "DuckDB Bloom Filters"
     ],
-    "description": "Build a Bloom filter compatible with DuckDB's internal join filter format. Produced filters can be used in custom join optimization paths and in zone-map-style data skipping. The first argument is the DuckDB version whose filter layout to produce (`v1.4.0` through `v2.0`).",
+    "description": "Build a Bloom filter in DuckDB's internal join filter format from precomputed `UBIGINT` hashes. Hash the original values with `bitfilters_duckdb_hash` using the same version string. The sector count must be a power of two. The first argument selects the DuckDB version whose filter layout to produce (`v1.4.0` through `v2.0`).",
     "relatedFunctions": [
       "bitfilters_duckdb_bloom_filter_probe",
       "bitfilters_duckdb_hash"
+    ],
+    "examples": [
+      {
+        "description": "Build a filter from 100 integer keys",
+        "code": "SELECT bitfilters_duckdb_bloom_filter_create(\n  'v2.0', 1024, bitfilters_duckdb_hash('v2.0', i)\n) AS filter\nFROM range(100) t(i);"
+      }
     ]
   },
   {
@@ -736,10 +742,20 @@
     "categories": [
       "DuckDB Bloom Filters"
     ],
-    "description": "Test whether a hash value might be a member of a DuckDB-compatible Bloom filter built by `bitfilters_duckdb_bloom_filter_create`. The version must be constant. The filter can be a constant BLOB (parsed once at bind time), a scalar subquery, or a per-row BLOB column (read per row), so one query can probe a different filter on each row. A `NULL` filter returns `NULL`. Extra value arguments are combined for multi-key filters.",
+    "description": "Test whether an original value, or combination of values, might belong to a DuckDB-compatible Bloom filter. Pass the original values: the function hashes them internally using the requested DuckDB version. Use the same version and value types as when creating the filter. False means definitely absent; true means possibly present. The version must be constant. The filter can be a constant BLOB (parsed once at bind time), a scalar subquery, or a per-row BLOB column (read per row). A `NULL` filter returns `NULL`.",
     "relatedFunctions": [
       "bitfilters_duckdb_bloom_filter_create",
       "bitfilters_duckdb_hash"
+    ],
+    "examples": [
+      {
+        "description": "Probe a filter built in a scalar subquery",
+        "code": "SELECT key_col,\n       bitfilters_duckdb_bloom_filter_probe(\n         'v2.0',\n         (SELECT bitfilters_duckdb_bloom_filter_create(\n           'v2.0', 1024, bitfilters_duckdb_hash('v2.0', k)\n         ) FROM range(100) t(k)),\n         key_col\n       ) AS maybe_present\nFROM range(98, 102) t(key_col);"
+      },
+      {
+        "description": "Probe a combination of an integer and a string",
+        "code": "WITH f AS (\n  SELECT bitfilters_duckdb_bloom_filter_create(\n    'v2.0', 1024, bitfilters_duckdb_hash('v2.0', i, 'k' || i)\n  ) AS filter_blob\n  FROM range(100) t(i)\n)\nSELECT col1, col2,\n       bitfilters_duckdb_bloom_filter_probe(\n         'v2.0', (SELECT filter_blob FROM f), col1, col2\n       ) AS maybe_present\nFROM (VALUES (1::BIGINT, 'k1'), (1, 'k2'), (200, 'k200')) t(col1, col2);"
+      }
     ]
   },
   {
@@ -747,10 +763,20 @@
     "categories": [
       "DuckDB Bloom Filters"
     ],
-    "description": "Hash function compatible with DuckDB's internal Bloom filter probe layout. Use this rather than a generic hash when feeding values into the DuckDB-style Bloom filter functions. The first argument is a constant DuckDB version string \u2014 `v1.4.0`\u2013`v1.4.4`, `v1.5.0`, `v1.5.1`, `v1.6.0` or `v2.0` \u2014 and the result equals that version's built-in `hash()`; extra value arguments are combined the way `hash(a, b, ...)` combines them.",
+    "description": "Compute DuckDB-version-specific hashes for one or more original values. Feed these hashes into `bitfilters_duckdb_bloom_filter_create`; pass the original values to `bitfilters_duckdb_bloom_filter_probe`. The first argument is a constant DuckDB version string \u2014 `v1.4.0`\u2013`v1.4.4`, `v1.5.0`, `v1.5.1`, `v1.6.0` or `v2.0` \u2014 and the result equals that version's built-in `hash()`; extra value arguments are combined the way `hash(a, b, ...)` combines them.",
     "relatedFunctions": [
       "bitfilters_duckdb_bloom_filter_create",
       "bitfilters_duckdb_bloom_filter_probe"
+    ],
+    "examples": [
+      {
+        "description": "Hash one value for DuckDB 2.0",
+        "code": "SELECT bitfilters_duckdb_hash('v2.0', 42);"
+      },
+      {
+        "description": "Hash two columns together",
+        "code": "SELECT col1, col2,\n       bitfilters_duckdb_hash('v2.0', col1, col2) AS hash\nFROM (VALUES (1::BIGINT, 'k1'), (2, 'k2')) t(col1, col2);"
+      }
     ]
   }
 ]

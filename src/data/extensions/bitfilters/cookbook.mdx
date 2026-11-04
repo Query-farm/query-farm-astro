@@ -10,7 +10,7 @@
 
 In short: **Bloom** is incremental, mergeable and Parquet-compatible; **XOR / Binary Fuse** are the smallest but build-once; **Quotient** is mergeable and can size itself.
 
-Filter constructors accept values of any type — pass the column itself. Values are hashed with XXH64 of a fixed encoding that stays the same across DuckDB versions, so you don't need `hash()`. `UBIGINT` values are used as keys exactly as given, if you'd rather compute your own (for example with [`hashfuncs`](/products/extensions/hashfuncs)).
+The XOR, Binary Fuse, Quotient and split block Bloom constructors accept supported scalar values directly. They hash values with XXH64 of a fixed encoding that stays the same across DuckDB versions, so you don't need `hash()`. XOR, Binary Fuse and Quotient use `UBIGINT` values as keys exactly as given; split block Bloom hashes them too. The separate `bitfilters_duckdb_bloom_filter_create` constructor takes hashes produced by `bitfilters_duckdb_hash`.
 
 ## Build a Filter
 
@@ -57,7 +57,7 @@ SELECT day,
 FROM events
 GROUP BY day;
 
--- At query time, only scan partitions that might contain user 7
+-- At query time, only scan partitions that might contain the user
 SELECT day, COUNT(*) AS hits
 FROM events
 WHERE day IN (
@@ -88,11 +88,11 @@ FROM unrelated_set u, the_filter f
 WHERE xor8_filter_contains(f.filter, u.id);
 ```
 
-For xor8, expect ~0.39% false positives across enough probes; binary_fuse8 lower; binary_fuse16 / xor16 nearly zero. `bitfilter_info(filter).expected_fpr` gives the rate the filter expects.
+Both xor8 and binary_fuse8 have an expected false-positive rate of 1/256 (~0.39%); the 16-bit variants have a rate of 1/65,536 (~0.0015%). Binary Fuse uses less space at the same fingerprint width. `bitfilter_info(filter).expected_fpr` gives the rate the filter expects.
 
 ## Inspect a Filter
 
-`bitfilter_info` describes any filter BLOB — type, key type, size, entries, expected false positive rate. Fields a filter type doesn't have are NULL:
+`bitfilter_info` describes XOR, Binary Fuse, Quotient and split block Bloom filter BLOBs — type, key type, size, entries, expected false positive rate. It does not accept the separate DuckDB-internal Bloom format. Fields a filter type doesn't have are NULL:
 
 ```sql
 SELECT i.filter_type, i.key_type, i.size_bytes, i.expected_fpr
@@ -103,11 +103,11 @@ Use `bitfilter_is_valid` (or the per-type `*_is_valid`) to find damaged or misma
 
 ## Bloom Filters — Incremental and Parquet-Compatible
 
-`bloom_filter(ndv, fpp, value)` builds a split block Bloom filter sized for `ndv` distinct values at false positive rate `fpp`. It is the Parquet Bloom filter: for the same values and sizing it is byte-for-byte the filter DuckDB writes into Parquet files.
+`bloom_filter(ndv, fpp, value)` builds a split block Bloom filter sized for `ndv` distinct values at false positive rate `fpp`. For the same values and sizing, its payload after the 16-byte Bitfilters header is byte-for-byte the Bloom filter blocks DuckDB writes into Parquet files.
 
 ```sql
 -- One filter per bucket, each sized for ~1,000 keys at 1% FPR
-CREATE TABLE bucket_blooms AS
+CREATE OR REPLACE TABLE bucket_blooms AS
 SELECT bucket,
        bloom_filter(1000, 0.01, key) AS bf
 FROM keys
@@ -117,7 +117,7 @@ GROUP BY bucket;
 SELECT bloom_filter_merge(bf) AS all_keys FROM bucket_blooms;
 ```
 
-Filters merge only when they were built with the same `ndv`, `fpp` and value type. A Bloom filter never gets "full" — insert more than `ndv` values and its false positive rate degrades gradually.
+Filters merge when their payload sizes and value types match. Using the same `ndv` and `fpp` guarantees matching sizes; different settings can also round to the same size. A Bloom filter never gets "full" — insert more than `ndv` values and its false positive rate degrades gradually.
 
 ## Quotient Filter — Mergeable Sets
 
