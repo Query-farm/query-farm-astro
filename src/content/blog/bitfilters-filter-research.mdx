@@ -1,0 +1,150 @@
+---
+title: "Why we passed on more filters for DuckDB’s bitfilters"
+description: "We evaluated BuRR, Taffy, Grafite, Diva++, and partitioned Binary Fuse for DuckDB’s bitfilters extension. See the memory, speed, and correctness tradeoffs."
+pubDate: 2026-11-04
+author: "Query Farm Team"
+tags: ["DuckDB", "Extensions", "Engineering", "Performance"]
+extensions: ["bitfilters"]
+draft: false
+heroImage: "/media/posts/bitfilters-filter-research/social.png"
+heroImageAlt: "Why we passed on more filters for DuckDB’s bitfilters — engineering from Query.Farm."
+showDescription: false
+showLeadVisual: false
+---
+
+import BarTable from '../../components/charts/BarTable.astro';
+import { BLOG_FIGURES } from '../../data/blog-figures';
+
+We were working on peak construction memory in [bitfilters](https://github.com/Query-farm/bitfilters), our DuckDB extension for approximate set membership, when we started looking at other filter designs. The extension already had Bloom, XOR, Binary Fuse, and quotient filters. We wanted to know whether a different design could save us more memory, let us build a filter without knowing its final size, or support range queries.
+
+That led us to [BuRR](https://github.com/lorenzhs/BuRR), [Taffy](https://github.com/jbapple/libfilter), [Grafite](https://github.com/marcocosta97/grafite), and [Diva++](https://github.com/n3slami/Diva/tree/binary_trie). We also tried splitting our existing Binary Fuse construction into smaller partitions.
+
+We haven’t added another filter family. BuRR’s space saving came with a substantial lookup cost in our tests. Taffy’s merge and freeze paths needed work. The range filters raised licensing and portability questions we hadn’t resolved. Partitioning helped some builds fit, but made the SQL path slower. The most useful change came from fixing how our existing filters handle repeated input.
+
+## Building a filter as a SQL aggregate
+
+A membership filter answers “definitely absent” or “possibly present.” The query can skip the first group and check the second exactly. False positives mean extra work; a false negative can cause the query to discard a valid result.
+
+Our XOR and Binary Fuse implementations come from [FastFilter’s single-header library](https://github.com/FastFilter/xor_singleheader). Wrapping a constructor and a lookup function gets an extension started, but there is more to the aggregate. DuckDB may build many groups at once and combine partial states from different threads. We need to account for their memory, serialize the result into a BLOB, and read it safely in later queries.
+
+Spilling was especially relevant to this work. Routing a library’s allocations through DuckDB’s buffer manager makes them count toward `memory_limit`; it doesn’t teach DuckDB how to spill that library’s objects. We still need a state representation DuckDB can export and restore. A static filter can also need much more memory during construction than its finished size suggests.
+
+Those were the costs we wanted to understand before adding another SQL function.
+
+## BuRR saved about 127 KB per million keys
+
+[BuRR](https://github.com/lorenzhs/BuRR) stands for Bumped Ribbon Retrieval. We tested its membership-filter configuration as a smaller alternative to Binary Fuse. Both are static: build a filter from a set of keys, then probe it.
+
+For one million distinct keys and 8-bit fingerprints, we got the following results. These are C++ core measurements on an Apple M3, outside DuckDB’s SQL execution path:
+
+| Measurement | Binary Fuse 8 | BuRR 8 |
+| --- | ---: | ---: |
+| Filter payload | 1,130,524 bytes | 1,003,557 bytes |
+| Construction | 25.51 ms | 143.02 ms |
+| Lookup of an absent key | 1.83 ns | 21.82 ns |
+| Observed false-positive rate | 0.388% | 0.389% |
+
+<BarTable {...BLOG_FIGURES['bitfilters-filter-research']} class="qf-chart-compact-labels" />
+
+BuRR saved 11.2% of the payload at almost the same observed false-positive rate. It took 5.6 times as long to build and 11.9 times as long to probe an absent key. A more compact BuRR configuration saved another 2,555 bytes, but pushed construction to 238 ms.
+
+We could imagine accepting that tradeoff if we were storing a large collection of filters and rarely querying them. We didn’t have that workload. For the membership checks we were trying to improve, saving roughly 127 KB per million keys didn’t justify another implementation and BLOB format with this lookup cost. The ratio would change inside a SQL query, but the core results gave us little reason to expect a performance win there.
+
+There were a couple of practical catches too. The tested builder requires unique hashes. Feeding it repeated keys triggered debug assertions and release-build timeouts, so an aggregate would need to deduplicate before construction. Its buffers and deserializer would also need integration with DuckDB’s allocation and validation code.
+
+The table uses BuRR’s fast configuration with `std::sort`, which passed our distinct-input tests. Its optional [ips2ra](https://github.com/ips4o/ips2ra) radix-sort path triggered an undefined-behavior sanitizer failure when sorting an empty range, so we excluded that path from the timing comparison.
+
+## Taffy’s merge was the expensive part
+
+The attraction of [Taffy Cuckoo in libfilter](https://github.com/jbapple/libfilter) was growth. We wouldn’t have to know the number of distinct keys before starting the filter. Individual growth worked in our tests; combining partial filters was where things got difficult.
+
+The implementation has an overflow stash for entries that don’t fit in the main table. Its union path could leave most of the entries there. We split 10,000 distinct keys across either two or eight partial filters, then merged them:
+
+| Measurement | Two partial filters | Eight partial filters |
+| --- | ---: | ---: |
+| Entries in the merged stash | 2,688 | 8,350 |
+| Lookup of an absent key after merging | 1.38 µs | 4.24 µs |
+| Missing members after merging | 0 | 0 |
+| Missing members after freezing | 2,451 | 7,937 |
+
+These timings are from individual test runs, with 10,000 absent probes per case. The merged filters retained every key, but their large stashes made lookups expensive. Freezing them into the compact representation then introduced false negatives, making those frozen filters unusable for rejecting rows.
+
+We found two defects in freezing. Stash entries were stored as reconstructed keys, while lookup expected the permuted bucket and fingerprint. A stash resize also passed an element count to `memcpy` where it needed `count * sizeof(uint64_t)`. With both fixes applied locally, the same two-part and eight-part cases had zero missing members under the sanitizers. Their stashes still contained 2,688 and 8,350 entries. Fixing correctness left the merge-performance problem intact, along with the work needed for portable serialization and memory accounting.
+
+This was the standard Taffy Cuckoo implementation at [revision 4ebeaef](https://github.com/jbapple/libfilter/tree/4ebeaef1215969aee9edb05eb145e94b8dd98e16). The [Taffy paper](https://arxiv.org/abs/2109.01947) describes other designs that we haven’t evaluated.
+
+## Grafite and Diva++ would add range queries
+
+Range filters offered a capability our point-membership filters don’t provide: asking whether any key might fall inside an interval. That could help skip a partition for a timestamp or numeric range.
+
+We tried the C++ implementation in [marcocosta97/grafite](https://github.com/marcocosta97/grafite) in a separate comparison harness. Its [paper](https://arxiv.org/abs/2311.15380) gives bounds on false-positive probability for range queries, which made it an interesting candidate. We stopped short of importing the code because the implementation is [GPLv3](https://github.com/marcocosta97/grafite/blob/6838e9c6f757b300c410e79bc9c608ece2c5f23f/LICENSE), and we wanted to keep the extension’s runtime permissively licensed.
+
+[Diva++ lives on the `binary_trie` branch of n3slami/Diva](https://github.com/n3slami/Diva/tree/binary_trie). The repository has an MIT license at the root, but following the code we would need raised questions. The entropy encoder was in [a file carrying a GPLv3-or-later header](https://github.com/n3slami/Diva/blob/7b0af7d4ccd7813a8d01bfebcd646c4c15777c60/bench/bench_utils.hpp), and the core linked bundled [Wormhole](https://github.com/wuxb45/wormhole) code, whose upstream project is GPLv3. We [opened an issue asking about those components and possible replacements](https://github.com/n3slami/Diva/issues/4).
+
+The unmodified Diva++ build also failed on our ARM machine because of architecture-specific code. We inspected it, but didn’t get as far as a successful runtime evaluation. We did build a separate static prototype using some Diva ideas; its selectivity on padded strings was poor. That was our adaptation, so it tells us about our prototype rather than upstream Diva or Diva++.
+
+We still want range filtering. We don’t yet have a version we’re ready to put behind a supported SQL API.
+
+## Building several smaller Binary Fuse filters
+
+Partitioning offered another way to reduce peak construction memory: divide the keys into partitions and build a Binary Fuse filter for each one. A probe hashes to one partition and checks its filter. Constructing the children one at a time can use much less scratch memory than building one large filter.
+
+We could test this without adding a function. We grouped keys by hash bits, built an ordinary Binary Fuse filter for each group, and used a join to route probes. For eight million distinct keys, the SQL results were:
+
+| Measurement | One filter | Eight filters |
+| --- | ---: | ---: |
+| DuckDB memory limit | 512 MB | 64 MB |
+| Total stored BLOB size | 9,011,244 bytes | 9,044,320 bytes |
+| Construction | 0.440 s | 0.688 s |
+| Two million absent probes | 0.0453 s | 0.1231 s |
+| Peak process resident memory | 287.6 MB | 251.7 MB |
+
+The one-filter build failed at limits of 64, 128, and 256 MB. Eight filters succeeded at 64 MB, spilling grouped state to disk and adding only 0.37% to the stored size. Partitioning could make a build possible under a memory limit where the monolithic construction fails.
+
+It was also slower. Construction went from 0.44 to 0.69 seconds, and the probe query took 2.7 times as long. The join and dynamic filter selection are part of that probe cost; this is not a measurement of a directory inside one BLOB. Some partitioned 8-bit lookups in our separate core benchmark were faster, while the 16-bit variants were slower. We couldn’t infer a universal lookup penalty from the SQL result.
+
+The 64 MB setting was a limit on DuckDB’s managed memory. Peak resident memory for the whole process was about 252 MB, as shown in the table.
+
+There was another limit: splitting construction doesn’t fix collection. Our aggregate still retains its input keys before it builds a filter. One large group can run out of memory at that stage, and repeated copies of one key all land in the same partition. A complete solution needs spilling and deduplication during collection too.
+
+We left partitioning as a possible fallback for builds that would otherwise fail. These measurements didn’t give us a reason to use it by default.
+
+## A smaller fix in the existing filters
+
+One of the partition tests used eight million rows but only 80,000 distinct keys. It produced 9.05 MB of filters. Deduplicating first brought that down to 103 KB.
+
+The oversized filters had passed the membership checks. Every key was still found. The builder had allocated for the row count, then successfully built a filter containing far fewer distinct keys. We needed a size assertion to catch that problem.
+
+We already had code to sort and deduplicate repeated input. A sample decided when to use it. The sample read evenly spaced positions, and a repeating sequence could put a different key at every sampled position. Runs of equal keys could fool it too.
+
+We changed the sampler to hash its positions. It sorts and deduplicates those positions before reading the keys, so sampling one row twice cannot be mistaken for duplicate input. The sample still occupies 32 KiB, and the existing deduplication path does the rest.
+
+For the eight-million-row input with 80,000 distinct keys, the change saved stored space at a cost during construction:
+
+| Measurement | Evenly spaced sample | Hashed sample positions |
+| --- | ---: | ---: |
+| Total stored BLOB size | 9,052,512 bytes | 102,752 bytes |
+| Construction | 0.283 s | 0.454 s |
+| Peak process resident memory | 160.4 MB | 181.2 MB |
+
+These are seven-trial medians, alternating the two builds in fresh processes, with eight filter groups and a 64 MB DuckDB memory limit. Materializing and sorting the keys increased both construction time and peak memory. Grouped unique-input builds were 4–6% slower because the sampler now does more work.
+
+The [sampling fix is on `v2.0`](https://github.com/Query-farm/bitfilters/commit/0901a9537c5bd53d9792fc424cd265775759cc95). Its regression tests compare filter size against an explicitly deduplicated build as well as checking membership. Sampling is still a heuristic, so it won’t catch every repetitive input.
+
+## Code and measurement details
+
+The main repositories and revisions used in this work were:
+
+| Repository | What we used |
+| --- | --- |
+| [Query-farm/bitfilters](https://github.com/Query-farm/bitfilters) | Our working checkout; the sampling fix is [0901a95](https://github.com/Query-farm/bitfilters/commit/0901a9537c5bd53d9792fc424cd265775759cc95). |
+| [FastFilter/xor_singleheader](https://github.com/FastFilter/xor_singleheader) | Vendored XOR and Binary Fuse headers, including our local construction-memory changes. |
+| [lorenzhs/BuRR](https://github.com/lorenzhs/BuRR) | [2ba071a](https://github.com/lorenzhs/BuRR/tree/2ba071ab728f77d1cebbd14d1f0b9381575730ab), fast configuration with `std::sort` for the reported comparison. |
+| [jbapple/libfilter](https://github.com/jbapple/libfilter) | [4ebeaef](https://github.com/jbapple/libfilter/tree/4ebeaef1215969aee9edb05eb145e94b8dd98e16), standard Taffy Cuckoo. |
+| [marcocosta97/grafite](https://github.com/marcocosta97/grafite) | [6838e9c](https://github.com/marcocosta97/grafite/tree/6838e9c6f757b300c410e79bc9c608ece2c5f23f), in the separate range-filter harness. |
+| [n3slami/Diva](https://github.com/n3slami/Diva) | [7b0af7d](https://github.com/n3slami/Diva/tree/7b0af7d4ccd7813a8d01bfebcd646c4c15777c60), the Diva++ source audit. |
+| [duckdb/duckdb](https://github.com/duckdb/duckdb) | [d54cbbe](https://github.com/duckdb/duckdb/tree/d54cbbe3df17e8e5ce68312f483b4155836112aa), a DuckDB 2.0 development checkout. |
+
+We ran on an Apple M3 with 24 GiB RAM and Apple Clang 17, using one thread unless noted otherwise. The BuRR table and partitioned SQL table report three-trial medians; the BuRR false-positive rates pool 15 million absent probes. The extension builds included additional construction-memory changes that are still under development. Those changes were present in both versions of the sampling comparison, so its timings describe that development build rather than the sampling commit alone.
+
+The core BuRR/Taffy benchmark generates hashes during construction without retaining a full input array. Probe timings exclude query-key generation. The SQL partition experiment includes input collection and spilling. Those build times measure different work and shouldn’t be compared directly.
