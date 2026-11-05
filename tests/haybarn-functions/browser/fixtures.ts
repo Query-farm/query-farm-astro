@@ -1,5 +1,6 @@
 import { test as base, expect } from '@playwright/test';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { wasmVersion } from '../../../src/haybarn-functions/data/haybarn-release.mjs';
 
 // Run the real pinned engine without relying on CDN availability in CI.
@@ -30,8 +31,10 @@ export const test = base.extend({
         body = Buffer.from(await response.arrayBuffer());
         if (!body.subarray(0, 4).equals(Buffer.from([0, 97, 115, 109]))) throw new Error(`Invalid WASM extension: ${name}`);
         await mkdir(directory, { recursive: true });
-        await writeFile(`${path}.tmp`, body);
-        await rename(`${path}.tmp`, path);
+        // Different browser workers can fetch the same uncached artifact.
+        const temporary = `${path}.${randomUUID()}.tmp`;
+        await writeFile(temporary, body);
+        await rename(temporary, path);
       }
       await route.fulfill({ body, contentType: 'application/wasm', headers: { 'Access-Control-Allow-Origin': '*' } });
     });

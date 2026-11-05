@@ -11,8 +11,8 @@
 -- extension. Load it best-effort so xor8_filter / xor8_filter_contains
 -- resolve at parse time. If the community binary isn't available on the
 -- current platform we still want the rest of the fixtures to apply.
-INSTALL bitfilters FROM community;
-LOAD bitfilters;
+INSTALL bitfilters FROM query_farm;
+LOAD bitfilters FROM query_farm;
 
 -- cookbook.mdx — "Hash partitioning" and "Independent hashes via seeds"
 CREATE OR REPLACE TABLE users AS

@@ -56,10 +56,10 @@ test('platform filters use the current release even with an older release in the
   await expect(page.locator('[data-extension]:visible')).toHaveCount(currentExtensions.length);
 });
 
-test('category pages and directory links work without JavaScript', async ({ browser }) => {
-  const context = await browser.newContext({ javaScriptEnabled: false, reducedMotion: 'reduce' });
+test('category pages and directory links work without JavaScript', async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ baseURL, javaScriptEnabled: false, reducedMotion: 'reduce' });
   const page = await context.newPage();
-  await page.goto(`http://127.0.0.1:4323${root}`);
+  await page.goto(root);
   await expect(page.locator('[data-extension]:visible')).toHaveCount(currentExtensions.length);
   await page.getByRole('navigation', { name: 'Extension categories' }).getByRole('link', { name: /Files & formats/ }).click();
   await expect(page).toHaveURL(/category\/files/);

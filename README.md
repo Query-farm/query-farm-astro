@@ -139,5 +139,68 @@ The workflow requires the `CLOUDFLARE_API_TOKEN` and
 CI checks Astro types, the function catalogs, the combined build, exported
 references, and browser behavior before deployment. Browser tests execute the
 real pinned WASM package and serve its artifacts locally for deterministic CI.
+CI also runs `npm run test:extension-install` against the built extension
+catalog and documentation, including pages without a browser runner. It checks
+the complete repository setup, qualified INSTALL/LOAD commands, later-session
+instructions, and cookbook/reference examples. Older syntax is allowed only
+inside the labeled pre-2.0 section. A native DuckDB 2.0.0 smoke test executes
+A5's rendered installation SQL unchanged, then its documented LOAD command in
+a second process, using temporary extension and repository directories. Both
+processes must execute an A5 function. This exercises the shared installation
+flow; it does not test native binary availability for every extension/platform.
+Repository or download failures fail this check rather than being skipped.
+
+Run it locally after `npm run build` with
+`uv run --with duckdb==2.0.0 npm run test:extension-install`, or install
+`tests/extensions/native-requirements.txt` in a virtual environment and set
+`DUCKDB_TEST_PYTHON` to that environment's Python executable.
+`EXTENSION_DOCS_DIST` can point at an existing build snapshot.
+
+The extension browser checks discover every built page offering a WASM runner
+and click every Run control, including cookbook, article, and tabbed examples.
+The VGI map's separate Run control also executes its real query and must render
+result markers; the live train board shares a query covered by the shell tests.
+Each example uses the site's own isolated session, setup SQL, and displayed
+query. Community extensions download from their published repository, and the
+tests confirm the extension is loaded. Missing builds, failed setup or SQL,
+rendering errors, and timeouts fail CI. Failures are collected per example;
+they are not skipped or replaced with native results. Examples that need
+credentials, external services, or prior setup are held to the same rule if
+they offer Run. The suite does not supply private credentials or silently
+invent setup. Each page attaches an `examples` JSON report with the exact SQL
+and terminal output for failures.
+Sample tables are recreated in each example's isolated database. Fixture COPY
+statements create shared sample files once per page; a failed COPY still fails
+the example. Extension pages expose their setup in “Sample data for the examples.”
+Keep these sample files immutable across examples.
+
+Use `-- expect-error: <message substring>` immediately before a statement that
+deliberately demonstrates an error. The statement must fail with that message;
+success, a different error, or any fixture failure still fails the check.
+For a snippet that requires native facilities, add
+`-- browser-unavailable: <specific reason>` inside its SQL block. The page shows
+that reason instead of Run, and the browser test checks the explanation and
+absence of a Run control. Do not use this to hide a missing promised WASM build.
+
+CI retains failed browser reports and traces as the `browser-test-results`
+artifact for seven days.
+
+Run this subset with `npm run build` followed by `npm run test:extension-wasm`.
+Use `-- --workers=4` to distribute independent pages across four browser
+workers. To test an existing build snapshot while another build is running,
+set `PLAYWRIGHT_DIST_DIR` to its directory and `PLAYWRIGHT_PORT` to a free port.
+New runnable blocks are covered automatically. Also add a documented query
+and expected result to `tests/extensions/wasm-examples.ts` when enabling a new
+extension: these supplemental smoke checks assert representative result values.
+The exhaustive checks verify execution, not equality with every illustrative
+output table (some contain random values or live data). Regression tests inject
+a missing binary and broken setup/SQL to ensure a later successful SELECT
+cannot conceal a failure.
+
+An extension with a published WASM artifact that cannot run in this site's
+browser runtime can set `browserRunDisabledReason` in its authored metadata.
+This removes Run controls from its reference pages and explains the limitation;
+generated artifact snapshots do not override it. Cronjob uses this restriction
+because its scheduler requires background threads.
 The dynamic JSON, Markdown, and search routes are Pages Functions. The remaining
 HTML and assets stay on Pages' static path and do not invoke a Function.

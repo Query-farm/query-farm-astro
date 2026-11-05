@@ -2,7 +2,7 @@
   "name": "bitfilters",
   "displayName": "Bitfilters",
   "icon": "funnel",
-  "description": "Probabilistic set-membership filters as DuckDB columns. Quotient, XOR (8/16-bit), Binary Fuse (8/16-bit), and DuckDB-style Bloom filters — answer 'is X in this set?' in O(1) using a fraction of the memory of the source set, with tunable false-positive rates and zero false negatives.",
+  "description": "Probabilistic set-membership filters as DuckDB columns. Quotient, XOR (8/16-bit), Binary Fuse (8/16-bit), Parquet-compatible split block Bloom, and DuckDB-style Bloom filters — answer 'is X in this set?' in O(1) using a fraction of the memory of the source set, with tunable false-positive rates and zero false negatives. Build them from values of any type.",
   "githubUrl": "https://github.com/Query-farm/bitfilters",
   "cta": {
     "title": "Skip Expensive Operations Probabilistically",
@@ -16,12 +16,16 @@
   "installSource": "community",
   "quickStart": [
     {
-      "title": "Build an xor8 filter from hashed keys",
-      "sql": "-- 1% false-positive rate, ~9 bits per key\nWITH f AS (\n  SELECT xor8_filter(hash(email)) AS filter FROM users\n)\nSELECT email,\n       xor8_filter_contains(f.filter, hash(email)) AS might_be_known\nFROM new_signups, f\nLIMIT 10;"
+      "title": "Build an xor8 filter from a column",
+      "sql": "-- ~0.39% false-positive rate, ~9 bits per key\nWITH f AS (\n  SELECT xor8_filter(email) AS filter FROM users\n)\nSELECT email,\n       xor8_filter_contains(f.filter, email) AS might_be_known\nFROM new_signups, f\nLIMIT 10;"
     },
     {
-      "title": "Per-partition Quotient filter — supports deletion and resize",
-      "sql": "SELECT bucket,\n       quotient_filter(16, 4, hash(id)) AS filter\nFROM ids\nGROUP BY bucket;"
+      "title": "Per-partition Quotient filters that size themselves",
+      "sql": "-- r = 8 remainder bits, ~0.4% false-positive rate; q is picked for you\nSELECT bucket,\n       quotient_filter(8, id) AS filter\nFROM ids\nGROUP BY bucket;"
+    },
+    {
+      "title": "Parquet-compatible Bloom filter",
+      "sql": "-- Sized for 1,000 distinct values at a 1% false-positive rate\nSELECT bloom_filter(1000, 0.01, key) AS filter FROM keys;"
     }
   ],
   "relatedExtensions": [

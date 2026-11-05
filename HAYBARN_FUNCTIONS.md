@@ -78,7 +78,7 @@ ID from it. Native CLI/install-channel versions continue to use the existing
 Haybarn product snapshot; those releases can differ from the WASM package.
 
 ```sh
-npm install --save-exact @haybarn/haybarn-wasm@NEW_VERSION
+npm install --save-exact --ignore-scripts @haybarn/haybarn-wasm@NEW_VERSION
 npx playwright install chromium
 npm run refresh:haybarn-functions
 npm run check
@@ -87,6 +87,10 @@ npm run build
 npm run test:haybarn-exports
 npm run test:haybarn-browser
 ```
+
+Skip the install hooks during a version change: the new release's catalog must
+be captured before the derived search data can be generated. `npm run check`
+regenerates that data after the refresh.
 
 Refresh requires Python 3 and Git. It checks out the captured SQLGlot revision
 under `.cache/sqlglot`, captures the installed WASM package through a private
@@ -103,7 +107,7 @@ To capture a published native engine, use `npm run snapshot:haybarn-functions
 
 ## WASM delivery
 
-`src/lib/repl/haybarn-bundles.ts` provides the same EH/MVP artifact URLs to both
+`src/lib/repl/haybarn-bundles.ts` provides the same base bundle artifact URLs to both
 browser runners. Workers and binaries load from the exact package version on
 unpkg; `createWorker()` creates a same-origin blob worker. The guide retains
 its isolated examples, Stop/reset behavior, and lazy engine startup.

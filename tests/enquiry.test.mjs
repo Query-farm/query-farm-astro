@@ -1,0 +1,178 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { handleEnquiry, validateEnquiry, enquiryEmail } from '../src/lib/enquiry.ts';
+import { enquiryDatabase } from './enquiry-support.mjs';
+
+const ENV = { RESEND_API_KEY: 're_test', TURNSTILE_SECRET_KEY: 'ts_test' };
+const GOOD = {
+  name: 'Ada Lovelace',
+  email: 'ada@example.com',
+  company: 'Analytical Engines',
+  topic: 'Consulting',
+  message: 'We need a DuckDB extension for our engine.',
+  page: '/company/contact',
+  turnstileToken: 'token',
+  qf_hp: '',
+};
+
+function post(body) {
+  return new Request('https://query.farm/api/enquiry', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.7' },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  });
+}
+
+// A stub fetch that records calls and answers Turnstile and Resend.
+function stubFetch({ turnstile = true, resendStatus = 200 } = {}) {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url: String(url), init });
+    if (String(url).includes('turnstile')) return Response.json({ success: turnstile });
+    return Response.json({ id: '49a3999c-0ce1-4ea6-ab68-afcd6dc2e794' }, { status: resendStatus });
+  };
+  return { calls, fetchImpl };
+}
+
+test('a valid enquiry is verified, then emailed with the sender as reply-to', async () => {
+  const { calls, fetchImpl } = stubFetch();
+  const response = await handleEnquiry(post(GOOD), ENV, fetchImpl);
+  assert.equal(response.status, 200);
+  const receipt = await response.json();
+  assert.equal(receipt.ok, true);
+  assert.equal(receipt.accepted, true);
+  assert.match(receipt.enquiry_id, /^[0-9a-f-]{36}$/);
+  assert.equal('resend_id' in receipt, false);
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].url, /turnstile\/v0\/siteverify$/);
+  assert.equal(calls[0].init.body.get('remoteip'), '203.0.113.7');
+  assert.equal(calls[1].url, 'https://api.resend.com/emails');
+  assert.equal(calls[1].init.headers.Authorization, 'Bearer re_test');
+  const email = JSON.parse(calls[1].init.body);
+  assert.deepEqual(email.to, ['hello@query.farm']);
+  assert.equal(email.reply_to, 'ada@example.com');
+  assert.equal(email.subject, 'Consulting: inquiry from Ada Lovelace (Analytical Engines)');
+  assert.match(email.text, /We need a DuckDB extension/);
+});
+
+test('invalid fields are reported per field and nothing is sent', async () => {
+  const { calls, fetchImpl } = stubFetch();
+  const response = await handleEnquiry(post({ ...GOOD, email: 'not-an-address', topic: 'Lunch', message: 'hi' }), ENV, fetchImpl);
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.deepEqual(Object.keys(body.errors).sort(), ['email', 'message', 'topic']);
+  assert.equal(calls.length, 0);
+});
+
+test('a failed Turnstile check is refused before Resend is called', async () => {
+  const { calls, fetchImpl } = stubFetch({ turnstile: false });
+  const response = await handleEnquiry(post(GOOD), ENV, fetchImpl);
+  assert.equal(response.status, 403);
+  assert.equal(calls.length, 1);
+});
+
+test('a filled honeypot gets a quiet success and sends nothing', async () => {
+  const { calls, fetchImpl } = stubFetch();
+  const response = await handleEnquiry(post({ ...GOOD, qf_hp: 'http://spam.example' }), ENV, fetchImpl);
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 0);
+  assert.deepEqual(await response.json(), { ok: true, accepted: false });
+});
+
+test('a Resend failure tells the visitor to email instead', async () => {
+  const { fetchImpl } = stubFetch({ resendStatus: 500 });
+  const response = await handleEnquiry(post(GOOD), ENV, fetchImpl);
+  assert.equal(response.status, 502);
+  assert.match((await response.json()).error, /hello@query\.farm/);
+});
+
+test('missing secrets fail closed with a helpful message', async () => {
+  const { calls, fetchImpl } = stubFetch();
+  const response = await handleEnquiry(post(GOOD), {}, fetchImpl);
+  assert.equal(response.status, 503);
+  assert.equal(calls.length, 0);
+});
+
+test('an unreadable body is a 400', async () => {
+  const response = await handleEnquiry(post('{not json'), ENV, stubFetch().fetchImpl);
+  assert.equal(response.status, 400);
+});
+
+test('validation trims fields and leaves company optional', () => {
+  const result = validateEnquiry({ ...GOOD, name: '  Ada  ', company: '' });
+  assert.equal(result.ok, true);
+  assert.equal(result.enquiry.name, 'Ada');
+  const email = enquiryEmail(result.enquiry, 'to@query.farm', 'Site <site@query.farm>');
+  assert.equal(email.subject, 'Consulting: inquiry from Ada');
+});
+
+test('a field named "website" (browser autofill) does not trip the honeypot', async () => {
+  const { calls, fetchImpl } = stubFetch();
+  const response = await handleEnquiry(post({ ...GOOD, website: 'https://example.com' }), ENV, fetchImpl);
+  assert.equal(response.status, 200);
+  assert.equal(calls.length, 2);
+});
+
+test('successful sends persist only IDs/timestamps and include correlation tags', async () => {
+  const db = enquiryDatabase();
+  try {
+    const { fetchImpl, calls } = stubFetch();
+    const response = await handleEnquiry(post(GOOD), { ...ENV, ENQUIRY_DB: db }, fetchImpl);
+    const body = await response.json();
+    const row = db.sqlite.prepare('SELECT * FROM enquiry_messages').get();
+    assert.equal(row.enquiry_id, body.enquiry_id);
+    assert.equal(row.resend_id, '49a3999c-0ce1-4ea6-ab68-afcd6dc2e794');
+    assert.deepEqual(Object.keys(row).sort(), ['accepted_at', 'enquiry_id', 'resend_id']);
+    assert.deepEqual(JSON.parse(calls[1].init.body).tags, [
+      { name: 'source', value: 'website_enquiry' }, { name: 'enquiry_id', value: body.enquiry_id },
+    ]);
+  } finally { db.sqlite.close(); }
+});
+
+test('storage failure does not invite a duplicate of an accepted email', async t => {
+  const logs = [];
+  t.mock.method(console, 'error', value => logs.push(value));
+  const response = await handleEnquiry(post(GOOD), { ...ENV, ENQUIRY_DB: { prepare: () => { throw Error('offline'); } } }, stubFetch().fetchImpl);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).accepted, true);
+  assert.equal(JSON.parse(logs[0]).reason, 'storage_failed');
+  assert.doesNotMatch(logs.join(''), /Ada|ada@example|Analytical|DuckDB extension/);
+});
+
+test('missing storage is explicit but preserves backward-compatible sending', async t => {
+  const logs = [];
+  t.mock.method(console, 'error', value => logs.push(JSON.parse(value)));
+  assert.equal((await handleEnquiry(post(GOOD), ENV, stubFetch().fetchImpl)).status, 200);
+  assert.equal(logs[0].reason, 'storage_not_configured');
+});
+
+test('missing, expired and unavailable Turnstile checks have coarse reasons and never send email', async () => {
+  for (const [token, reply, expected] of [
+    ['', { success: true }, 'turnstile_missing'],
+    ['token', { success: false, 'error-codes': ['timeout-or-duplicate'] }, 'turnstile_expired'],
+    ['token', { success: false, 'error-codes': ['internal-error'] }, 'turnstile_unavailable'],
+  ]) {
+    const calls = [];
+    const response = await handleEnquiry(post({ ...GOOD, turnstileToken: token }), ENV, async url => {
+      calls.push(String(url)); return Response.json(reply);
+    });
+    assert.equal(response.status, 403);
+    assert.equal((await response.json()).reason, expected);
+    assert.equal(calls.some(url => url.includes('resend.com')), false);
+  }
+});
+
+test('non-object JSON is rejected without leaking errors', async () => {
+  for (const value of [null, [], 123, '"text"']) {
+    const response = await handleEnquiry(post(value), ENV, stubFetch().fetchImpl);
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).reason, 'invalid_request');
+  }
+});
+
+test('an incomplete provider success cannot count as an accepted lead', async () => {
+  const response = await handleEnquiry(post(GOOD), ENV, async url => Response.json(String(url).includes('turnstile') ? { success: true } : {}));
+  assert.equal(response.status, 502);
+  assert.equal((await response.json()).reason, 'send_failed');
+});

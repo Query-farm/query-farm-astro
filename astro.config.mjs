@@ -78,6 +78,8 @@ const farmTheme = {
 
 // https://astro.build/config
 export default defineConfig({
+  // Keep local product reviews free of the developer overlay and its background audits.
+  devToolbar: { enabled: false },
   site: 'https://query.farm',
   output: 'static',
   // Astro's HTML compressor drops newline-only whitespace at element

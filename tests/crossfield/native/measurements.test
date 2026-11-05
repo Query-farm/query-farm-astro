@@ -1,0 +1,46 @@
+# Website download regression. Run from the extracted measurements directory.
+# Expected values are independently specified; native SQLLogicTest runner only.
+require crossfield
+
+require-env WEBSITE_EXAMPLE_DIR
+
+statement ok
+LOAD icu;
+
+statement ok
+SET TimeZone = 'UTC';
+
+statement ok
+CREATE TABLE measurement_rows(
+    id INTEGER PRIMARY KEY, location VARCHAR, time TIMESTAMPTZ,
+    start_at TIMESTAMPTZ, end_at TIMESTAMPTZ, seconds DOUBLE, amount DOUBLE,
+    mean_value DOUBLE, instant DOUBLE, event_at TIMESTAMPTZ,
+    unknown_value DOUBLE, probability DOUBLE, offset_seconds INTEGER
+);
+
+statement ok
+INSERT INTO measurement_rows VALUES
+(1,'A','2024-01-02 00:00+00','2024-01-01 23:00+00','2024-01-02 00:00+00',3600,5,10,99,'2024-01-02 00:00+00',7,20,0),
+(2,'A','2024-01-02 01:00+00','2024-01-02 00:00+00','2024-01-02 01:00+00',3600,3,20,98,'2024-01-02 01:00+00',8,50,0),
+(3,'A','2024-01-02 03:00+00','2024-01-02 01:00+00','2024-01-02 03:00+00',7200,4,50,97,'2024-01-02 03:00+00',9,70,0),
+(4,'B','2024-01-02 00:00+00','2024-01-01 23:00+00','2024-01-02 00:00+00',3600,11,30,96,'2024-01-02 00:00+00',6,10,0);
+
+statement ok
+ATTACH '{WEBSITE_EXAMPLE_DIR}/models/utc.crossfield.json' AS weather_model (TYPE crossfield);
+
+statement ok
+SET crossfield_mode = 'strict';
+
+query TTRR
+SELECT location, report_day, rainfall, weighted_flux
+FROM SEMANTIC weather_model.measurements
+GROUP BY location, report_day ORDER BY location, report_day;
+----
+A	2024-01-01	5	10
+A	2024-01-02	7	40
+B	2024-01-01	11	30
+
+statement error
+SELECT report_day,unsafe_mean FROM SEMANTIC weather_model.measurements GROUP BY report_day;
+----
+MEASUREMENT_AGGREGATION_REQUIRED

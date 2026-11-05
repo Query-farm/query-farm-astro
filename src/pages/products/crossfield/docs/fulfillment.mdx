@@ -1,0 +1,116 @@
+---
+layout: '../../../../layouts/CrossfieldDocs.astro'
+title: 'Complete orders, delivered on time'
+description: 'A runnable fulfillment example: define eligible orders, count complete on-time deliveries, and compare original and revised promises.'
+---
+
+import CodeBlock from '../../../../components/ui/CodeBlock.astro';
+import FulfillmentExample from '../../../../components/crossfield/FulfillmentExample.astro';
+import queries from '../../../../../public/crossfield/examples/fulfillment/queries.json';
+import { crossfieldScenarios } from '../../../../data/crossfield-scenarios';
+
+A shipment dashboard and a customer service report can describe the same deliveries differently. Customers care about receiving their complete order. A shipment arriving on time does not establish that the rest of the order arrived with it.
+
+This guide uses a small synthetic dataset so you can follow every order into the result. The download includes the source records, complete models and SQL; it runs locally without an external service.
+
+## Understand the source data
+
+The reporting population is non-canceled orders **originally promised for January 31, 2024**. Deliveries are observed through February 3. All dates are UTC business dates.
+
+| Order | Region | Units ordered | Deliveries through February 3 | Complete and on time? |
+|---|---|---:|---|---|
+| A100 | North | 2 | One unit January 30, one January 31 | Yes |
+| A101 | North | 2 | One unit January 31, one February 2 | No: late |
+| A102 | South | 2 | One unit January 31 | No: incomplete |
+| A103 | South | 1 | One unit January 31 | Yes |
+
+A104 is canceled; A105 is due February 5; A106 was due January 30. All three are outside the population. A102 has a second delivery on February 5, outside the observation cutoff.
+
+There are six observed shipments for the eligible orders. Five arrived by the original promise date: **83.3% of delivered shipments**. Only two of four complete orders meet that promise: **50% of eligible orders**. These are distinct measures.
+
+<FulfillmentExample />
+
+## Load the example
+
+[Download fulfillment.zip](/crossfield/examples/fulfillment.zip). It contains the complete source setup, Ossie definitions, Crossfield policies, two versioned packages, SQL, manual expectations and captured explanation.
+
+Use the [matching native engine and extension](/products/crossfield/docs/compatibility). [Request evaluation access](/company/contact) if you need the development build; the example download contains data and models only.
+
+```sh
+unzip fulfillment.zip
+cd fulfillment
+/path/to/matched/haybarn -unsigned -init /dev/null :memory: \
+  -cmd "LOAD '/absolute/path/to/crossfield.duckdb_extension';" < session.sql
+```
+
+For an interactive session, omit `< session.sql`, then run:
+
+```sql
+.bail on
+.read setup.sql
+.read run.sql
+.read explain.sql
+```
+
+[setup.sql](/crossfield/examples/fulfillment/setup.sql) creates raw `orders` and `shipments`, then prepares a **stored table with one fact per order**, `warehouse.order_facts`. It sums delivered units and records the last delivery date through the fixed observation cutoff. Orders with no deliveries have zero delivered units and a NULL last-delivery date.
+
+This preparation belongs to the example's source pipeline. Crossfield queries the stored facts; this example does not claim automatic shipment traversal, refresh or live snapshot maintenance. In production, that source pipeline must preserve order identity, units and a consistent observation cutoff.
+
+The setup also performs both model attachments. The current attachment is:
+
+<CodeBlock code={crossfieldScenarios[0].attach} title="SQL · Already included in setup.sql" tryable={false} />
+
+Run setup once in a fresh connection. `BINDINGS` maps the logical source to the physical warehouse.
+
+## Query the approved delivery metrics
+
+<CodeBlock code={crossfieldScenarios[0].strict} title="SQL · Select the model and require approved queries" tryable={false} />
+
+<CodeBlock code={queries.region} title="SQL · On-time delivery by region" tryable={false} />
+
+| region | eligible_orders | on_time_orders | on_time_percent |
+|---|---:|---:|---:|
+| North | 2 | 1 | 50 |
+| South | 2 | 1 | 50 |
+
+<CodeBlock code={queries.total} title="SQL · The same definitions across all eligible orders" tryable={false} />
+
+Overall: **4 eligible orders, 2 on time, 50 percent**. The percentage is recomputed from counts. It is not an average of regional percentages.
+
+The [Ossie document](/crossfield/examples/fulfillment/fulfillment-current.ossie.json) defines `eligible_orders`, `on_time_orders` and `on_time_percent`. The [Crossfield manifest](/crossfield/examples/fulfillment/fulfillment-current.crossfield.json) approves those metrics and the region dimension, fixes the reporting population and marks the percentage non-additive.
+
+An on-time order has at least its ordered quantity delivered, with its last delivery on or before the promise date. An incomplete order stays in the eligible count. This fixed dataset assumes positive ordered quantities, no returns and distinct shipment records; those are source guarantees, not validations established by this example.
+
+When no orders qualify, the eligible count is zero and the on-time count and percentage remain NULL. A missing population is not reported as a successful 0% or 100% rate.
+
+## Review a model revision
+
+The proposed revision changes the deadline to the **revised promise date**. A101's revised date is February 2, so it now qualifies. The denominator still uses the original January 31 cohort: the two revisions compare the same four orders and observation cutoff.
+
+```sql
+SET crossfield_mode = 'semantic';
+```
+
+<CodeBlock code={queries.revision} title="SQL · Compare definitions over the same facts" tryable={false} />
+
+| original_promise_percent | revised_promise_percent | percentage_point_change |
+|---:|---:|---:|
+| 50 | 75 | 25 |
+
+The result changes because the definition changed; deliveries did not improve. Whether revised promises should count is a business policy decision. Crossfield makes the difference reviewable. Both packages share a package identity, with revisions 1 and 2; neither revision freezes or refreshes the source data.
+
+Follow [model versions](/products/crossfield/docs/model-versions) for the complete process of keeping definitions, comparing them and choosing which version future reports should use.
+
+## Inspect the calculation
+
+<CodeBlock code={`EXPLAIN (SEMANTIC)\n${queries.region}`} title="SQL · Inspect the approved definitions" tryable={false} />
+
+The [captured explanation](/crossfield/examples/fulfillment/explain-semantic.json) includes model and policy identities, source mappings and [complete generated SQL](/crossfield/examples/fulfillment/expanded.sql). Look for the January 31 population, cancellation exclusion and complete-delivery condition.
+
+Explanation does not execute the report or providers. Execute the original semantic query to retain validation. Strict mode rejects direct raw-table queries and unapproved calculations; a caller-controlled setting alone is not an authentication boundary. Read about [host-controlled sessions](/products/crossfield/docs/compatibility#host-controlled-sessions).
+
+## Verification and limits
+
+The native SQLLogicTest passes **36 assertions per optimizer mode** on EC2, including six numerical queries and two deliberate rejections. Both downloaded CLI sessions also complete, and the explanation is captured from the engine. [Exact evidence and commands](/crossfield/examples/fulfillment/verification.txt).
+
+These checks cover the declared fixture, population, empty result, CTE, strict rejection and revision comparison. They do not qualify a logistics connector or a production order model. [Manual expectations](/crossfield/examples/fulfillment/expected-results.txt) and [the executable test](/crossfield/examples/fulfillment/fulfillment.test) are included for review.

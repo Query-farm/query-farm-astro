@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["haybarn==1.5.5rc1"]
+# dependencies = ["haybarn==2.0.0rc11"]
 # ///
 """
 Per-extension SQL example validator.
@@ -113,6 +113,8 @@ BIND_VAR_RE = re.compile(r"(?<![:\w]):([a-zA-Z_][a-zA-Z0-9_]*)\b")
 # system. Auto-converts EXEC-FAIL → EXEC-SKIP with the matching reason.
 RUNTIME_SKIP_HINTS = [
     ("io error", "network unavailable"),
+    # Tributary examples need a real Kafka broker, which CI doesn't have.
+    ("broker transport failure", "kafka broker unavailable"),
     ("connection refused", "network unavailable"),
     ("connection reset", "network unavailable"),
     ("could not resolve host", "network unavailable"),
@@ -263,7 +265,7 @@ class Result:
 # failures. Keep this list narrow: deterministic hashes and statistics continue
 # to receive exact output validation.
 NONDETERMINISTIC_OUTPUT_RE = re.compile(
-    r"\b(?:crypto_random_bytes|adbc_connect|dist_[a-z0-9_]+_sample|dist_uniform_int_range)\s*\(",
+    r"\b(?:crypto_random_bytes|adbc_connect|dist_[a-z0-9_]+_samples?|dist_uniform_int_range)\s*\(",
     re.IGNORECASE,
 )
 
@@ -513,6 +515,12 @@ def open_db_for(slug: str, install_extensions: bool, force_install: bool = False
     the missing binary, not real doc drift.
     """
     db = duckdb.connect(":memory:")
+    # The docs assume the install block ran first; Haybarn uses its own host.
+    db.execute("SET allow_extension_repositories = 'allowed'")
+    db.execute(
+        "CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm "
+        "WITH PREFIX 'https://haybarn-extensions.query.farm'"
+    )
     loaded = False
     if install_extensions and slug not in NON_EXTENSION_SLUGS:
         try:
@@ -712,6 +720,9 @@ def check_snippet(
                     return "true" if value else "false"
                 if isinstance(value, (bytes, bytearray, memoryview)):
                     return bytes(value).hex()
+                # ARRAY columns arrive as tuples, but SQL prints them as [a, b].
+                if isinstance(value, tuple):
+                    value = list(value)
                 return str(value)
 
             rendered_actual = [[display_cell(cell) for cell in row] for row in actual_rows]

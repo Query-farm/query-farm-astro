@@ -20,14 +20,16 @@ The schema document follows the [JSON Schema specification](https://json-schema.
 Most real workloads point validation at a `JSON` column instead of a literal:
 
 ```sql
+SET VARIABLE event_schema = '{"$schema":"https://json-schema.org/draft-07/schema","type":"object","properties":{"id":{"type":"integer","default":5},"name":{"type":"string"}},"required":["id"]}';
+
 SELECT
   COUNT(*)                                                         AS total,
-  COUNT(*) FILTER (WHERE     COALESCE(TRY(json_schema_validate(:schema, payload)), false)) AS valid,
-  COUNT(*) FILTER (WHERE NOT COALESCE(TRY(json_schema_validate(:schema, payload)), false)) AS invalid
+  COUNT(*) FILTER (WHERE     COALESCE(TRY(json_schema_validate(getvariable('event_schema'), payload)), false)) AS valid,
+  COUNT(*) FILTER (WHERE NOT COALESCE(TRY(json_schema_validate(getvariable('event_schema'), payload)), false)) AS invalid
 FROM events;
 ```
 
-[`json_schema_validate`](#json_schema_validate) returns `TRUE` for valid data and raises an error for invalid data. `TRY` turns errors into `NULL`; `COALESCE(..., false)` counts errors and SQL `NULL` inputs as invalid. Validate the schema once outside `TRY` before processing rows, because `TRY` also catches invalid-schema errors. Here `:schema` and `:event_schema` stand for schema values supplied by your application.
+[`json_schema_validate`](#json_schema_validate) returns `TRUE` for valid data and raises an error for invalid data. `TRY` turns errors into `NULL`; `COALESCE(..., false)` counts errors and SQL `NULL` inputs as invalid. Validate the schema once outside `TRY` before processing rows, because `TRY` also catches invalid-schema errors. Each runnable example sets `event_schema` to a concrete schema; replace it with the schema your application uses.
 
 ## Lint the schema before deploying
 
@@ -55,15 +57,19 @@ WHERE NOT COALESCE(TRY(json_schema_validate_schema(definition)), false);
 Reject non-conforming payloads at the boundary; tee the rest into a quarantine table for review:
 
 ```sql
+SET VARIABLE event_schema = '{"$schema":"https://json-schema.org/draft-07/schema","type":"object","properties":{"id":{"type":"integer","default":5},"name":{"type":"string"}},"required":["id"]}';
+
 INSERT INTO events_clean
 SELECT * FROM events_raw
-WHERE     COALESCE(TRY(json_schema_validate(:event_schema, payload)), false);
+WHERE     COALESCE(TRY(json_schema_validate(getvariable('event_schema'), payload)), false);
 ```
 
 ```sql
+SET VARIABLE event_schema = '{"$schema":"https://json-schema.org/draft-07/schema","type":"object","properties":{"id":{"type":"integer","default":5},"name":{"type":"string"}},"required":["id"]}';
+
 INSERT INTO events_quarantine
 SELECT * FROM events_raw
-WHERE NOT COALESCE(TRY(json_schema_validate(:event_schema, payload)), false);
+WHERE NOT COALESCE(TRY(json_schema_validate(getvariable('event_schema'), payload)), false);
 ```
 
 ## Compute a defaults patch
@@ -103,10 +109,12 @@ SELECT json_schema_update('{
 Build a clean enriched table in one step — validate, then enrich:
 
 ```sql
+SET VARIABLE event_schema = '{"$schema":"https://json-schema.org/draft-07/schema","type":"object","properties":{"id":{"type":"integer","default":5},"name":{"type":"string"}},"required":["id"]}';
+
 CREATE TABLE events_enriched AS
-SELECT json_schema_update(:schema, payload) AS payload
+SELECT json_schema_update(getvariable('event_schema'), payload) AS payload
 FROM events_raw
-WHERE COALESCE(TRY(json_schema_validate(:schema, payload)), false);
+WHERE COALESCE(TRY(json_schema_validate(getvariable('event_schema'), payload)), false);
 ```
 
 ## Validate JSON files on ingest
@@ -114,9 +122,11 @@ WHERE COALESCE(TRY(json_schema_validate(:schema, payload)), false);
 Pair with DuckDB's [`read_json_auto`](https://duckdb.org/docs/data/json/loading_json.html) for file-based inputs:
 
 ```sql
+SET VARIABLE event_schema = '{"$schema":"https://json-schema.org/draft-07/schema","type":"object","properties":{"id":{"type":"integer","default":5},"name":{"type":"string"}},"required":["id"]}';
+
 SELECT *
-FROM read_json_auto('events/*.json') AS event
-WHERE COALESCE(TRY(json_schema_validate(:schema, to_json(event))), false);
+FROM read_json_auto('events.json') AS event
+WHERE COALESCE(TRY(json_schema_validate(getvariable('event_schema'), to_json(event))), false);
 ```
 
 For records arriving as already-typed JSON columns, pass the column directly without the `to_json` wrap.

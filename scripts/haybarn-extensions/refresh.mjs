@@ -10,14 +10,17 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 process.chdir(root);
 const repository = 'https://github.com/Query-farm-haybarn/haybarn-community-extensions';
+// Descriptors follow the engine line: `main` carries 1.5.6, 2.0 is on its own
+// branch. Reading the wrong one drops extensions and reports stale source refs.
+const communityBranch = 'haybarn-2.0';
 const cache = resolve('.cache/haybarn-extensions');
 await mkdir(cache, { recursive: true });
 const arg = process.argv.indexOf('--community-dir');
 const checkout = arg >= 0 ? resolve(process.argv[arg + 1]) : `${cache}/community`;
 if (arg < 0) {
-  if (!existsSync(`${checkout}/.git`)) execFileSync('git', ['clone', '--depth', '1', repository, checkout], { stdio: 'inherit' });
+  if (!existsSync(`${checkout}/.git`)) execFileSync('git', ['clone', '--depth', '1', '--branch', communityBranch, repository, checkout], { stdio: 'inherit' });
   else {
-    execFileSync('git', ['-C', checkout, 'fetch', '--depth', '1', 'origin', 'main'], { stdio: 'inherit' });
+    execFileSync('git', ['-C', checkout, 'fetch', '--depth', '1', 'origin', communityBranch], { stdio: 'inherit' });
     execFileSync('git', ['-C', checkout, 'reset', '--hard', 'FETCH_HEAD'], { stdio: 'inherit' });
   }
 }
@@ -77,6 +80,25 @@ async function probeHead(url) {
   }
   return { status: Number(statusLine.split(' ')[1]), headers };
 }
+// The CDN serves .wasm artifacts with no Content-Length, on HEAD or on a Range
+// request, so the size can only be measured by reading the body.
+async function measureArtifact(url) {
+  if (curl) {
+    const { stdout } = await curl('curl', ['-sS', '-f', '-L', '--max-time', '120', '-H', 'Accept-Encoding: identity', url], { encoding: 'buffer', maxBuffer: 1024 ** 3 });
+    return { bytes: stdout.length, magic: stdout.subarray(0, 4) };
+  }
+  const response = await fetch(url, { headers: { 'Accept-Encoding': 'identity' }, signal: AbortSignal.timeout(120_000) });
+  if (response.status !== 200) throw new Error(`Artifact download HTTP ${response.status}`);
+  let bytes = 0, magic;
+  for await (const chunk of response.body) {
+    magic ??= chunk.subarray(0, 4);
+    bytes += chunk.length;
+  }
+  return { bytes, magic };
+}
+const hasArtifactMagic = (platform, value) => platform.startsWith('wasm_')
+  ? value?.[0] === 0 && value?.[1] === 97 && value?.[2] === 115 && value?.[3] === 109
+  : value?.[0] === 31 && value?.[1] === 139;
 console.log(`Checking ${jobs.length} artifacts for Haybarn ${latest.version} with ${concurrency} parallel probes.`);
 async function probe(job) {
   const { entry, release, platform } = job;
@@ -86,12 +108,15 @@ async function probe(job) {
       const response = await probeHead(url);
       if (response.status === 404) return;
       if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
-      const bytes = Number(response.headers.get('content-length'));
+      const contentLength = response.headers.get('content-length');
+      const measured = contentLength ? null : await measureArtifact(url);
+      if (measured && !hasArtifactMagic(platform, measured.magic)) throw new Error('Artifact file magic does not match its format');
+      const bytes = measured ? measured.bytes : Number(contentLength);
       const contentType = response.headers.get('content-type');
       if (bytes < 512 || (contentType && !/^application\/(gzip|x-gzip|wasm|octet-stream)/.test(contentType))) throw new Error('Response is not an extension artifact');
       // Some older uploads omit Content-Type. Check the file magic using a
       // bounded range read instead of rejecting a published binary.
-      if (!contentType) {
+      if (!contentType && !measured) {
         let value;
         if (curl) {
           const sample = await curl('curl', ['-sS', '-f', '-L', '--max-time', '20', '--range', '0-3', '-H', 'Accept-Encoding: identity', url], { encoding: 'buffer', maxBuffer: 4096 });
@@ -103,10 +128,7 @@ async function probe(job) {
           ({ value } = await reader.read());
           await reader.cancel();
         }
-        const valid = platform.startsWith('wasm_')
-          ? value?.[0] === 0 && value?.[1] === 97 && value?.[2] === 115 && value?.[3] === 109
-          : value?.[0] === 31 && value?.[1] === 139;
-        if (!valid) throw new Error('Artifact file magic does not match its format');
+        if (!hasArtifactMagic(platform, value)) throw new Error('Artifact file magic does not match its format');
       }
       entry.availability.push({ version: release.version, platform, bytes, etag: response.headers.get('etag'), modifiedAt: response.headers.get('last-modified') });
       return;

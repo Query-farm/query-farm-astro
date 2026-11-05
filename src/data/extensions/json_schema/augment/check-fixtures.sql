@@ -1,13 +1,4 @@
--- Fixtures for json_schema cookbook / functions / quickstart examples.
---
--- The check-examples harness now substitutes `:name` bind variables with a
--- valid JSON object placeholder (`'{"_bind":"name"}'`), so functions like
--- `json_schema_validate(:schema, payload)` execute successfully against the
--- placeholder schema rather than failing with a Malformed JSON Conversion
--- Error. That lets these fixture tables convert previously-skipped snippets
--- into PASSes.
---
--- Idempotent via CREATE OR REPLACE.
+-- Concrete source data for validation, defaults, and quarantine examples.
 
 -- Author-blessed schema-registry recipe (no bind variable).
 CREATE OR REPLACE TABLE schema_registry AS
@@ -48,3 +39,7 @@ CREATE OR REPLACE TABLE events_quarantine (
   row_num INTEGER,
   payload JSON
 );
+
+-- Local JSON input for the file-ingestion example.
+COPY (SELECT * FROM (VALUES (1, 'Alice'), (2, 'Bob')) AS people(id, name))
+TO 'events.json' (FORMAT JSON, ARRAY true);

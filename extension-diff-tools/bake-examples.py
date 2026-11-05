@@ -43,7 +43,7 @@ SKIP_SLUGS = {"example"}
 
 def serialize_value(v):
     if v is None:
-        return ""
+        return "NULL"
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, (bytes, bytearray)):
@@ -51,6 +51,9 @@ def serialize_value(v):
         # very long blobs (random bytes, etc.) so the table doesn't bloat.
         h = v.hex()
         return h if len(h) <= 200 else h[:200] + '…'
+    # ARRAY columns arrive as tuples, but SQL prints them as [a, b].
+    if isinstance(v, tuple):
+        return str(list(v))
     return str(v)
 
 

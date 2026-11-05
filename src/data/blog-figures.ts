@@ -1,7 +1,7 @@
 import type { BarRow, BarSeries } from '../components/charts/chart-types';
 
 /**
- * Lead figures for blog posts.
+ * Figures for blog posts, used as lead visuals or embedded in the article.
  *
  * A post's hero is its own measured data, drawn — not a social share card
  * cropped into a thumbnail. Every number here is transcribed from a table that
@@ -37,6 +37,29 @@ const HAYBARN = '#c08e2f';
 const REFERENCE = '#446f22';
 
 export const BLOG_FIGURES: Record<string, BlogFigure> = {
+  'bitfilters-filter-research': {
+    title: 'BuRR and Binary Fuse at one million keys',
+    subtitle:
+      'Ratios relative to Binary Fuse 8; lower is better. One million distinct keys, 8-bit fingerprints, C++ core benchmark.',
+    rowHeader: 'Measurement',
+    series: [
+      { label: 'Binary Fuse', color: REFERENCE, unit: '×' },
+      { label: 'BuRR', color: HAYBARN, unit: '×' },
+    ],
+    layout: 'grouped',
+    valueHeader: 'Relative to Binary Fuse = 1',
+    precision: 2,
+    rows: [
+      { label: 'Filter payload', values: [1, 1003557 / 1130524] },
+      { label: 'Construction time', values: [1, 0.143020458 / 0.0255085] },
+      { label: 'Absent lookup time', values: [1, 21.8170694 / 1.8270512] },
+    ],
+    source:
+      'Apple M3, one thread, three-trial medians. BuRR fast configuration with std::sort. SQL input collection is excluded.',
+    sparkLabel: 'BuRR cost relative to Binary Fuse',
+    sparkRows: 3,
+  },
+
   'one-query-one-arrow-stream-adbc-duckdb-2': {
     title: 'DuckDB finished these PostgreSQL queries 10–11× faster',
     subtitle:

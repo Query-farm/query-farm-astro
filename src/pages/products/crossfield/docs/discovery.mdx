@@ -1,0 +1,111 @@
+---
+layout: '../../../../layouts/CrossfieldDocs.astro'
+title: 'Discovery and AI agents'
+description: 'Find public definitions, inspect semantic intent and correct queries without changing the business question.'
+---
+
+Use discovery when an application needs to answer questions such as which models are attached, what a metric means, or which arguments a query accepts. These functions inspect model definitions without invoking providers.
+
+This is the API reference. The [AI-agent guide](/products/crossfield/agents) shows how to use it in a complete reporting session. The queries below use the [retail setup](/products/crossfield/docs/quickstart); the same functions describe the fulfillment and investment models.
+
+Start with models, then metrics and dimensions, then permitted combinations. Every inventory is global: changing `USE` does not change which models it lists.
+
+## Discover members and reports
+
+```sql
+SELECT database_name, model_name, package_revision, sql_reference, is_callable
+FROM crossfield_models()
+ORDER BY database_name;
+
+SELECT name, sql_name, unit, comment
+FROM crossfield_metrics()
+WHERE database_name = 'jaffle_current'
+ORDER BY name;
+
+SELECT name, supported, compatible_dimensions
+FROM crossfield_member_capabilities()
+WHERE database_name = 'jaffle_current'
+  AND name = 'revenue';
+```
+
+`name` is the canonical identity, such as `stores.name`; `sql_name` is the aggregate column to query, such as `store_name`. Model `sql_reference` values are qualified, quoted relation names. Metric and dimension rows provide a quoted column `sql_reference` and its `model_sql_reference`. Callable relations still require inputs from their discovered signatures. Individual compatible dimensions do not guarantee that every combination of dimensions and measures is valid.
+
+`crossfield_metrics()` and `crossfield_dimensions()` filter the same metadata exposed by `crossfield_members()`. The combined inventory includes filter and detail roles. Two attachments of the same model remain separate rows, including when they use different revisions. Use `database_name` to filter and attachment/semantic identities to join metadata; do not depend on a selected default model.
+
+| Function | Discover |
+|---|---|
+| `crossfield_models()` | Attached models, revisions, qualified references and callable status |
+| `crossfield_metrics()` / `crossfield_dimensions()` | Approved metrics and dimensions across models |
+| `crossfield_member_capabilities()` | Supported operations, grouping requirements and compatible dimensions |
+| `crossfield_relationships()` | Modeled relationships and their supported contracts |
+| `crossfield_reports()` | Fixed and parameterized named queries |
+| `crossfield_report_parameters()` | Named-report argument names, types and nullability |
+| `crossfield_report_columns()` | Named-report output columns, types, roles and units |
+| `crossfield_parameters()` | Callable semantic/detail inputs |
+| `crossfield_signatures()` | Callable signatures and overloads |
+| `crossfield_dependencies()` | Logical bindings and captured physical source contracts |
+
+Named reports and callable models have separate parameter inventories:
+
+```sql
+SELECT name, type, nullable, comment
+FROM crossfield_report_parameters()
+WHERE database_name = 'jaffle_current'
+  AND report_name = 'store_revenue'
+ORDER BY ordinal;
+```
+
+The report requires `store_name VARCHAR`, `start_day DATE` and `end_day DATE`. Nullable parameters are still required.
+
+These names replace the earlier `crossfield_catalogs()`, `crossfield_catalog_capabilities()` and `crossfield_queries()` spellings. The former selected-model inventories and one-argument capability lookup are consolidated into global, zero-argument functions. Use ordinary `WHERE` filters to select a model or member.
+
+After attaching `arithmetic` in the [typed model example](/products/crossfield/docs/querying#call-a-typed-semantic-model), discover its calling forms and structured parameter contracts:
+
+```sql
+SELECT signature_id, signature, parameters
+FROM crossfield_signatures()
+WHERE database_name = 'arithmetic'
+  AND object_kind = 'semantic';
+```
+
+Join inventories using `database_oid`, `model_id` and relevant member/report identities. For report columns and parameters, also retain `report_id`, `revision` and `requires_model_selection`: host-session reports and attached model reports are distinct. Host-only report types can be `UNKNOWN` with `type_status` unresolved until binding. Names alone do not distinguish attachment replacement or establish equivalent definitions. Metadata remains available after source loss and does not certify current source health.
+
+## Inspect semantic intent
+
+```sql
+EXPLAIN (SEMANTIC)
+SELECT revenue FROM SEMANTIC jaffle_current.jaffle;
+```
+
+Semantic explanation validates shape from retained definitions without live source binding or provider execution. It exposes expanded SQL and semantic metadata; strict explanations include model/policy fingerprints, while ordinary outer queries identify their governed blocks. Types can remain unresolved. Exported SQL uses indentation and clause line breaks for readability; whitespace and generated aliases are not stable identities.
+
+```sql
+EXPLAIN (SQL)
+SELECT revenue FROM SEMANTIC jaffle_current.jaffle;
+```
+
+This form binds and optimizes the query. Planning may bind providers and fold immutable scalar expressions. `EXPLAIN ANALYZE` executes its target. Execute the original semantic query after inspection: exported physical SQL carries no retained semantic authority.
+
+## Preserve meaning when repairing SQL
+
+In the walkthrough's unsealed connection, enable strict mode and run this separately as an intentional rejection:
+
+```sql
+USE jaffle_current.semantic;
+SET crossfield_mode = 'strict';
+SELECT SUM(subtotal) FROM warehouse.orders;
+-- Rejected: raw source calculation.
+```
+
+The model supplies the approved measure with the same intended meaning:
+
+```sql
+SELECT revenue FROM SEMANTIC jaffle_current.jaffle;
+-- 6355.00
+```
+
+A request for `SUM(total)` includes tax; its corresponding measure is `order_total`, yielding `6730.75`. Substituting `revenue` would change that question.
+
+Hosts can configure `errors_as_json=true` before entering strict mode and sealing to receive structured repair metadata. Guidance distinguishes query corrections, model-owner action, source refresh and runtime failure. A suggestion does not authorize dropping a filter, changing the grain or relaxing policy. Surface an unmet requirement when no approved query preserves the user's intent.
+
+For a complete session with a captured rejection, see [the AI agent guide](/products/crossfield/agents).

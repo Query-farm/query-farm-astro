@@ -15,7 +15,7 @@ A naive `COUNT(DISTINCT user_id)` over a billion-row event table is a sort plus 
 
 ```sql
 -- One pass, per-day sketch state, persisted as a typed BLOB column
-CREATE TABLE daily_uniques AS
+CREATE OR REPLACE TABLE daily_uniques AS
 SELECT date_trunc('day', ts)        AS day,
        datasketch_theta(12, user_id) AS sketch        -- ~64 KB per day
 FROM events
@@ -27,15 +27,15 @@ SELECT datasketch_theta_estimate(
          datasketch_theta(sketch)
        ) AS uniques_last_7d
 FROM daily_uniques
-WHERE day >= CURRENT_DATE - 7;
+WHERE day >= CURRENT_DATE + INTERVAL '-7 days';
 
 -- Retention: users active in BOTH last week AND this week
 WITH last_week AS (SELECT datasketch_theta(sketch) AS s
                    FROM daily_uniques
-                   WHERE day BETWEEN CURRENT_DATE - 14 AND CURRENT_DATE - 7),
+                   WHERE day BETWEEN CURRENT_DATE + INTERVAL '-14 days' AND CURRENT_DATE + INTERVAL '-7 days'),
      this_week AS (SELECT datasketch_theta(sketch) AS s
                    FROM daily_uniques
-                   WHERE day >= CURRENT_DATE - 7)
+                   WHERE day >= CURRENT_DATE + INTERVAL '-7 days')
 SELECT datasketch_theta_estimate(
          datasketch_theta_intersect(last_week.s, this_week.s)
        ) AS retained

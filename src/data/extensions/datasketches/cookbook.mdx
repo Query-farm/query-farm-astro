@@ -22,7 +22,7 @@ FROM events;
 Build the sketch state once; query any window without rescanning.
 
 ```sql
-CREATE TABLE daily_uniques (day DATE, hll sketch_hll);
+CREATE OR REPLACE TABLE daily_uniques (day DATE, hll sketch_hll);
 
 INSERT INTO daily_uniques
 SELECT date_trunc('day', ts) AS day,
@@ -33,7 +33,7 @@ GROUP BY 1;
 -- Rolling 7-day uniques — reads sketch state, not source events
 SELECT datasketch_hll_estimate(datasketch_hll_union(12, hll)) AS uniques_last_7d
 FROM daily_uniques
-WHERE day >= CURRENT_DATE - 7;
+WHERE day >= CURRENT_DATE + INTERVAL '-7 days';
 ```
 
 The same pattern works for [`datasketch_cpc`](#datasketch_cpc) (smaller on disk, slower to write) and [`datasketch_theta`](#datasketch_theta) (supports set operations beyond union).
@@ -92,7 +92,7 @@ Returns one row of cumulative ranks at each split point — directly usable for 
 When p99 / p999 matters more than the median (SLO reporting), reach for [t-digest](https://datasketches.apache.org/docs/tdigest/tdigest.html).
 
 ```sql
-CREATE TABLE readings(temp DOUBLE);
+CREATE OR REPLACE TABLE readings(temp DOUBLE);
 INSERT INTO readings(temp) SELECT unnest(generate_series(1, 10))::DOUBLE;
 
 -- Rank of value 5 within the aggregated sketch
@@ -168,7 +168,7 @@ COPY (SELECT day, hll FROM daily_uniques)
 -- Later, anywhere with this extension loaded:
 SELECT datasketch_hll_estimate(datasketch_hll_union(12, hll))
 FROM read_parquet('daily_uniques.parquet')
-WHERE day BETWEEN DATE '2026-01-01' AND DATE '2026-01-31';
+WHERE day >= CURRENT_DATE + INTERVAL '-7 days';
 ```
 
 The serialization format is the same one used by Druid, Pinot, BigQuery, and the [Apache DataSketches Java library](https://github.com/apache/datasketches-java) — sketches built here can be merged in those systems and vice versa.

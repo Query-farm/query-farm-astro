@@ -1,0 +1,676 @@
+{
+  "slides": [
+    {
+      "slug": "adbc_scanner",
+      "title": "ADBC Scanner",
+      "subtitle": "Database drivers. Arrow batches. Ordinary SQL.",
+      "category": "connectors",
+      "categoryLabel": "Connectors",
+      "flow": [
+        "ADBC driver",
+        "Arrow batches",
+        "DuckDB SQL"
+      ],
+      "intro": "Connect DuckDB to a database through an Arrow Database Connectivity driver. Use attached catalogs for joins and discovery, send backend SQL explicitly, or bulk-ingest a DuckDB query through the driver's Arrow interface.",
+      "exampleTitle": "Query through a driver",
+      "sql": "ATTACH ':memory:' AS db (\n  TYPE adbc, driver 'sqlite'\n);\nSELECT * FROM adbc_scan(\n  'db', 'SELECT ? AS id',\n  params := row(42),\n  columns := {'id': 'BIGINT'}\n);",
+      "setup": true
+    },
+    {
+      "slug": "airport",
+      "title": "Airport",
+      "subtitle": "Bring Arrow Flight services into your SQL.",
+      "category": "connectors",
+      "categoryLabel": "Connectors",
+      "flow": [
+        "Flight server",
+        "Arrow stream",
+        "DuckDB catalog"
+      ],
+      "intro": "Attach an Arrow Flight service as a DuckDB catalog, then query its tables alongside local data. Discover available flights, fetch a descriptor directly, and invoke server-defined actions when a full catalog is unnecessary.",
+      "exampleTitle": "Query an attached catalog",
+      "sql": "ATTACH 'grpc://localhost:8815' AS remote\n  (TYPE airport);\nSHOW TABLES FROM remote.public;\nSELECT user_id, count(*) AS n\nFROM remote.public.activity\nGROUP BY user_id\nORDER BY n DESC\nLIMIT 10;\nDETACH remote;",
+      "setup": true
+    },
+    {
+      "slug": "http_client",
+      "title": "HTTP Client",
+      "subtitle": "Small HTTP requests, directly from DuckDB.",
+      "category": "connectors",
+      "categoryLabel": "Connectors",
+      "flow": [
+        "HTTP request",
+        "JSON envelope",
+        "SQL projection"
+      ],
+      "intro": "Fetch HTTP resources or submit JSON and form bodies from a SQL expression. Responses arrive as a JSON envelope containing status, reason and body, ready to inspect or save in a local table.",
+      "exampleTitle": "Fetch once, inspect locally",
+      "sql": "CREATE TEMP TABLE response AS\nSELECT http_get('https://example.com/') AS r;\nSELECT (r->>'status')::INTEGER AS status,\n       r->>'reason' AS reason,\n       r->>'body' AS body\nFROM response;",
+      "setup": true
+    },
+    {
+      "slug": "httpserver",
+      "title": "HTTP Server",
+      "subtitle": "Serve a DuckDB connection through HTTP.",
+      "category": "connectors",
+      "categoryLabel": "Connectors",
+      "flow": [
+        "HTTP client",
+        "SQL request",
+        "DuckDB result"
+      ],
+      "intro": "Start an HTTP listener inside a DuckDB process and query it from an HTTP client. Send SQL in a POST body, receive JSON results, and keep the process running for the lifetime of the service.",
+      "exampleTitle": "Start a local listener",
+      "sql": "SELECT httpserve_start(\n  'localhost', 9999, 'replace-this-key'\n);",
+      "setup": true
+    },
+    {
+      "slug": "radio",
+      "title": "Radio",
+      "subtitle": "Live channel messages meet relational queries.",
+      "category": "connectors",
+      "categoryLabel": "Connectors",
+      "flow": [
+        "Live channel",
+        "Memory buffer",
+        "DuckDB rows"
+      ],
+      "intro": "Subscribe to WebSocket or Redis Pub/Sub endpoints, query buffered messages, and queue replies from DuckDB. The subscription URL identifies the feed throughout its lifecycle, while background I/O keeps network activity separate from buffer scans.",
+      "exampleTitle": "Subscribe, wait and inspect",
+      "sql": "SET VARIABLE feed = 'ws://localhost:8765/';\nCALL radio_subscribe(getvariable('feed'));\nCALL radio_listen(true, INTERVAL '5 seconds');\nSELECT receive_time, channel,\n       decode(message) AS text\nFROM radio_received_messages()\nWHERE subscription_url = getvariable('feed')\nORDER BY receive_time DESC\nLIMIT 20;",
+      "setup": true
+    },
+    {
+      "slug": "redis",
+      "title": "Redis",
+      "subtitle": "Read hot data. Analyze it with SQL.",
+      "category": "connectors",
+      "categoryLabel": "Connectors",
+      "flow": [
+        "Redis keys",
+        "SQL functions",
+        "Local analysis"
+      ],
+      "intro": "Query Redis strings, hashes and lists from DuckDB, or snapshot operational data into local tables for analysis. Every Redis call selects a named DuckDB secret, keeping connection details separate from the data-access expression.",
+      "exampleTitle": "Snapshot matching hashes",
+      "sql": "CREATE TABLE users_snapshot AS\nSELECT key, field, value\nFROM redis_hscan_over_scan(\n  'user:*', '*', 100, 'quickref_redis'\n);\nSELECT key, count(*) AS fields\nFROM users_snapshot\nGROUP BY key;",
+      "setup": true
+    },
+    {
+      "slug": "shellfs",
+      "title": "Shellfs",
+      "subtitle": "Read and write shell pipelines through file paths.",
+      "category": "connectors",
+      "categoryLabel": "Connectors",
+      "flow": [
+        "Local command",
+        "Streaming pipe",
+        "DuckDB rows"
+      ],
+      "intro": "Use a shell command as a DuckDB file source or sink. A trailing pipe reads command output; a leading pipe sends COPY output to a command. Useful for local tools that already produce or consume CSV and JSON.",
+      "exampleTitle": "Query a command’s CSV output",
+      "sql": "SELECT sum(n) AS total\nFROM read_csv(\n  'printf \"n\\n1\\n2\\n3\\n\" |',\n  header = true\n);\n-- 6",
+      "setup": false
+    },
+    {
+      "slug": "tributary",
+      "title": "Tributary",
+      "subtitle": "Query Kafka topics from DuckDB.",
+      "category": "connectors",
+      "categoryLabel": "Connectors",
+      "flow": [
+        "Kafka topic",
+        "Message rows",
+        "SQL analysis"
+      ],
+      "intro": "Read Kafka topic messages as rows with topic, partition, offset and BLOB payload columns. Discover cluster metadata, decode application payloads, and materialize a local table for joins and repeatable downstream analysis.",
+      "exampleTitle": "Snapshot a partition range",
+      "sql": "CREATE TABLE topic_snapshot AS\nSELECT partition, \"offset\", message\nFROM tributary_scan_topic('events',\n  \"bootstrap.servers\" := 'localhost:9092',\n  \"group.id\" := 'quick-reference',\n  \"enable.auto.commit\" := 'false'\n)\nWHERE partition = 0\n  AND \"offset\" BETWEEN 0 AND 99;\nSELECT \"offset\",\n       decode(message)::JSON->>'user_id' AS id\nFROM topic_snapshot;",
+      "setup": true
+    },
+    {
+      "slug": "vgi",
+      "title": "VGI",
+      "subtitle": "Attach a worker. Query its capabilities.",
+      "category": "connectors",
+      "categoryLabel": "Connectors",
+      "flow": [
+        "Worker code",
+        "Arrow IPC",
+        "DuckDB SQL"
+      ],
+      "intro": "Vector Gateway Interface connects DuckDB to workers written in other languages. A worker advertises catalogs, tables and functions; attach a catalog and query it alongside local data over a subprocess or HTTP connection.",
+      "exampleTitle": "Attach and query",
+      "sql": "ATTACH 'analytics' AS app (\n  TYPE vgi,\n  LOCATION 'https://worker.example.com/vgi/'\n);\nSHOW TABLES FROM app.main;\nSELECT * FROM app.main.events\nLIMIT 10;\nDETACH app;",
+      "setup": true
+    },
+    {
+      "slug": "crypto",
+      "title": "Crypto",
+      "subtitle": "Digests, message authentication & random bytes.",
+      "category": "transformation",
+      "categoryLabel": "Transformation",
+      "flow": [
+        "SQL values",
+        "Hash / HMAC",
+        "BLOB or hex"
+      ],
+      "intro": "Compute cryptographic digests and HMACs directly from SQL values. Use secure random bytes for tokens and salts, or aggregate values in a specified order for reproducible checksums.",
+      "exampleTitle": "Bytes & ordered aggregates",
+      "sql": "SELECT octet_length(crypto_random_bytes(32));\n\nSELECT to_hex(crypto_hash_agg(\n  'sha2-256', s ORDER BY s\n)) AS digest\nFROM (VALUES ('A'), ('B')) AS t(s);",
+      "setup": false
+    },
+    {
+      "slug": "hashfuncs",
+      "title": "Hashfuncs",
+      "subtitle": "Fast fingerprints, buckets & cache keys.",
+      "category": "transformation",
+      "categoryLabel": "Transformation",
+      "flow": [
+        "Canonical input",
+        "Named hash",
+        "Bucket / key"
+      ],
+      "intro": "Hash SQL values with named non-cryptographic algorithms. Choose a stable representation and seed for repeatable partitioning, probabilistic-filter inputs and compact fingerprints.",
+      "exampleTitle": "Choose the output width",
+      "sql": "SELECT typeof(xxh3_64('hello')) AS small,\n       typeof(xxh3_128('hello')) AS large;\n-- UBIGINT, UHUGEINT",
+      "setup": false
+    },
+    {
+      "slug": "inflector",
+      "title": "Inflector",
+      "subtitle": "Normalize names, keys, and query result columns.",
+      "category": "transformation",
+      "categoryLabel": "Transformation",
+      "flow": [
+        "Mixed names",
+        "Choose a format",
+        "Consistent shape"
+      ],
+      "intro": "Apply consistent naming conventions to strings, struct keys, or every column of a query. Combine case conversion with English inflection helpers when cleaning imported schemas, generating identifiers, or shaping data for another system.",
+      "exampleTitle": "Derive table and word names",
+      "sql": "SELECT inflector_to_table_case('UserAccount');\n-- user_accounts\nSELECT inflector_to_plural('person');\n-- people\nSELECT inflector_to_singular('people');\n-- person",
+      "setup": false
+    },
+    {
+      "slug": "jsonata",
+      "title": "JSONata",
+      "subtitle": "Query and reshape JSON with compact expressions.",
+      "category": "transformation",
+      "categoryLabel": "Transformation",
+      "flow": [
+        "JSON document",
+        "JSONata expression",
+        "New JSON shape"
+      ],
+      "intro": "Filter nested arrays, construct output objects, and aggregate values within a JSON document. JSONata keeps these transformations in one SQL expression and returns JSON that can be cast, extracted, or expanded by DuckDB.",
+      "exampleTitle": "Filter with a bound threshold",
+      "sql": "SELECT jsonata(\n  '[items[price > $limit].id]',\n  '{\"items\":[{\"id\":\"A\",\"price\":20},' ||\n  '{\"id\":\"B\",\"price\":120}]}',\n  '{\"limit\":100}'\n);\n-- [\"B\"]",
+      "setup": false
+    },
+    {
+      "slug": "minijinja",
+      "title": "MiniJinja",
+      "subtitle": "Render Jinja-style templates directly from SQL.",
+      "category": "transformation",
+      "categoryLabel": "Transformation",
+      "flow": [
+        "Template",
+        "JSON context",
+        "Rendered text"
+      ],
+      "intro": "Turn JSON context into rendered text using familiar Jinja variables, filters, loops, and conditions. Generate one HTML fragment, message, or configuration block per row while keeping the source data and rendering query together.",
+      "exampleTitle": "Loop through a list",
+      "sql": "SELECT minijinja_render_with_context(\n  '{% for x in xs %}{{ x }}' ||\n  '{% if not loop.last %}, {% endif %}' ||\n  '{% endfor %}',\n  '{\"xs\":[\"A\",\"B\",\"C\"]}'\n);\n-- A, B, C",
+      "setup": false
+    },
+    {
+      "slug": "quickjs",
+      "title": "QuickJS",
+      "subtitle": "Bring JavaScript expressions into DuckDB queries.",
+      "category": "transformation",
+      "categoryLabel": "Transformation",
+      "flow": [
+        "SQL arguments",
+        "JavaScript",
+        "Text / JSON / rows"
+      ],
+      "intro": "Evaluate a JavaScript expression, call a function with SQL arguments, or expand an array into rows. Use the embedded QuickJS engine for transformations that benefit from JavaScript control flow, string methods, or JSON reshaping.",
+      "exampleTitle": "Unpack a transformed array",
+      "sql": "SELECT result::INTEGER AS value\nFROM quickjs(\n  'parsed_arg0.map(x => x * arg1)',\n  '[1,2,3]', 3\n);\n-- 3, 6, 9",
+      "setup": false
+    },
+    {
+      "slug": "rapidfuzz",
+      "title": "RapidFuzz",
+      "subtitle": "Fuzzy string comparisons beside your data.",
+      "category": "transformation",
+      "categoryLabel": "Transformation",
+      "flow": [
+        "Normalize text",
+        "Score candidates",
+        "Rank matches"
+      ],
+      "intro": "Score candidate pairs using edit-distance and token-based matching. Normalize text first, select a score that matches your data, then rank or threshold the candidates.",
+      "exampleTitle": "Find the closest candidate",
+      "sql": "SELECT name,\n  rapidfuzz_ratio('query farm', lower(name))\n    AS score\nFROM (VALUES ('Query Farm'), ('Query Firm'),\n             ('Quiet Barn')) AS t(name)\nORDER BY score DESC\nLIMIT 2;",
+      "setup": false
+    },
+    {
+      "slug": "evalexpr_rhai",
+      "title": "Rhai",
+      "subtitle": "Evaluate expressions and rules stored as text.",
+      "category": "transformation",
+      "categoryLabel": "Transformation",
+      "flow": [
+        "Script text",
+        "Row context",
+        "JSON result"
+      ],
+      "intro": "Run Rhai expressions inside a query, pass row values as JSON context, and read a typed success or error result. Useful for configurable business rules, small transformations, and scripts that need local variables or branching.",
+      "exampleTitle": "Apply one rule to each row",
+      "sql": "SELECT salary, evalexpr_rhai(\n  'context.salary >= 100000',\n  {'salary': salary}\n).ok::BOOLEAN AS eligible\nFROM (VALUES (80000), (120000)) t(salary);\n-- false, true",
+      "setup": false
+    },
+    {
+      "slug": "tera",
+      "title": "Tera",
+      "subtitle": "Render templates from inline text or named files.",
+      "category": "transformation",
+      "categoryLabel": "Transformation",
+      "flow": [
+        "Text or file",
+        "JSON context",
+        "Rendered text"
+      ],
+      "intro": "Render JSON context with Tera’s variables, filters, loops, and conditionals. Keep short templates in SQL, or load named files for larger templates and inheritance. Results are ordinary text columns ready for export or further processing.",
+      "exampleTitle": "Render a plain-text list",
+      "sql": "SELECT tera_render(\n  '{% for x in xs %}{{ x }}' ||\n  '{% if not loop.last %}, {% endif %}' ||\n  '{% endfor %}',\n  '{\"xs\":[\"B&O\",\"Acme\"]}',\n  autoescape := false\n);\n-- B&O, Acme",
+      "setup": false
+    },
+    {
+      "slug": "tsid",
+      "title": "TSID",
+      "subtitle": "Generate sortable IDs and recover their timestamps.",
+      "category": "transformation",
+      "categoryLabel": "Transformation",
+      "flow": [
+        "Generate ID",
+        "Store as VARCHAR",
+        "Sort or decode"
+      ],
+      "intro": "Create time-prefixed identifiers as 32-character hexadecimal strings and recover their embedded timestamps. Use them as internal keys, recent-first sort values, or pagination cursors when generation time is useful alongside a compact textual identifier.",
+      "exampleTitle": "Page through recent IDs",
+      "sql": "SELECT * FROM events\nORDER BY id DESC LIMIT 2;\n\nSET VARIABLE cursor = (\n  SELECT id FROM events\n  ORDER BY id DESC LIMIT 1 OFFSET 1\n);\nSELECT * FROM events\nWHERE id < getvariable('cursor')\nORDER BY id DESC LIMIT 2;",
+      "setup": false
+    },
+    {
+      "slug": "a5",
+      "title": "A5",
+      "subtitle": "Equal-area cells for geographic data.",
+      "category": "analytics",
+      "categoryLabel": "Analytics",
+      "flow": [
+        "Longitude / latitude",
+        "A5 cell ID",
+        "Group / join / roll up"
+      ],
+      "intro": "Turn longitude and latitude into pentagonal cell IDs for grouping, joining, and geographic rollups. A5 uses equal-area cells at each resolution, with integer IDs and functions for hierarchy, neighborhoods, and geometry conversion.",
+      "exampleTitle": "Count observations by cell",
+      "sql": "WITH points(lon,lat) AS (VALUES\n  (-74.0060,40.7128), (-74.0061,40.7129),\n  (-73.9857,40.7484)\n)\nSELECT a5_lonlat_to_cell(lon,lat,15) AS cell,\n       count(*) AS n\nFROM points\nGROUP BY cell;",
+      "setup": false
+    },
+    {
+      "slug": "datasketches",
+      "title": "Apache DataSketches",
+      "subtitle": "Approximate answers from compact aggregate state.",
+      "category": "analytics",
+      "categoryLabel": "Analytics",
+      "flow": [
+        "Rows",
+        "Sketch state",
+        "Merge / estimate"
+      ],
+      "intro": "Build sketches over rows, persist their typed state, and query estimates later. Select a family for distinct counts, quantiles or frequent items; merge states to summarize partitions.",
+      "exampleTitle": "Estimate p50 and p95",
+      "sql": "WITH agg AS (\n  SELECT datasketch_kll(200, i::DOUBLE) AS s\n  FROM range(10000) AS t(i)\n)\nSELECT datasketch_kll_quantile(s, 0.50, true)\n         AS p50,\n       datasketch_kll_quantile(s, 0.95, true)\n         AS p95\nFROM agg;",
+      "setup": false
+    },
+    {
+      "slug": "stochastic",
+      "title": "Stochastic",
+      "subtitle": "Probability distributions as SQL functions.",
+      "category": "analytics",
+      "categoryLabel": "Analytics",
+      "flow": [
+        "Distributions",
+        "PDF · CDF · quantile",
+        "Sampling"
+      ],
+      "intro": "Densities, cumulative probabilities, quantiles and random samples for common continuous and discrete distributions, callable from any query.",
+      "exampleTitle": "Estimate π with a Monte Carlo query",
+      "sql": "WITH draws AS MATERIALIZED (\n  SELECT\n    dist_uniform_real_sample(-1, 1) AS x,\n    dist_uniform_real_sample(-1, 1) AS y\n  FROM range(100000)\n)\nSELECT 4.0 * AVG(\n  (x*x + y*y <= 1)::INTEGER\n) AS pi_estimate\nFROM draws;",
+      "setup": false
+    },
+    {
+      "slug": "bitfilters",
+      "title": "Bitfilters",
+      "subtitle": "Compact membership checks for large sets.",
+      "category": "performance",
+      "categoryLabel": "Performance",
+      "flow": [
+        "Hash keys",
+        "Build filter",
+        "Probe & verify"
+      ],
+      "intro": "Aggregate hashed keys into a compact BLOB, then probe it to reject definite nonmembers. Use an exact check for candidates that survive the filter.",
+      "exampleTitle": "Confirm the match",
+      "sql": "SELECT i\nFROM known_filter, range(995, 1005) AS t(i)\nWHERE xor8_filter_contains(f, hash(i))\n  AND i IN (SELECT range FROM range(1000));",
+      "setup": false
+    },
+    {
+      "slug": "geosilo",
+      "title": "GeoSilo",
+      "subtitle": "Compact geometry with explicit precision.",
+      "category": "performance",
+      "categoryLabel": "Performance",
+      "flow": [
+        "Native GEOMETRY",
+        "Scale + delta encode",
+        "Store / inspect / decode"
+      ],
+      "intro": "Store geometries as scaled integer coordinates with delta encoding. GeoSilo provides a GEOSILO column type, direct measurements and bounds, and explicit encode/decode functions for BLOB pipelines. Choose precision before comparing storage size or query performance.",
+      "exampleTitle": "Store a projected polygon",
+      "sql": "CREATE TABLE plots (\n  geom GEOSILO('EPSG:3857')\n    USING COMPRESSION zstd\n);\nINSERT INTO plots VALUES (\n  'POLYGON((0 0,10 0,10 10,0 10,0 0))'\n    ::GEOMETRY\n);",
+      "setup": false
+    },
+    {
+      "slug": "lindel",
+      "title": "Lindel",
+      "subtitle": "Space-filling curves for faster range filters.",
+      "category": "performance",
+      "categoryLabel": "Performance",
+      "flow": [
+        "Multi-column keys",
+        "Hilbert order",
+        "Pruned Parquet"
+      ],
+      "intro": "Hilbert and Morton encodings turn several columns into one sortable key. Ordering Parquet by that key keeps nearby points in the same row groups, so range filters skip more of the file.",
+      "exampleTitle": "Cluster a Parquet file on two columns",
+      "sql": "COPY (\n  SELECT x, y\n  FROM (VALUES (3, 5), (1, 1), (7, 0),\n               (2, 6), (5, 3), (0, 4))\n       AS points(x, y)\n  ORDER BY\n    hilbert_encode([x, y]::UINTEGER[2])\n) TO 'points.parquet' (FORMAT PARQUET);",
+      "setup": false
+    },
+    {
+      "slug": "marisa",
+      "title": "Marisa",
+      "subtitle": "Static dictionaries with fast prefix lookup.",
+      "category": "performance",
+      "categoryLabel": "Performance",
+      "flow": [
+        "String column",
+        "Trie BLOB",
+        "Lookup / prefix"
+      ],
+      "intro": "Build a compact MARISA trie from a column of strings. Store the trie as a BLOB and use it for exact membership, autocomplete, or prefix-rule matching.",
+      "exampleTitle": "Match stored prefixes",
+      "sql": "WITH rules AS (\n  SELECT marisa_trie(s) AS trie\n  FROM (VALUES ('U'), ('US'), ('USA')) t(s)\n)\nSELECT marisa_common_prefix(trie, 'USA', 10)\nFROM rules;",
+      "setup": false
+    },
+    {
+      "slug": "json_schema",
+      "title": "JSON Schema",
+      "subtitle": "Validate JSON contracts and apply declared defaults.",
+      "category": "quality",
+      "categoryLabel": "Data quality",
+      "flow": [
+        "Schema + JSON",
+        "Validate",
+        "Patch or enrich"
+      ],
+      "intro": "Check JSON documents against a schema inside SQL, then fill missing properties from schema defaults. Useful at ingest and during audits. Invalid documents raise errors in this build, so choose strict validation or a deliberate TRY wrapper.",
+      "exampleTitle": "Flag valid and invalid rows",
+      "sql": "SELECT payload, coalesce(try(\n  json_schema_validate(\n    '{\"type\":\"integer\"}', payload\n  )), false) AS valid\nFROM (VALUES ('5'::JSON), ('\"five\"'::JSON))\n  t(payload);\n-- 5: true; \"five\": false",
+      "setup": false
+    },
+    {
+      "slug": "cronjob",
+      "title": "Cronjob",
+      "subtitle": "Schedule recurring SQL in a live DuckDB process.",
+      "category": "devtools",
+      "categoryLabel": "Developer tools",
+      "flow": [
+        "SQL + schedule",
+        "Live scheduler",
+        "Inspect / cancel"
+      ],
+      "intro": "Register SQL with a six-field cron expression, inspect jobs and cancel by ID. The scheduler lives inside the DuckDB process, making it useful for short-lived local automation.",
+      "exampleTitle": "Register a job",
+      "sql": "CREATE TEMP TABLE scheduled AS\nSELECT cron(\n  'SELECT 42', '0 */5 * * * *'\n) AS job_id;",
+      "setup": false
+    },
+    {
+      "slug": "events",
+      "title": "Events",
+      "subtitle": "Query and transaction events as a JSON stream.",
+      "category": "devtools",
+      "categoryLabel": "Developer tools",
+      "flow": [
+        "DuckDB event",
+        "JSON line",
+        "Handler stdin"
+      ],
+      "intro": "Forward DuckDB lifecycle events to an executable handler as JSON lines on standard input. Use the stream for operational logs, query timing and transaction traces, with a session tag to identify each running process.",
+      "exampleTitle": "Capture query activity",
+      "sql": "SET events_session_name = 'analytics';\nSET events_types = [\n  'query_begin', 'query_end'\n];\nSET events_async = TRUE;\nSET events_destination =\n  '/usr/local/bin/query-events';\nSELECT sum(i) FROM range(1000) t(i);",
+      "setup": true
+    },
+    {
+      "slug": "fuzzycomplete",
+      "title": "Fuzzycomplete",
+      "subtitle": "Fuzzy SQL completion with a catalog-aware matcher.",
+      "category": "devtools",
+      "categoryLabel": "Developer tools",
+      "flow": [
+        "Partial SQL",
+        "Catalog + matcher",
+        "Suggestions"
+      ],
+      "intro": "Suggest SQL keywords and catalog names from a partial query using a fuzzy matcher. Fixed v1.5 builds activate even when the DuckDB CLI has already loaded stock autocomplete; inspect suggestions through the table function.",
+      "exampleTitle": "Try a catalog abbreviation",
+      "sql": "CREATE TEMP TABLE getNotificationStatus(\n  id INTEGER\n);\n-- In a compatible interactive CLI, type:\n-- SELECT * FROM gnst\n-- Then press Tab before submitting.",
+      "setup": true
+    },
+    {
+      "slug": "textplot",
+      "title": "Textplot",
+      "subtitle": "Small charts inside your query results.",
+      "category": "devtools",
+      "categoryLabel": "Developer tools",
+      "flow": [
+        "Numbers",
+        "Plot function",
+        "VARCHAR chart"
+      ],
+      "intro": "Render a numeric sequence or progress value as terminal-friendly text. Keep the underlying values for sorting and computation; add plots as a compact visual summary.",
+      "exampleTitle": "Aggregate in order",
+      "sql": "SELECT tp_sparkline(\n  array_agg(value ORDER BY step),\n  theme := 'ascii_basic'\n) AS trend\nFROM (VALUES (1, 4.0), (2, 7.0),\n             (3, 5.0)) AS t(step, value);",
+      "setup": false
+    },
+    {
+      "slug": "webmacro",
+      "title": "WebMacro",
+      "subtitle": "Share SQL macros through a trusted URL.",
+      "category": "devtools",
+      "categoryLabel": "Developer tools",
+      "flow": [
+        "SQL at a URL",
+        "Load definition",
+        "Call the macro"
+      ],
+      "intro": "Load a DuckDB macro definition from an HTTP or HTTPS endpoint and call it in ordinary SQL. Use reviewed, versioned SQL files to distribute reusable scalar expressions and table queries across notebooks and applications.",
+      "exampleTitle": "Inspect and remove a macro",
+      "sql": "SELECT function_name, macro_definition\nFROM duckdb_functions()\nWHERE function_type = 'macro'\n  AND function_name = 'normalize_tag';\nDROP MACRO normalize_tag;",
+      "setup": false
+    }
+  ],
+  "groups": [
+    {
+      "label": "Connectors",
+      "items": [
+        {
+          "slug": "adbc_scanner",
+          "title": "ADBC Scanner"
+        },
+        {
+          "slug": "airport",
+          "title": "Airport"
+        },
+        {
+          "slug": "http_client",
+          "title": "HTTP Client"
+        },
+        {
+          "slug": "httpserver",
+          "title": "HTTP Server"
+        },
+        {
+          "slug": "radio",
+          "title": "Radio"
+        },
+        {
+          "slug": "redis",
+          "title": "Redis"
+        },
+        {
+          "slug": "shellfs",
+          "title": "Shellfs"
+        },
+        {
+          "slug": "tributary",
+          "title": "Tributary"
+        },
+        {
+          "slug": "vgi",
+          "title": "VGI"
+        }
+      ]
+    },
+    {
+      "label": "Transformation",
+      "items": [
+        {
+          "slug": "crypto",
+          "title": "Crypto"
+        },
+        {
+          "slug": "hashfuncs",
+          "title": "Hashfuncs"
+        },
+        {
+          "slug": "inflector",
+          "title": "Inflector"
+        },
+        {
+          "slug": "jsonata",
+          "title": "JSONata"
+        },
+        {
+          "slug": "minijinja",
+          "title": "MiniJinja"
+        },
+        {
+          "slug": "quickjs",
+          "title": "QuickJS"
+        },
+        {
+          "slug": "rapidfuzz",
+          "title": "RapidFuzz"
+        },
+        {
+          "slug": "evalexpr_rhai",
+          "title": "Rhai"
+        },
+        {
+          "slug": "tera",
+          "title": "Tera"
+        },
+        {
+          "slug": "tsid",
+          "title": "TSID"
+        }
+      ]
+    },
+    {
+      "label": "Analytics",
+      "items": [
+        {
+          "slug": "a5",
+          "title": "A5"
+        },
+        {
+          "slug": "datasketches",
+          "title": "Apache DataSketches"
+        },
+        {
+          "slug": "stochastic",
+          "title": "Stochastic"
+        }
+      ]
+    },
+    {
+      "label": "Performance",
+      "items": [
+        {
+          "slug": "bitfilters",
+          "title": "Bitfilters"
+        },
+        {
+          "slug": "geosilo",
+          "title": "GeoSilo"
+        },
+        {
+          "slug": "lindel",
+          "title": "Lindel"
+        },
+        {
+          "slug": "marisa",
+          "title": "Marisa"
+        }
+      ]
+    },
+    {
+      "label": "Data quality",
+      "items": [
+        {
+          "slug": "json_schema",
+          "title": "JSON Schema"
+        }
+      ]
+    },
+    {
+      "label": "Developer tools",
+      "items": [
+        {
+          "slug": "cronjob",
+          "title": "Cronjob"
+        },
+        {
+          "slug": "events",
+          "title": "Events"
+        },
+        {
+          "slug": "fuzzycomplete",
+          "title": "Fuzzycomplete"
+        },
+        {
+          "slug": "textplot",
+          "title": "Textplot"
+        },
+        {
+          "slug": "webmacro",
+          "title": "WebMacro"
+        }
+      ]
+    }
+  ]
+}

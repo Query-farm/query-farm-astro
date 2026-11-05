@@ -74,10 +74,10 @@ test('signature changes show both forms and function kinds, with readable mobile
   await expect(page.getByLabel('Find a function')).toHaveValue('strftime');
 });
 
-test('comparison content and reference links remain available without JavaScript', async ({ browser }) => {
-  const context = await browser.newContext({ javaScriptEnabled: false, reducedMotion: 'reduce' });
+test('comparison content and reference links remain available without JavaScript', async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ baseURL, javaScriptEnabled: false, reducedMotion: 'reduce' });
   const page = await context.newPage();
-  await page.goto(`http://127.0.0.1:4323${comparison}`);
+  await page.goto(comparison);
   await expect(page.locator('.change-filters')).toBeHidden();
   await expect(page.locator('[data-name="list_intersect"] .before .signature-box')).toBeVisible();
   await expect(page.locator('[data-name="list_intersect"] .after .signature-box')).toBeVisible();

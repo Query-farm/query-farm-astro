@@ -2,7 +2,7 @@
 title: "ADBC in the browser: use your existing drivers"
 description: "Use native ADBC drivers from WebAssembly with Grainlift. Connect PostgreSQL to Haybarn or Cupola in the browser while keeping drivers and credentials on the server."
 pubDate: 2026-10-07
-author: "Rusty Conover"
+author: "Query Farm Team"
 tags: ["ADBC", "Grainlift", "WebAssembly", "DuckDB", "Apache Arrow", "PostgreSQL"]
 draft: false
 heroImage: "/media/posts/native-adbc-in-your-browser/social.png"

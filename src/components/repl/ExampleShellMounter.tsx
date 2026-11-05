@@ -11,6 +11,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import ExampleShell from "./ExampleShell";
+import { exampleSql, browserUnavailableReason } from "../../lib/repl/example-sql";
 
 const STYLE_ID = "example-shell-style";
 const ATTACHED = "exampleShellAttached";
@@ -140,29 +141,6 @@ function ensureStyle(): void {
   tag.id = STYLE_ID;
   tag.textContent = STYLE;
   document.head.appendChild(tag);
-}
-
-/**
- * Extract runnable SQL from a code block. Two renderers feed this component:
- * CodeBlock.astro (Prism, hand-authored examples) puts the whole snippet in a
- * single text node, where `.textContent` is exactly the source string.
- * Expressive Code (MDX/Markdown fences — cookbook.mdx, technical-details.mdx)
- * instead lays out each line as its own block-level `.ec-line` div with no
- * literal "\n" between them; the line break is CSS, not a character, so
- * `.textContent` there runs every line together while still preserving each
- * line's own indentation — which is exactly the "no spacing" bug this guards
- * against. Rejoin on "\n" whenever that per-line structure is present.
- */
-function getSql(pre: HTMLElement): string {
-  const code = pre.querySelector("code");
-  if (!code) return (pre.textContent ?? "").trim();
-
-  const lines = code.querySelectorAll(":scope > .ec-line");
-  if (lines.length > 0) {
-    return Array.from(lines).map((line) => line.textContent ?? "").join("\n").trim();
-  }
-
-  return (code.textContent ?? "").trim();
 }
 
 /** Relative luminance (WCAG) of a computed `rgb()`/`rgba()` string, or null when
@@ -382,7 +360,7 @@ export default function ExampleShellMounter({
       .querySelectorAll<HTMLElement>(codeBlockSelector)
       .forEach((pre) => {
         if (pre.dataset[ATTACHED] === "true") return;
-        const sql = getSql(pre);
+        const sql = exampleSql(pre);
         if (!sql) return;
         pre.dataset[ATTACHED] = "true";
 
@@ -405,6 +383,22 @@ export default function ExampleShellMounter({
           (pre.closest(".code-block-wrapper") as HTMLElement | null) ??
           (pre.closest("figure.frame") as HTMLElement | null) ??
           pre;
+        const unavailable = browserUnavailableReason(sql);
+        if (unavailable) {
+          const note = document.createElement("p");
+          note.className = "example-browser-unavailable my-3 text-sm text-soil-700";
+          note.textContent = unavailable;
+          blockRoot.insertAdjacentElement("afterend", note);
+          pre.dataset.browserRunDisabledReason = unavailable;
+          cleanupByBlock.set(pre, () => {
+            note.remove();
+            stopAdopting();
+            restoreToolbar();
+            delete pre.dataset[ATTACHED];
+            delete pre.dataset.browserRunDisabledReason;
+          });
+          return;
+        }
         // Blog examples place a static, accessible result table immediately
         // after the Expressive Code wrapper. It is useful before the reader
         // starts WASM, but becomes duplicate output once the live terminal is

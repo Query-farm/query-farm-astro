@@ -56,6 +56,16 @@ export const platformComponents: ProductTile[] = [
     status: 'preview',
   },
   {
+    img: '/crossfield/crossfield-mark.svg',
+    title: 'Crossfield',
+    eyebrow: 'A semantic layer inside DuckDB',
+    outcome: 'Spend less time reconciling reports.',
+    description: 'Give teams and AI agents shared reporting definitions through SQL. Inspect calculations, combine models and compare revisions in DuckDB. Coming in Haybarn.',
+    href: '/products/crossfield',
+    cta: 'Explore Crossfield',
+    status: 'development',
+  },
+  {
     img: '/products/haybarn/haybarn-mark.svg',
     title: 'Haybarn',
     eyebrow: 'Independent distribution',

@@ -44,3 +44,11 @@ CREATE OR REPLACE TABLE right_records (
 INSERT INTO right_records VALUES
     (10, 'hello_world'),
     (20, 'foo_bar');
+
+-- Small files for the file-ingestion examples, in the browser's filesystem.
+COPY (SELECT 'Ada' AS firstName, 'Lovelace' AS lastName, 'ada@example.com' AS emailAddress)
+TO 'users.csv' (HEADER true);
+COPY (SELECT 'Ada' AS firstName, 'Lovelace' AS lastName)
+TO 'data.csv' (HEADER true);
+COPY (SELECT 'Ada' AS firstName, 'Lovelace' AS lastName)
+TO 'events.json' (FORMAT JSON, ARRAY true);

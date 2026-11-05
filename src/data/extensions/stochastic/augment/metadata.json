@@ -2,11 +2,11 @@
   "name": "stochastic",
   "displayName": "Stochastic",
   "icon": "dice-five",
-  "description": "Monte Carlo, synthetic data, and what-if analysis directly in SQL. 22 named probability distributions, each with the same uniform surface — sample, PDF, CDF, quantile, hazard, plus full distribution properties — for ~444 functions total. Best for ad-hoc statistical work next to warehouse data; for production-grade simulation many users will still want a Python notebook with NumPy and SciPy.",
+  "description": "Evaluate probability distributions in DuckDB SQL. Compute densities, cumulative probabilities and quantiles, generate samples for simulations, fit distributions to data and run hypothesis tests.",
   "githubUrl": "https://github.com/Query-farm/stochastic",
   "cta": {
     "title": "Monte Carlo, in SQL",
-    "description": "Install Stochastic to compute PDFs, CDFs, quantiles, and random samples from 22 named probability distributions inside DuckDB — Monte Carlo and synthetic data without leaving the warehouse."
+    "description": "Install Stochastic to compute PDFs, CDFs, quantiles, and random samples from 36 named probability distributions inside DuckDB, fit distributions to your columns, and run t-tests, chi-squared and Kolmogorov-Smirnov tests — Monte Carlo, synthetic data and inference without leaving the warehouse."
   },
   "category": "analytics",
   "status": "stable",
@@ -16,19 +16,107 @@
   "installSource": "community",
   "quickStart": [
     {
-      "title": "Find the 95th percentile of a Normal(0, 1)",
-      "sql": "SELECT dist_normal_quantile(0.0, 1.0, 0.95) AS p95;"
+      "title": "Find a normal-distribution percentile",
+      "description": "Calculate the 95th percentile of a standard normal distribution, then check its cumulative probability.",
+      "sql": "SELECT round(dist_normal_quantile(0.0, 1.0, 0.95), 4) AS p95,\n       round(dist_normal_cdf(0.0, 1.0, 1.6448536269514722), 2) AS probability;",
+      "note": "The parameters describe a standard normal distribution: mean 0 and standard deviation 1. This computes a theoretical quantile, not a percentile of an observed table.",
+      "outputTable": {
+        "columns": [
+          {
+            "name": "p95"
+          },
+          {
+            "name": "probability"
+          }
+        ],
+        "rows": [
+          [
+            1.6449,
+            0.95
+          ]
+        ]
+      }
     },
     {
-      "title": "1,000 random draws from N(100, 15)",
-      "sql": "SELECT dist_normal_sample(100.0, 15.0) AS x\nFROM range(1000);"
-    },
-    {
-      "title": "P(X ≤ 5 | Binomial(n=10, p=0.3))",
-      "sql": "SELECT dist_binomial_cdf(10, 0.3, 5) AS prob_at_most_5;"
+      "title": "Fit a distribution and test the fit",
+      "description": "Fit a gamma distribution to a column by maximum likelihood, then check the fit with a Kolmogorov-Smirnov test.",
+      "sql": "WITH durations AS (\n  SELECT * FROM (VALUES (1.2), (0.7), (2.9), (1.8), (0.4), (3.6), (1.1), (2.2)) t(x)\n), fit AS (\n  SELECT dist_gamma_fit(x) AS f FROM durations\n)\nSELECT round(f.shape, 4) AS shape, round(f.scale, 4) AS scale,\n       round(dist_gamma_ks_test(x, f.shape, f.scale).p_value, 4) AS ks_p_value\nFROM durations, fit\nGROUP BY f;",
+      "note": "The fit returns a STRUCT whose fields are named like the distribution's parameters, so it plugs straight into the other dist_gamma_* functions, followed by the log_likelihood, aic and bic for comparing fits. Fitting and the tests need the DuckDB 2.0 build of the extension.",
+      "browserRunnable": false,
+      "outputTable": {
+        "columns": [
+          {
+            "name": "shape",
+            "align": "left"
+          },
+          {
+            "name": "scale",
+            "align": "left"
+          },
+          {
+            "name": "ks_p_value",
+            "align": "left"
+          }
+        ],
+        "rows": [
+          [
+            "2.5168",
+            "0.6904",
+            "0.9991"
+          ]
+        ]
+      }
     }
   ],
   "relatedExtensions": [
     "datasketches"
+  ],
+  "entryPage": {
+    "title": "Stochastic: Probability Distributions in DuckDB",
+    "seoDescription": "Evaluate probability distributions in DuckDB SQL. Compute densities, cumulative probabilities and quantiles, generate samples for simulations, fit distributions to data and run hypothesis tests.",
+    "tasks": [
+      {
+        "title": "Choose a distribution",
+        "description": "Match the family to the quantity you are modelling.",
+        "href": "#when-to-use-which-family"
+      },
+      {
+        "title": "Fit a distribution to data",
+        "description": "Estimate parameters from a column, then test the fit.",
+        "href": "#fit-a-distribution-then-test-the-fit"
+      },
+      {
+        "title": "Run a hypothesis test",
+        "description": "t-tests, chi-squared and Kolmogorov-Smirnov as aggregates.",
+        "href": "#hypothesis-tests"
+      },
+      {
+        "title": "Generate synthetic columns",
+        "description": "Sample from several distribution families.",
+        "href": "#synthetic-data--combine-families-per-column"
+      },
+      {
+        "title": "Make sampling reproducible",
+        "description": "Seed sampling with setseed.",
+        "href": "#reproducibility"
+      }
+    ],
+    "testedWith": "DuckDB 2.0.0",
+    "introduction": {
+      "title": "Calculate probabilities and draw samples in SQL",
+      "paragraphs": [
+        "Stochastic provides 36 probability distributions through a consistent set of SQL functions. For each one you can evaluate a density, calculate a cumulative probability or quantile, read its properties and generate random samples.",
+        "It also works in the other direction: fit aggregates estimate a distribution's parameters from a column by maximum likelihood, and test aggregates run Kolmogorov-Smirnov, t-tests and Pearson's chi-squared test next to your data. Use it for synthetic datasets, probability calculations alongside existing rows, simulation experiments and quick inference."
+      ]
+    }
+  },
+  "searchTerms": [
+    "probability distribution normal binomial poisson",
+    "statistics simulation monte carlo quantile random sample",
+    "fit distribution maximum likelihood estimate parameters",
+    "aic bic log likelihood compare distributions model selection",
+    "weibull cauchy logistic laplace negative binomial fit",
+    "hypothesis test t-test chi-squared kolmogorov-smirnov p-value",
+    "dirichlet multinomial skew normal triangular non-central"
   ]
 }

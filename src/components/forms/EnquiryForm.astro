@@ -1,0 +1,117 @@
+---
+/**
+ * EnquiryForm — a short message that reaches hello@query.farm without a mail
+ * client. Posts JSON to /api/enquiry (functions/api/enquiry.ts →
+ * src/lib/enquiry.ts), which checks Cloudflare Turnstile and sends through
+ * Resend. Only a validated enquiry accepted by Resend records `generate_lead`.
+ */
+import Button from '../ui/Button.astro';
+import { ENQUIRY_TOPICS } from '../../lib/enquiry';
+
+interface Props {
+  /** Pre-selects the topic, e.g. "Consulting" on the consulting page. */
+  topic?: (typeof ENQUIRY_TOPICS)[number];
+  id?: string;
+}
+
+const { topic, id = 'enquiry' } = Astro.props;
+
+// Turnstile widget site key (public; it ships in the page). The matching
+// secret is TURNSTILE_SECRET_KEY on the Pages project. The widget only renders
+// on the hostnames registered for it; to test on localhost without adding it
+// there, use Cloudflare's test site key 1x00000000000000000000AA with the test
+// secret 1x0000000000000000000000000000000AA in .dev.vars.
+const TURNSTILE_SITE_KEY = '0x4AAAAAAFgOJo0cs7g703aQ';
+
+const INPUT =
+  'w-full rounded-lg border border-soil-300 bg-[#fffdf7] px-3.5 py-2.5 text-[15.5px] font-normal text-soil-900 transition ' +
+  'placeholder:text-soil-500 focus:border-link focus:ring-[3px] focus:ring-link/20 focus:outline-none ' +
+  'aria-[invalid=true]:border-[#b3261e]';
+const LABEL = 'text-[12.5px] font-medium text-soil-600';
+const ERROR = 'text-[13px] text-[#b3261e]';
+---
+
+<form id={id} class="enquiry-form flex flex-col gap-4" novalidate data-enquiry-form>
+  <div class="grid gap-4 sm:grid-cols-2">
+    <div class="flex flex-col gap-1.5">
+      <label for={`${id}-name`} class={LABEL}>Name</label>
+      <input id={`${id}-name`} name="name" autocomplete="name" required maxlength="120" class={INPUT} aria-describedby={`${id}-name-error`} />
+      <p id={`${id}-name-error`} class={ERROR} data-error-for="name" hidden></p>
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <label for={`${id}-email`} class={LABEL}>Work email</label>
+      <input id={`${id}-email`} name="email" type="email" autocomplete="email" required maxlength="254" placeholder="you@company.com" class={INPUT} aria-describedby={`${id}-email-error`} />
+      <p id={`${id}-email-error`} class={ERROR} data-error-for="email" hidden></p>
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <label for={`${id}-company`} class={LABEL}>Company <span class="font-normal text-soil-500">(optional)</span></label>
+      <input id={`${id}-company`} name="company" autocomplete="organization" maxlength="160" class={INPUT} aria-describedby={`${id}-company-error`} />
+      <p id={`${id}-company-error`} class={ERROR} data-error-for="company" hidden></p>
+    </div>
+    <div class="flex flex-col gap-1.5">
+      <label for={`${id}-topic`} class={LABEL}>What do you need?</label>
+      <select id={`${id}-topic`} name="topic" required class={INPUT} aria-describedby={`${id}-topic-error`}>
+        {!topic && <option value="" selected disabled>Choose one</option>}
+        {ENQUIRY_TOPICS.map(t => <option value={t} selected={t === topic}>{t}</option>)}
+      </select>
+      <p id={`${id}-topic-error`} class={ERROR} data-error-for="topic" hidden></p>
+    </div>
+  </div>
+
+  <div class="flex flex-col gap-1.5">
+    <label for={`${id}-message`} class={LABEL}>How can we help?</label>
+    <textarea
+      id={`${id}-message`}
+      name="message"
+      rows="5"
+      required
+      maxlength="5000"
+      placeholder="What are you trying to query or build, which DuckDB version you're on, and any deadline."
+      class={INPUT}
+      aria-describedby={`${id}-message-error`}
+    ></textarea>
+    <p id={`${id}-message-error`} class={ERROR} data-error-for="message" hidden></p>
+  </div>
+
+  {/* Honeypot: hidden from people and assistive tech; bots fill it in. The
+      name means nothing to browser autofill, which fills a field called
+      "website" and would silently drop a real visitor's message. */}
+  <div class="absolute -left-[9999px] h-px w-px overflow-hidden" aria-hidden="true">
+    <label for={`${id}-qf-hp`}>Leave this empty</label>
+    <input id={`${id}-qf-hp`} name="qf_hp" tabindex="-1" autocomplete="off" />
+  </div>
+
+  <div class="cf-turnstile" data-sitekey={TURNSTILE_SITE_KEY} data-theme="light" data-callback="qfEnquiryReady" data-expired-callback="qfEnquiryExpired" data-error-callback="qfEnquiryError"></div>
+
+  <div class="flex flex-wrap items-center gap-4">
+    <Button type="submit">Send message</Button>
+    <button type="button" class="text-sm text-link underline underline-offset-4" data-enquiry-retry hidden>Try the security check again</button>
+    <p class="text-[13px] text-soil-600" role="status" aria-live="polite" data-enquiry-status></p>
+  </div>
+</form>
+
+<div class="rounded-xl border border-field-700/30 bg-field-700/5 px-5 py-4" data-enquiry-sent hidden tabindex="-1">
+  <p class="font-medium text-soil-900">Thanks — your message is on its way.</p>
+  <p class="mt-1 text-[14.5px] text-soil-700">A person reads every message and replies within one or two business days.</p>
+</div>
+
+<script is:inline>
+  // Callbacks exist before the async widget loads. No token or provider error
+  // text enters analytics; the module also reads this state if it loads later.
+  (() => {
+    const state = value => {
+      for (const form of document.querySelectorAll('[data-enquiry-form]')) {
+        form.dataset.turnstileStatus = value;
+        form.dispatchEvent(new Event('enquiry:turnstile'));
+      }
+    };
+    window.qfEnquiryReady = () => state('ready');
+    window.qfEnquiryExpired = () => state('expired');
+    window.qfEnquiryError = () => state('error');
+  })();
+</script>
+<script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+<script>
+  import { initEnquiryForms } from '../../lib/enquiry-form';
+  initEnquiryForms();
+</script>

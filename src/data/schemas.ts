@@ -279,6 +279,9 @@ export const ExtensionMetadataSchema = z.object({
   }).optional(),
   githubStars: z.number().optional(),
   platforms: z.array(PlatformInfoSchema).optional(),
+  // A published WASM artifact can still require capabilities our browser
+  // runtime lacks. Keep this authored restriction separate from snapshots.
+  browserRunDisabledReason: z.string().trim().min(1).optional(),
   duckdbVersions: z.array(z.string()).optional(),
   // Per (platform, architecture) compiled artifact size in bytes. Discovered
   // by extension-diff.py from Content-Length on community-extensions.duckdb.org.

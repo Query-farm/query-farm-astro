@@ -4,7 +4,7 @@ description: "Direct VARIANT interchange with Arrow is merged into DuckDB's 2.0 
 pubDate: 2026-09-13
 updatedDate: 2026-10-08
 heroImage: '/media/posts/duckdb-variant-arrow-support-tracker/social.png'
-author: "Rusty Conover"
+author: "Query Farm Team"
 tags: ["DuckDB", "Arrow", "VARIANT", "Interoperability"]
 draft: false
 ---

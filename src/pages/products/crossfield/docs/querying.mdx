@@ -1,0 +1,143 @@
+---
+layout: '../../../../layouts/CrossfieldDocs.astro'
+title: 'Query and compose'
+description: 'Select approved measures, retain detail grain, supply typed inputs and compare scoped definitions.'
+---
+
+import CodeBlock from '../../../../components/ui/CodeBlock.astro';
+import { compositionSQL } from '../../../../data/crossfield';
+
+Use this reference when you need detail rows, named reports, typed inputs or a query that combines models. For a first query, start with the [fulfillment walkthrough](/products/crossfield/docs/fulfillment) or [investment example](/products/crossfield/docs/trading). For a complete old-versus-new comparison, follow [model versions](/products/crossfield/docs/model-versions).
+
+The retail queries below assume the [orders and line items setup](/products/crossfield/docs/quickstart) has loaded both attachments. `FROM SEMANTIC` selects a model; `jaffle_current` is the attached catalog and `jaffle` is the model inside it:
+
+```sql
+SELECT store_name, revenue
+FROM SEMANTIC jaffle_current.jaffle
+GROUP BY store_name
+ORDER BY store_name;
+```
+
+The equivalent catalog spelling is `FROM jaffle_current.semantic.jaffle`. Both enforce the same model rules. Unqualified `FROM SEMANTIC jaffle` uses the current `USE` catalog or the unique matching attachment; ambiguous selection fails.
+
+## Choose the query surface
+
+| Surface | Caller chooses | Contract |
+|---|---|---|
+| `semantic.jaffle` | Measures, dimensions, filters and grouping | Named approved members; no aggregate `SELECT *` |
+| `detail.items` | Approved row fields, filters and ordering | Retains source grain and duplicate projections |
+| `reports.monthly_summary` | Published report outputs | Fixed query, executed against live sources |
+| `reports.store_revenue(...)` | Required typed report arguments | Fixed query with parameterized selection |
+
+Selecting `revenue` invokes its recipe. Wrapping it in `SUM(revenue)` or inventing `revenue * 2` is not approved by ordinary catalog syntax. Detail does not authorize arbitrary caller aggregation.
+
+## Understand the mode
+
+| Mode | Attached definitions | Surrounding SQL |
+|---|---|---|
+| `off` | Enforced | Ordinary SQL available |
+| `semantic` | Enforced | Ordinary composition around governed blocks |
+| `strict` | Enforced | Supported statements must satisfy one attachment's policy |
+
+An unsealed development connection can change mode. [Host sealing](/products/crossfield/docs/compatibility#host-controlled-sessions) adds a separately administered boundary.
+
+## Compare model revisions
+
+Each CTE below retains its model. Semantic mode permits the outer comparison:
+
+```sql
+SET crossfield_mode = 'semantic';
+
+WITH previous AS (
+    SELECT * FROM jaffle_old.reports.revenue_by_store
+), current AS (
+    SELECT * FROM jaffle_current.reports.revenue_by_store
+)
+SELECT coalesce(p.store_name, c.store_name) AS store_name,
+       p.revenue AS previous_revenue,
+       c.revenue AS current_revenue,
+       c.revenue - p.revenue AS change
+FROM previous p
+FULL OUTER JOIN current c ON p.store_name = c.store_name
+ORDER BY store_name;
+```
+
+| store_name | previous_revenue | current_revenue | change |
+|---|---:|---:|---:|
+| Brooklyn | 265.20 | 255.00 | -10.20 |
+| Philadelphia | 6465.55 | 6100.00 | -365.55 |
+
+The author owns the outer reconciliation; it is not an approved model metric or a claim that definitions are equivalent. Strict mode rejects this cross-attachment business query.
+
+In off or semantic mode, direct aggregate-model joins require explicit join permission and matching shared dimensions with compatible types and meaning. Each input aggregates independently at the complete join grain. Matching column names alone are insufficient; Jaffle's comparison uses report results instead.
+
+## Retain model revisions
+
+The [model versions guide](/products/crossfield/docs/model-versions) follows the complete workflow: save both definitions, attach them, compare their answers and choose which version future reports should use.
+
+A package contains one business revision. Its package UUID identifies the model family; its `revision` and content hashes identify the retained definition. Attach separate package files under different names to query revisions in the same connection. The [delivery example](/products/crossfield/docs/fulfillment#review-a-model-revision) compares original and revised delivery promises; the [investment example](/products/crossfield/docs/trading#review-a-model-revision) compares portfolio scopes.
+
+An attachment retains the loaded definition. Editing its source file does not update that attachment. `MODEL_VERSION` checks that a supplied package has the requested revision; it does not fetch another revision or load a remote service.
+
+For managed releases, Crossfield also provides an optional persistent release store in DuckDB, administered through its native host API. It records immutable package revisions, validation receipts and the selected release. The host publishes a checked revision or selects a previously published revision for subsequent activations. Existing attached definitions are unchanged. This is an application-managed workflow, not automatic history created by `ATTACH`.
+
+You can instead retain package files in your existing version-control workflow. In either case, model history preserves definitions, not source data. To reproduce a past report, retain its input parameters, filters and source snapshot as well. Selecting an earlier model does not roll back the underlying tables.
+
+## Join independent models
+
+This separate synthetic example compares actual sales and budget allocations by region across the fixture's history. It uses two independently defined models over two source tables. Each source row records a region, month, segment, amount, and active flag. Both models select their active rows; the sales model defines `revenue`, and the planning model defines `budget`.
+
+Download [the composition setup SQL](/crossfield/composition-setup.sql). Open a **fresh matching CLI connection with Crossfield loaded**, as in the [walkthrough](/products/crossfield/docs/quickstart#open-the-matching-cli), from the Crossfield repository root. The matching build must include ICU; the script loads it and selects UTC because these models also declare a month dimension.
+
+Use the downloaded file's actual path at the CLI prompt:
+
+```text
+.read /absolute/path/to/composition-setup.sql
+```
+
+The script creates the tables, inserts the fixture rows, and attaches `test/models/shared-join-actual.ossie.json` as `actuals` and `shared-join-plan.ossie.json` as `planning`. Both models allow semantic joins and declare their region dimension as `company.region.v1`.
+
+<CodeBlock code={compositionSQL} title="Revenue and budget by region" tryable={false} />
+
+| region | revenue, USD | budget, USD |
+|---|---:|---:|
+| North | 230 | 550 |
+| South | 80 | 100 |
+| West | 25 | NULL |
+
+Crossfield aggregates each model independently before joining. The North result includes three non-NULL active sales amounts, 100 + 40 + 90, and three active budget amounts, 200 + 50 + 300. Inactive rows are excluded by the models. The LEFT JOIN retains West without inventing a zero budget; the WHERE clause excludes unnamed regions.
+
+This is a comparison over the fixture's history, not a same-month comparison: South's sales occur in January and its budget in February. To compare by month, both the grouping and join must include that shared dimension. Join keys must cover the complete result grain. Matching column names alone do not establish equivalent business meaning.
+
+Semantic/off mode allows these approved direct joins. Strict mode rejects business queries spanning multiple attachments. An ordinary outer query can compute a variance from these results; that calculation is author-controlled reconciliation.
+
+## Call a typed semantic model
+
+In the matching CLI, from the Crossfield repository root, this checked-in fixture uses native `range` functions and needs no external provider:
+
+```sql
+SET crossfield_mode = 'semantic';
+ATTACH 'test/models/semantic-overloads.crossfield.json'
+AS arithmetic (TYPE crossfield);
+
+SELECT number_count, number_sum
+FROM SEMANTIC arithmetic.numbers(5);
+-- 5 | 10
+
+SELECT number_count, number_sum
+FROM SEMANTIC arithmetic.numbers(start => 2, stop => 5);
+-- 3 | 9
+
+SELECT number
+FROM arithmetic.detail.numbers(2, 5)
+ORDER BY number;
+-- 2; 3; 4
+```
+
+These typed signatures select an input scope while retaining selectable measures and dimensions. A parameterized saved report instead fixes its query.
+
+Native overload selection uses argument names and types. Required inputs remain required; optional inputs need authored defaults. Explicitly supplied inputs that do not affect selected members reject. Legacy callable models may accept named inputs only; discover the actual calling forms with `crossfield_signatures()` and `crossfield_parameters()`.
+
+## Beyond the retail fixture
+
+Use [typed scopes and model-owned retrieval](/products/crossfield/docs/providers) when the model needs to call approved providers. For measurements, distinguish [represented intervals from timestamp labels](/products/crossfield/docs/time-and-measurements). These contracts complement ordinary [definition validation and revision review](/products/crossfield/docs/validation).

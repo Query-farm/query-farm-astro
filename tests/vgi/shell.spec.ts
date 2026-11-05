@@ -60,6 +60,6 @@ test('the VGI terminal runs without CDN module imports or blob-relative source m
   expect(moduleRequests).toEqual([]);
   const maps = await page.evaluate(() => (window as typeof window & { workerSourceMaps: string[] }).workerSourceMaps);
   expect(maps).toEqual([
-    `https://unpkg.com/@haybarn/haybarn-wasm@${wasmVersion}/dist/duckdb-browser-eh.worker.js.map`,
+    `https://unpkg.com/@haybarn/haybarn-wasm@${wasmVersion}/dist/duckdb-browser-base.worker.js.map`,
   ]);
 });

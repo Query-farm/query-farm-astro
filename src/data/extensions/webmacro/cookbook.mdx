@@ -1,8 +1,10 @@
+These examples use DuckDB 2.0 or later. Complete the [repository setup and installation](#quick-install) first.
+
 ## Install and load
 
 ```sql
-INSTALL webmacro FROM community;
-LOAD webmacro;
+INSTALL webmacro FROM query_farm;
+LOAD webmacro FROM query_farm;
 ```
 
 The extension registers a single function: [`load_macro_from_url`](#load_macro_from_url). Everything below is a recipe around it.
@@ -13,16 +15,16 @@ The recommended pattern — host the SQL in a Git repo, load by raw URL:
 
 ```sql
 SELECT load_macro_from_url(
-  'https://raw.githubusercontent.com/your-org/sql-macros/main/search_posts.sql'
+  'https://raw.githubusercontent.com/Query-farm/sql-macros/main/macros/search_posts.sql'
 ) AS res;
 -- 'Successfully loaded macro: search_posts'
 
 -- Now use it like any DuckDB macro
 SELECT *
-FROM search_posts('qxip.bsky.social', text := 'quack');
+FROM search_posts('alice.example.com', text := 'quack');
 ```
 
-The body of the URL must contain a [`CREATE MACRO`](https://duckdb.org/docs/sql/statements/create_macro) statement (scalar or table macro). See [`load_macro_from_url`](#load_macro_from_url) for the validation rules.
+The body of the URL must be exactly one [`CREATE MACRO`](https://duckdb.org/docs/sql/statements/create_macro) statement (scalar or table macro). See [`load_macro_from_url`](#load_macro_from_url) for the validation rules.
 
 ## Pin to an immutable commit
 
@@ -30,8 +32,8 @@ Use a commit SHA in the URL so a branch rebase or upstream change can't silently
 
 ```sql
 SELECT load_macro_from_url(
-  'https://raw.githubusercontent.com/your-org/sql-macros/'
-  || 'a3f8d21c9e7b4f0e6d2a1b5c8e9f0a1b2c3d4e5f'
+  'https://raw.githubusercontent.com/Query-farm/sql-macros/'
+  || 'a6a929d6d157bf10293dd04bffe606f8fabeda0d'
   || '/macros/search_posts.sql'
 );
 ```
@@ -47,13 +49,13 @@ SELECT
   url,
   load_macro_from_url(url) AS status
 FROM (VALUES
-  ('https://raw.githubusercontent.com/your-org/sql-macros/main/search_posts.sql'),
-  ('https://raw.githubusercontent.com/your-org/sql-macros/main/normalize_handle.sql'),
-  ('https://raw.githubusercontent.com/your-org/sql-macros/main/active_users.sql')
+  ('https://raw.githubusercontent.com/Query-farm/sql-macros/main/macros/search_posts.sql'),
+  ('https://raw.githubusercontent.com/Query-farm/sql-macros/main/macros/normalize_handle.sql'),
+  ('https://raw.githubusercontent.com/Query-farm/sql-macros/main/macros/active_users.sql')
 ) AS macros(url);
 ```
 
-Any URL that fails the fetch, the macro-statement check, or the dangerous-command filter raises an error — the bootstrap halts, you find out at session start instead of at first use.
+Any URL that fails the fetch or the statement check raises an error — the bootstrap halts, you find out at session start instead of at first use.
 
 ## Load from a private host with auth
 
@@ -62,7 +64,7 @@ Any URL that fails the fetch, the macro-statement check, or the dangerous-comman
 ```sql
 SET VARIABLE macro_url = getenv('MACRO_PRESIGNED_URL');
 
-SELECT load_macro_from_url(:macro_url);
+SELECT load_macro_from_url(getvariable('macro_url'));
 ```
 
 For an internally-routable host where TLS or network ACLs are the access control (e.g. `https://macros.your-org.internal/foo.sql`), a plain URL is fine.
@@ -71,27 +73,32 @@ For an internally-routable host where TLS or network ACLs are the access control
 
 Either macro form loads the same way — the difference is how you call the result.
 
-A **scalar macro** definition at `https://example.com/macros/normalize_handle.sql`:
+A **scalar macro** definition at [`normalize_handle.sql`](https://raw.githubusercontent.com/Query-farm/sql-macros/main/macros/normalize_handle.sql):
 
 ```sql
 CREATE OR REPLACE MACRO normalize_handle(h)
-AS lower(trim(h, '@'));
+AS lower(trim(trim(h), '@'));
 ```
 
-A **table macro** at `https://example.com/macros/active_users.sql`:
+A **table macro** at [`active_users.sql`](https://raw.githubusercontent.com/Query-farm/sql-macros/main/macros/active_users.sql), which carries its own sample rows:
 
 ```sql
 CREATE OR REPLACE MACRO active_users(since_date) AS TABLE
 SELECT user_id, last_seen
-FROM users
-WHERE last_seen >= since_date;
+FROM (VALUES
+    (1, DATE '2025-11-02'),
+    (2, DATE '2026-02-15'),
+    (3, DATE '2026-03-01')
+) AS users(user_id, last_seen)
+WHERE last_seen >= since_date
+ORDER BY user_id;
 ```
 
 After loading both, scalar macros go in the `SELECT` list; table macros go in the `FROM` clause:
 
 ```sql
-SELECT load_macro_from_url('https://example.com/macros/normalize_handle.sql');
-SELECT load_macro_from_url('https://example.com/macros/active_users.sql');
+SELECT load_macro_from_url('https://raw.githubusercontent.com/Query-farm/sql-macros/main/macros/normalize_handle.sql');
+SELECT load_macro_from_url('https://raw.githubusercontent.com/Query-farm/sql-macros/main/macros/active_users.sql');
 
 SELECT normalize_handle('@Alice  ') AS handle,
        u.last_seen
@@ -105,7 +112,7 @@ FROM active_users(DATE '2026-01-01') u;
 ```sql
 -- Edit the SQL upstream, then re-run:
 SELECT load_macro_from_url(
-  'https://raw.githubusercontent.com/your-org/sql-macros/main/search_posts.sql'
+  'https://raw.githubusercontent.com/Query-farm/sql-macros/main/macros/search_posts.sql'
 );
 -- 'Successfully loaded macro: search_posts'  -- now the new definition
 ```
@@ -117,14 +124,14 @@ If the macro was created without `OR REPLACE`, you'll need to [`DROP MACRO`](htt
 WebMacro is a one-trick extension on purpose — it loads macros and nothing else. For HTTP request patterns it doesn't cover (POST bodies, custom headers, reading non-macro JSON), pair with the [`http_client`](/products/extensions/http_client) extension, which exposes general-purpose `http_get` / `http_post` for SQL-level HTTP.
 
 ```sql
--- Fetch a macro index from your registry, then load each entry
-INSTALL http_client FROM community;
-LOAD http_client;
+-- Fetch a macro index, then load each entry
+INSTALL http_client FROM query_farm;
+LOAD http_client FROM query_farm;
 
 WITH index AS (
-  SELECT (http_get('https://macros.your-org.internal/index.json')->>'body')::JSON AS j
+  SELECT (http_get('https://raw.githubusercontent.com/Query-farm/sql-macros/main/index.json')->>'body')::JSON AS j
 )
-SELECT load_macro_from_url(unnest(j->'$.macros[*].url')::VARCHAR)
+SELECT load_macro_from_url(unnest(j->>'$.macros[*].url'))
 FROM index;
 ```
 

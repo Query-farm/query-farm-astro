@@ -178,10 +178,10 @@ test('results preserve nested decimals, large integers, timestamps, nulls, and l
   await expect(page.locator('.result-table-wrap img')).toHaveCount(0);
 });
 
-test('reference pages retain all overloads without JavaScript', async ({ browser }) => {
-  const context = await browser.newContext({ javaScriptEnabled: false, reducedMotion: 'reduce' });
+test('reference pages retain all overloads without JavaScript', async ({ browser, baseURL }) => {
+  const context = await browser.newContext({ baseURL, javaScriptEnabled: false, reducedMotion: 'reduce' });
   const page = await context.newPage();
-  await page.goto(`http://127.0.0.1:4323${reference}regexp_extract/`);
+  await page.goto(`${reference}regexp_extract/`);
   const panels = page.locator('[data-overload]');
   expect(await panels.count()).toBeGreaterThan(1);
   await expect(panels.last()).toBeVisible();

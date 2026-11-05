@@ -32,13 +32,38 @@ jobs:
 
       - run: npm run test:haybarn-functions
 
+      - name: Check contact tracking and delivery webhooks
+        run: node --import tsx --test tests/enquiry.test.mjs tests/enquiry-webhook.test.mjs tests/enquiry-browser.test.mjs
+
       - run: npm run test:haybarn-extensions
 
       - run: npm run validate
 
+      - name: Prepare native DuckDB documentation tests
+        run: |
+          python3 -m venv .cache/extension-install-tests
+          .cache/extension-install-tests/bin/python -m pip install -r tests/extensions/native-requirements.txt
+
+      - name: Check extension installation documentation
+        env:
+          DUCKDB_TEST_PYTHON: .cache/extension-install-tests/bin/python
+        run: npm run test:extension-install
+
       - run: npm run test:haybarn-exports
 
-      - run: npm run test:haybarn-browser
+      - name: Run browser tests
+        id: browser_tests
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/browser-results.json
+        run: npm run test:haybarn-browser -- --workers=4 --reporter=line,json
+
+      - name: Upload failed browser test results
+        if: ${{ !cancelled() && steps.browser_tests.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-test-results
+          path: test-results/
+          retention-days: 7
 
       - run: npm run check:pages-functions
 

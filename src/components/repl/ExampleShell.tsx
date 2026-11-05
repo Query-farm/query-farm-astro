@@ -13,6 +13,7 @@
  * "core terminal": query editor + Arrow result rendering + a few dot-commands.
  */
 import { useEffect, useRef, useState } from "react";
+import { expectedExampleError } from "../../lib/repl/example-sql";
 import {
   printBoxTable,
   printLineTable,
@@ -23,6 +24,7 @@ import {
   ensureEngine,
   ensureExtension,
   createSession,
+  runFixtureStatement,
   splitStatements,
   isCommentOnly,
   type Session,
@@ -259,7 +261,13 @@ interface ReplDeps {
  *  disposed (which rejects the pending rl.read()). */
 async function runRepl(
   deps: ReplDeps,
-  opts: { seedSql?: string; extError?: string; fixtures?: string; extensionName?: string },
+  opts: {
+    seedSql?: string;
+    extError?: string;
+    fixtures?: string;
+    extensionName?: string;
+    onExampleComplete: (ok: boolean) => void;
+  },
 ): Promise<void> {
   const { term, rl, session, tableFromIPC } = deps;
   let maxDisplayRows = 40;
@@ -275,7 +283,7 @@ async function runRepl(
     rl.println(color ? `\x1b[${color}m${msg}\x1b[0m` : msg);
 
   /** Execute one statement and render its result. Returns false on error. */
-  async function exec(sql: string, echo = false): Promise<boolean> {
+  async function exec(sql: string, echo = false, silent = false, expectedError?: string, fixture = false): Promise<boolean> {
     if (echo) writeln(`${PROMPT}\x1b[90m${sql};\x1b[0m`);
     const t0 = performance.now();
 
@@ -299,14 +307,34 @@ async function runRepl(
 
     let r: QueryResult;
     try {
-      r = await session.runQuery(sql);
+      // Native DuckDB docs use query_farm; Haybarn-Wasm publishes these
+      // extensions in its community repository. Keep copied SQL native, but
+      // use the browser builds when an example loads another extension.
+      const browserSql = sql.replace(
+        /^((?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*)(INSTALL|LOAD)\s+([A-Za-z_][A-Za-z0-9_]*)\s+FROM\s+query_farm\s*;?\s*$/i,
+        (_, prefix: string, action: string, name: string) =>
+          `${prefix}${action} ${name}${action.toUpperCase() === 'INSTALL' ? ' FROM community' : ''}`,
+      );
+      r = fixture ? await runFixtureStatement(session, browserSql) : await session.runQuery(browserSql);
     } finally {
       clearTimeout(spinnerDelay);
       clearInterval(spinnerInterval);
       if (spinnerShown) rl.write(`\r\x1b[2K`);
     }
     const elapsed = performance.now() - t0;
+    if (expectedError) {
+      if (!r.ok && parseError(r.error || "unknown").message.includes(expectedError)) {
+        writeln(`Expected error: ${parseError(r.error || "unknown").message}`, "32");
+        return true;
+      }
+      if (r.ok) {
+        writeln(`Expected error containing "${expectedError}", but this statement succeeded.`, "31");
+        return false;
+      }
+      writeln(`Expected an error containing "${expectedError}".`, "31");
+    }
     if (!r.ok) {
+      if (silent) writeln(`Setup SQL: ${sql}`, "90");
       const { message, position } = parseError(r.error || "unknown");
       if (/is not a function/.test(message)) {
         writeln(
@@ -324,6 +352,7 @@ async function runRepl(
       }
       return false;
     }
+    if (silent) return true;
     if (!r.buffer) {
       writeln("OK", "32");
       return true;
@@ -400,13 +429,16 @@ async function runRepl(
     writeln(`Note: ${opts.extError}`, "33");
     rl.println("");
   }
+  // Loading the engine alone does not mean the documented example worked.
+  // Preserve failures from every phase, even if a later statement succeeds.
+  let exampleOk = !opts.extError;
 
   // Seed sample tables the examples query (e.g. `contacts`). Run silently in
   // this session before the example — no announcement; just make them exist.
   if (opts.fixtures) {
     const fixtureStmts = splitStatements(opts.fixtures).filter((s) => !isCommentOnly(s));
     for (const stmt of fixtureStmts) {
-      await session.runQuery(stmt);
+      if (!await exec(stmt, false, true, undefined, true)) exampleOk = false;
     }
   }
 
@@ -434,16 +466,17 @@ async function runRepl(
       // result, so it runs quietly and the terminal goes straight to the
       // part the reader is here for.
       if (/^\s*ATTACH\b/i.test(stmt)) {
-        await session.runQuery(stmt);
+        if (!await exec(stmt, false, true)) exampleOk = false;
         continue;
       }
-      await exec(stmt, true);
+      if (!await exec(stmt, true, false, expectedExampleError(stmt))) exampleOk = false;
       // Seed the readline history so the user can press ↑ to recall and edit
       // the example, just as if they had typed it.
       rl.appendHistory(stmt);
       rl.println("");
     }
   }
+  opts.onExampleComplete(exampleOk);
 
   for (;;) {
     const sql = (await rl.read(PROMPT)).trim();
@@ -474,6 +507,7 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [exampleStatus, setExampleStatus] = useState<"running" | "succeeded" | "failed">("running");
   const startedRef = useRef(false);
 
   useEffect(() => {
@@ -614,6 +648,9 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
             seedSql: sql,
             fixtures: ext.ok ? fixtures ?? undefined : undefined,
             extensionName,
+            onExampleComplete: (ok) => {
+              if (!disposed) setExampleStatus(ok ? "succeeded" : "failed");
+            },
             extError: ext.ok
               ? undefined
               : `${extensionName} may not have a WebAssembly build yet — the SQL below may not run in-browser.`,
@@ -622,6 +659,7 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
       } catch (e: unknown) {
         if (disposed) return;
         setStatus("error");
+        setExampleStatus("failed");
         setErrorMsg(e instanceof Error ? e.message : String(e));
       }
     })();
@@ -633,13 +671,14 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
   }, [extensionName, installSource, sql, fixtures]);
 
   return (
-    <div className="example-shell">
+    <div className="example-shell" data-example-status={exampleStatus}>
       {/* .panel-head, dark side: mono / uppercase / tracked, on rock-950. */}
       <div className="example-shell-head">
         {/* Live-status dot — field-400, the one cool note in the palette. */}
         <span className="example-shell-dot" aria-hidden="true" />
         <span>Haybarn shell · {extensionName}</span>
         {status === "loading" && <span className="example-shell-booting">· booting…</span>}
+        {status === "ready" && exampleStatus === "failed" && <span role="status">· example failed</span>}
         {onClose && (
           <button
             type="button"

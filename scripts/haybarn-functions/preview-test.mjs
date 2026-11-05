@@ -3,7 +3,8 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { renderMachineResource } from '../../src/haybarn-functions/lib/machine-resources.ts';
 
-const DIST = resolve('dist');
+const DIST = resolve(process.env.PLAYWRIGHT_DIST_DIR ?? 'dist');
+const PORT = Number(process.env.PLAYWRIGHT_PORT ?? 4323);
 const CONTENT_SIGNAL = 'search=yes, ai-input=yes, ai-train=no';
 const types = {
   '.css': 'text/css; charset=utf-8',
@@ -44,7 +45,7 @@ async function assetPath(pathname) {
 
 createServer(async (request, response) => {
   try {
-    const url = new URL(request.url ?? '/', 'http://127.0.0.1:4323');
+    const url = new URL(request.url ?? '/', `http://127.0.0.1:${PORT}`);
     const machine = renderMachineResource(url);
     if (machine) {
       response.writeHead(machine.status, machine.headers);
@@ -74,4 +75,4 @@ createServer(async (request, response) => {
     response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
     response.end('Internal preview server error');
   }
-}).listen(4323, '127.0.0.1', () => console.log('[preview] http://127.0.0.1:4323'));
+}).listen(PORT, '127.0.0.1', () => console.log(`[preview] http://127.0.0.1:${PORT}`));

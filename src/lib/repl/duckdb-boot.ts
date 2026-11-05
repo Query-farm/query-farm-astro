@@ -197,6 +197,24 @@ export interface Session {
   runQuery: (sql: string) => Promise<QueryResult>;
 }
 
+// Tables belong to each example's private database, but the WASM filesystem
+// belongs to the shared engine. Create immutable sample files once per page:
+// overwriting an already-read file can fail or invalidate cached file handles.
+// Only fixture COPY statements are shared; example SQL always executes.
+const fixtureCopies = new Map<string, Promise<QueryResult>>();
+export async function runFixtureStatement(session: Session, sql: string): Promise<QueryResult> {
+  const statement = sql.replace(/^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)+/, "");
+  if (!/^COPY\b/i.test(statement)) return session.runQuery(sql);
+  let pending = fixtureCopies.get(sql);
+  if (!pending) {
+    pending = session.runQuery(sql);
+    fixtureCopies.set(sql, pending);
+  }
+  const result = await pending;
+  if (!result.ok) fixtureCopies.delete(sql); // preserve errors and allow retry
+  return result;
+}
+
 /** `ATTACH ... AS <alias>` registers the alias in the engine's catalog
  *  namespace, which is global — not scoped to the connection/session that
  *  issued it. So two independent example shells that both attach under the
@@ -204,6 +222,9 @@ export interface Session {
  *  since nothing DETACHes on close) fail with "database with name already
  *  exists" even though each has its own private session. */
 function attachAliasOf(sql: string): string | null {
+  // Documentation often introduces ATTACH with a comment. Ignore that prefix
+  // when identifying the alias, while executing the original statement.
+  sql = sql.replace(/^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)+/, "");
   // Some examples intentionally share a remote catalog. Honor DuckDB's
   // idempotent attach instead of detaching it under another running shell.
   if (/^\s*ATTACH\s+(?:DATABASE\s+)?IF\s+NOT\s+EXISTS\b/i.test(sql)) return null;

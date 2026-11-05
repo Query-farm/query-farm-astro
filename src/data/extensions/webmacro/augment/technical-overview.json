@@ -29,19 +29,19 @@
     {
       "icon": "🔌",
       "title": "How it works",
-      "description": "`load_macro_from_url` is a single scalar function. Internally: `GET` the URL, validate the body, register the macro on the current connection, return a status string. There is no caching, no manifest, no dependency graph — it's deliberately the simplest possible primitive.",
+      "description": "`load_macro_from_url` is a single scalar function. Internally: `GET` the URL, parse the body, create the macro, return a status string. There is no caching, no manifest, no dependency graph — it's deliberately the simplest possible primitive.",
       "bulletPoints": [
         {
           "label": "Plain HTTP(S) GET",
           "description": "Uses [`cpp-httplib`](https://github.com/yhirose/cpp-httplib) with OpenSSL for TLS. Redirects are followed automatically (so a `gist.github.com/...` URL that 301s to `gist.githubusercontent.com/...` works). The read timeout is 10 seconds."
         },
         {
-          "label": "Substring validation",
-          "description": "The fetched body must contain a `CREATE [OR REPLACE] [TEMP|TEMPORARY] MACRO` token. It's then scanned for dangerous keywords (`DELETE`, `DROP`, `TRUNCATE`, `ALTER`, `GRANT`, `REVOKE`, `CREATE USER`, `EXEC`, `EXECUTE`, `SHUTDOWN`, `RESTART`, `DETACH`); a hit raises an error. **This is a substring check, not a SQL parser** — treat it as a guardrail against accidentally fetching the wrong file, not a security boundary."
+          "label": "Parser validation",
+          "description": "The fetched body is parsed with DuckDB's own parser and must be exactly one `CREATE MACRO` or `CREATE OR REPLACE MACRO` statement. Anything else raises an error and nothing runs. `TEMP` macros are rejected because the macro is created on a separate connection, where it wouldn't last."
         },
         {
-          "label": "Session-scoped registration",
-          "description": "The macro is created on the current DuckDB connection (using whatever scope the SQL itself declared — persistent, `TEMP`, or `OR REPLACE`). It lives until the session ends or the macro is dropped, just like a hand-typed `CREATE MACRO`."
+          "label": "Registration",
+          "description": "The macro is created in the attached database, like a hand-typed `CREATE MACRO`. In an in-memory database it lasts until the database closes; in a database file it stays until you drop it."
         },
         {
           "label": "WASM build",
@@ -59,8 +59,8 @@
           "description": "Your own Git repos, your team's internal artifact host, your own gists. Don't load from URLs found in chat messages, Stack Overflow, or random blog posts — same posture you'd use for `curl ... | bash`. See [OWASP — Code Injection](https://owasp.org/www-community/attacks/Code_Injection)."
         },
         {
-          "label": "The dangerous-command filter is not a sandbox",
-          "description": "It's a literal substring scan over the response body. It catches obvious things (`DROP TABLE`, `DELETE FROM`) but does not understand SQL — comments, string literals, and creative formatting all bypass it. A motivated author can bypass the filter; the filter is there to catch wrong-file-by-accident, not malice."
+          "label": "The statement check is not a sandbox",
+          "description": "It stops a file from running anything else when it loads. It doesn't limit the macro itself: a macro's body can do whatever your session can, such as reading files or URLs, and it runs whenever you call the macro."
         },
         {
           "label": "Pin URLs to immutable revisions",

@@ -22,9 +22,11 @@ import DuckDBExtensionPricing from '../../../components/docs/DuckDBExtensionPric
 import DuckDBExtensionCookbook from '../../../components/docs/DuckDBExtensionCookbook.astro';
 import DuckDBExtensionTypeReference from '../../../components/docs/DuckDBExtensionTypeReference.astro';
 import ExtensionSection from '../../../components/docs/ExtensionSection.astro';
+import ExtensionInstall from '../../../components/docs/ExtensionInstall.astro';
 import ExtensionPageTOC from '../../../components/docs/ExtensionPageTOC.astro';
 import Callout from '../../../components/docs/Callout.astro';
 import ExampleShellMounter from '../../../components/repl/ExampleShellMounter.tsx';
+import ExampleData from '../../../components/docs/ExampleData.astro';
 import { parseInline } from 'marked';
 import { publicExtensions, getExtensionById, getExtensionsByIds } from '../../../data/extensions';
 import { getExtensionData, loadExtensionMdx, loadCookbookMdx, loadCheckFixtures } from '../../../data/extension-loader';
@@ -258,8 +260,10 @@ const pageUrl = `${SITE_ORIGIN}/products/extensions/${extensionId}`;
 // scripts/generate-extension-og-images.mjs (npm run generate:og-extensions).
 const resolvedOgImage = metadata.image ?? `/og/extensions/${extensionId}.png`;
 const operatingSystems = (metadata.platforms ?? []).map(p => p.platform);
-const wasmSupported = (metadata.platforms ?? []).some(p => p.platform === 'WASM');
-const installSource = (metadata as any).installSource ?? 'community';
+const wasmSupported = !metadata.browserRunDisabledReason
+  && (metadata.platforms ?? []).some(p => p.platform === 'WASM');
+// Haybarn-Wasm uses its community builds; native DuckDB setup is rendered by ExtensionInstall.
+const installSource = metadata.installSource;
 const checkFixtures = loadCheckFixtures(extensionId);
 // quickStart is either the legacy single SQL string or the preferred array of
 // {title, sql} examples. Normalize both into a list of cells to render.
@@ -272,15 +276,6 @@ const quickStartExamples: { title?: string; sql: string }[] = Array.isArray(rawQ
   : rawQuickStart
     ? [{ sql: rawQuickStart }]
     : [];
-const installFrom = installSource === 'community'
-  ? 'FROM community'
-  : installSource.toLowerCase().startsWith('from ') ? installSource : `FROM '${installSource}'`;
-// The Install section's SQL, one statement per line — INSTALL fetches the
-// extension once, LOAD brings it into the session every time. Rendered by the
-// same CodeBlock as every other SQL snippet on the page, but `tryable={false}`:
-// these do nothing visible in the in-page REPL (the extension is already loaded
-// there), so the block must not get a "Try it in your browser" button.
-const installSql = `INSTALL ${metadata.name} ${installFrom};\nLOAD ${metadata.name};`;
 const seoDescription = extensionSeoDescription(metadata.displayName, metadata.description);
 
 // ── Page header ──────────────────────────────────────────────────────────
@@ -394,6 +389,13 @@ const jsonLd = [
          notice above them doesn't shift which one is suppressed. -->
     <div class="min-w-0 [&>section:first-of-type]:border-t-0">
       <ExtensionPageTOC items={tocItems} mobile class="min-[900px]:hidden" />
+      {metadata.browserRunDisabledReason && (
+        <div class="mb-8">
+          <Callout type="note" title="Browser execution unavailable">
+            <p>{metadata.browserRunDisabledReason}</p>
+          </Callout>
+        </div>
+      )}
       <!-- Page-top notice (deprecation, successor announcement, advisory). -->
       {metadata.notice && (
         <div class="mb-8 [&_a]:text-link [&_a]:underline [&_a]:underline-offset-2 [&_a]:decoration-link/45 hover:[&_a]:decoration-link [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:bg-soil-100 [&_code]:text-soil-900 [&_code]:font-mono [&_code]:text-[0.9em]">
@@ -429,6 +431,7 @@ const jsonLd = [
       )}
 
       <!-- Technical Overview — lead with what the extension is and why. -->
+      {wasmSupported && checkFixtures && <ExampleData sql={checkFixtures} />}
       {technicalOverview && (
         <DuckDBExtensionTechnicalOverview
           eyebrow={technicalOverview.eyebrow}
@@ -451,12 +454,10 @@ const jsonLd = [
         </DuckDBExtensionTechnicalDetails>
       )}
 
-      <!-- Install — after the prose, not before it: what the extension is
-           earns the top of the page, and this is one line people learn once.
-           Keeps the `quick-install` id, so old deep links still land. -->
+      <!-- Keep the quick-install anchor for links from examples and older pages. -->
       <ExtensionSection id="quick-install">
         <h2 class="mb-5 text-[clamp(1.55rem,3.4vw,2.5rem)] text-soil-900">Install</h2>
-        <CodeBlock code={installSql} lang="sql" tryable={false} />
+        <ExtensionInstall name={metadata.name} />
       </ExtensionSection>
 
       <!-- Quick Start — each example is its own Try-able cell, so a Try click

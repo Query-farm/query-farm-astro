@@ -14,13 +14,17 @@ const blog = defineCollection({
     pubDate: z.coerce.date(),
     // Set only for a substantive editorial update, never from the build clock.
     updatedDate: z.coerce.date().optional(),
-    author: z.string().default('Query.Farm Team'),
+    author: z.string().default('Query Farm Team'),
     tags: z.array(z.string()).default([]),
     draft: z.boolean().default(false),
     showLeadVisual: z.boolean().default(true),
+    showDescription: z.boolean().default(true),
     showTableOfContents: z.boolean().default(true),
     heroImage: z.string().optional(),
     heroImageAlt: z.string().optional(),
+    // Image for the /blog index. Use one of the post's own figures; it falls back
+    // to leadVisual. heroImage is the OG card and is never shown on the index.
+    thumbnail: z.string().optional(),
     leadVisual: z.object({
       src: z.string(),
       alt: z.string(),

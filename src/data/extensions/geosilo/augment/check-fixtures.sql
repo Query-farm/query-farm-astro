@@ -10,11 +10,6 @@ SELECT * FROM (VALUES
   (2, 'b', ST_GeomFromText('POLYGON((2 2,3 2,3 3,2 3,2 2))'))
 ) t(id, name, geom);
 
--- NOTE: raw_data intentionally not created. The tech-details snippets
--- INSERT INTO parcels SELECT id, geom FROM raw_data, but cookbook.mdx
--- runs first and creates `parcels` with 3 columns (id, name, geom),
--- so a 2-column INSERT would fail bind. Leaving raw_data missing
--- preserves the PARSE-SKIP "table fixture missing" verdict.
 
 -- roads(geom) for ST_Length aggregate
 CREATE OR REPLACE TABLE roads AS
@@ -57,3 +52,15 @@ SELECT ST_GeomFromText('POINT(0.001 0.002)') AS geom;
 -- parcels_geometry(id, geom) — GEOMETRY-typed parcels for export example
 CREATE OR REPLACE TABLE parcels_geometry AS
 SELECT id, geom FROM raw_parcels;
+
+-- Each Run starts with a compact geometry table and matching input files.
+CREATE OR REPLACE TABLE parcels (
+  id INTEGER, name VARCHAR,
+  geom GEOSILO('EPSG:4326') USING COMPRESSION zstd
+);
+INSERT INTO parcels SELECT id, name, geom FROM raw_parcels;
+CREATE OR REPLACE TABLE raw_data AS SELECT id, geom FROM raw_parcels;
+COPY (SELECT id, name, ST_AsText(geom) AS wkt FROM raw_parcels)
+TO 'parcels.csv' (HEADER true);
+COPY (SELECT id, name, ST_AsWKB(geom) AS geom_wkb FROM raw_parcels)
+TO 'parcels.parquet' (FORMAT PARQUET);

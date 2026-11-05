@@ -190,9 +190,9 @@ def execute_example(con, expr: str) -> dict | None:
     serialized = []
     for row in rows:
         serialized.append([
-            "" if v is None else
+            "NULL" if v is None else
             ("true" if v is True else "false") if isinstance(v, bool) else
-            str(v)
+            str(list(v)) if isinstance(v, tuple) else str(v)  # ARRAY prints as [a, b]
             for v in row
         ])
     return {"columns": columns, "rows": serialized}
@@ -273,9 +273,9 @@ def build_function_doc(row: dict, exec_con=None) -> dict:
                     if cur.description:
                         cols = [{"name": d[0], "align": "left"} for d in cur.description]
                         serialized = [
-                            ["" if v is None else
+                            ["NULL" if v is None else
                              ("true" if v is True else "false") if isinstance(v, bool) else
-                             str(v)
+                             str(list(v)) if isinstance(v, tuple) else str(v)  # ARRAY prints as [a, b]
                              for v in row]
                             for row in rows
                         ]

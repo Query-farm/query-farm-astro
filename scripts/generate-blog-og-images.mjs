@@ -1,4 +1,4 @@
-// Generate the two article cards that previously used the generic site image.
+// Generate article cards using the site's typography and colors.
 // Run explicitly and commit the PNGs, as with the other OG image generators.
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -8,13 +8,14 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const articles = [
   { slug: 'duckdb-community-extensions-distribution', topic: 'DuckDB · Distribution · Haybarn' },
   { slug: 'duckdb-variant-arrow-support-tracker', topic: 'DuckDB · Arrow · Interoperability' },
-  { slug: 'duckdb-wasm-startup-time', topic: 'DuckDB-WASM · WebAssembly · Haybarn' },
+  { slug: 'duckdb-wasm-startup-time', topic: 'DuckDB-Wasm · WebAssembly · Haybarn' },
+  { slug: 'bitfilters-filter-research', topic: 'DuckDB · Filters · Performance', extension: 'mdx' },
 ];
 // Pass slugs to regenerate only those cards.
 const only = process.argv.slice(2);
 
-for (const { slug, topic } of articles.filter(a => !only.length || only.includes(a.slug))) {
-  const source = readFileSync(`${root}src/content/blog/${slug}.md`, 'utf8');
+for (const { slug, topic, extension = 'md' } of articles.filter(a => !only.length || only.includes(a.slug))) {
+  const source = readFileSync(`${root}src/content/blog/${slug}.${extension}`, 'utf8');
   // These articles use JSON-compatible double-quoted frontmatter titles.
   const title = JSON.parse(source.match(/^title: (".*")$/m)[1]);
   const card = {
