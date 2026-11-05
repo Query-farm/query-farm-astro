@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import type { Locator, Page } from '@playwright/test';
 import { expect } from '@playwright/test';
 
-type Terminal = { buffer: { active: { length: number; getLine(index: number): { translateToString(): string } | undefined } } };
+type Terminal = { buffer: { active: { length: number; getLine(index: number): { isWrapped: boolean; translateToString(): string } | undefined } } };
 type TerminalWindow = typeof window & { wasmTestTerminals?: Terminal[] };
 
 export async function captureTerminal(page: Page) {
@@ -28,9 +28,17 @@ export async function captureTerminal(page: Page) {
 }
 
 export async function terminalText(page: Page) {
-  return page.evaluate(() => ((window as TerminalWindow).wasmTestTerminals ?? []).map(terminal =>
-    Array.from({ length: terminal.buffer.active.length }, (_, index) =>
-      terminal.buffer.active.getLine(index)?.translateToString() ?? '').join('\n')).join('\n'));
+  // Rejoin lines xterm wrapped, so assertions don't depend on the terminal's width.
+  return page.evaluate(() => ((window as TerminalWindow).wasmTestTerminals ?? []).map(terminal => {
+    const lines: string[] = [];
+    for (let index = 0; index < terminal.buffer.active.length; index++) {
+      const line = terminal.buffer.active.getLine(index);
+      const value = line?.translateToString() ?? '';
+      if (line?.isWrapped && lines.length) lines[lines.length - 1] += value;
+      else lines.push(value);
+    }
+    return lines.join('\n');
+  }).join('\n'));
 }
 
 export async function waitForPrompt(page: Page) {
