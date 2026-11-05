@@ -262,7 +262,7 @@ export default function OvertureMapExample({ sql, setupSql }: Props) {
       await loadLeaflet();
       const [arrowModule] = await Promise.all([
         import("apache-arrow"),
-        ensureEngine(),
+        ensureEngine([{ name: "VGI", source: "community" }]),
       ]);
       const [ext, session] = await Promise.all([
         ensureExtension("VGI", "community"),

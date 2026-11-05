@@ -30,6 +30,7 @@ import {
   type Session,
   type QueryResult,
 } from "../../lib/repl/duckdb-boot";
+import { extensionsInSql } from "../../lib/repl/extension-scan";
 import { normalizeStatement, tryPageType, trackTry } from "../../lib/repl/analytics";
 
 const CDN_SCRIPTS = [
@@ -664,14 +665,16 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
         rl.write(
           "\x1b[90mBooting Haybarn (DuckDB) WebAssembly… (first load can take a few seconds)\x1b[0m",
         );
-        await ensureEngine();
+        // Everything this example will load, so it all downloads in parallel.
+        const alsoNeeded = extensionsInSql([fixtures, sql].filter(Boolean).join(";\n"), extensionName);
+        await ensureEngine([{ name: extensionName, source: installSource }, ...alsoNeeded]);
         engineBooted = true;
         stage = "extension";
         if (disposed) return;
 
         // Load the extension once, engine-wide; open an isolated session.
         const [ext, session] = await Promise.all([
-          ensureExtension(extensionName, installSource),
+          ensureExtension(extensionName, installSource, alsoNeeded),
           createSession(),
         ]);
         if (disposed) return;
