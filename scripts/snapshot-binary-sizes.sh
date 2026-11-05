@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Refresh per-platform compiled extension sizes from the Haybarn extension
-# repository (haybarn-extensions.query.farm) for every extension.
+# Refresh per-platform extension availability and sizes from Query.Farm’s
+# DuckDB repository and Haybarn’s built-in community repository.
 #
 # Thin wrapper over extension-diff-tools/binary-sizes-snapshot.py: it rewrites
-# each extension's generated/compatibility.json (platform matrix + DuckDB
-# version + binarySizes), all derived from which binaries Haybarn actually
-# serves. No credentials needed — the repository is public.
+# each extension's generated/compatibility.json. Checks the current native
+# release and the pinned browser release separately. No credentials needed.
 #
 # Usage:
 #   scripts/snapshot-binary-sizes.sh          # manual: fail loudly on error

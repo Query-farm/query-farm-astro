@@ -29,10 +29,17 @@ function hasAncestor(node, predicate) {
   return false;
 }
 
+function isHaybarn(node) {
+  return hasAncestor(node, parent => attribute(parent, 'data-tab') === 'haybarn'
+    || (parent.tagName === 'details'
+    && parent.childNodes.some(child => child.tagName === 'summary' && text(child).trim() === 'Haybarn')));
+}
+
 function isLegacy(node) {
-  return hasAncestor(node, parent => parent.tagName === 'details'
+  return hasAncestor(node, parent => attribute(parent, 'data-tab') === 'v1.5'
+    || (parent.tagName === 'details'
     && parent.childNodes.some(child => child.tagName === 'summary'
-      && text(child).trim() === 'DuckDB versions before 2.0'));
+      && text(child).trim() === 'DuckDB versions before 2.0')));
 }
 
 // Discover coverage from the published catalog, including extensions with no
@@ -59,7 +66,7 @@ export function checkInstallation(html, name, { catalog = false } = {}) {
   assert.ok(section, `${name}: missing installation section`);
   const codes = [...elements(section)].filter(node => node.tagName === 'code');
   const blocks = codes.filter(node => hasAncestor(node, parent => parent.tagName === 'pre'));
-  const installSql = codeText(blocks.find(node => !isLegacy(node)) ?? { childNodes: [] });
+  const installSql = codeText(blocks.find(node => !isLegacy(node) && !isHaybarn(node)) ?? { childNodes: [] });
   const required = [
     /SET\s+allow_extension_repositories\s*=\s*'allowed'\s*;/i,
     /CREATE\s+EXTENSION\s+REPOSITORY\s+IF\s+NOT\s+EXISTS\s+query_farm\s+WITH\s+PREFIX\s+'https:\/\/duckdb-extensions\.query\.farm'\s*;/i,
@@ -75,15 +82,16 @@ export function checkInstallation(html, name, { catalog = false } = {}) {
   }
   const reload = codes.find(node => !hasAncestor(node, parent => parent.tagName === 'pre')
     && new RegExp(`^LOAD\\s+${name}\\s+FROM\\s+query_farm\\s*;$`, 'i').test(codeText(node)));
-  assert.ok(reload, `${name}: missing later-session LOAD command`);
+  // Entry pages show the LOAD inside the first complete example.
+  const reloadSql = reload ? codeText(reload) : installSql.match(new RegExp(`LOAD\\s+${name}\\s+FROM\\s+query_farm\\s*;`, 'i'))?.[0];
+  assert.ok(reloadSql, `${name}: missing later-session LOAD command`);
   // Haybarn verifies its own signing key, so it must never get DuckDB's host.
-  const haybarnSql = blocks.filter(node => hasAncestor(node, parent => parent.tagName === 'details'
-    && parent.childNodes.some(child => child.tagName === 'summary' && text(child).trim() === 'Haybarn'))).map(codeText).join('\n');
+  const haybarnSql = blocks.filter(isHaybarn).map(codeText).join('\n');
   if (haybarnSql) assert.match(haybarnSql, /WITH\s+PREFIX\s+'https:\/\/haybarn-extensions\.query\.farm'\s*;/i, `${name}: Haybarn must use its own host`);
   const legacySql = blocks.filter(isLegacy).map(codeText).join('\n');
   assert.match(legacySql, new RegExp(`INSTALL\\s+${name}\\s+FROM\\s+community\\s*;`, 'i'));
   assert.match(legacySql, new RegExp(`LOAD\\s+${name}\\s*;`, 'i'));
-  return { installSql, reloadSql: codeText(reload) };
+  return { installSql, reloadSql };
 }
 
 export function checkExampleRepositories(html, names, path) {

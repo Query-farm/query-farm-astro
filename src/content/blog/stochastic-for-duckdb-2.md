@@ -1,10 +1,10 @@
 ---
-title: "Stochastic for DuckDB 2.0: 22 distribution fits with AIC and BIC, hardened by fuzzing"
-description: "The Stochastic extension for DuckDB 2.0 now fits 22 distributions, reports log-likelihood, AIC and BIC for model choice, and has been fuzzed until every function returns an answer or a clear error. We follow a support team answering a question about repair times in SQL."
+title: "Stochastic for DuckDB 2.0: fit, compare and test distributions in SQL"
+description: "The Stochastic extension for DuckDB 2.0 fits 22 distributions, ranks candidate fits by AICc with dist_fits, and adds hypothesis tests and 14 new distributions, all fuzzed until every function returns an answer or a clear error. We follow a support team answering a question about repair times in SQL."
 pubDate: 2026-10-28
 author: "Query Farm Team"
 tags: ["DuckDB", "Extensions", "Statistics", "SQL"]
-draft: true
+draft: false
 ---
 
 A support team lead asks a reasonable question: when a customer calls in a repair, what should we tell them about how long it will take? The repair tickets are already in DuckDB. The average is easy to compute and nearly useless. Repair times are skewed — most jobs are quick and a few drag on — so the average promises too much to the unlucky customers and too little to everyone else. The team needs the shape of the distribution, not just its center.
@@ -236,7 +236,7 @@ Every step of the analysis — the fit, the model choice, the answer to the cust
 
 An analysis like this is only as good as the functions underneath it. A statistics library is easy to get mostly right and hard to get entirely right. The formulas are well known; the edge cases are where the bugs hide. They show up at tiny probabilities, enormous parameters, and values that underflow to zero or overflow to infinity.
 
-Our regular test suite checks the extension against [SciPy](https://docs.scipy.org/doc/scipy/reference/stats.html): 1,304 assertions, with every fit compared against SciPy's estimates and the Weibull against an exact solution of its likelihood equations. But with 827 functions, each taking several parameters, hand-written tests only cover the inputs someone thought to try. So before this release, we wrote a fuzzer to try the inputs nobody thinks of.
+Our regular test suite checks the extension against [SciPy](https://docs.scipy.org/doc/scipy/reference/stats.html): 1,401 assertions, with every fit compared against SciPy's estimates and the Weibull against an exact solution of its likelihood equations. But with 829 functions, each taking several parameters, hand-written tests only cover the inputs someone thought to try. So before this release, we wrote a fuzzer to try the inputs nobody thinks of.
 
 The fuzzer, which now ships in the repository as [`test/fuzz`](https://github.com/Query-farm/stochastic/tree/v2.0/test/fuzz), calls every function with arguments chosen to break numerical code. It uses zero and negative zero, subnormal numbers, ±1e300, the largest `DOUBLE`, infinities, NaN, NULL, extreme `BIGINT`s, and empty or degenerate lists. That comes to about 218,000 calls. It treats anything other than a clean result, or an error that names the distribution, as a finding.
 

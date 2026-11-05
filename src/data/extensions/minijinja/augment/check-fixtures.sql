@@ -1,22 +1,23 @@
--- Fixtures for minijinja cookbook / technical-details / functions.json examples.
--- Small, deterministic, idempotent. Backs snippets that read from `users`
--- (per-row HTML email) and `virtual_hosts` (per-host config).
+-- Fixtures for minijinja cookbook / technical-details examples.
+-- Small, deterministic, idempotent (CREATE OR REPLACE).
 
+-- "Generate HTML email per row" (cookbook) and "What you can do with one
+-- query" (technical-details).
 CREATE OR REPLACE TABLE users (
     email         TEXT,
     name          TEXT,
     unread_count  INTEGER
 );
 INSERT INTO users VALUES
-    ('alice@example.com', 'Alice',   5),
-    ('bob@example.com',   'Bob',     0),
-    ('carol@example.com', 'Carol',   2);
+    ('alice@example.com', 'Alice', 3),
+    ('bob@example.com',   'Bob',   0),
+    ('carol@example.com', 'Carol', 12);
 
+-- "Generate config files / IaC" (cookbook).
 CREATE OR REPLACE TABLE virtual_hosts (
     hostname  TEXT,
     upstream  TEXT
 );
 INSERT INTO virtual_hosts VALUES
-    ('a.example.com', '10.0.0.1:8080'),
-    ('b.example.com', '10.0.0.2:8080'),
-    ('c.example.com', '10.0.0.3:8080');
+    ('app.example.com', '10.0.0.10:8080'),
+    ('api.example.com', '10.0.0.20:9000');

@@ -205,6 +205,8 @@ export interface ExtensionTree {
       platforms?: ExtensionMetadata['platforms'];
       duckdbVersions?: string[];
       binarySizes?: ExtensionMetadata['binarySizes'];
+      compatibilityReleases?: ExtensionMetadata['compatibilityReleases'];
+      compatibilityCheckedAt?: string;
     };
     /** Cloudflare AE snapshot; merged into metadata.usageStats. */
     usage?: { count: number; period: string; asOf?: string };
@@ -238,6 +240,8 @@ export function mergeExtensionTree(tree: ExtensionTree): ExtensionData {
       platforms: augMeta.platforms ?? compat.platforms,
       duckdbVersions: augMeta.duckdbVersions ?? compat.duckdbVersions,
       binarySizes: augMeta.binarySizes ?? compat.binarySizes,
+      compatibilityReleases: compat.compatibilityReleases,
+      compatibilityCheckedAt: compat.compatibilityCheckedAt,
     } : {}),
     ...(usage ? {
       usageStats: augMeta.usageStats ?? { count: usage.count, period: usage.period },

@@ -1,24 +1,24 @@
 [
   {
-    "id": "binary_fuse16_filter_contains(BLOB,UBIGINT)",
+    "id": "binary_fuse16_filter_contains(BLOB,ANY)",
     "name": "binary_fuse16_filter_contains",
     "type": "scalar",
     "returnType": "BOOLEAN",
     "parameters": [
       {
-        "name": "col0",
+        "name": "filter",
         "type": "BLOB",
         "paramType": "positional",
         "description": ""
       },
       {
-        "name": "col1",
-        "type": "UBIGINT",
+        "name": "value",
+        "type": "ANY",
         "paramType": "positional",
         "description": ""
       }
     ],
-    "description": "Tests if a BinaryFuse16 filter may contain a value. Returns true if the value might be in the set (with possible false positives), or false if the value is definitely not in the set (no false negatives).",
+    "description": "Tests if a Binary Fuse 16-bit filter may contain a value. Returns true if the value might be in the set (with possible false positives), or false if the value is definitely not in the set (no false negatives).",
     "examples": [
       {
         "description": "",
@@ -27,86 +27,242 @@
     ]
   },
   {
-    "id": "quotient_filter(INTEGER,INTEGER,UBIGINT)",
-    "name": "quotient_filter",
+    "id": "binary_fuse16_filter(ANY)",
+    "name": "binary_fuse16_filter",
     "type": "aggregate",
     "returnType": "BLOB",
     "parameters": [
       {
-        "name": "col0",
-        "type": "INTEGER",
-        "paramType": "positional",
-        "description": ""
-      },
-      {
-        "name": "col1",
-        "type": "INTEGER",
-        "paramType": "positional",
-        "description": ""
-      },
-      {
-        "name": "col2",
-        "type": "UBIGINT",
+        "name": "value",
+        "type": "ANY",
         "paramType": "positional",
         "description": ""
       }
     ],
-    "description": "Creates a Quotient filter by aggregating values or by merging other Quotient filters. Takes q and r as number of bits.",
+    "description": "Creates a Binary Fuse 16-bit filter (~0.0015% false positive rate) by aggregating values of any type: UBIGINT values are used as keys as they are, other values are hashed with XXH64 of a fixed encoding that does not change between DuckDB versions. Returns a BLOB to probe with binary_fuse16_filter_contains.",
     "examples": [
       {
         "description": "",
-        "code": "SELECT quotient_filter(16, 8, column) FROM table;"
+        "code": "SELECT binary_fuse16_filter(column) FROM table;"
       }
     ]
   },
   {
-    "id": "quotient_filter(INTEGER,INTEGER,BLOB)",
+    "id": "quotient_filter(INTEGER,ANY)",
     "name": "quotient_filter",
     "type": "aggregate",
     "returnType": "BLOB",
     "parameters": [
       {
-        "name": "col0",
+        "name": "r",
         "type": "INTEGER",
         "paramType": "positional",
         "description": ""
       },
       {
-        "name": "col1",
-        "type": "INTEGER",
+        "name": "value",
+        "type": "ANY",
         "paramType": "positional",
         "description": ""
-      },
+      }
+    ],
+    "description": "Creates a Quotient filter sized to fit its input: q is chosen so that the distinct values fill at most 3/4 of the 2^q slots. r is the number of remainder bits (false positive rate ~2^-r). Values are handled as by quotient_filter(q, r, value).",
+    "examples": [
       {
-        "name": "col2",
+        "description": "",
+        "code": "SELECT quotient_filter(8, column) FROM table;"
+      }
+    ]
+  },
+  {
+    "id": "xor16_filter_info(BLOB)",
+    "name": "xor16_filter_info",
+    "type": "scalar",
+    "returnType": "STRUCT(filter_type VARCHAR, format_version UTINYINT, key_hash VARCHAR, key_type VARCHAR, size_bytes UBIGINT, entries UBIGINT, capacity UBIGINT, load_factor DOUBLE, fingerprint_bits UTINYINT, bits_per_entry DOUBLE, expected_fpr DOUBLE, q UTINYINT, r UTINYINT, seed UBIGINT)",
+    "parameters": [
+      {
+        "name": "filter",
         "type": "BLOB",
         "paramType": "positional",
         "description": ""
       }
     ],
-    "description": "Creates a Quotient filter by aggregating values or by merging other Quotient filters. Takes q and r as number of bits.",
+    "description": "Describes a xor16_filter BLOB: filter_type, format_version (0 for a BLOB without header), key_hash (none or xxhash64), key_type, size_bytes, entries, capacity, load_factor, fingerprint_bits, bits_per_entry, expected_fpr, q, r and seed; fields a filter type does not have are NULL.",
     "examples": [
       {
         "description": "",
-        "code": "SELECT quotient_filter(16, 8, column) FROM table;"
+        "code": "SELECT xor16_filter_info(filter) FROM filters;"
       }
     ]
   },
   {
-    "id": "quotient_filter_contains(BLOB,UBIGINT)",
+    "id": "xor8_filter_contains(BLOB,ANY)",
+    "name": "xor8_filter_contains",
+    "type": "scalar",
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "value",
+        "type": "ANY",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Tests if an Xor8 filter may contain a value. Returns true if the value might be in the set (with possible false positives), or false if the value is definitely not in the set (no false negatives).",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT xor8_filter_contains(filter, 42) FROM table;"
+      }
+    ]
+  },
+  {
+    "id": "xor8_filter_is_valid(BLOB)",
+    "name": "xor8_filter_is_valid",
+    "type": "scalar",
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Returns whether a BLOB is a structurally valid xor8_filter, instead of raising the error xor8_filter_contains would.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT xor8_filter_is_valid(filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "xor8_filter(ANY)",
+    "name": "xor8_filter",
+    "type": "aggregate",
+    "returnType": "BLOB",
+    "parameters": [
+      {
+        "name": "value",
+        "type": "ANY",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Creates an Xor8 filter (8-bit fingerprints, ~0.4% false positive rate) from a column of any type: UBIGINT values are used as keys as they are, other values are hashed with XXH64 of a fixed encoding that does not change between DuckDB versions. Returns a BLOB to probe with xor8_filter_contains.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT xor8_filter(column) FROM table;"
+      }
+    ]
+  },
+  {
+    "id": "binary_fuse8_filter_is_valid(BLOB)",
+    "name": "binary_fuse8_filter_is_valid",
+    "type": "scalar",
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Returns whether a BLOB is a structurally valid binary_fuse8_filter, instead of raising the error binary_fuse8_filter_contains would.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT binary_fuse8_filter_is_valid(filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "xor8_filter_info(BLOB)",
+    "name": "xor8_filter_info",
+    "type": "scalar",
+    "returnType": "STRUCT(filter_type VARCHAR, format_version UTINYINT, key_hash VARCHAR, key_type VARCHAR, size_bytes UBIGINT, entries UBIGINT, capacity UBIGINT, load_factor DOUBLE, fingerprint_bits UTINYINT, bits_per_entry DOUBLE, expected_fpr DOUBLE, q UTINYINT, r UTINYINT, seed UBIGINT)",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Describes a xor8_filter BLOB: filter_type, format_version (0 for a BLOB without header), key_hash (none or xxhash64), key_type, size_bytes, entries, capacity, load_factor, fingerprint_bits, bits_per_entry, expected_fpr, q, r and seed; fields a filter type does not have are NULL.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT xor8_filter_info(filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "binary_fuse16_filter_info(BLOB)",
+    "name": "binary_fuse16_filter_info",
+    "type": "scalar",
+    "returnType": "STRUCT(filter_type VARCHAR, format_version UTINYINT, key_hash VARCHAR, key_type VARCHAR, size_bytes UBIGINT, entries UBIGINT, capacity UBIGINT, load_factor DOUBLE, fingerprint_bits UTINYINT, bits_per_entry DOUBLE, expected_fpr DOUBLE, q UTINYINT, r UTINYINT, seed UBIGINT)",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Describes a binary_fuse16_filter BLOB: filter_type, format_version (0 for a BLOB without header), key_hash (none or xxhash64), key_type, size_bytes, entries, capacity, load_factor, fingerprint_bits, bits_per_entry, expected_fpr, q, r and seed; fields a filter type does not have are NULL.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT binary_fuse16_filter_info(filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "binary_fuse8_filter_info(BLOB)",
+    "name": "binary_fuse8_filter_info",
+    "type": "scalar",
+    "returnType": "STRUCT(filter_type VARCHAR, format_version UTINYINT, key_hash VARCHAR, key_type VARCHAR, size_bytes UBIGINT, entries UBIGINT, capacity UBIGINT, load_factor DOUBLE, fingerprint_bits UTINYINT, bits_per_entry DOUBLE, expected_fpr DOUBLE, q UTINYINT, r UTINYINT, seed UBIGINT)",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Describes a binary_fuse8_filter BLOB: filter_type, format_version (0 for a BLOB without header), key_hash (none or xxhash64), key_type, size_bytes, entries, capacity, load_factor, fingerprint_bits, bits_per_entry, expected_fpr, q, r and seed; fields a filter type does not have are NULL.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT binary_fuse8_filter_info(filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "quotient_filter_contains(BLOB,ANY)",
     "name": "quotient_filter_contains",
     "type": "scalar",
     "returnType": "BOOLEAN",
     "parameters": [
       {
-        "name": "col0",
+        "name": "filter",
         "type": "BLOB",
         "paramType": "positional",
         "description": ""
       },
       {
-        "name": "col1",
-        "type": "UBIGINT",
+        "name": "value",
+        "type": "ANY",
         "paramType": "positional",
         "description": ""
       }
@@ -120,111 +276,79 @@
     ]
   },
   {
-    "id": "binary_fuse8_filter(UBIGINT)",
-    "name": "binary_fuse8_filter",
-    "type": "aggregate",
-    "returnType": "BLOB",
-    "parameters": [
-      {
-        "name": "col0",
-        "type": "UBIGINT",
-        "paramType": "positional",
-        "description": ""
-      }
-    ],
-    "description": "Creates a Binary Fuse 8-bit filter with ~0.4% false positive rate.",
-    "examples": [
-      {
-        "description": "",
-        "code": "SELECT binary_fuse8_filter(hash(column)) FROM table;"
-      }
-    ]
-  },
-  {
-    "id": "bitfilters_duckdb_bloom_filter_probe(VARCHAR,BLOB)",
-    "name": "bitfilters_duckdb_bloom_filter_probe",
+    "id": "bloom_filter_contains(BLOB,ANY)",
+    "name": "bloom_filter_contains",
     "type": "scalar",
     "returnType": "BOOLEAN",
     "parameters": [
       {
-        "name": "col0",
-        "type": "VARCHAR",
-        "paramType": "positional",
-        "description": ""
-      },
-      {
-        "name": "col1",
+        "name": "filter",
         "type": "BLOB",
         "paramType": "positional",
         "description": ""
       },
       {
-        "name": "varargs",
+        "name": "value",
         "type": "ANY",
         "paramType": "positional",
-        "description": "",
-        "varargs": true
+        "description": ""
       }
     ],
-    "description": "Probes a DuckDB-internal bloom filter (serialized as BLOB) for a value. The version parameter specifies which DuckDB hash algorithm to use. The filter blob and version are constant-folded at bind time. Multiple value arguments are combined for multi-key bloom filter probes.",
+    "description": "Tests if a Bloom filter may contain a value. Returns true if the value might be in the set (with possible false positives), or false if the value is definitely not in the set (no false negatives).",
     "examples": [
       {
         "description": "",
-        "code": "SELECT bitfilters_duckdb_bloom_filter_probe('v1.5.1', filter_blob, key_col) FROM tbl;"
-      },
-      {
-        "description": "",
-        "code": "SELECT bitfilters_duckdb_bloom_filter_probe('v1.5.1', filter_blob, col1, col2) FROM tbl;"
+        "code": "SELECT bloom_filter_contains(filter, 42) FROM table;"
       }
     ]
   },
   {
-    "id": "xor8_filter_contains(BLOB,UBIGINT)",
-    "name": "xor8_filter_contains",
+    "id": "binary_fuse8_filter_contains(BLOB,ANY)",
+    "name": "binary_fuse8_filter_contains",
     "type": "scalar",
     "returnType": "BOOLEAN",
     "parameters": [
       {
-        "name": "col0",
+        "name": "filter",
         "type": "BLOB",
         "paramType": "positional",
         "description": ""
       },
       {
-        "name": "col1",
-        "type": "UBIGINT",
+        "name": "value",
+        "type": "ANY",
         "paramType": "positional",
         "description": ""
       }
     ],
-    "description": "Tests if a Xor8 filter may contain a value. Returns true if the value might be in the set (with possible false positives), or false if the value is definitely not in the set (no false negatives).",
+    "description": "Tests if a Binary Fuse 8-bit filter may contain a value. Returns true if the value might be in the set (with possible false positives), or false if the value is definitely not in the set (no false negatives).",
     "examples": [
       {
         "description": "",
-        "code": "SELECT xor8_filter_contains(filter, 42) FROM table;"
+        "code": "SELECT binary_fuse8_filter_contains(filter, 42) FROM table;"
       }
     ]
   },
   {
-    "id": "xor16_filter_contains(BLOB,UBIGINT)",
+    "id": "xor16_filter_contains(BLOB,ANY)",
     "name": "xor16_filter_contains",
     "type": "scalar",
     "returnType": "BOOLEAN",
     "parameters": [
       {
-        "name": "col0",
+        "name": "filter",
         "type": "BLOB",
         "paramType": "positional",
         "description": ""
       },
       {
-        "name": "col1",
-        "type": "UBIGINT",
+        "name": "value",
+        "type": "ANY",
         "paramType": "positional",
         "description": ""
       }
     ],
-    "description": "Tests if a Xor16 filter may contain a value. Returns true if the value might be in the set (with possible false positives), or false if the value is definitely not in the set (no false negatives).",
+    "description": "Tests if an Xor16 filter may contain a value. Returns true if the value might be in the set (with possible false positives), or false if the value is definitely not in the set (no false negatives).",
     "examples": [
       {
         "description": "",
@@ -233,29 +357,119 @@
     ]
   },
   {
-    "id": "binary_fuse8_filter_contains(BLOB,UBIGINT)",
-    "name": "binary_fuse8_filter_contains",
+    "id": "bloom_filter_is_valid(BLOB)",
+    "name": "bloom_filter_is_valid",
     "type": "scalar",
     "returnType": "BOOLEAN",
     "parameters": [
       {
-        "name": "col0",
+        "name": "filter",
         "type": "BLOB",
-        "paramType": "positional",
-        "description": ""
-      },
-      {
-        "name": "col1",
-        "type": "UBIGINT",
         "paramType": "positional",
         "description": ""
       }
     ],
-    "description": "Tests if a BinaryFuse8 filter may contain a value. Returns true if the value might be in the set (with possible false positives), or false if the value is definitely not in the set (no false negatives).",
+    "description": "Returns whether a BLOB is a structurally valid bloom_filter, instead of raising the error bloom_filter_contains would.",
     "examples": [
       {
         "description": "",
-        "code": "SELECT binary_fuse8_filter_contains(filter, 42) FROM table;"
+        "code": "SELECT bloom_filter_is_valid(filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "binary_fuse8_filter(ANY)",
+    "name": "binary_fuse8_filter",
+    "type": "aggregate",
+    "returnType": "BLOB",
+    "parameters": [
+      {
+        "name": "value",
+        "type": "ANY",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Creates a Binary Fuse 8-bit filter (~0.4% false positive rate) by aggregating values of any type: UBIGINT values are used as keys as they are, other values are hashed with XXH64 of a fixed encoding that does not change between DuckDB versions. Returns a BLOB to probe with binary_fuse8_filter_contains.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT binary_fuse8_filter(column) FROM table;"
+      }
+    ]
+  },
+  {
+    "id": "bloom_filter(BIGINT,DOUBLE,ANY)",
+    "name": "bloom_filter",
+    "type": "aggregate",
+    "returnType": "BLOB",
+    "parameters": [
+      {
+        "name": "ndv",
+        "type": "BIGINT",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "fpp",
+        "type": "DOUBLE",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "value",
+        "type": "ANY",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Creates a split block Bloom filter (the Parquet Bloom filter format) sized for ndv distinct values at a false positive rate of fpp. Values are hashed with XXH64 of their Parquet plain encoding, so the filter matches the Bloom filters Parquet writers produce. Bloom filters of the same size merge with bloom_filter_merge. Returns a BLOB to probe with bloom_filter_contains.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT bloom_filter(1000000, 0.01, column) FROM table;"
+      }
+    ]
+  },
+  {
+    "id": "bitfilter_is_valid(BLOB)",
+    "name": "bitfilter_is_valid",
+    "type": "scalar",
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Returns whether a BLOB is a structurally valid bitfilters filter with a header.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT bitfilter_is_valid(filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "quotient_filter_is_valid(BLOB)",
+    "name": "quotient_filter_is_valid",
+    "type": "scalar",
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Returns whether a BLOB is a structurally valid quotient_filter, instead of raising the error quotient_filter_contains would.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT quotient_filter_is_valid(filter) FROM filters;"
       }
     ]
   },
@@ -266,7 +480,7 @@
     "returnType": "UBIGINT",
     "parameters": [
       {
-        "name": "col0",
+        "name": "version",
         "type": "VARCHAR",
         "paramType": "positional",
         "description": ""
@@ -279,91 +493,15 @@
         "varargs": true
       }
     ],
-    "description": "Computes the DuckDB-internal hash value for the given DuckDB version. The hash matches DuckDB's built-in hash() function for that version. Multiple values are combined using the version's CombineHash algorithm.",
+    "description": "Computes the DuckDB-internal hash value for the given DuckDB version. The hash matches DuckDB's built-in hash() function for that version. Multiple values are combined using the version's CombineHash algorithm. Supported versions: v1.4.0-v1.4.4, v1.5.0, v1.5.1, v1.6.0, v2.0.",
     "examples": [
       {
         "description": "",
-        "code": "SELECT bitfilters_duckdb_hash('v1.5.1', 42);",
-        "outputTable": {
-          "columns": [
-            {
-              "name": "bitfilters_duckdb_hash('v1.5.1', 42)",
-              "align": "left"
-            }
-          ],
-          "rows": [
-            [
-              "7199933130570745587"
-            ]
-          ]
-        }
+        "code": "SELECT bitfilters_duckdb_hash('v2.0', 42);"
       },
       {
         "description": "",
-        "code": "SELECT bitfilters_duckdb_hash('v1.5.1', col1, col2) FROM tbl;"
-      }
-    ]
-  },
-  {
-    "id": "binary_fuse16_filter(UBIGINT)",
-    "name": "binary_fuse16_filter",
-    "type": "aggregate",
-    "returnType": "BLOB",
-    "parameters": [
-      {
-        "name": "col0",
-        "type": "UBIGINT",
-        "paramType": "positional",
-        "description": ""
-      }
-    ],
-    "description": "Creates a Binary Fuse 16-bit filter with ~0.0015% false positive rate.",
-    "examples": [
-      {
-        "description": "",
-        "code": "SELECT binary_fuse16_filter(hash(column)) FROM table;"
-      }
-    ]
-  },
-  {
-    "id": "xor16_filter(UBIGINT)",
-    "name": "xor16_filter",
-    "type": "aggregate",
-    "returnType": "BLOB",
-    "parameters": [
-      {
-        "name": "col0",
-        "type": "UBIGINT",
-        "paramType": "positional",
-        "description": ""
-      }
-    ],
-    "description": "Creates a Xor16 filter with ~0.0015% false positive rate.",
-    "examples": [
-      {
-        "description": "",
-        "code": "SELECT xor16_filter(hash(column)) FROM table;"
-      }
-    ]
-  },
-  {
-    "id": "xor8_filter(UBIGINT)",
-    "name": "xor8_filter",
-    "type": "aggregate",
-    "returnType": "BLOB",
-    "parameters": [
-      {
-        "name": "col0",
-        "type": "UBIGINT",
-        "paramType": "positional",
-        "description": ""
-      }
-    ],
-    "description": "Creates a Xor8 filter with ~0.4% false positive rate.",
-    "examples": [
-      {
-        "description": "",
-        "code": "SELECT xor8_filter(hash(column)) FROM table;"
+        "code": "SELECT bitfilters_duckdb_hash('v2.0', col1, col2) FROM tbl;"
       }
     ]
   },
@@ -374,19 +512,19 @@
     "returnType": "BLOB",
     "parameters": [
       {
-        "name": "col0",
+        "name": "version",
         "type": "VARCHAR",
         "paramType": "positional",
         "description": ""
       },
       {
-        "name": "col1",
+        "name": "num_sectors",
         "type": "INTEGER",
         "paramType": "positional",
         "description": ""
       },
       {
-        "name": "col2",
+        "name": "hashed_value",
         "type": "UBIGINT",
         "paramType": "positional",
         "description": ""
@@ -396,7 +534,285 @@
     "examples": [
       {
         "description": "",
-        "code": "SELECT bitfilters_duckdb_bloom_filter_create('v1.5.1', 16384, bitfilters_duckdb_hash('v1.5.1', key)) FROM tbl;"
+        "code": "SELECT bitfilters_duckdb_bloom_filter_create('v2.0', 16384, bitfilters_duckdb_hash('v2.0', key)) FROM tbl;"
+      }
+    ]
+  },
+  {
+    "id": "binary_fuse16_filter_is_valid(BLOB)",
+    "name": "binary_fuse16_filter_is_valid",
+    "type": "scalar",
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Returns whether a BLOB is a structurally valid binary_fuse16_filter, instead of raising the error binary_fuse16_filter_contains would.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT binary_fuse16_filter_is_valid(filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "quotient_filter(INTEGER,INTEGER,ANY)",
+    "name": "quotient_filter",
+    "type": "aggregate",
+    "returnType": "BLOB",
+    "parameters": [
+      {
+        "name": "q",
+        "type": "INTEGER",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "r",
+        "type": "INTEGER",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "value",
+        "type": "ANY",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Creates a Quotient filter from values of any type: UBIGINT values are used as keys as they are, other values are hashed with XXH64 of a fixed encoding that does not change between DuckDB versions. q is the number of quotient bits (the filter holds at most 2^q - 1 values) and r the number of remainder bits (false positive rate ~2^-r). q + r must be <= 64. Returns a BLOB to probe with quotient_filter_contains.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT quotient_filter(16, 8, column) FROM table;"
+      }
+    ]
+  },
+  {
+    "id": "bitfilters_duckdb_bloom_filter_probe(VARCHAR,BLOB)",
+    "name": "bitfilters_duckdb_bloom_filter_probe",
+    "type": "scalar",
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "version",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "filter_blob",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "varargs",
+        "type": "ANY",
+        "paramType": "positional",
+        "description": "",
+        "varargs": true
+      }
+    ],
+    "description": "Probes a DuckDB-internal bloom filter (serialized as BLOB) for a value. The version parameter specifies which DuckDB hash algorithm to use. The version must be constant; a constant filter blob is parsed once at bind time, otherwise (e.g. a scalar subquery or a BLOB column) it is read per row. A NULL filter returns NULL. Multiple value arguments are combined for multi-key bloom filter probes.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT key_col, bitfilters_duckdb_bloom_filter_probe('v2.0', (SELECT bitfilters_duckdb_bloom_filter_create('v2.0', 1024, bitfilters_duckdb_hash('v2.0', k)) FROM range(100) t(k)), key_col) AS maybe_present FROM range(98, 102) t(key_col);"
+      },
+      {
+        "description": "",
+        "code": "WITH f AS (SELECT bitfilters_duckdb_bloom_filter_create('v2.0', 1024, bitfilters_duckdb_hash('v2.0', i, 'k' || i)) AS filter_blob FROM range(100) t(i)) SELECT col1, col2, bitfilters_duckdb_bloom_filter_probe('v2.0', (SELECT filter_blob FROM f), col1, col2) AS maybe_present FROM (VALUES (1::BIGINT, 'k1'), (1, 'k2'), (200, 'k200')) t(col1, col2);"
+      }
+    ]
+  },
+  {
+    "id": "bitfilter_contains(BLOB,ANY)",
+    "name": "bitfilter_contains",
+    "type": "scalar",
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "value",
+        "type": "ANY",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Tests if any bitfilters filter may contain a value; the filter's header says what kind of filter it is and how its values were hashed. Returns true if the value might be in the set, or false if it is definitely not.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT bitfilter_contains(filter, 42) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "bitfilter_info(BLOB)",
+    "name": "bitfilter_info",
+    "type": "scalar",
+    "returnType": "STRUCT(filter_type VARCHAR, format_version UTINYINT, key_hash VARCHAR, key_type VARCHAR, size_bytes UBIGINT, entries UBIGINT, capacity UBIGINT, load_factor DOUBLE, fingerprint_bits UTINYINT, bits_per_entry DOUBLE, expected_fpr DOUBLE, q UTINYINT, r UTINYINT, seed UBIGINT)",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Describes any bitfilters filter BLOB: filter_type, format_version (0 for a BLOB without header), key_hash (none or xxhash64), key_type, size_bytes, entries, capacity, load_factor, fingerprint_bits, bits_per_entry, expected_fpr, q, r and seed; fields a filter type does not have are NULL.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT bitfilter_info(filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "bloom_filter_merge(BLOB)",
+    "name": "bloom_filter_merge",
+    "type": "aggregate",
+    "returnType": "BLOB",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Merges Bloom filters (BLOBs produced by bloom_filter with the same ndv and fpp) into one filter containing every value of the inputs.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT bloom_filter_merge(filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "quotient_filter_info(BLOB)",
+    "name": "quotient_filter_info",
+    "type": "scalar",
+    "returnType": "STRUCT(filter_type VARCHAR, format_version UTINYINT, key_hash VARCHAR, key_type VARCHAR, size_bytes UBIGINT, entries UBIGINT, capacity UBIGINT, load_factor DOUBLE, fingerprint_bits UTINYINT, bits_per_entry DOUBLE, expected_fpr DOUBLE, q UTINYINT, r UTINYINT, seed UBIGINT)",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Describes a quotient_filter BLOB: filter_type, format_version (0 for a BLOB without header), key_hash (none or xxhash64), key_type, size_bytes, entries, capacity, load_factor, fingerprint_bits, bits_per_entry, expected_fpr, q, r and seed; fields a filter type does not have are NULL.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT quotient_filter_info(filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "xor16_filter(ANY)",
+    "name": "xor16_filter",
+    "type": "aggregate",
+    "returnType": "BLOB",
+    "parameters": [
+      {
+        "name": "value",
+        "type": "ANY",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Creates an Xor16 filter (16-bit fingerprints, ~0.0015% false positive rate) from a column of any type: UBIGINT values are used as keys as they are, other values are hashed with XXH64 of a fixed encoding that does not change between DuckDB versions. Returns a BLOB to probe with xor16_filter_contains.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT xor16_filter(column) FROM table;"
+      }
+    ]
+  },
+  {
+    "id": "bloom_filter_info(BLOB)",
+    "name": "bloom_filter_info",
+    "type": "scalar",
+    "returnType": "STRUCT(filter_type VARCHAR, format_version UTINYINT, key_hash VARCHAR, key_type VARCHAR, size_bytes UBIGINT, entries UBIGINT, capacity UBIGINT, load_factor DOUBLE, fingerprint_bits UTINYINT, bits_per_entry DOUBLE, expected_fpr DOUBLE, q UTINYINT, r UTINYINT, seed UBIGINT)",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Describes a bloom_filter BLOB: filter_type, format_version (0 for a BLOB without header), key_hash (none or xxhash64), key_type, size_bytes, entries, capacity, load_factor, fingerprint_bits, bits_per_entry, expected_fpr, q, r and seed; fields a filter type does not have are NULL.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT bloom_filter_info(filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "quotient_filter(INTEGER,INTEGER,BLOB)",
+    "name": "quotient_filter",
+    "type": "aggregate",
+    "returnType": "BLOB",
+    "parameters": [
+      {
+        "name": "q",
+        "type": "INTEGER",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "r",
+        "type": "INTEGER",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Merges Quotient filters (BLOBs produced by quotient_filter) into a single filter containing every value of the inputs. q and r size the merged filter, which holds at most 2^q - 1 values. Each input must keep at least q + r bits of each hash (its own q + r must be >= q + r), so a merge can grow q only by giving up as many remainder bits. The inputs must be built from the same type of values. q + r must be <= 64.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT quotient_filter(16, 8, filter) FROM filters;"
+      }
+    ]
+  },
+  {
+    "id": "xor16_filter_is_valid(BLOB)",
+    "name": "xor16_filter_is_valid",
+    "type": "scalar",
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "filter",
+        "type": "BLOB",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Returns whether a BLOB is a structurally valid xor16_filter, instead of raising the error xor16_filter_contains would.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT xor16_filter_is_valid(filter) FROM filters;"
       }
     ]
   }

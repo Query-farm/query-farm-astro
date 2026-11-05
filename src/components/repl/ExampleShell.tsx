@@ -30,6 +30,7 @@ import {
   type Session,
   type QueryResult,
 } from "../../lib/repl/duckdb-boot";
+import { normalizeStatement, tryPageType, trackTry } from "../../lib/repl/analytics";
 
 const CDN_SCRIPTS = [
   "https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js",
@@ -267,6 +268,10 @@ async function runRepl(
     fixtures?: string;
     extensionName?: string;
     onExampleComplete: (ok: boolean) => void;
+    /** Called once the seeded example has run; exampleOk is false if any statement failed. */
+    onExampleRun?: (exampleOk: boolean) => void;
+    /** Called after each statement the visitor runs; edited is false when it repeats the example. */
+    onUserRun?: (ok: boolean, edited: boolean) => void;
   },
 ): Promise<void> {
   const { term, rl, session, tableFromIPC } = deps;
@@ -448,16 +453,35 @@ async function runRepl(
   // second, unrelated extension (e.g. `LOAD spatial;` for a geometry join)
   // is NOT stripped — nothing has loaded that one, and it's genuinely part
   // of what the example needs, not boilerplate to skip past.
+  const seeded = new Set<string>();
   if (opts.seedSql) {
     const primary = opts.extensionName?.toLowerCase();
-    const stmts = splitStatements(opts.seedSql).filter((s) => {
-      if (isCommentOnly(s)) return false;
-      const m = /^\s*(INSTALL|LOAD)\s+["']?([A-Za-z_][A-Za-z0-9_]*)/i.exec(s);
-      if (!m) return true; // not an INSTALL/LOAD statement
+    const stmts: string[] = [];
+    for (const s of splitStatements(opts.seedSql)) {
+      if (isCommentOnly(s)) continue;
+      // Match on the statement itself, not the `--` comment lines above it.
+      const bare = s.replace(/^(\s*--[^\n]*\n)+/, '');
+      // Examples are written for DuckDB 2.0, where our extensions come from
+      // the Query.Farm repository. The browser engine installs them from
+      // community instead, so the repository setup has nothing to do here.
+      if (/^\s*SET\s+allow_extension_repositories\b/i.test(bare)) continue;
+      if (/^\s*CREATE\s+(OR\s+REPLACE\s+)?EXTENSION\s+REPOSITORY\b/i.test(bare)) continue;
+      const m = /^\s*(INSTALL|LOAD)\s+["']?([A-Za-z_][A-Za-z0-9_]*)/i.exec(bare);
+      if (!m) {
+        stmts.push(s); // not an INSTALL/LOAD statement
+        continue;
+      }
       // No known primary extension name: fall back to the old blanket drop.
-      if (!primary) return false;
-      return m[2].toLowerCase() !== primary;
-    });
+      if (!primary || m[2].toLowerCase() === primary) continue;
+      // A second Query.Farm extension (`LOAD a5 FROM query_farm`): load it the
+      // way the browser can, from community, rather than running the statement.
+      if (/\bFROM\s+query_farm\b/i.test(bare)) {
+        const loaded = await ensureExtension(m[2].toLowerCase(), 'community');
+        if (!loaded.ok) writeln(`Note: could not load ${m[2]}: ${loaded.error}`, "33");
+        continue;
+      }
+      stmts.push(s);
+    }
     for (const stmt of stmts) {
       // ATTACH still has to run — the query below depends on the catalog it
       // creates — but it's setup the reader already sees in the code sample
@@ -470,6 +494,7 @@ async function runRepl(
         continue;
       }
       if (!await exec(stmt, true, false, expectedExampleError(stmt))) exampleOk = false;
+      seeded.add(normalizeStatement(stmt));
       // Seed the readline history so the user can press ↑ to recall and edit
       // the example, just as if they had typed it.
       rl.appendHistory(stmt);
@@ -477,6 +502,8 @@ async function runRepl(
     }
   }
   opts.onExampleComplete(exampleOk);
+
+  opts.onExampleRun?.(exampleOk);
 
   for (;;) {
     const sql = (await rl.read(PROMPT)).trim();
@@ -487,7 +514,8 @@ async function runRepl(
     if (sql.startsWith(".")) {
       if (handleDot(sql)) continue;
     }
-    await exec(sql);
+    const ok = await exec(sql);
+    opts.onUserRun?.(ok, !seeded.has(normalizeStatement(sql)));
   }
 }
 
@@ -503,6 +531,10 @@ interface Props {
   onClose?: () => void;
 }
 
+// Whether this page has already booted the engine, so load times from a
+// cold start and from a second shell on the same page can be told apart.
+let engineBooted = false;
+
 export default function ExampleShell({ extensionName, installSource, sql, fixtures, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -516,6 +548,11 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
     ensureShellStyle();
     let disposed = false;
     let cleanup = () => {};
+    const openedAt = performance.now();
+    const warm = engineBooted;
+    const base = { extension: extensionName, page_type: tryPageType() };
+    let stage = "boot";
+    trackTry("try_extension", base);
 
     (async () => {
       try {
@@ -628,6 +665,8 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
           "\x1b[90mBooting Haybarn (DuckDB) WebAssembly… (first load can take a few seconds)\x1b[0m",
         );
         await ensureEngine();
+        engineBooted = true;
+        stage = "extension";
         if (disposed) return;
 
         // Load the extension once, engine-wide; open an isolated session.
@@ -637,6 +676,9 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
         ]);
         if (disposed) return;
 
+        const loadMs = Math.round(performance.now() - openedAt);
+        if (!ext.ok) trackTry("try_extension_failed", { ...base, stage: "extension", load_ms: loadMs });
+        stage = "session";
         setStatus("ready");
         // Clear the booting line (carriage return + erase line) now that the
         // engine, extension, and session are ready.
@@ -654,10 +696,15 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
             extError: ext.ok
               ? undefined
               : `${extensionName} may not have a WebAssembly build yet — the SQL below may not run in-browser.`,
+            onExampleRun: (exampleOk) => {
+              if (ext.ok) trackTry("try_extension_ready", { ...base, load_ms: loadMs, warm, example_ok: exampleOk });
+            },
+            onUserRun: (ok, edited) => trackTry("try_query_run", { ...base, ok, edited }),
           },
         );
       } catch (e: unknown) {
         if (disposed) return;
+        trackTry("try_extension_failed", { ...base, stage, load_ms: Math.round(performance.now() - openedAt) });
         setStatus("error");
         setExampleStatus("failed");
         setErrorMsg(e instanceof Error ? e.message : String(e));

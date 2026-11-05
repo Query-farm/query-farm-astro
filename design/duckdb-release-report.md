@@ -1,9 +1,9 @@
-# DuckDB 2.0 release report prototype
+# DuckDB 2.0 release report
 
-Local route: `/blog/duckdb-2-release-activity/`. The article is an MDX entry in
+Public route: `/blog/duckdb-2-release-activity/`. The article is an MDX entry in
 the blog collection; the old `/research/duckdb-2-release-activity/` route redirects
-to it. It follows the blog's draft convention: available in development or with `INCLUDE_DRAFTS=true`, excluded
-from an ordinary production build. It is marked noindex during prototyping.
+to it. The article is published (`draft: false`), included in ordinary production
+builds, and indexable by search engines.
 
 The primary action is **Discuss your DuckDB project**, leading to the existing
 `/company/schedule` page. A project-brief email link is the alternative contact
@@ -80,10 +80,10 @@ affected component/version or regression classification. Exact counts and
 expectations remain available in the downloadable evidence.
 
 `group-comparison.csv` exports all five repository groups, three releases and
-both baselines. The 2.0 core comparison is 127 / 49.75 = 2.55×, versus 37 / 11.25
-= 3.29× at 1.5. Using the recent baseline gives 2.38× versus 3.02×. Clients and
-installers have 27 / 11.25 = 2.40× under the main baseline and 27 / 14 = 1.93×
-under the recent one. Client activity exceeds its own baseline under both;
+both baselines. In the refreshed first-week comparison, 2.0 core intake is
+142 / 56.25 = 2.52×, versus 42 / 13.5 = 3.11× at 1.5. Using the recent baseline
+gives 2.18× versus 3.29×. Clients and installers have 29 / 12.25 = 2.37× under
+the main baseline and 29 / 15 = 1.93× under the recent one. Client activity exceeds its own baseline under both;
 whether it exceeds 1.5's response changes with the baseline. Do not claim that
 engine intake is below normal, that clients have a historically exceptional
 response, or that these are defect rates. These groups describe where reports
@@ -94,8 +94,9 @@ independently checked against the materialized DuckDB tables with UTC boundaries
 post-release window, for all, first-observed and recurring issue reporters.
 First observed is scope-wide across all 46 repositories, separately from PR
 history. Moving to a different repository does not make an existing issue
-reporter new again. In the 2.0 window, 67 of 72 first-time reporters filed in one
-repository and five filed in two; collectively they used 16 repositories.
+reporter new again. In the 2.0 first week, 76 of 81 first-time reporters filed
+in one repository, three in two, and two in three; collectively they used
+19 repositories.
 Each person's cohort stays fixed for the window, so later issues from a new
 reporter remain in the new cohort. Whole-window counts do not sum daily unique people, and the new cohort
 reconciles with the saved daily first-time counts. No identities are exported.
@@ -119,11 +120,39 @@ documents client build adaptations. Those changes are a plausible contributor
 to integration problems, not an established cause of the aggregate issue rise.
 
 The migration guidance and release planning dates were reviewed against official
-DuckDB sources on 2026-10-27. Review this editorial copy, support dates, and package
+DuckDB sources on 2026-11-03. Review this editorial copy, support dates, and package
 interpretations when refreshing the data; the exporter does not fetch release
 guidance or classify individual issue contents.
 Commit the exporter and exported assets together when refreshing this report.
 The vendored Plotly bundle retains its upstream MIT license header.
+
+### 3 November refresh
+
+The observation cutoff is 2 November 2026 UTC (exclusive end 3 November),
+covering 13 complete days including release day. The original publication date
+stays 27 October; `updatedDate` is 3 November. The article remains published and
+preliminary. All seven measures, both baselines, both chart views, the calendar,
+repository and reporter-breadth CSVs, static figures, and social card were refreshed.
+
+The matched headline and package window is now the complete first week,
+21–27 October (days 0–6), consistent with the PDF. Its 266 issues include 142
+in core; 131 issues closed, including 68 filed before release. `periods.post`
+supplies the distribution caption and repository-search dates. Those dates must
+not use the overall snapshot endpoint once it extends beyond the first week.
+
+The dated update adds ratios for each release’s first 13 days (`observed`) and
+the latest seven calendar days (`latest`, 27 October–2 November for 2.0).
+First-week issue intake is 2.72× normal, easing to 1.55× in the latest week;
+first-observed reporting moves from 3.95× to 2.20×. Daily merge participation
+is 1.54× and 1.52× respectively. Across the first 13 days, issue intake is
+2.15× for 2.0, 2.76× for 1.5, and 1.34× for 1.4. The ordering also holds with
+the recent baseline (1.71×, 2.62×, 1.62×). These remain ratios of sums using
+the same saved daily evidence, not raw cross-release comparisons.
+
+The official calendar still plans 2.0.1 for 18 November. The exporter accepts
+both `2.0.1` and `Release 2.0.1` labels and keeps feature/merge freezes separate.
+The update changes no conclusion about confirmed regressions or resolution rates.
+
 
 The page uses the site's BaseLayout metadata, canonical URL, organization
 attribution, and a dedicated Open Graph / Twitter card. It is a preliminary
@@ -156,7 +185,7 @@ subscriber metadata. Native submission preserves Buttondown CAPTCHA and error
 handling. Rapid duplicate submit events are suppressed.
 
 Confirmed subscription conversions require a Buttondown-side confirmation or
-webhook integration; this prototype does not falsely report them from button
+webhook integration; the site does not falsely report them from button
 clicks or submissions. In GA4, register `content_id`, `placement`, and
 `subscription_status` as event-scoped dimensions to break down these events.
 Property configuration and live event delivery were not changed or exercised.
@@ -170,7 +199,7 @@ Official references:
 ```sh
 node --import tsx --test tests/release-report/analytics.test.ts
 npm run check
-INCLUDE_DRAFTS=true npm run build
+npm run build
 ```
 
 Use HTTP and rendered HTML checks for the local route and its linked assets.

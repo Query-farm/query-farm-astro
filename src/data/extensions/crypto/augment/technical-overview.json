@@ -1,7 +1,7 @@
 {
   "eyebrow": "Technical Overview",
-  "title": "Cryptographic hashing, HMAC, and secure random — directly in SQL",
-  "description": "DuckDB ships with [`hash()`](https://duckdb.org/docs/sql/functions/utility#hash) (non-cryptographic) and a built-in `sha256()`. The [Crypto extension](https://github.com/Query-farm/crypto) adds the full [SHA-2](https://en.wikipedia.org/wiki/SHA-2) and [SHA-3](https://en.wikipedia.org/wiki/SHA-3) families, [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) and [BLAKE2b](https://datatracker.ietf.org/doc/html/rfc7693), [HMAC](https://datatracker.ietf.org/doc/html/rfc2104), an order-deterministic aggregate hash, and a CSPRNG for keys, salts, and nonces. The scope is deliberately **hashing and authentication only** — and getting the hashing semantics right matters more than the algorithm list.",
+  "title": "Cryptographic hashing, HMAC, key derivation, and secure random — directly in SQL",
+  "description": "DuckDB ships with [`hash()`](https://duckdb.org/docs/sql/functions/utility#hash) (non-cryptographic) and a built-in `sha256()`. The [Crypto extension](https://github.com/Query-farm/crypto) adds the full [SHA-2](https://en.wikipedia.org/wiki/SHA-2) and [SHA-3](https://en.wikipedia.org/wiki/SHA-3) families, SHAKE, Ethereum's Keccak, [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) and [BLAKE2](https://datatracker.ietf.org/doc/html/rfc7693), [HMAC](https://datatracker.ietf.org/doc/html/rfc2104) with constant-time verification, password hashing and key derivation (Argon2, scrypt, PBKDF2, HKDF), an order-deterministic aggregate hash, and a CSPRNG for keys, salts, and nonces. The scope is deliberately **hashing, authentication, and key derivation only** — and getting the hashing semantics right matters more than the algorithm list.",
   "sections": [
     {
       "icon": "🧷",
@@ -13,31 +13,39 @@
           "description": "`42::INTEGER` and `42::BIGINT` produce **different** digests, because their binary representations differ and the hash is computed over those bytes. That is the right behaviour for cryptographic use: a hash that silently collapses across logically distinct domains is a footgun. The flip side is that you must cast inputs deliberately — pin the type if a digest needs to be stable across schema changes."
         },
         {
+          "label": "Canonical, platform-independent encoding",
+          "description": "Fixed-width values are hashed as little-endian bytes, so a digest is the same on every platform. A few types get an encoding chosen so the hash tracks the value, not its storage: a `UUID` hashes as its 16 bytes in [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562) order (the same as `unhex()` of its digits), a `DECIMAL` as its unscaled value widened to 16 bytes (so `DECIMAL(4,2)` and `DECIMAL(38,2)` agree), an `ENUM` as its label, and a fixed-size `ARRAY` the same as the equivalent `LIST`."
+        },
+        {
           "label": "Length-prefixed list elements",
           "description": "Variable-length elements (`VARCHAR`, `BLOB`) inside a list are hashed as `[8-byte length][content]`. This closes a [length-extension-style ambiguity](https://en.wikipedia.org/wiki/Length_extension_attack): without the length prefix, `['ab', 'c']` and `['a', 'bc']` would serialize to the same byte stream and collide. With it, they produce distinct digests — and the same rule applies whether you hash a list directly or fold a `VARCHAR`/`BLOB` column through the aggregate hash."
         },
         {
           "label": "Aggregate equals list, deterministically",
-          "description": "The aggregate hash over `col ORDER BY ord` is byte-equal to a single hash of `LIST(col ORDER BY ord)` — so any client (Python, Go, Rust) that can build the equivalent ordered list can verify a DuckDB digest byte-for-byte. The `ORDER BY` is **mandatory**: DuckDB's [aggregate](https://duckdb.org/docs/sql/aggregates) execution does not guarantee row order, so an unordered hash aggregate would be non-deterministic and worthless as a checksum."
+          "description": "The aggregate hash over `col ORDER BY ord` is byte-equal to a single hash of `LIST(col ORDER BY ord)` — so any client (Python, Go, Rust) that can build the equivalent ordered list can verify a DuckDB digest byte-for-byte. The `ORDER BY` is **mandatory** and checked when the query is planned: DuckDB's [aggregate](https://duckdb.org/docs/sql/aggregates) execution does not guarantee row order, so an unordered hash aggregate would be non-deterministic and worthless as a checksum. It also runs as a window function for running or per-frame checksums."
         },
         {
           "label": "NULL propagation and BLOB output",
-          "description": "`crypto_hash` and `crypto_hmac` propagate NULL (NULL in, NULL out); the aggregate returns NULL for an empty group. Coalesce or cast NULLs explicitly if you need a stable representation for them. All hash functions return raw [`BLOB`](https://duckdb.org/docs/sql/data_types/blob) — compare with `=` for byte-equality, or wrap with `lower(to_hex(...))` only when you need a human-readable string."
+          "description": "`crypto_hash` and `crypto_hmac` propagate NULL (NULL in, NULL out); the aggregate returns NULL for an empty group but raises an error on a NULL value, so a missing row can't silently produce the same checksum — skip NULLs explicitly with `FILTER (WHERE col IS NOT NULL)`. All hash functions return raw [`BLOB`](https://duckdb.org/docs/sql/data_types/blob) — compare with `=` for byte-equality (or `crypto_equals` for secrets), or wrap with `lower(to_hex(...))` only when you need a human-readable string."
         }
       ]
     },
     {
       "icon": "🛡️",
       "title": "Honest scope — what's not in this extension",
-      "description": "The extension is deliberately narrow: hashing, keyed authentication, and secure random bytes. If your problem needs primitives from a wider library, this is the wrong tool and you'll need to combine it with something else — knowing the boundary up front prevents misuse.",
+      "description": "The extension is deliberately narrow: hashing, keyed authentication, key derivation, and secure random bytes. If your problem needs primitives from a wider library, this is the wrong tool and you'll need to combine it with something else — knowing the boundary up front prevents misuse.",
       "bulletPoints": [
         {
           "label": "No symmetric encryption",
           "description": "There is no `crypto_encrypt` / `crypto_decrypt`. The extension does not implement AES (see [NIST FIPS 197](https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.197.pdf)) or any other cipher. Encrypt-at-rest belongs at the storage / file level, not in row expressions."
         },
         {
-          "label": "No password-hashing KDFs",
-          "description": "No bcrypt, scrypt, Argon2, or PBKDF2. For storing user passwords, follow the [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html) and run a real KDF in your application layer — a fast cryptographic hash in SQL is *not* a password hash. You can generate salts here with the CSPRNG; the KDF itself must live elsewhere."
+          "label": "Password hashing, but no bcrypt",
+          "description": "Argon2 ([RFC 9106](https://datatracker.ietf.org/doc/html/rfc9106)), scrypt and PBKDF2 are available as `crypto_argon2`, `crypto_scrypt` and `crypto_pbkdf2` — use them, not a fast hash, to store passwords, following the [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html). bcrypt is not included. `crypto_hkdf` derives keys from an already-random secret and is not a password hash. Their working memory counts against DuckDB's `memory_limit`."
+        },
+        {
+          "label": "Constant-time comparison only for byte strings",
+          "description": "`crypto_equals` compares two `VARCHAR`/`BLOB` values in constant time for MAC verification. Ordinary `=` comparisons, joins and filters on secrets are not timing-safe."
         },
         {
           "label": "No public-key signatures",
@@ -45,7 +53,7 @@
         },
         {
           "label": "Legacy algorithms exposed for compatibility",
-          "description": "MD4, MD5, and SHA-1 are present so you can interop with existing systems, but they are **not cryptographically secure** for new designs. See [NIST SP 800-107 Rev. 1](https://csrc.nist.gov/pubs/sp/800/107/r1/final) for current guidance — prefer `sha2-256`, `sha2-512`, or `blake3`. MD4 may be disabled outright in modern OpenSSL builds."
+          "description": "MD5 and SHA-1 are present so you can interop with existing systems, but they are **not cryptographically secure** for new designs. See [NIST SP 800-107 Rev. 1](https://csrc.nist.gov/pubs/sp/800/107/r1/final) for current guidance — prefer `sha2-256`, `sha2-512`, or `blake3`. MD4 lives only in OpenSSL's legacy provider, so `crypto_algorithms()` reports it as unavailable."
         }
       ]
     },
@@ -60,7 +68,7 @@
         },
         {
           "label": "Bounded output",
-          "description": "Length must be between 1 byte and 4 GB − 1 (DuckDB's BLOB cap); 0 or negative raises an error. Output is a raw `BLOB` — hex it for display, store it as-is for use as key material."
+          "description": "Length must be between 1 byte and 4 GB − 1 (DuckDB's BLOB cap); 0 or negative raises an error. Large outputs are allocated through DuckDB's buffer manager and count against `memory_limit`. Output is a raw `BLOB` — hex it for display, store it as-is for use as key material."
         }
       ]
     }

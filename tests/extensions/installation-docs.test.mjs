@@ -8,13 +8,15 @@ import { fileURLToPath } from 'node:url';
 import { dist, readPage, publicExtensions, checkInstallation, checkExampleRepositories } from './installation-docs.mjs';
 
 const extensions = publicExtensions();
-const names = extensions.map(extension => extension.name);
+// Not published to the Query.Farm repository (src/data/query-farm-repository.ts).
+const communityOnly = new Set(['events', 'vgi']);
+const names = extensions.map(extension => extension.name).filter(name => !communityOnly.has(name));
 
 test('the catalog documents native setup and labels the older DuckDB syntax', () => {
   checkInstallation(readPage('products/extensions/index.html'), 'airport', { catalog: true });
 });
 
-for (const { name, path } of extensions) {
+for (const { name, path } of extensions.filter(({ name }) => !communityOnly.has(name))) {
   test(`${name}: copyable installation and later-session commands use the named repository`, () => {
     checkInstallation(readPage(path), name);
   });

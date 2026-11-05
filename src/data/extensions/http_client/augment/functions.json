@@ -16,11 +16,15 @@
       }
     ],
     "returns": "A JSON object with `status` (the HTTP status code as a number), `reason` (the [HTTP reason phrase](https://datatracker.ietf.org/doc/html/rfc9110#name-status-codes), e.g. `\"OK\"` / `\"Not Found\"`), and `body` (the response body as a string).",
-    "description": "Issue an HTTP `GET` against `url` and return the response as JSON. Synchronous — DuckDB blocks until the response arrives or the request fails.\n\nExtract fields from the result with DuckDB's JSON operators: `->>` for string fields, `->` for nested JSON. To dive into a JSON response body, cast it: `((http_get(...)->>'body')::JSON)->>'$.field'`.\n\nFor REST endpoints that need headers (auth tokens, content negotiation), use `http_post` instead — `http_get` does not currently expose a headers parameter in the documented signature.",
+    "description": "Issue an HTTP `GET` against `url` and return the response as JSON. Synchronous — DuckDB blocks until the response arrives or the request fails.\n\nExtract fields from the result with DuckDB's JSON operators: `->>` for string fields, `->` for nested JSON. To dive into a JSON response body, cast it: `((http_get(...)->>'body')::JSON)->>'$.field'`.\n\nFor endpoints that need request headers (auth tokens, content negotiation) or query parameters, use the three-argument form `http_get(url, headers, params)`: `headers` is a `MAP(VARCHAR, VARCHAR)` of request headers and `params` is a `MAP(VARCHAR, VARCHAR)` appended to the URL as a query string.\n\nA request that gets no response (DNS failure, refused connection, or the fixed 10-second read timeout) returns `status` `-1` with the error message in `reason` rather than raising an error.",
     "examples": [
       {
         "description": "Read just the status code",
         "code": "SELECT (http_get('https://httpbin.org/get')->>'status')::INT AS status;"
+      },
+      {
+        "description": "Send request headers and query parameters",
+        "code": "SELECT ((http_get(\n  'https://httpbin.org/get',\n  headers => MAP{'accept': 'application/json'},\n  params  => MAP{'q': 'duckdb'}\n)->>'body')::JSON)->>'$.args.q' AS q;"
       },
       {
         "description": "Pull a field out of a JSON response body",
@@ -59,9 +63,9 @@
       },
       {
         "name": "params",
-        "type": "MAP(VARCHAR, VARCHAR)",
+        "type": "JSON",
         "paramType": "named",
-        "description": "Body parameters as a `MAP`. JSON-encoded into the request body — keys become object keys, values become JSON string values."
+        "description": "The request body as `JSON`, sent with `Content-Type: application/json`. A `MAP{...}` is converted to a JSON object (keys become object keys, values become JSON string values); pass a `JSON` value directly for nested bodies."
       }
     ],
     "returns": "A JSON object with `status`, `reason`, and `body` — same shape as [`http_get`](#http_get).",
@@ -147,7 +151,7 @@
       }
     ],
     "returns": "A JSON object with the same `status` / `reason` / `body` shape as [`http_get`](#http_get). For a well-behaved server the body is empty.",
-    "description": "Issue an HTTP `HEAD` request — same response metadata as a `GET`, but without a body. Use it for liveness checks or to test whether a URL exists before fetching the full payload with `http_get`.\n\nThis function is exposed by the extension binary but is **not documented in the upstream README** — the signature could change in a future release. Treat it as best-effort.",
+    "description": "Issue an HTTP `HEAD` request. Returns `{status, reason, headers}`: the same status fields as a `GET`, plus the response headers (lower-cased names) encoded as a JSON string in `headers`, and no body. Use it for liveness checks or to test whether a URL exists before fetching the full payload with `http_get`.\n\nThis function is exposed by the extension binary but is **not documented in the upstream README** — the signature could change in a future release. Treat it as best-effort.",
     "examples": [
       {
         "description": "Liveness check — is the URL reachable?",

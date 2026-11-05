@@ -2,6 +2,9 @@ import {
   extensionDocument, matchingExtensions, mergeSearchResults, popularExtensions, resultKey,
   type SearchDocument, type SearchExtension,
 } from '../lib/site-search';
+import { searchTracker } from '../lib/search-analytics';
+
+const trackSearch = searchTracker('site');
 
 interface Pagefind {
   init(): Promise<void>;
@@ -105,9 +108,17 @@ function resultItem(doc: SearchDocument, extensions: SearchExtension[]) {
 }
 
 function render(documents: SearchDocument[], extensions: SearchExtension[], label: string) {
+  const focused = document.activeElement;
+  const focusedKey = focused instanceof HTMLAnchorElement && resultsEl.contains(focused)
+    ? resultKey(focused.href) : undefined;
   resultsEl.replaceChildren(...documents.map(doc => resultItem(doc, extensions)).filter(item => item !== null));
   heading.textContent = label;
   heading.hidden = !documents.length;
+  if (focusedKey) {
+    const replacement = [...resultsEl.querySelectorAll<HTMLAnchorElement>('a')]
+      .find(link => resultKey(link.href) === focusedKey);
+    (replacement ?? input).focus({ preventScroll: true });
+  }
 }
 
 async function runSearch(token = ++generation) {
@@ -136,6 +147,7 @@ async function runSearch(token = ++generation) {
         filters: { kind: includeFunctions ? { any: ['page', 'function'] } : 'page' },
       });
       if (!current()) return;
+      trackSearch(query, search.results.length);
       const documents = await Promise.all(search.results.slice(0, 8).map(result => result.data()));
       if (!current()) return;
       const top = mergeSearchResults(named, documents);
@@ -173,6 +185,7 @@ openBtn.addEventListener('click', openModal);
 modal.querySelectorAll('[data-search-close]').forEach(element => element.addEventListener('click', closeModal));
 input.addEventListener('input', () => {
   const token = ++generation; // Invalidate pending requests before the debounce.
+  trackSearch('', 0);
   clearTimeout(timer);
   resultsEl.replaceChildren();
   heading.hidden = true;

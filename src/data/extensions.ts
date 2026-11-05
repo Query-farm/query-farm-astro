@@ -17,6 +17,7 @@ export interface Extension {
   githubUrl?: string;
   docsUrl?: string;
   features?: string[];
+  searchTerms?: string[];
   /** Usage count from generated/usage.json (Cloudflare AE snapshot). */
   usageCount?: number;
   /** Human label for the usageCount window, e.g. "last 90 days". */
@@ -57,6 +58,7 @@ function toListingEntry(slug: string, m: ExtensionMetadata): Extension {
     githubUrl: m.githubUrl || undefined,
     docsUrl: m.docsUrl,
     features: m.features,
+    searchTerms: [...(m.searchTerms ?? []), ...(m.entryPage?.tasks.map(task => task.title) ?? [])],
     usageCount: m.usageStats?.count ?? usageBySlug[slug]?.count,
     usagePeriod: m.usageStats?.period ?? usageBySlug[slug]?.period,
   };

@@ -15,6 +15,12 @@ leadVisual:
     src: "/blog/native-adbc-in-your-browser/architecture-mobile.svg"
     width: 400
     height: 790
+nextStep:
+  title: "Grainlift"
+  pitch: "Proxy existing database drivers or build new data services behind one ADBC client interface, with Arrow-native results."
+  href: "/products/grainlift/"
+  cta: "Explore Grainlift"
+  repo: "https://github.com/Query-farm/grainlift"
 ---
 
 An [ADBC (Arrow Database Connectivity)](https://arrow.apache.org/adbc/current/) driver already knows how to connect to your database, discover its tables, and return [Apache Arrow](https://arrow.apache.org/) results. If you want to query that database from a browser, you should be able to keep using the driver you have.

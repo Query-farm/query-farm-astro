@@ -4,7 +4,10 @@
 |---|---|
 | A modern fast 64-bit default | [`xxh3_64`](#xxh3_64) |
 | Maximum throughput | [`rapidhash`](#rapidhash) |
-| Cross-system compatibility (Cassandra / Spark) | [`murmurhash3_x64_128`](#murmurhash3_x64_128) |
+| One key for several columns | [`xxh3_64`](#xxh3_64) of a tuple: `xxh3_64((a, b, c))` |
+| The same hash BigQuery, Spark, Kafka, Iceberg or ClickHouse computes | [`farm_fingerprint`](#farm_fingerprint), [`spark_hash`](#spark_hash), [`kafka_partition`](#kafka_partition), [`iceberg_bucket`](#iceberg_bucket), [`clickhouse_cityhash64`](#clickhouse_cityhash64) |
+| Shards you can add to without moving most keys | [`jump_hash`](#jump_hash) |
+| A checksum another system verifies | [`crc32c`](#crc32c) |
 | Stable hex digest matching Python / Rust xxhash | [`xxh3_128_hex`](#xxh3_128_hex) |
 | 128-bit space for billions of distinct keys | [`xxh3_128`](#xxh3_128) or [`murmurhash3_x64_128`](#murmurhash3_x64_128) |
 | Cryptographic guarantees | not this extension — use [`crypto`](/products/extensions/crypto) |
@@ -32,16 +35,73 @@ FROM users;
 
 Materialize the result with [`CREATE TABLE AS`](https://duckdb.org/docs/sql/statements/create_table) to write a partitioned [Parquet](https://duckdb.org/docs/data/parquet/overview) dataset.
 
-## Cross-system routing (Cassandra / Spark)
+## Multi-column keys
 
-Use [`murmurhash3_x64_128`](#murmurhash3_x64_128) when DuckDB needs to compute the same routing hash that an upstream [Apache Cassandra](https://cassandra.apache.org/_/index.html) `Murmur3Partitioner` or [Apache Spark](https://spark.apache.org/) job would assign:
+Hash a tuple to get one key for several columns. Unlike concatenating strings, the [row encoding](#hashing-several-columns-at-once) can't confuse `('a|', 'b')` with `('a', '|b')`, and it keeps `NULL` apart from an empty string:
 
 ```sql
--- Same hash Cassandra's Murmur3Partitioner would compute
+-- One 64-bit key per (user, query) pair, e.g. for deduplication or joins
+SELECT user_id,
+       query_text,
+       xxh3_64((user_id, query_text)) AS row_key
+FROM query_log;
+```
+
+Any `STRUCT`, `LIST`, `MAP` or `ARRAY` column works the same way, and every algorithm accepts a tuple — `rapidhash((a, b), 7)`, `xxh3_128((a, b, c))`.
+
+## Routing like Kafka, Spark, Iceberg and BigQuery
+
+Predict which partition a keyed Kafka record lands on — the same answer as Kafka's default partitioner — for example to co-partition DuckDB output with a topic:
+
+```sql
+-- Partition for each key on a 12-partition topic
 SELECT key,
-       murmurhash3_x64_128(key) AS token
+       kafka_partition(key, 12) AS partition
 FROM rows_to_route;
 ```
+
+Reproduce a Spark bucket id. Spark buckets rows by `pmod(hash(cols), numBuckets)`; [`spark_hash`](#spark_hash) applies Spark's type rules, so pass the same column types Spark sees:
+
+```sql
+-- Spark bucket id for 16 buckets
+SELECT key,
+       ((spark_hash(key) % 16) + 16) % 16 AS spark_bucket
+FROM rows_to_route;
+```
+
+Compute the Iceberg `bucket[N]` partition of each row — for example to find which bucket files hold a key, or to write data partitioned the way an Iceberg table expects:
+
+```sql
+-- Iceberg bucket[16] partition of each key
+SELECT key,
+       iceberg_bucket(key, 16) AS bucket
+FROM rows_to_route;
+```
+
+Reproduce a BigQuery sampling split built on `FARM_FINGERPRINT`:
+
+```sql
+-- Same rows BigQuery's MOD(ABS(FARM_FINGERPRINT(key)), 10) = 0 would keep
+SELECT key
+FROM rows_to_route
+WHERE abs(farm_fingerprint(key)) % 10 = 0;
+```
+
+For [Apache Cassandra](https://cassandra.apache.org/_/index.html), note that `Murmur3Partitioner` tokens are derived from MurmurHash3 x64-128 but are not the raw [`murmurhash3_x64_128`](#murmurhash3_x64_128) value — verify against Cassandra before routing with it.
+
+## Adding shards without moving every key
+
+With `hash % n`, adding a shard reassigns almost every key. [`jump_hash`](#jump_hash) moves only the keys the new shard takes over:
+
+```sql
+-- Which keys move when growing from 4 to 5 shards?
+SELECT key,
+       jump_hash(xxh3_64(key), 4) AS shard_before,
+       jump_hash(xxh3_64(key), 5) AS shard_after
+FROM rows_to_route;
+```
+
+Every key either keeps its shard or moves to the new shard `4`; about a fifth of them move.
 
 ## String cache keys
 
@@ -56,6 +116,8 @@ SELECT user_id,
        ) AS cache_key
 FROM query_log;
 ```
+
+Concatenation is only unambiguous when the separator can't appear in the values before it — true here, since `user_id` is a number. When the key doesn't need to be a string, hash the tuple instead (see [Multi-column keys](#multi-column-keys)).
 
 ## Bloom / XOR / Cuckoo filter input
 

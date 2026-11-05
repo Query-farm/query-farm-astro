@@ -72,14 +72,14 @@ build on schema mismatches. VGI SDK reference pages are generated from their
 language repositories; see `VGI_DOCS_GUIDE.md` before editing those pages.
 Visual changes should follow `DESIGN_BRIEF.md`.
 
-## DuckDB release report prototype
+## DuckDB release report
 
 Preview `/blog/duckdb-2-release-activity/` with `npm run dev`. The old research
 preview URL redirects to the blog post. It includes
 the saved release analysis, interactive comparisons, a project-discussion CTA,
 Open Graph artwork, and newsletter links/forms with GA4 click and submission
-events. The report follows the draft-post build convention (`INCLUDE_DRAFTS=true`
-for build verification). Data export and analytics semantics are documented in
+events. The article is published in ordinary production builds. Data export and
+analytics semantics are documented in
 [design/duckdb-release-report.md](design/duckdb-release-report.md).
 
 ## Extension PDF quick references

@@ -4,7 +4,7 @@
     "categories": [
       "HLL"
     ],
-    "description": "Aggregate input values into a HyperLogLog sketch for distinct counting. Returns a `sketch_hll` BLOB you can persist, ship between processes, or merge later. The first argument is `lg_k` — base-2 log of the number of buckets — which controls the size/accuracy trade-off. `lg_k = 12` (4096 buckets, ~4 KB sketch, ~1.6% standard error) is a common default; raise it for tighter bounds, lower it for smaller sketches (accepted range 4–21). Input can be any integer, float, string, blob, `UUID`, `HUGEINT`, or `UHUGEINT` column; merge only sketches built from the same type, since values are hashed according to their column type. Returns `NULL` over no rows.",
+    "description": "Aggregate input values into a HyperLogLog sketch for distinct counting. Returns a `sketch_hll` BLOB you can persist, ship between processes, or merge later. The first argument is `lg_k` — base-2 log of the number of buckets — which controls the size/accuracy trade-off. `lg_k = 12` (4096 buckets, ~4 KB sketch, ~1.6% standard error) is a common default; raise it for tighter bounds, lower it for smaller sketches. An optional third argument picks the register encoding: `'HLL_4'` (the default, smallest), `'HLL_6'` or `'HLL_8'` (largest, fastest to update); it must be a constant, and parallel combines keep the chosen encoding. `lg_k` must be between 4 and 21. Input can be any integer, float, string, blob, `UUID`, `HUGEINT`, or `UHUGEINT` column; merge only sketches built from the same type, since values are hashed according to their column type. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Approximate distinct users (lg_k = 12, ~1.6% error)",
@@ -13,6 +13,10 @@
       {
         "description": "Build per-day sketches and persist them",
         "code": "CREATE OR REPLACE TABLE daily_uniques (day DATE, hll sketch_hll);\nINSERT INTO daily_uniques\nSELECT date_trunc('day', ts) AS day,\n       datasketch_hll(12, user_id) AS hll\nFROM events\nGROUP BY 1;"
+      },
+      {
+        "description": "Build with 8-bit registers and check the encoding",
+        "code": "SELECT datasketch_hll_target_type(datasketch_hll(12, user_id, 'HLL_8')) AS encoding,\n       datasketch_hll_estimate(datasketch_hll(12, user_id, 'HLL_8')) AS distinct_users\nFROM events;"
       }
     ],
     "relatedFunctions": [
@@ -20,7 +24,9 @@
       "datasketch_hll_union",
       "datasketch_hll_lower_bound",
       "datasketch_hll_upper_bound",
-      "datasketch_hll_describe"
+      "datasketch_hll_describe",
+      "datasketch_hll_target_type",
+      "datasketch_hll_merge"
     ]
   },
   {
@@ -33,13 +39,8 @@
       "datasketch_hll",
       "datasketch_hll_union",
       "datasketch_hll_lower_bound",
-      "datasketch_hll_upper_bound"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_hll(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_hll_estimate(sketch)\nFROM sample;"
-      }
+      "datasketch_hll_upper_bound",
+      "datasketch_hll_composite_estimate"
     ]
   },
   {
@@ -47,7 +48,7 @@
     "categories": [
       "HLL"
     ],
-    "description": "Merge multiple HLL sketches into one. Aggregate over a column of `sketch_hll` BLOBs to roll per-partition or per-day sketches up to whatever window you need — without rescanning the underlying rows. The leading `k` argument (`lg_k`) is the precision of the output sketch. Merge only sketches built from the same input type.",
+    "description": "Merge multiple HLL sketches into one. Aggregate over a column of `sketch_hll` BLOBs to roll per-partition or per-day sketches up to whatever window you need — without rescanning the underlying rows. The leading `lg_k` argument is the precision of the output sketch. An optional third argument (`'HLL_4'`, `'HLL_6'` or `'HLL_8'`) sets the encoding of the result. To union just two sketches in a row-wise expression, use the scalar `datasketch_hll_merge`. Merge only sketches built from the same input type.",
     "examples": [
       {
         "description": "Rolling 7-day distinct users from per-day sketches",
@@ -56,7 +57,8 @@
     ],
     "relatedFunctions": [
       "datasketch_hll",
-      "datasketch_hll_estimate"
+      "datasketch_hll_estimate",
+      "datasketch_hll_merge"
     ]
   },
   {
@@ -67,12 +69,6 @@
     "relatedFunctions": [
       "datasketch_hll",
       "datasketch_hll_estimate"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_hll(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_hll_describe(sketch, true, false)\nFROM sample;"
-      }
     ]
   },
   {
@@ -82,12 +78,6 @@
     ],
     "relatedFunctions": [
       "datasketch_hll"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_hll(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_hll_is_compact(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -97,12 +87,6 @@
     ],
     "relatedFunctions": [
       "datasketch_hll"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_hll(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_hll_is_empty(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -112,12 +96,6 @@
     ],
     "relatedFunctions": [
       "datasketch_hll"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_hll(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_hll_lg_config_k(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -130,12 +108,6 @@
       "datasketch_hll",
       "datasketch_hll_estimate",
       "datasketch_hll_upper_bound"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_hll(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_hll_lower_bound(sketch, 2)\nFROM sample;"
-      }
     ]
   },
   {
@@ -148,12 +120,44 @@
       "datasketch_hll",
       "datasketch_hll_estimate",
       "datasketch_hll_lower_bound"
+    ]
+  },
+  {
+    "name": "datasketch_hll_merge",
+    "categories": [
+      "HLL"
     ],
+    "description": "Scalar union of two HLL sketches — the row-wise counterpart of the `datasketch_hll_union` aggregate (the scalar is named `_merge` because a scalar and an aggregate cannot share a name). The result keeps the first sketch's target type; the union runs at the larger `lg_config_k` of the two, and if either input is in dense (HLL) mode the result is reduced to the smaller one.",
     "examples": [
       {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_hll(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_hll_upper_bound(sketch, 2)\nFROM sample;"
+        "description": "Users seen in January or February, from two stored sketches",
+        "code": "WITH a AS (SELECT datasketch_hll(12, user_id) AS s FROM events_jan),\n     b AS (SELECT datasketch_hll(12, user_id) AS s FROM events_feb)\nSELECT datasketch_hll_estimate(datasketch_hll_merge(a.s, b.s)) AS jan_or_feb\nFROM a, b;"
       }
+    ],
+    "relatedFunctions": [
+      "datasketch_hll_union",
+      "datasketch_hll",
+      "datasketch_hll_estimate"
+    ]
+  },
+  {
+    "name": "datasketch_hll_target_type",
+    "categories": [
+      "HLL"
+    ],
+    "relatedFunctions": [
+      "datasketch_hll",
+      "datasketch_hll_union"
+    ]
+  },
+  {
+    "name": "datasketch_hll_composite_estimate",
+    "categories": [
+      "HLL"
+    ],
+    "relatedFunctions": [
+      "datasketch_hll_estimate",
+      "datasketch_hll_merge"
     ]
   },
   {
@@ -161,7 +165,7 @@
     "categories": [
       "CPC"
     ],
-    "description": "Aggregate input values into a Compressed Probability Counting sketch — a distinct-count sketch that's roughly 40% smaller than HLL at the same accuracy, traded against slower serialization. Choose CPC when you store many sketches at rest and reads are infrequent. The leading `lg_k` controls the size/accuracy trade-off the same way it does for HLL (accepted range 4–26). Accepts the same input types as HLL, including `UUID`, `HUGEINT`, and `UHUGEINT`. Returns `NULL` over no rows.",
+    "description": "Aggregate input values into a Compressed Probability Counting sketch — a distinct-count sketch that's roughly 40% smaller than HLL at the same accuracy, traded against slower serialization. Choose CPC when you store many sketches at rest and reads are infrequent. The leading `lg_k` controls the size/accuracy trade-off the same way it does for HLL. `lg_k` must be between 4 and 26. Accepts the same input types as HLL, including `UUID`, `HUGEINT`, and `UHUGEINT`. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Distinct-count with CPC",
@@ -184,12 +188,6 @@
     "relatedFunctions": [
       "datasketch_cpc",
       "datasketch_cpc_union"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_cpc(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_cpc_estimate(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -197,16 +195,11 @@
     "categories": [
       "CPC"
     ],
-    "description": "Merge a column of `sketch_cpc` BLOBs into one rollup sketch — the standard per-partition / per-day rollup pattern. Merge only sketches built from the same input type.",
+    "description": "Merge a column of `sketch_cpc` BLOBs into one rollup sketch — the standard per-partition / per-day rollup pattern. For a scalar union of two sketches in the same row, use `datasketch_cpc_merge`. Merge only sketches built from the same input type.",
     "relatedFunctions": [
       "datasketch_cpc",
-      "datasketch_cpc_estimate"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_cpc(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_cpc_union(12, sketch)\nFROM sample;"
-      }
+      "datasketch_cpc_estimate",
+      "datasketch_cpc_merge"
     ]
   },
   {
@@ -216,12 +209,6 @@
     ],
     "relatedFunctions": [
       "datasketch_cpc"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_cpc(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_cpc_describe(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -231,12 +218,6 @@
     ],
     "relatedFunctions": [
       "datasketch_cpc"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_cpc(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_cpc_is_empty(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -248,13 +229,7 @@
       "datasketch_cpc",
       "datasketch_cpc_upper_bound"
     ],
-    "description": "Lower bound of the CPC distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error.",
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_cpc(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_cpc_lower_bound(sketch, 2)\nFROM sample;"
-      }
-    ]
+    "description": "Lower bound of the CPC distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error."
   },
   {
     "name": "datasketch_cpc_upper_bound",
@@ -265,12 +240,24 @@
       "datasketch_cpc",
       "datasketch_cpc_lower_bound"
     ],
-    "description": "Upper bound of the CPC distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error.",
+    "description": "Upper bound of the CPC distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error."
+  },
+  {
+    "name": "datasketch_cpc_merge",
+    "categories": [
+      "CPC"
+    ],
+    "description": "Scalar union of two CPC sketches — the row-wise counterpart of the `datasketch_cpc_union` aggregate. The result uses the smaller `lg_k` of the two inputs.",
     "examples": [
       {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_cpc(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_cpc_upper_bound(sketch, 2)\nFROM sample;"
+        "description": "Users seen in January or February",
+        "code": "WITH a AS (SELECT datasketch_cpc(12, user_id) AS s FROM events_jan),\n     b AS (SELECT datasketch_cpc(12, user_id) AS s FROM events_feb)\nSELECT datasketch_cpc_estimate(datasketch_cpc_merge(a.s, b.s)) AS jan_or_feb\nFROM a, b;"
       }
+    ],
+    "relatedFunctions": [
+      "datasketch_cpc_union",
+      "datasketch_cpc",
+      "datasketch_cpc_estimate"
     ]
   },
   {
@@ -278,22 +265,29 @@
     "categories": [
       "Theta"
     ],
-    "description": "Aggregate input values into a Theta sketch — the distinct-count family that supports set operations (union, intersect, A-not-B) beyond simple merge. The leading `lg_k` is base-2 log of the nominal sketch entries (accepted range 5–26, default 12). Over a `sketch_theta` column it is the merge aggregate: `datasketch_theta(sketch)` rolls up per-day or per-shard sketches, keeping the largest `lg_k` of its inputs. Returns `NULL` over no rows.",
+    "description": "Aggregate input values into a Theta sketch — the distinct-count family that supports set operations (union, intersect, A-not-B) beyond simple merge. The optional leading `lg_k` (4–26, default 12) is base-2 log of the nominal sketch entries. Accepts signed and unsigned integers, floats and VARCHAR; passing a `sketch_theta` (or a BLOB of serialized sketches, e.g. read back from Parquet) merges sketches instead, growing to the largest `lg_k` of the inputs unless one is given. Keyword options: `seed :=` (hash seed — sketches can only be combined with sketches built from the same seed) and `p :=` (up-front sampling probability in (0, 1]). Results are stored in the compressed compact format (serial version 4) when it applies; versions 1–4 are all readable. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Build per-cohort sketches",
         "code": "SELECT cohort,\n       datasketch_theta(12, user_id) AS sketch\nFROM events\nGROUP BY cohort;"
       },
       {
-        "description": "Roll per-cohort sketches up into one",
-        "code": "WITH per_cohort AS (\n  SELECT cohort, datasketch_theta(12, user_id) AS sketch\n  FROM events\n  GROUP BY cohort\n)\nSELECT datasketch_theta_estimate(datasketch_theta(sketch)) AS distinct_users\nFROM per_cohort;"
+        "description": "Roll per-cohort sketches up into one (merge aggregate)",
+        "code": "SELECT datasketch_theta_estimate(datasketch_theta(s)) AS uniques\nFROM (SELECT datasketch_theta(12, user_id) AS s FROM events GROUP BY cohort);"
+      },
+      {
+        "description": "Custom seed and sampling probability",
+        "code": "SELECT datasketch_theta_seed_hash(datasketch_theta(user_id, seed := 42)) AS seed_hash,\n       datasketch_theta_get_theta(datasketch_theta(user_id, p := 0.5))      AS theta\nFROM events;"
       }
     ],
     "relatedFunctions": [
       "datasketch_theta_estimate",
       "datasketch_theta_union",
       "datasketch_theta_intersect",
-      "datasketch_theta_a_not_b"
+      "datasketch_theta_a_not_b",
+      "datasketch_theta_jaccard",
+      "datasketch_theta_intersect_agg",
+      "datasketch_theta_blob"
     ]
   },
   {
@@ -306,12 +300,6 @@
       "datasketch_theta",
       "datasketch_theta_lower_bound",
       "datasketch_theta_upper_bound"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_theta(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_theta_estimate(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -319,7 +307,7 @@
     "categories": [
       "Theta"
     ],
-    "description": "Approximate `|A ∪ B|` — the union of two Theta sketches, as a new sketch. The result keeps the larger `lg_k` of its two inputs. To merge a whole column of sketches, use the aggregate `datasketch_theta(sketch)` instead.",
+    "description": "Approximate `|A ∪ B ∪ …|` — scalar union of two or more Theta sketches. The result keeps the largest `lg_k` inferred from the inputs (at least the default 12); pass a leading `lg_k` (`datasketch_theta_union(16, a, b)`) to set it explicitly. To merge a whole column of sketches across rows, use the `datasketch_theta(sketch)` aggregate.",
     "relatedFunctions": [
       "datasketch_theta",
       "datasketch_theta_intersect",
@@ -327,8 +315,8 @@
     ],
     "examples": [
       {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH a AS (\n  SELECT datasketch_theta(12, i) AS sketch FROM range(1, 6) AS t(i)\n), b AS (\n  SELECT datasketch_theta(12, i) AS sketch FROM range(3, 8) AS t(i)\n)\nSELECT datasketch_theta_union(a.sketch, b.sketch)\nFROM a, b;"
+        "description": "Users in any of three cohorts",
+        "code": "WITH a AS (SELECT datasketch_theta(user_id) AS s FROM events_jan),\n     b AS (SELECT datasketch_theta(user_id) AS s FROM events_feb),\n     c AS (SELECT datasketch_theta(user_id) AS s FROM events)\nSELECT datasketch_theta_estimate(datasketch_theta_union(a.s, b.s, c.s)) AS any_cohort\nFROM a, b, c;"
       }
     ]
   },
@@ -337,7 +325,7 @@
     "categories": [
       "Theta"
     ],
-    "description": "Approximate `|A ∩ B|` — distinct items present in both cohorts. The classic use case is funnel and retention analysis: how many users in segment A also appear in segment B, computed from the sketches alone.",
+    "description": "Approximate `|A ∩ B|` — distinct items present in both cohorts. The classic use case is funnel and retention analysis: how many users in segment A also appear in segment B, computed from the sketches alone. Accepts two or more sketches; use `datasketch_theta_intersect_agg` to intersect a column of sketches across rows.",
     "examples": [
       {
         "description": "Retention — users active in Jan AND Feb",
@@ -347,7 +335,9 @@
     "relatedFunctions": [
       "datasketch_theta",
       "datasketch_theta_union",
-      "datasketch_theta_a_not_b"
+      "datasketch_theta_a_not_b",
+      "datasketch_theta_intersect_agg",
+      "datasketch_theta_jaccard"
     ]
   },
   {
@@ -360,12 +350,6 @@
       "datasketch_theta",
       "datasketch_theta_union",
       "datasketch_theta_intersect"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH a AS (\n  SELECT datasketch_theta(12, i) AS sketch FROM range(1, 6) AS t(i)\n), b AS (\n  SELECT datasketch_theta(12, i) AS sketch FROM range(3, 8) AS t(i)\n)\nSELECT datasketch_theta_a_not_b(a.sketch, b.sketch)\nFROM a, b;"
-      }
     ]
   },
   {
@@ -375,12 +359,6 @@
     ],
     "relatedFunctions": [
       "datasketch_theta"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_theta(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_theta_describe(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -389,14 +367,10 @@
       "Theta"
     ],
     "relatedFunctions": [
-      "datasketch_theta"
+      "datasketch_theta",
+      "datasketch_theta_seed_hash"
     ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_theta(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_theta_get_seed(sketch)\nFROM sample;"
-      }
-    ]
+    "description": "Alias of `datasketch_theta_seed_hash`: returns the 16-bit seed hash stored in the sketch (it always returned the hash, not the seed)."
   },
   {
     "name": "datasketch_theta_get_theta",
@@ -405,12 +379,6 @@
     ],
     "relatedFunctions": [
       "datasketch_theta"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_theta(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_theta_get_theta(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -420,12 +388,6 @@
     ],
     "relatedFunctions": [
       "datasketch_theta"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_theta(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_theta_is_empty(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -435,12 +397,6 @@
     ],
     "relatedFunctions": [
       "datasketch_theta"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_theta(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_theta_is_estimation_mode(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -452,13 +408,7 @@
       "datasketch_theta",
       "datasketch_theta_upper_bound"
     ],
-    "description": "Lower bound of the Theta distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error.",
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_theta(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_theta_lower_bound(sketch, 2)\nFROM sample;"
-      }
-    ]
+    "description": "Lower bound of the Theta distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error."
   },
   {
     "name": "datasketch_theta_upper_bound",
@@ -469,13 +419,7 @@
       "datasketch_theta",
       "datasketch_theta_lower_bound"
     ],
-    "description": "Upper bound of the Theta distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error.",
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_theta(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_theta_upper_bound(sketch, 2)\nFROM sample;"
-      }
-    ]
+    "description": "Upper bound of the Theta distinct-count estimate. `num_std_devs` (1, 2, or 3 — roughly 68%, 95%, and 99.7% confidence) sets the width of the interval; any other value is an error."
   },
   {
     "name": "datasketch_theta_num_retained",
@@ -484,12 +428,573 @@
     ],
     "relatedFunctions": [
       "datasketch_theta"
+    ]
+  },
+  {
+    "name": "datasketch_theta_intersect_agg",
+    "categories": [
+      "Theta"
     ],
     "examples": [
       {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_theta(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_theta_num_retained(sketch)\nFROM sample;"
+        "description": "Users present in every month",
+        "code": "SELECT datasketch_theta_estimate(datasketch_theta_intersect_agg(s)) AS in_every_month\nFROM (SELECT datasketch_theta(12, user_id) AS s FROM events_jan\n      UNION ALL\n      SELECT datasketch_theta(12, user_id) FROM events_feb);"
       }
+    ],
+    "relatedFunctions": [
+      "datasketch_theta_intersect",
+      "datasketch_theta",
+      "datasketch_theta_estimate"
+    ]
+  },
+  {
+    "name": "datasketch_theta_jaccard",
+    "categories": [
+      "Theta"
+    ],
+    "examples": [
+      {
+        "description": "How similar are the January and February audiences?",
+        "code": "WITH a AS (SELECT datasketch_theta(12, user_id) AS s FROM events_jan),\n     b AS (SELECT datasketch_theta(12, user_id) AS s FROM events_feb)\nSELECT datasketch_theta_jaccard(a.s, b.s).estimate        AS jaccard,\n       datasketch_theta_similarity_test(a.s, b.s, 0.3)  AS at_least_30pct\nFROM a, b;"
+      }
+    ],
+    "relatedFunctions": [
+      "datasketch_theta_exactly_equal",
+      "datasketch_theta_similarity_test",
+      "datasketch_theta_dissimilarity_test"
+    ]
+  },
+  {
+    "name": "datasketch_theta_exactly_equal",
+    "categories": [
+      "Theta"
+    ],
+    "relatedFunctions": [
+      "datasketch_theta_jaccard"
+    ]
+  },
+  {
+    "name": "datasketch_theta_similarity_test",
+    "categories": [
+      "Theta"
+    ],
+    "relatedFunctions": [
+      "datasketch_theta_jaccard",
+      "datasketch_theta_dissimilarity_test"
+    ]
+  },
+  {
+    "name": "datasketch_theta_dissimilarity_test",
+    "categories": [
+      "Theta"
+    ],
+    "relatedFunctions": [
+      "datasketch_theta_jaccard",
+      "datasketch_theta_similarity_test"
+    ]
+  },
+  {
+    "name": "datasketch_theta_seed_hash",
+    "categories": [
+      "Theta"
+    ],
+    "relatedFunctions": [
+      "datasketch_theta",
+      "datasketch_theta_get_seed"
+    ]
+  },
+  {
+    "name": "datasketch_theta_blob",
+    "categories": [
+      "Theta"
+    ],
+    "examples": [
+      {
+        "description": "Distinct raw payloads",
+        "code": "SELECT datasketch_theta_estimate(datasketch_theta_blob(country_code::BLOB)) AS distinct_payloads\nFROM page_views;"
+      }
+    ],
+    "relatedFunctions": [
+      "datasketch_theta"
+    ]
+  },
+  {
+    "name": "datasketch_tuple",
+    "categories": [
+      "Tuple"
+    ],
+    "description": "Aggregate `(key, value)` rows into a Tuple sketch (`sketch_tuple_double`): a Theta sketch of the distinct keys in which every retained key carries a DOUBLE summary of its values. `mode :=` combines a key's values — `'sum'` (default), `'min'`, `'max'` or `'one'` (presence only). The optional leading `lg_k` (4–26, default 12) sets the nominal size, and `seed :=` / `p :=` work as for `datasketch_theta`. NULL keys or values are skipped. Passing a `sketch_tuple_double` merges sketches (keeping the inputs' `lg_k` unless one is given); the mode is not stored in the sketch, so pass the same `mode :=` when merging. Returns `NULL` over no rows.",
+    "examples": [
+      {
+        "description": "Distinct customers and their revenue from one pass",
+        "code": "SELECT datasketch_tuple_estimate(s) AS customers,\n       datasketch_tuple_sum(s)      AS revenue,\n       datasketch_tuple_mean(s)     AS revenue_per_customer\nFROM (SELECT datasketch_tuple(customer_id, amount) AS s FROM orders);"
+      },
+      {
+        "description": "Keep each customer's largest order instead of the sum",
+        "code": "SELECT datasketch_tuple_mean(datasketch_tuple(customer_id, amount, mode := 'max')) AS avg_largest_order\nFROM orders;"
+      },
+      {
+        "description": "Merge per-region sketches",
+        "code": "SELECT datasketch_tuple_sum(datasketch_tuple(s)) AS total_revenue\nFROM (SELECT region, datasketch_tuple(customer_id, amount) AS s FROM orders GROUP BY region);"
+      }
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple_estimate",
+      "datasketch_tuple_sum",
+      "datasketch_tuple_mean",
+      "datasketch_tuple_union",
+      "datasketch_tuple_intersect"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_estimate",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple",
+      "datasketch_tuple_lower_bound",
+      "datasketch_tuple_upper_bound"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_sum",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple",
+      "datasketch_tuple_mean"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_mean",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple",
+      "datasketch_tuple_sum"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_summaries",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_union",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple",
+      "datasketch_tuple_intersect",
+      "datasketch_tuple_a_not_b"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_intersect",
+    "categories": [
+      "Tuple"
+    ],
+    "examples": [
+      {
+        "description": "Customers in both segments, with their combined revenue",
+        "code": "WITH a AS (SELECT datasketch_tuple(customer_id, amount) AS s FROM orders WHERE region = 'north' AND customer_id < 30),\n     b AS (SELECT datasketch_tuple(customer_id, amount) AS s FROM orders WHERE region = 'north' AND customer_id >= 10)\nSELECT datasketch_tuple_estimate(datasketch_tuple_intersect(a.s, b.s)) AS in_both,\n       datasketch_tuple_sum(datasketch_tuple_intersect(a.s, b.s))      AS revenue\nFROM a, b;"
+      }
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple_union",
+      "datasketch_tuple_intersect_agg",
+      "datasketch_tuple_a_not_b"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_intersect_agg",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple_intersect"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_a_not_b",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple_union",
+      "datasketch_tuple_intersect"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_jaccard",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple_exactly_equal",
+      "datasketch_tuple_similarity_test",
+      "datasketch_tuple_dissimilarity_test"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_exactly_equal",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple_jaccard"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_similarity_test",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple_jaccard",
+      "datasketch_tuple_dissimilarity_test"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_dissimilarity_test",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple_jaccard",
+      "datasketch_tuple_similarity_test"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_to_theta",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_theta_estimate",
+      "datasketch_tuple"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_lower_bound",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple_estimate",
+      "datasketch_tuple_upper_bound"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_upper_bound",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple_estimate",
+      "datasketch_tuple_lower_bound"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_num_retained",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_get_theta",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_seed_hash",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_is_empty",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_is_estimation_mode",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple"
+    ]
+  },
+  {
+    "name": "datasketch_tuple_describe",
+    "categories": [
+      "Tuple"
+    ],
+    "relatedFunctions": [
+      "datasketch_tuple"
+    ]
+  },
+  {
+    "name": "datasketch_aod",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "description": "Aggregate `(key, values DOUBLE[])` rows into an array-of-doubles Tuple sketch (`sketch_aod`): a Theta sketch of the distinct keys where each retained key carries a fixed-length array of DOUBLE values (1–255 values, the same length on every row, inferred from the data and stored in the sketch), summed element-wise per key. The optional leading `lg_k` (4–26, default 12) and `seed :=` / `p :=` work as for `datasketch_theta`. Passing a `sketch_aod` merges sketches. Combining sketches with different numbers of values or different seeds is an error. Returns `NULL` over no rows.",
+    "examples": [
+      {
+        "description": "Distinct customers with per-customer revenue and item totals",
+        "code": "SELECT datasketch_aod_estimate(s)     AS customers,\n       datasketch_aod_column_sums(s)  AS totals,\n       datasketch_aod_column_means(s) AS per_customer\nFROM (SELECT datasketch_aod(customer_id, [amount, items]) AS s FROM orders);"
+      }
+    ],
+    "relatedFunctions": [
+      "datasketch_aod_column_sums",
+      "datasketch_aod_column_means",
+      "datasketch_aod_estimate",
+      "datasketch_aod_union",
+      "datasketch_tuple"
+    ]
+  },
+  {
+    "name": "datasketch_aod_column_sums",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod",
+      "datasketch_aod_column_means"
+    ]
+  },
+  {
+    "name": "datasketch_aod_column_means",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod",
+      "datasketch_aod_column_sums"
+    ]
+  },
+  {
+    "name": "datasketch_aod_num_values",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod"
+    ]
+  },
+  {
+    "name": "datasketch_aod_summaries",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod"
+    ]
+  },
+  {
+    "name": "datasketch_aod_estimate",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod",
+      "datasketch_aod_lower_bound",
+      "datasketch_aod_upper_bound"
+    ]
+  },
+  {
+    "name": "datasketch_aod_union",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod",
+      "datasketch_aod_intersect",
+      "datasketch_aod_a_not_b"
+    ]
+  },
+  {
+    "name": "datasketch_aod_intersect",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod_union",
+      "datasketch_aod_intersect_agg",
+      "datasketch_aod_a_not_b"
+    ]
+  },
+  {
+    "name": "datasketch_aod_intersect_agg",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod_intersect"
+    ]
+  },
+  {
+    "name": "datasketch_aod_a_not_b",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod_union",
+      "datasketch_aod_intersect"
+    ]
+  },
+  {
+    "name": "datasketch_aod_jaccard",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod_exactly_equal",
+      "datasketch_aod_similarity_test",
+      "datasketch_aod_dissimilarity_test"
+    ]
+  },
+  {
+    "name": "datasketch_aod_exactly_equal",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod_jaccard"
+    ]
+  },
+  {
+    "name": "datasketch_aod_similarity_test",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod_jaccard",
+      "datasketch_aod_dissimilarity_test"
+    ]
+  },
+  {
+    "name": "datasketch_aod_dissimilarity_test",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod_jaccard",
+      "datasketch_aod_similarity_test"
+    ]
+  },
+  {
+    "name": "datasketch_aod_to_theta",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "examples": [
+      {
+        "description": "Use the keys with the Theta functions",
+        "code": "SELECT datasketch_theta_estimate(datasketch_aod_to_theta(datasketch_aod(customer_id, [amount]))) AS customers\nFROM orders;"
+      }
+    ],
+    "relatedFunctions": [
+      "datasketch_theta_estimate",
+      "datasketch_aod"
+    ]
+  },
+  {
+    "name": "datasketch_aod_lower_bound",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod_estimate",
+      "datasketch_aod_upper_bound"
+    ]
+  },
+  {
+    "name": "datasketch_aod_upper_bound",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod_estimate",
+      "datasketch_aod_lower_bound"
+    ]
+  },
+  {
+    "name": "datasketch_aod_num_retained",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod"
+    ]
+  },
+  {
+    "name": "datasketch_aod_get_theta",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod"
+    ]
+  },
+  {
+    "name": "datasketch_aod_seed_hash",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod"
+    ]
+  },
+  {
+    "name": "datasketch_aod_is_empty",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod"
+    ]
+  },
+  {
+    "name": "datasketch_aod_is_estimation_mode",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod"
+    ]
+  },
+  {
+    "name": "datasketch_aod_describe",
+    "categories": [
+      "Array of Doubles"
+    ],
+    "relatedFunctions": [
+      "datasketch_aod"
     ]
   },
   {
@@ -497,7 +1002,7 @@
     "categories": [
       "Frequent Items"
     ],
-    "description": "Aggregate input values into a Frequent Items (heavy-hitter) sketch. The first argument is `lg_max_k` — log₂ of the maximum number of tracked items, so `8` → up to 256 candidates, `12` → up to 4096. Bigger values track more candidates and tighten the per-item error bound. The accepted range is 3–30; typical values run 4–12. Items are stored as strings: `FLOAT`/`DOUBLE` items are spelled exactly as `CAST(x AS VARCHAR)` spells them. Returns `NULL` over no rows.",
+    "description": "Aggregate input values into a Frequent Items (heavy-hitter) sketch. The optional first argument is `lg_max_k` (default 10) — log₂ of the maximum number of tracked items, so `8` → up to 256 candidates, `12` → up to 4096. Bigger values track more candidates and tighten the per-item error bound. Valid values are 3–30 (anything else is rejected at bind time); typical values run 4–12. FLOAT and DOUBLE items are keyed by their shortest round-trip spelling (the same text as `CAST(x AS VARCHAR)`), so nearby values such as `0.1234567` and `0.1234568` stay distinct. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Top countries by page views",
@@ -513,25 +1018,6 @@
     ]
   },
   {
-    "name": "datasketch_frequent_items_weighted",
-    "categories": [
-      "Frequent Items"
-    ],
-    "description": "Aggregate input values into a Frequent Items sketch where each row contributes a weight instead of a count of one — approximate top-K by a metric such as revenue or bytes. Weights are `BIGINT` or `UBIGINT`; negative weights are rejected. The optional leading `lg_max_k` works as it does for `datasketch_frequent_items`. The result is an ordinary `sketch_frequent_items`, read with the same estimate, bound, and `get_frequent` functions, and its estimates are summed weights. Returns `NULL` over no rows.",
-    "examples": [
-      {
-        "description": "Top products by revenue",
-        "code": "WITH weighted_sketch AS (\n  SELECT datasketch_frequent_items_weighted(10, product, revenue) AS sketch\n  FROM orders\n)\nSELECT f.item, f.estimate, f.lower_bound, f.upper_bound\nFROM weighted_sketch,\n     UNNEST(datasketch_frequent_items_get_frequent(sketch, 'NO_FALSE_POSITIVES')) AS t(f)\nORDER BY f.estimate DESC\nLIMIT 10;"
-      }
-    ],
-    "relatedFunctions": [
-      "datasketch_frequent_items",
-      "datasketch_frequent_items_get_frequent",
-      "datasketch_frequent_items_estimate",
-      "datasketch_frequent_items_total_weight"
-    ]
-  },
-  {
     "name": "datasketch_frequent_items_get_frequent",
     "categories": [
       "Frequent Items"
@@ -542,12 +1028,6 @@
       "datasketch_frequent_items_estimate",
       "datasketch_frequent_items_lower_bound",
       "datasketch_frequent_items_upper_bound"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_frequent_items(8, value) AS sketch\n  FROM (VALUES ('US'), ('US'), ('GB')) AS input(value)\n)\nSELECT datasketch_frequent_items_get_frequent(sketch, 'NO_FALSE_POSITIVES')\nFROM sample;"
-      }
     ]
   },
   {
@@ -555,16 +1035,10 @@
     "categories": [
       "Frequent Items"
     ],
-    "description": "Estimated frequency for a specific item.",
+    "description": "Estimated frequency for a specific item. FLOAT/DOUBLE probes are formatted like `CAST(x AS VARCHAR)`; sketches of FLOAT/DOUBLE items built by older extension versions used six-decimal keys and should be rebuilt from source data.",
     "relatedFunctions": [
       "datasketch_frequent_items",
       "datasketch_frequent_items_get_frequent"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_frequent_items(8, value) AS sketch\n  FROM (VALUES ('US'), ('US'), ('GB')) AS input(value)\n)\nSELECT datasketch_frequent_items_estimate(sketch, 'US')\nFROM sample;"
-      }
     ]
   },
   {
@@ -574,12 +1048,6 @@
     ],
     "relatedFunctions": [
       "datasketch_frequent_items"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_frequent_items(8, value) AS sketch\n  FROM (VALUES ('US'), ('US'), ('GB')) AS input(value)\n)\nSELECT datasketch_frequent_items_epsilon(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -589,12 +1057,6 @@
     ],
     "relatedFunctions": [
       "datasketch_frequent_items"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_frequent_items(8, value) AS sketch\n  FROM (VALUES ('US'), ('US'), ('GB')) AS input(value)\n)\nSELECT datasketch_frequent_items_is_empty(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -605,12 +1067,6 @@
     "relatedFunctions": [
       "datasketch_frequent_items",
       "datasketch_frequent_items_upper_bound"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_frequent_items(8, value) AS sketch\n  FROM (VALUES ('US'), ('US'), ('GB')) AS input(value)\n)\nSELECT datasketch_frequent_items_lower_bound(sketch, 'US')\nFROM sample;"
-      }
     ]
   },
   {
@@ -621,12 +1077,6 @@
     "relatedFunctions": [
       "datasketch_frequent_items",
       "datasketch_frequent_items_lower_bound"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_frequent_items(8, value) AS sketch\n  FROM (VALUES ('US'), ('US'), ('GB')) AS input(value)\n)\nSELECT datasketch_frequent_items_upper_bound(sketch, 'US')\nFROM sample;"
-      }
     ]
   },
   {
@@ -636,12 +1086,6 @@
     ],
     "relatedFunctions": [
       "datasketch_frequent_items"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_frequent_items(8, value) AS sketch\n  FROM (VALUES ('US'), ('US'), ('GB')) AS input(value)\n)\nSELECT datasketch_frequent_items_num_active(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -651,12 +1095,23 @@
     ],
     "relatedFunctions": [
       "datasketch_frequent_items"
+    ]
+  },
+  {
+    "name": "datasketch_frequent_items_weighted",
+    "categories": [
+      "Frequent Items"
     ],
+    "description": "Like `datasketch_frequent_items`, but each row adds a weight (`BIGINT` or `UBIGINT`; negative weights are rejected) instead of a count of one — approximate top-K by a metric such as revenue or bytes. The optional leading `lg_max_k` (log₂ of the maximum number of tracked items, default 10, valid range 3–30) works as in `datasketch_frequent_items`. Returns `NULL` over no rows.",
     "examples": [
       {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_frequent_items(8, value) AS sketch\n  FROM (VALUES ('US'), ('US'), ('GB')) AS input(value)\n)\nSELECT datasketch_frequent_items_total_weight(sketch)\nFROM sample;"
+        "description": "Regions by revenue",
+        "code": "SELECT datasketch_frequent_items_get_frequent(\n         datasketch_frequent_items_weighted(8, region, amount::BIGINT),\n         'NO_FALSE_POSITIVES'\n       ) AS by_revenue\nFROM orders;"
       }
+    ],
+    "relatedFunctions": [
+      "datasketch_frequent_items",
+      "datasketch_frequent_items_get_frequent"
     ]
   },
   {
@@ -664,7 +1119,7 @@
     "categories": [
       "KLL"
     ],
-    "description": "Aggregate input values into a KLL quantile sketch. Best balance of accuracy, speed, and size — the modern default for general-purpose quantile estimation. The first argument `K` controls accuracy: higher K → smaller error and bigger sketch. `K = 200` is a sensible production starting point. `K` must be between 8 and 65535; values outside the range are rejected at bind time. Returns `NULL` over no rows.",
+    "description": "Aggregate input values into a KLL quantile sketch. Best balance of accuracy, speed, and size — the modern default for general-purpose quantile estimation. The first argument `K` controls accuracy: higher K → smaller error and bigger sketch. `K = 200` is a sensible production starting point. Accepts every numeric type and VARCHAR (strings are ordered bytewise and give a `sketch_kll_varchar`). `K` must be between 8 and 65535. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "p50 / p95 / p99 latency from one KLL sketch",
@@ -676,7 +1131,10 @@
       "datasketch_kll_rank",
       "datasketch_kll_cdf",
       "datasketch_kll_pmf",
-      "datasketch_kll_normalized_rank_error"
+      "datasketch_kll_normalized_rank_error",
+      "datasketch_kll_quantiles",
+      "datasketch_kll_ranks",
+      "datasketch_kll_sorted_view"
     ]
   },
   {
@@ -689,12 +1147,6 @@
       "datasketch_kll",
       "datasketch_kll_rank",
       "datasketch_kll_cdf"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_quantile(sketch, 0.5, true)\nFROM sample;"
-      }
     ]
   },
   {
@@ -706,12 +1158,6 @@
     "relatedFunctions": [
       "datasketch_kll",
       "datasketch_kll_quantile"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_rank(sketch, 5.0::DOUBLE, true)\nFROM sample;"
-      }
     ]
   },
   {
@@ -719,16 +1165,10 @@
     "categories": [
       "KLL"
     ],
-    "description": "CDF over a list of split points — one call returns the cumulative rank at each. Useful for histograms.",
+    "description": "CDF over a list of split points — one call returns the cumulative rank at each. Useful for histograms. The list has one more entry than there are split points (the last is always 1.0). Always returns `LIST(DOUBLE)` regardless of the sketch's item type.",
     "relatedFunctions": [
       "datasketch_kll",
       "datasketch_kll_pmf"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_cdf(sketch, [3.0, 6.0]::DOUBLE[], true)\nFROM sample;"
-      }
     ]
   },
   {
@@ -736,16 +1176,10 @@
     "categories": [
       "KLL"
     ],
-    "description": "PMF (probability mass) over a list of split points — fraction of the distribution falling in each bucket.",
+    "description": "PMF (probability mass) over a list of split points — fraction of the distribution falling in each bucket. Always returns `LIST(DOUBLE)` regardless of the sketch's item type.",
     "relatedFunctions": [
       "datasketch_kll",
       "datasketch_kll_cdf"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_pmf(sketch, [3.0, 6.0]::DOUBLE[], true)\nFROM sample;"
-      }
     ]
   },
   {
@@ -755,12 +1189,6 @@
     ],
     "relatedFunctions": [
       "datasketch_kll"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_describe(sketch, false, false)\nFROM sample;"
-      }
     ]
   },
   {
@@ -770,12 +1198,6 @@
     ],
     "relatedFunctions": [
       "datasketch_kll"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_is_empty(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -785,12 +1207,6 @@
     ],
     "relatedFunctions": [
       "datasketch_kll"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_is_estimation_mode(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -800,12 +1216,6 @@
     ],
     "relatedFunctions": [
       "datasketch_kll"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_k(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -816,12 +1226,6 @@
     "relatedFunctions": [
       "datasketch_kll",
       "datasketch_kll_min_item"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_max_item(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -832,12 +1236,6 @@
     "relatedFunctions": [
       "datasketch_kll",
       "datasketch_kll_max_item"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_min_item(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -847,12 +1245,6 @@
     ],
     "relatedFunctions": [
       "datasketch_kll"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_n(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -862,12 +1254,6 @@
     ],
     "relatedFunctions": [
       "datasketch_kll"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_normalized_rank_error(sketch, false)\nFROM sample;"
-      }
     ]
   },
   {
@@ -877,11 +1263,56 @@
     ],
     "relatedFunctions": [
       "datasketch_kll"
+    ]
+  },
+  {
+    "name": "datasketch_kll_quantiles",
+    "categories": [
+      "KLL"
     ],
     "examples": [
       {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_kll(200, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_kll_num_retained(sketch)\nFROM sample;"
+        "description": "Several quantiles in one call",
+        "code": "SELECT datasketch_kll_quantiles(datasketch_kll(200, latency_ms), [0.5, 0.9, 0.99], true) AS p50_p90_p99\nFROM requests;"
+      }
+    ],
+    "relatedFunctions": [
+      "datasketch_kll_quantile",
+      "datasketch_kll_ranks",
+      "datasketch_kll"
+    ]
+  },
+  {
+    "name": "datasketch_kll_ranks",
+    "categories": [
+      "KLL"
+    ],
+    "relatedFunctions": [
+      "datasketch_kll_rank",
+      "datasketch_kll_quantiles",
+      "datasketch_kll"
+    ],
+    "examples": [
+      {
+        "description": "Fraction of requests at or under 100 / 500 / 900 ms",
+        "code": "SELECT datasketch_kll_ranks(datasketch_kll(200, latency_ms), [100, 500, 900], true) AS ranks\nFROM requests;"
+      }
+    ]
+  },
+  {
+    "name": "datasketch_kll_sorted_view",
+    "categories": [
+      "KLL"
+    ],
+    "relatedFunctions": [
+      "datasketch_kll_cdf",
+      "datasketch_kll_n",
+      "datasketch_kll"
+    ],
+    "examples": [
+      {
+        "description": "Unnest the retained items with their weights",
+        "code": "SELECT sv.item, sv.weight, sv.cumulative_weight\nFROM (SELECT unnest(datasketch_kll_sorted_view(datasketch_kll(200, temp))) AS sv\n      FROM readings);"
       }
     ]
   },
@@ -890,7 +1321,7 @@
     "categories": [
       "TDigest"
     ],
-    "description": "Aggregate input values into a t-digest quantile sketch — most accurate at the tails (p99, p999), exactly where SLOs live. FLOAT/DOUBLE input only. The first argument controls the centroid budget; larger sketches give tighter tail estimates. `K` must be between 10 and 65535; values outside the range are rejected at bind time. Returns `NULL` over no rows.",
+    "description": "Aggregate input values into a t-digest quantile sketch — most accurate at the tails (p99, p999), exactly where SLOs live. FLOAT/DOUBLE input only. The first argument controls the centroid budget; larger sketches give tighter tail estimates. `K` must be between 10 and 65535. Returns `NULL` over no rows.",
     "examples": [
       {
         "description": "Tail latency",
@@ -913,12 +1344,6 @@
     "relatedFunctions": [
       "datasketch_tdigest",
       "datasketch_tdigest_rank"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_tdigest(100, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_tdigest_quantile(sketch, 0.5)\nFROM sample;"
-      }
     ]
   },
   {
@@ -930,12 +1355,6 @@
     "relatedFunctions": [
       "datasketch_tdigest",
       "datasketch_tdigest_quantile"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_tdigest(100, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_tdigest_rank(sketch, 5.0::DOUBLE)\nFROM sample;"
-      }
     ]
   },
   {
@@ -946,12 +1365,6 @@
     "relatedFunctions": [
       "datasketch_tdigest",
       "datasketch_tdigest_pmf"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_tdigest(100, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_tdigest_cdf(sketch, [3.0, 6.0]::DOUBLE[])\nFROM sample;"
-      }
     ]
   },
   {
@@ -962,12 +1375,6 @@
     "relatedFunctions": [
       "datasketch_tdigest",
       "datasketch_tdigest_cdf"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_tdigest(100, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_tdigest_pmf(sketch, [3.0, 6.0]::DOUBLE[])\nFROM sample;"
-      }
     ]
   },
   {
@@ -977,12 +1384,6 @@
     ],
     "relatedFunctions": [
       "datasketch_tdigest"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_tdigest(100, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_tdigest_describe(sketch, false)\nFROM sample;"
-      }
     ]
   },
   {
@@ -992,12 +1393,6 @@
     ],
     "relatedFunctions": [
       "datasketch_tdigest"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_tdigest(100, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_tdigest_is_empty(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1007,12 +1402,6 @@
     ],
     "relatedFunctions": [
       "datasketch_tdigest"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_tdigest(100, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_tdigest_k(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1022,12 +1411,34 @@
     ],
     "relatedFunctions": [
       "datasketch_tdigest"
+    ]
+  },
+  {
+    "name": "datasketch_tdigest_min_value",
+    "categories": [
+      "TDigest"
     ],
+    "description": "Exact minimum value seen by the t-digest.",
     "examples": [
       {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_tdigest(100, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_tdigest_total_weight(sketch)\nFROM sample;"
+        "description": "Exact range of the readings",
+        "code": "SELECT datasketch_tdigest_min_value(datasketch_tdigest(100, temp)) AS min_temp,\n       datasketch_tdigest_max_value(datasketch_tdigest(100, temp)) AS max_temp\nFROM readings;"
       }
+    ],
+    "relatedFunctions": [
+      "datasketch_tdigest_max_value",
+      "datasketch_tdigest"
+    ]
+  },
+  {
+    "name": "datasketch_tdigest_max_value",
+    "categories": [
+      "TDigest"
+    ],
+    "description": "Exact maximum value seen by the t-digest.",
+    "relatedFunctions": [
+      "datasketch_tdigest_min_value",
+      "datasketch_tdigest"
     ]
   },
   {
@@ -1035,17 +1446,21 @@
     "categories": [
       "REQ"
     ],
-    "description": "Aggregate input values into a Relative Error Quantile sketch. Error scales with rank rather than being a fixed fraction of `n` — predictable accuracy on highly skewed distributions where a fixed-error sketch over- or under-spends precision at the extremes. `K` must be between 4 and 1024; values outside the range are rejected at bind time. Returns `NULL` over no rows.",
+    "description": "Aggregate input values into a Relative Error Quantile sketch. Error scales with rank rather than being a fixed fraction of `n` — predictable accuracy on highly skewed distributions where a fixed-error sketch over- or under-spends precision at the extremes. An optional third argument `hra` (a constant, default `true`) picks high-rank accuracy (best for p99-style tails); pass `false` for low-rank accuracy. Merging starts from the first input's mode; mixing HRA and LRA sketches is an error. `K` must be between 4 and 1024. Returns `NULL` over no rows.",
     "relatedFunctions": [
       "datasketch_req_quantile",
       "datasketch_req_rank",
       "datasketch_req_cdf",
-      "datasketch_req_pmf"
+      "datasketch_req_pmf",
+      "datasketch_req_is_hra",
+      "datasketch_req_rank_lower_bound",
+      "datasketch_req_rank_upper_bound",
+      "datasketch_req_quantiles"
     ],
     "examples": [
       {
-        "description": "Build a sketch from sample values",
-        "code": "SELECT datasketch_req(12, value) AS sketch\nFROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input;"
+        "description": "Low-rank-accuracy sketch for the bottom of the distribution",
+        "code": "SELECT datasketch_req_is_hra(datasketch_req(12, value, false))                  AS hra,\n       datasketch_req_quantile(datasketch_req(12, value, false), 0.01, true) AS p01\nFROM measurements;"
       }
     ]
   },
@@ -1058,12 +1473,6 @@
     "relatedFunctions": [
       "datasketch_req",
       "datasketch_req_rank"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_req(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_req_quantile(sketch, 0.5, true)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1075,12 +1484,6 @@
     "relatedFunctions": [
       "datasketch_req",
       "datasketch_req_quantile"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_req(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_req_rank(sketch, 5.0::DOUBLE, true)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1092,12 +1495,7 @@
       "datasketch_req",
       "datasketch_req_pmf"
     ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_req(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_req_cdf(sketch, [3.0, 6.0]::DOUBLE[], true)\nFROM sample;"
-      }
-    ]
+    "description": "CDF over a list of split points — the cumulative rank at each split point, plus a final 1.0. Always returns `LIST(DOUBLE)` regardless of the sketch's item type."
   },
   {
     "name": "datasketch_req_pmf",
@@ -1108,12 +1506,7 @@
       "datasketch_req",
       "datasketch_req_cdf"
     ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_req(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_req_pmf(sketch, [3.0, 6.0]::DOUBLE[], true)\nFROM sample;"
-      }
-    ]
+    "description": "PMF (probability mass) over a list of split points — the fraction of the distribution falling in each bucket. Always returns `LIST(DOUBLE)` regardless of the sketch's item type."
   },
   {
     "name": "datasketch_req_describe",
@@ -1122,12 +1515,6 @@
     ],
     "relatedFunctions": [
       "datasketch_req"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_req(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_req_describe(sketch, false, false)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1137,12 +1524,6 @@
     ],
     "relatedFunctions": [
       "datasketch_req"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_req(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_req_is_empty(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1152,12 +1533,6 @@
     ],
     "relatedFunctions": [
       "datasketch_req"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_req(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_req_is_estimation_mode(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1167,12 +1542,6 @@
     ],
     "relatedFunctions": [
       "datasketch_req"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_req(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_req_k(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1183,12 +1552,6 @@
     "relatedFunctions": [
       "datasketch_req",
       "datasketch_req_min_item"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_req(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_req_max_item(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1199,12 +1562,6 @@
     "relatedFunctions": [
       "datasketch_req",
       "datasketch_req_max_item"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_req(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_req_min_item(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1214,12 +1571,6 @@
     ],
     "relatedFunctions": [
       "datasketch_req"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_req(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_req_n(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1229,12 +1580,80 @@
     ],
     "relatedFunctions": [
       "datasketch_req"
+    ]
+  },
+  {
+    "name": "datasketch_req_quantiles",
+    "categories": [
+      "REQ"
     ],
     "examples": [
       {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_req(12, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_req_num_retained(sketch)\nFROM sample;"
+        "description": "Several quantiles in one call",
+        "code": "SELECT datasketch_req_quantiles(datasketch_req(12, latency_ms), [0.5, 0.9, 0.99], true) AS p50_p90_p99\nFROM requests;"
       }
+    ],
+    "relatedFunctions": [
+      "datasketch_req_quantile",
+      "datasketch_req_ranks",
+      "datasketch_req"
+    ]
+  },
+  {
+    "name": "datasketch_req_ranks",
+    "categories": [
+      "REQ"
+    ],
+    "relatedFunctions": [
+      "datasketch_req_rank",
+      "datasketch_req_quantiles",
+      "datasketch_req"
+    ]
+  },
+  {
+    "name": "datasketch_req_sorted_view",
+    "categories": [
+      "REQ"
+    ],
+    "relatedFunctions": [
+      "datasketch_req_cdf",
+      "datasketch_req_n",
+      "datasketch_req"
+    ]
+  },
+  {
+    "name": "datasketch_req_rank_lower_bound",
+    "categories": [
+      "REQ"
+    ],
+    "relatedFunctions": [
+      "datasketch_req_rank_upper_bound",
+      "datasketch_req_rank"
+    ]
+  },
+  {
+    "name": "datasketch_req_rank_upper_bound",
+    "categories": [
+      "REQ"
+    ],
+    "examples": [
+      {
+        "description": "Confidence interval (2 standard deviations) around the 0.99 rank",
+        "code": "WITH s AS (SELECT datasketch_req(12, value) AS sk FROM measurements)\nSELECT datasketch_req_rank_lower_bound(sk, 0.99, 2) AS lo,\n       datasketch_req_rank_upper_bound(sk, 0.99, 2) AS hi\nFROM s;"
+      }
+    ],
+    "relatedFunctions": [
+      "datasketch_req_rank_lower_bound",
+      "datasketch_req_rank"
+    ]
+  },
+  {
+    "name": "datasketch_req_is_hra",
+    "categories": [
+      "REQ"
+    ],
+    "relatedFunctions": [
+      "datasketch_req"
     ]
   },
   {
@@ -1242,18 +1661,15 @@
     "categories": [
       "Quantiles"
     ],
-    "description": "Aggregate input values into the classic mergeable quantiles sketch from the original DataSketches paper. Solid general-purpose choice supporting all numeric input types; for new projects prefer `datasketch_kll`, which gives the same merge semantics with better accuracy/size trade-off. `K` must be a power of 2 from 2 to 32768. Returns `NULL` over no rows.",
+    "description": "Aggregate input values into the classic mergeable quantiles sketch from the original DataSketches paper. Solid general-purpose choice supporting all numeric input types; for new projects prefer `datasketch_kll`, which gives the same merge semantics with better accuracy/size trade-off. Also accepts VARCHAR items (ordered bytewise, `sketch_quantiles_varchar`). `K` must be a power of 2 from 2 to 32768. Returns `NULL` over no rows.",
     "relatedFunctions": [
       "datasketch_quantiles_quantile",
       "datasketch_quantiles_rank",
       "datasketch_quantiles_cdf",
-      "datasketch_quantiles_pmf"
-    ],
-    "examples": [
-      {
-        "description": "Build a sketch from sample values",
-        "code": "SELECT datasketch_quantiles(128, value) AS sketch\nFROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input;"
-      }
+      "datasketch_quantiles_pmf",
+      "datasketch_quantiles_quantiles",
+      "datasketch_quantiles_ranks",
+      "datasketch_quantiles_sorted_view"
     ]
   },
   {
@@ -1265,12 +1681,6 @@
     "relatedFunctions": [
       "datasketch_quantiles",
       "datasketch_quantiles_rank"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_quantile(sketch, 0.5, true)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1282,12 +1692,6 @@
     "relatedFunctions": [
       "datasketch_quantiles",
       "datasketch_quantiles_quantile"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_rank(sketch, 5.0::DOUBLE, true)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1299,12 +1703,7 @@
       "datasketch_quantiles",
       "datasketch_quantiles_pmf"
     ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_cdf(sketch, [3.0, 6.0]::DOUBLE[], true)\nFROM sample;"
-      }
-    ]
+    "description": "CDF over a list of split points — the cumulative rank at each split point, plus a final 1.0. Always returns `LIST(DOUBLE)` regardless of the sketch's item type."
   },
   {
     "name": "datasketch_quantiles_pmf",
@@ -1315,12 +1714,7 @@
       "datasketch_quantiles",
       "datasketch_quantiles_cdf"
     ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_pmf(sketch, [3.0, 6.0]::DOUBLE[], true)\nFROM sample;"
-      }
-    ]
+    "description": "PMF (probability mass) over a list of split points — the fraction of the distribution falling in each bucket. Always returns `LIST(DOUBLE)` regardless of the sketch's item type."
   },
   {
     "name": "datasketch_quantiles_describe",
@@ -1329,12 +1723,6 @@
     ],
     "relatedFunctions": [
       "datasketch_quantiles"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_describe(sketch, false, false)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1344,12 +1732,6 @@
     ],
     "relatedFunctions": [
       "datasketch_quantiles"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_is_empty(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1359,12 +1741,6 @@
     ],
     "relatedFunctions": [
       "datasketch_quantiles"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_is_estimation_mode(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1374,12 +1750,6 @@
     ],
     "relatedFunctions": [
       "datasketch_quantiles"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_k(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1390,12 +1760,6 @@
     "relatedFunctions": [
       "datasketch_quantiles",
       "datasketch_quantiles_min_item"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_max_item(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1406,12 +1770,6 @@
     "relatedFunctions": [
       "datasketch_quantiles",
       "datasketch_quantiles_max_item"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_min_item(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1421,12 +1779,6 @@
     ],
     "relatedFunctions": [
       "datasketch_quantiles"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_n(sketch)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1436,12 +1788,6 @@
     ],
     "relatedFunctions": [
       "datasketch_quantiles"
-    ],
-    "examples": [
-      {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_normalized_rank_error(sketch, false)\nFROM sample;"
-      }
     ]
   },
   {
@@ -1451,12 +1797,45 @@
     ],
     "relatedFunctions": [
       "datasketch_quantiles"
+    ]
+  },
+  {
+    "name": "datasketch_quantiles_quantiles",
+    "categories": [
+      "Quantiles"
     ],
     "examples": [
       {
-        "description": "Build a sample sketch and inspect it",
-        "code": "WITH sample AS (\n  SELECT datasketch_quantiles(128, value) AS sketch\n  FROM (SELECT i::DOUBLE AS value FROM range(1, 11) AS t(i)) AS input\n)\nSELECT datasketch_quantiles_num_retained(sketch)\nFROM sample;"
+        "description": "Several quantiles in one call",
+        "code": "SELECT datasketch_quantiles_quantiles(datasketch_quantiles(128, latency_ms), [0.5, 0.9, 0.99], true) AS p50_p90_p99\nFROM requests;"
       }
+    ],
+    "relatedFunctions": [
+      "datasketch_quantiles_quantile",
+      "datasketch_quantiles_ranks",
+      "datasketch_quantiles"
+    ]
+  },
+  {
+    "name": "datasketch_quantiles_ranks",
+    "categories": [
+      "Quantiles"
+    ],
+    "relatedFunctions": [
+      "datasketch_quantiles_rank",
+      "datasketch_quantiles_quantiles",
+      "datasketch_quantiles"
+    ]
+  },
+  {
+    "name": "datasketch_quantiles_sorted_view",
+    "categories": [
+      "Quantiles"
+    ],
+    "relatedFunctions": [
+      "datasketch_quantiles_cdf",
+      "datasketch_quantiles_n",
+      "datasketch_quantiles"
     ]
   }
 ]

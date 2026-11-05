@@ -41,18 +41,30 @@ SELECT redis_get('counter', 'prod_redis');
 
 See [`CREATE SECRET`](https://duckdb.org/docs/sql/statements/create_secret) and the [DuckDB Secrets Manager](https://duckdb.org/docs/configuration/secrets_manager) for the secrets infrastructure, and the [Secrets](#secrets) section below for the parameter table the `redis` secret type accepts.
 
-## SCAN vs KEYS — why it matters
+## SCAN, never KEYS
 
-[`redis_keys`](#redis_keys) is the convenience function — it returns all matching keys as a table. It's fine for development and small keyspaces, but it issues the [`KEYS`](https://redis.io/docs/latest/commands/keys/) command, which **blocks the Redis server for the duration of the scan**. On a large production instance this can stall traffic.
+The [`KEYS`](https://redis.io/docs/latest/commands/keys/) command **blocks the Redis server for the duration of the scan**, which can stall traffic on a large production instance. No function in this extension issues it. Every key-listing function is built on cursor-paginated, non-blocking [`SCAN`](https://redis.io/docs/latest/commands/scan/):
 
-[`redis_scan`](#redis_scan) is the production primitive — cursor-paginated, non-blocking, server-side filtered. The [`SCAN`](https://redis.io/docs/latest/commands/scan/) protocol returns a cursor with each batch of keys; you re-pass the cursor to fetch the next page. Cursor `0` means iteration is complete:
+- [`redis_keys`](#redis_keys) is the convenience function: it follows the `SCAN` cursor page by page until iteration completes and returns every matching key as a table, each key once.
+- [`redis_scan`](#redis_scan) is the manual primitive: one `SCAN` page per call. You re-pass the returned cursor to fetch the next page; cursor `0` means iteration is complete:
 
 ```sql
 SELECT redis_scan('0', 'user:*', 100, 'redis');
 -- "1024:user:1,user:2,...,user:50"
 ```
 
-[`redis_hscan_over_scan`](#redis_hscan_over_scan) (used in the lead snippet above) chains both into one streaming pipeline: for every key matching `scan_pattern`, run [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) `hscan_pattern` and emit `(key, field, value)` rows. The fastest way to drain a Redis hash dataset into DuckDB.
+[`redis_hscan_over_scan`](#redis_hscan_over_scan) (used in the lead snippet above) chains both into one streaming pipeline: for every key matching `scan_pattern`, run [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) `hscan_pattern` and emit `(key, field, value)` rows, following both cursors to the end. Matching keys that aren't hashes are skipped. The fastest way to drain a Redis hash dataset into DuckDB.
+
+Because `redis_keys` and `redis_hscan_over_scan` walk the whole matching keyspace in one query, keep their patterns narrow on large instances.
+
+## Return values and NULLs
+
+- [`redis_get`](#redis_get) and [`redis_hget`](#redis_hget) return `NULL` for a missing key or field, so `coalesce(redis_get(k, 'redis'), 'default')` and `IS NULL` checks work as expected.
+- [`redis_hset`](#redis_hset) returns a `BIGINT` count of fields added (`1` for a new field, `0` when an existing one is overwritten); [`redis_lpush`](#redis_lpush) returns the list length after the push as a `BIGINT`.
+- [`redis_mget`](#redis_mget) returns values comma-joined in request order, with an empty entry for each missing key so positions line up with the keys you asked for. Empty key names (for example, from a trailing comma) are ignored.
+- A `NULL` in any argument, including the secret name, gives a `NULL` result.
+
+Every argument is read per row, so the key, value, and even the secret can come from columns. The scalar functions are registered as volatile: DuckDB runs them for every row and never constant-folds or deduplicates a call, which matters because most of them change server state.
 
 ## What's in the box
 
@@ -61,7 +73,7 @@ SELECT redis_scan('0', 'user:*', 100, 'redis');
 | Strings | [`redis_get`](#redis_get), [`redis_set`](#redis_set), [`redis_mget`](#redis_mget) | [`GET`](https://redis.io/docs/latest/commands/get/), [`SET`](https://redis.io/docs/latest/commands/set/), [`MGET`](https://redis.io/docs/latest/commands/mget/) |
 | Hashes | [`redis_hget`](#redis_hget), [`redis_hset`](#redis_hset), [`redis_hgetall`](#redis_hgetall), [`redis_hscan`](#redis_hscan) | [`HGET`](https://redis.io/docs/latest/commands/hget/), [`HSET`](https://redis.io/docs/latest/commands/hset/), [`HGETALL`](https://redis.io/docs/latest/commands/hgetall/), [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) |
 | Lists | [`redis_lpush`](#redis_lpush), [`redis_lrange`](#redis_lrange), [`redis_lrange_table`](#redis_lrange_table) | [`LPUSH`](https://redis.io/docs/latest/commands/lpush/), [`LRANGE`](https://redis.io/docs/latest/commands/lrange/) |
-| Discovery | [`redis_keys`](#redis_keys), [`redis_scan`](#redis_scan), [`redis_hscan_over_scan`](#redis_hscan_over_scan) | [`KEYS`](https://redis.io/docs/latest/commands/keys/), [`SCAN`](https://redis.io/docs/latest/commands/scan/), [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) |
+| Discovery | [`redis_keys`](#redis_keys), [`redis_scan`](#redis_scan), [`redis_hscan_over_scan`](#redis_hscan_over_scan) | [`SCAN`](https://redis.io/docs/latest/commands/scan/), [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) |
 | Key management | [`redis_type`](#redis_type), [`redis_exists`](#redis_exists), [`redis_del`](#redis_del) | [`TYPE`](https://redis.io/docs/latest/commands/type/), [`EXISTS`](https://redis.io/docs/latest/commands/exists/), [`DEL`](https://redis.io/docs/latest/commands/del/) |
 | Expiry | [`redis_expire`](#redis_expire), [`redis_expireat`](#redis_expireat), [`redis_ttl`](#redis_ttl) | [`EXPIRE`](https://redis.io/docs/latest/commands/expire/), [`EXPIREAT`](https://redis.io/docs/latest/commands/expireat/), [`TTL`](https://redis.io/docs/latest/commands/ttl/) |
 

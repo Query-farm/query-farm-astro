@@ -16,6 +16,12 @@ leadVisual:
     src: "/blog/why-we-built-vgi-instead-of-waiting-for-arrow-flight-2-0/flight-to-vgi-mobile.svg"
     width: 400
     height: 220
+nextStep:
+  title: "VGI"
+  pitch: "Make APIs, services, models, and business logic available as SQL tables and functions, with workers in Python, TypeScript, Go, Rust, or Java."
+  href: "/vgi/"
+  cta: "Learn about VGI"
+  repo: "https://github.com/Query-farm/vgi"
 ---
 
 I don't expect an Arrow Flight 2.0 that fixes the design problems people have spent years working around. By 2.0, I mean a substantial protocol redesign, separate from Arrow's library version numbers.

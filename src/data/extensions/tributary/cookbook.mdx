@@ -15,29 +15,31 @@ FROM tributary_scan_topic('orders',
                           "bootstrap.servers" := 'kafka:9092');
 ```
 
-Each row corresponds to one Kafka message, with metadata columns (`topic`, `partition`, `offset`) plus the raw payload as a `BLOB`. See [`tributary_scan_topic`](#tributary_scan_topic) for the full signature and parameter table.
+Each row corresponds to one Kafka message, with metadata columns (`topic`, `partition`, `offset`) plus the raw `key` and payload (`message`) as `BLOB`s. The scan reads everything the topic retains, up to where each partition ended when the scan started. See [`tributary_scan_topic`](#tributary_scan_topic) for the full signature and parameter table.
 
 ## Decode JSON messages on the way in
 
-Most topics carry JSON. Cast the `message` column to `VARCHAR` and use [DuckDB's JSON functions](https://duckdb.org/docs/data/json/loading_json.html):
+Most topics carry JSON. Turn the `message` bytes into text with [`decode`](https://duckdb.org/docs/sql/functions/blob) and use [DuckDB's JSON functions](https://duckdb.org/docs/data/json/loading_json.html):
 
 ```sql
 SELECT
   partition,
   "offset",
-  json_extract_string(message::VARCHAR, '$.user_id') AS user_id,
-  json_extract_string(message::VARCHAR, '$.event')   AS event
+  json_extract_string(decode(message), '$.user_id') AS user_id,
+  json_extract_string(decode(message), '$.event')   AS event
 FROM tributary_scan_topic('events',
                           "bootstrap.servers" := 'kafka:9092');
 ```
 
 `offset` is a reserved keyword in DuckDB (used by `LIMIT … OFFSET …`), so quote it as `"offset"` whenever you reference the column directly.
 
+Use `decode(message)` rather than `message::VARCHAR`: in DuckDB 2.0 casting a `BLOB` to `VARCHAR` escapes quotes and non-ASCII bytes (`{\x22user_id\x22: ...}`), which the JSON functions reject.
+
 For Avro / Protobuf payloads, pair with DuckDB's `avro` / `protobuf` community extensions and decode the `BLOB` column the same way.
 
-## Filter while consuming
+## Filter a scan
 
-DuckDB pushes predicates down into the partition-parallel scan — partitions you don't need aren't consumed at all:
+Filter on the metadata columns like any other table:
 
 ```sql
 SELECT *
@@ -47,12 +49,12 @@ WHERE partition = 0
   AND "offset" >= 1000000;
 ```
 
-For time-bounded scans, decode the timestamp from the message body and filter there, or use `auto.offset.reset := 'latest'` so a fresh consumer group starts at the tail.
+The filter runs after the messages are read: every partition is still consumed from its first retained offset, so this narrows the result, not the cost of the scan. For time-bounded slices, decode the timestamp from the message body and filter on it. If you'll query the same slice repeatedly, snapshot it into a table first (below).
 
 ## Snapshot a topic into a local table
 
 ```sql
-CREATE TABLE orders_snapshot AS
+CREATE OR REPLACE TABLE orders_snapshot AS
 SELECT *
 FROM tributary_scan_topic('orders',
                           "bootstrap.servers" := 'kafka:9092');
@@ -68,8 +70,8 @@ FROM tributary_scan_topic('events',
                           "bootstrap.servers" := 'kafka:9092') k
 CROSS JOIN LATERAL (
   SELECT
-    json_extract_string(k.message::VARCHAR, '$.user_id') AS user_id,
-    json_extract_string(k.message::VARCHAR, '$.event')   AS event
+    json_extract_string(decode(k.message), '$.user_id') AS user_id,
+    json_extract_string(decode(k.message), '$.event')   AS event
 ) msg
 JOIN users u ON u.user_id = msg.user_id::BIGINT;
 ```
@@ -81,17 +83,21 @@ The classic enrichment pattern — Kafka stream on one side, reference data on t
 Source credentials from the environment so they don't appear in cached query plans:
 
 ```sql
-SET VARIABLE k_user = getenv('KAFKA_USER');
-SET VARIABLE k_pass = getenv('KAFKA_PASSWORD');
+CREATE SECRET prod_kafka (
+  TYPE tributary_cluster,
+  SCOPE 'kafka://prod',
+  "bootstrap.servers" 'broker.example.com:9093',
+  "security.protocol" 'SASL_SSL',
+  "sasl.mechanism"    'SCRAM-SHA-512',
+  "sasl.username"     getenv('KAFKA_USER'),
+  "sasl.password"     getenv('KAFKA_PASSWORD')
+);
 
-SELECT *
-FROM tributary_scan_topic('orders',
-  "bootstrap.servers"  := 'broker.example.com:9093',
-  "security.protocol"  := 'SASL_SSL',
-  "sasl.mechanism"     := 'SCRAM-SHA-512',
-  "sasl.username"      := :k_user,
-  "sasl.password"      := :k_pass);
+-- The kafka://prod/ prefix picks up the secret
+SELECT * FROM tributary_scan_topic('kafka://prod/orders');
 ```
+
+The `tributary_cluster` secret holds the librdkafka options for one cluster and redacts the credentials in `duckdb_secrets()`. Named parameters passed to the scan override the secret's values. To skip the secret, pass the same options as named parameters, using `getvariable('k_user')` for values loaded with `SET VARIABLE k_user = getenv('KAFKA_USER')`.
 
 Same pattern for SSL-only clusters: pass `security.protocol := 'SSL'` plus the relevant `ssl.ca.location` / `ssl.certificate.location` parameters. See [Kafka SASL](https://kafka.apache.org/documentation/#security_sasl) and [SSL](https://kafka.apache.org/documentation/#security_ssl) for the upstream config matrix.
 
@@ -117,10 +123,37 @@ ORDER BY partitions DESC;
 
 See [`tributary_metadata`](#tributary_metadata) for the full output shape.
 
+## Decode JSON-schema topics through a Schema Registry
+
+When producers write JSON-schema payloads through a Confluent-compatible Schema Registry, point the scan at the registry and the key and value come back as `JSON`:
+
+{/* check: skip needs a Schema Registry */}
+```sql
+SELECT partition, "offset", value->>'user_id' AS user_id
+FROM tributary_scan_topic('orders',
+                          "bootstrap.servers"   := 'kafka:9092',
+                          "schema.registry.url" := 'https://registry.example.com');
+```
+
+Tributary uses the latest schema of the `orders-key` and `orders-value` subjects; a missing subject leaves that column as a `BLOB` named `key` or `message`. Only JSON schemas are decoded — an Avro or Protobuf subject is an error. Browse the registry itself with the `tributary_schema_registry_*` functions:
+
+{/* check: skip needs a Schema Registry */}
+```sql
+SELECT * FROM tributary_schema_registry_subjects('https://registry.example.com', false);
+```
+
+{/* check: skip needs a Schema Registry */}
+```sql
+SELECT version, schema_type, schema
+FROM tributary_schema_registry_get_schema_latest('https://registry.example.com', 'orders-value');
+```
+
+Registry credentials go in a `tributary_schema_registry` secret scoped to the registry URL. See [Schema Registry](#schema-registry) in the technical details.
+
 ## Diagnostics
 
 ```sql
-SELECT tributary_version();   -- e.g. '20250612.01'
+SELECT tributary_version();   -- e.g. '20251020.01'
 ```
 
 Use [`tributary_version`](#tributary_version) when you need to confirm the loaded build against bug reports or release notes.

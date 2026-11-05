@@ -21,10 +21,9 @@ SELECT date_trunc('day', ts)        AS day,
 FROM events
 GROUP BY 1;
 
--- Rolling 7-day uniques: merge the per-day sketches, no rescan
--- (datasketch_theta over a sketch column is the merge aggregate)
+-- Rolling 7-day uniques: union the per-day sketches, no rescan
 SELECT datasketch_theta_estimate(
-         datasketch_theta(sketch)
+         datasketch_theta(sketch)               -- merge aggregate over sketches
        ) AS uniques_last_7d
 FROM daily_uniques
 WHERE day >= CURRENT_DATE + INTERVAL '-7 days';
@@ -55,9 +54,9 @@ This extension is a thin DuckDB wrapper around the [Apache DataSketches C++ libr
 - **An aggregate** (`datasketch_kll`, `datasketch_hll`, `datasketch_theta`, …) that builds the sketch in one pass over input values.
 - **A typed BLOB column type** (`sketch_kll_double`, `sketch_hll`, `sketch_theta`, …) — a strict superset of `BLOB` carrying the serialized sketch.
 - **Reader scalars** (`datasketch_*_quantile`, `datasketch_*_estimate`, `datasketch_*_cdf`, …) that decode the BLOB and return values without rebuilding from rows.
-- **Mergers** — aggregates over a sketch column that produce a rolled-up sketch (`datasketch_hll_union`, `datasketch_cpc_union`, and the merge form of every other aggregate, e.g. `datasketch_theta(sketch)` or `datasketch_kll(200, sketch)`). Theta also has two-sketch scalars for set algebra: `datasketch_theta_union`, `datasketch_theta_intersect`, `datasketch_theta_a_not_b`.
+- **Mergers** — aggregates over a sketch column that produce a rolled-up sketch (`datasketch_hll_union`, `datasketch_cpc_union`, or the sketch aggregate itself given a sketch, e.g. `datasketch_theta(sketch)`, `datasketch_kll(200, sketch)`), plus scalar unions of sketches in the same row (`datasketch_hll_merge`, `datasketch_cpc_merge`, `datasketch_theta_union(a, b, …)`).
 
-Every aggregate returns `NULL` when it sees no input rows, so wrap an estimate in `coalesce(..., 0)` where an empty group should read as zero.
+Every sketch aggregate returns `NULL` when it sees no input rows (or only NULLs), like any SQL aggregate, so wrap an estimate in `coalesce(..., 0)` where an empty group should read as zero.
 
 The serialization format is the same one the [Java reference implementation](https://github.com/apache/datasketches-java) writes, which is the format Druid, Pinot, BigQuery, and Spark integrations consume. A sketch built in DuckDB and written to Parquet can be merged inside Druid or vice versa — no re-aggregation across systems.
 
@@ -71,24 +70,40 @@ The right sketch depends on what you're estimating and which constraint binds fi
 |--------|---------------------------------------------------------------------|----------------------------------------------------|
 | HLL    | Default — fastest reads, broad cross-system interop                 | `lg_k` 4–21; 12 is a good default (~4 KB sketch)   |
 | CPC    | Storage-bound — many sketches at rest                               | `lg_k` 4–26; ~40% smaller than HLL at the same accuracy |
-| Theta  | You need union, intersection, or A-not-B (funnel, retention, churn) | `lg_k` 5–26; only family with full set algebra     |
+| Theta  | You need union, intersection, or A-not-B (funnel, retention, churn) | `lg_k` 4–26; only family with full set algebra |
+
+**Distinct keys with per-key metrics**
+
+| Family           | When to pick                                                     | Notes                                                    |
+|------------------|------------------------------------------------------------------|----------------------------------------------------------|
+| Tuple            | Distinct keys *and* one metric per key (customers + revenue)     | `mode :=` sum / min / max / one; Theta set algebra       |
+| Array of Doubles | Distinct keys with several metrics per key                       | 1–255 DOUBLE values per key, summed element-wise         |
 
 **Quantiles**
 
 | Family    | When to pick                          | Notes                                        |
 |-----------|---------------------------------------|----------------------------------------------|
-| KLL       | Default — best accuracy/size balance  | `K` 8–65535; 200 is a sensible production starting point |
+| KLL       | Default — best accuracy/size balance  | `K` 8–65535; 200 is a sensible production starting point; numeric or VARCHAR items |
 | TDigest   | p99 / p999 SLO reporting              | `K` 10–65535; FLOAT/DOUBLE only; tail-accurate |
-| REQ       | Skewed distributions                  | `K` 4–1024; error scales with rank, not fixed |
-| Quantiles | Compatibility with classic pipelines  | `K` a power of 2 from 2 to 32768; use KLL for new work |
+| REQ       | Skewed distributions                  | `K` 4–1024; error scales with rank; high-rank (default) or low-rank accuracy |
+| Quantiles | Compatibility with classic pipelines  | `K` a power of 2 from 2 to 32768; use KLL for new work; numeric or VARCHAR items |
 
-A size argument outside its family's range is rejected when the query binds, rather than being silently truncated.
+A size argument outside its family's range is rejected when the query binds, rather than failing mid-query or being silently truncated.
 
 **Frequency**
 
-A single family — [Frequent Items](https://datasketches.apache.org/docs/Frequency/FrequentItemsOverview.html) — for top-K heavy hitters with confidence-bounded frequencies. Use `'NO_FALSE_POSITIVES'` to get items that are *definitely* heavy, `'NO_FALSE_NEGATIVES'` to get every candidate that *might* be (the error type is case-insensitive; anything else is an error). `datasketch_frequent_items` counts each row once; `datasketch_frequent_items_weighted` adds a per-row `BIGINT`/`UBIGINT` weight, for top-K by revenue, bytes, or any other metric.
+A single family — [Frequent Items](https://datasketches.apache.org/docs/Frequency/FrequentItemsOverview.html) — for top-K heavy hitters with confidence-bounded frequencies. Use `'NO_FALSE_POSITIVES'` to get items that are *definitely* heavy, `'NO_FALSE_NEGATIVES'` to get every candidate that *might* be (the error type is case-insensitive; anything else is an error). `datasketch_frequent_items_weighted` adds a per-row `BIGINT`/`UBIGINT` weight for top-K by revenue, bytes, or any other metric.
 
-Items are stored as strings. `FLOAT` and `DOUBLE` items are spelled the way `CAST(x AS VARCHAR)` spells them (the shortest string that round-trips), so distinct values stay distinct and lookups match what a VARCHAR cast prints.
+## Compared to alternatives
+
+- **DuckDB's built-in [`approx_count_distinct`](https://duckdb.org/docs/stable/sql/functions/aggregates) and [`approx_quantile`](https://duckdb.org/docs/stable/sql/functions/aggregates)** — both ship in DuckDB and use HLL / TDigest internally, but expose only the final estimate. Reach for this extension when you need the sketch *as state* — to persist it as a column, merge later, tune sketch parameters (`lg_k`, `K`, `map_size`), or interoperate with other Apache DataSketches consumers.
+- **Exact aggregates (`COUNT(DISTINCT)`, `quantile_cont`, `mode`)** — the right answer when policy demands exact and your data fits. DuckDB's vectorized exact aggregates are fast at most analytical scales; measure before reaching for an approximate sketch.
+- **Reservoir / streaming aggregates rolled by hand** — sketches give you the same bounded-memory streaming property *plus* mathematically grounded error bounds *plus* mergeability across processes. For anything that needs to survive a process restart or roll up across shards, the sketch is the better primitive.
+- **Druid / Pinot / BigQuery sketch columns** — those systems use the same serialization format. If you're already producing sketches there, this extension lets DuckDB read and merge them; if you're building them in DuckDB, downstream OLAP systems can consume the BLOBs directly.
+
+## Persistence and portability
+
+Every sketch round-trips through a typed BLOB column (`sketch_kll_double`, `sketch_hll`, `sketch_theta`, etc.) that's a strict superset of `BLOB`. Sketches written into a Parquet file can be read back into any DuckDB instance with this extension loaded, or into any other DataSketches-aware system, and merged without a re-scan. Aggregate functions accept either raw input values *or* an existing sketch column, so incremental rollup is just another `SELECT`.
 
 ## Merging HLL and CPC sketches across types
 
@@ -101,13 +116,34 @@ HLL and CPC accept integers, floats, strings, blobs, `UUID`, `HUGEINT` and `UHUG
 
 If values arrive in different types, cast them to one type before sketching.
 
-## Compared to alternatives
+## Tuple sketches: distinct keys that carry values
 
-- **DuckDB's built-in [`approx_count_distinct`](https://duckdb.org/docs/stable/sql/functions/aggregates) and [`approx_quantile`](https://duckdb.org/docs/stable/sql/functions/aggregates)** — both ship in DuckDB and use HLL / TDigest internally, but expose only the final estimate. Reach for this extension when you need the sketch *as state* — to persist it as a column, merge later, tune sketch parameters (`lg_k`, `K`, `map_size`), or interoperate with other Apache DataSketches consumers.
-- **Exact aggregates (`COUNT(DISTINCT)`, `quantile_cont`, `mode`)** — the right answer when policy demands exact and your data fits. DuckDB's vectorized exact aggregates are fast at most analytical scales; measure before reaching for an approximate sketch.
-- **Reservoir / streaming aggregates rolled by hand** — sketches give you the same bounded-memory streaming property *plus* mathematically grounded error bounds *plus* mergeability across processes. For anything that needs to survive a process restart or roll up across shards, the sketch is the better primitive.
-- **Druid / Pinot / BigQuery sketch columns** — those systems use the same serialization format. If you're already producing sketches there, this extension lets DuckDB read and merge them; if you're building them in DuckDB, downstream OLAP systems can consume the BLOBs directly.
+A [Tuple sketch](https://datasketches.apache.org/docs/Tuple/TupleOverview.html) is a Theta sketch in which every retained key also carries a summary. `datasketch_tuple(key, value)` keeps one DOUBLE per key, combined by `mode :=` — `'sum'` (default), `'min'`, `'max'` or `'one'` — so one pass answers both "how many distinct customers?" and "how much did they spend?":
 
-## Persistence and portability
+```sql
+SELECT datasketch_tuple_estimate(s) AS customers,
+       datasketch_tuple_sum(s)      AS revenue,               -- estimated total over all keys
+       datasketch_tuple_mean(s)     AS revenue_per_customer
+FROM (SELECT datasketch_tuple(customer_id, amount) AS s FROM orders);
+```
 
-Every sketch round-trips through a typed BLOB column (`sketch_kll_double`, `sketch_hll`, `sketch_theta`, etc.) that's a strict superset of `BLOB`. Sketches written into a Parquet file can be read back into any DuckDB instance with this extension loaded, or into any other DataSketches-aware system, and merged without a re-scan. Aggregate functions accept either raw input values *or* an existing sketch column, so incremental rollup is just another `SELECT`.
+`datasketch_aod(key, [m1, m2, …])` is the array-of-doubles variant: each key carries 1–255 DOUBLE values summed element-wise, read back with `datasketch_aod_column_sums` / `datasketch_aod_column_means`. Both families support the Theta algebra (`_union`, `_intersect`, `_intersect_agg`, `_a_not_b`), Jaccard similarity on the key sets, and conversion to a plain Theta sketch with `_to_theta`. The Tuple sketch's mode is not stored in the sketch (as in the other DataSketches libraries), so pass the same `mode :=` to merges, unions and intersections. Sketches with different seeds — or array-of-doubles sketches with different numbers of values — cannot be combined.
+
+## Theta options: seeds, sampling, and storage
+
+`datasketch_theta`, `datasketch_tuple` and `datasketch_aod` take keyword options `seed :=` (the hash seed) and `p :=` (an up-front sampling probability in (0, 1]). Compact sketches store only a 16-bit hash of the seed (`datasketch_theta_seed_hash`), and every function reads and combines seeded sketches without being told the seed again; combining sketches whose seed hashes differ is an error. Unions keep the largest `lg_k` of their inputs (at least 12) unless you pass one. Theta results are written in the compressed compact format (serial version 4) when it applies; versions 1–4 are all readable, and DataSketches C++ 4.0+, Java and Python read version 4. To hash raw BLOB bytes use `datasketch_theta_blob` — `datasketch_theta(BLOB)` merges serialized sketches.
+
+## Behavior changes in recent releases
+
+The October 2026 releases (Apache DataSketches C++ 5.3.0) change a few behaviors. Unless marked *DuckDB 2.0 build*, the change also ships in the current DuckDB 1.5 build.
+
+- **CDF and PMF always return `LIST(DOUBLE)`** *(DuckDB 2.0 build)*. `datasketch_{kll,quantiles,req}_cdf` and `_pmf` used to return a list of the sketch's item type, which truncated CDF ranks for integer sketches and could corrupt PMF results. Update code that expects, say, `INTEGER[]`.
+- **Frequent Items keys for FLOAT/DOUBLE are exact.** Items are now keyed by their shortest round-trip text (like `CAST(x AS VARCHAR)`) instead of six fixed decimals, so `0.1234567` and `0.1234568` stay distinct. Sketches of FLOAT/DOUBLE items built by earlier versions hold the old spellings: lookups against them usually return 0 and merges keep both spellings, so rebuild them from source data. VARCHAR and integer sketches are unaffected. `lg_max_k` must now be between 3 and 30 (out-of-range values used to be silently truncated).
+- **Theta unions keep their size.** `datasketch_theta_union` and the `datasketch_theta(sketch)` merge used to run at `lg_k` 12 regardless of their inputs; they now keep the inputs' `lg_k`.
+- **Constant arguments are honored.** Queries that combined the same aggregate with different constant sizes (e.g. `datasketch_kll(12, v)` and `datasketch_kll(16, v)` in one `UNION ALL`) could previously return the first sketch twice.
+- **Empty input gives `NULL`.** Every sketch aggregate now returns `NULL` over no rows. Theta, Tuple, array-of-doubles and Frequent Items used to return an empty sketch, so an estimate over an empty group is now `NULL` rather than 0 — wrap it in `coalesce(..., 0)` for the old result. Merging only empty sketches still returns an empty sketch.
+- **Size arguments are validated.** `K` / `lg_k` values outside each family's range (see the tables above) are bind errors; previously some failed mid-query and others were silently changed (a REQ `K` of 256 became 4, a T-Digest `K` of 70000 became 4464).
+- **HLL and CPC bounds take `num_std_devs`.** `datasketch_{hll,cpc}_{lower,upper}_bound` now take `num_std_devs INTEGER` (1, 2 or 3), like the Theta bounds, instead of `std_dev UTINYINT`; other values are an error.
+- **HLL and CPC accept `UUID`, `HUGEINT` and `UHUGEINT`.** `HUGEINT`/`UHUGEINT` used to go through `DOUBLE`, so values beyond 2^53 collapsed; see [Merging HLL and CPC sketches across types](#merging-hll-and-cpc-sketches-across-types). HUGEINT sketches built by earlier versions do not merge with new ones.
+- **Stricter errors.** A `NULL` split point in a CDF or PMF is an error (it used to read whatever value sat in the vector); library failures surface as `Invalid Input Error: <function>: …`; corrupt Theta and Frequent Items sketches report `Failed to deserialize … sketch`; a `NULL` `lg_max_k` is an error; and casts to `sketch_hll`, `sketch_cpc`, `sketch_theta` and `sketch_frequent_items` keep the sketch type instead of `BLOB`.
+- **New in the DuckDB 2.0 build:** Tuple and array-of-doubles sketches; batch `_quantiles` / `_ranks` and `_sorted_view` for KLL, Quantiles and REQ; VARCHAR items for KLL and Quantiles; REQ accuracy mode and rank bounds; T-Digest exact min/max; HLL register encodings, composite estimate and `datasketch_hll_merge` / `datasketch_cpc_merge`; Theta Jaccard similarity, `datasketch_theta_intersect_agg`, variadic union/intersect, `seed :=` / `p :=` options, unsigned-integer input, `datasketch_theta_blob` and compressed storage. `datasketch_theta_get_seed` is now documented as an alias of `datasketch_theta_seed_hash` (it always returned the seed hash).

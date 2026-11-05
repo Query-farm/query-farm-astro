@@ -88,12 +88,19 @@ CREATE OR REPLACE TABLE new_signups AS
 SELECT 'user' || i || '@example.com' AS email
 FROM range(20, 40) t(i);
 
--- Per-zone DuckDB-compatible Bloom filters for the cookbook snippet.
+-- Generic `tbl` referenced by the bitfilters_duckdb_hash and
+-- bitfilters_duckdb_bloom_filter_create examples the extension ships in
+-- duckdb_functions().
+CREATE OR REPLACE TABLE tbl AS
+SELECT i AS key, i AS key_col, i AS col1, i * 10 AS col2
+FROM range(0, 20) t(i);
+
+-- Per-bucket DuckDB-compatible Bloom filters for the cookbook snippets,
+-- built the same way as the cookbook's CREATE TABLE.
 CREATE OR REPLACE TABLE zone_filters AS
 SELECT bucket,
        bitfilters_duckdb_bloom_filter_create(
-         'v2.0', 16384, bitfilters_duckdb_hash('v2.0', key)
-       ) AS bf
+         'v2.0', 16384, bitfilters_duckdb_hash('v2.0', key)) AS bf
 FROM keys
 GROUP BY bucket;
 

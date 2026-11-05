@@ -15,6 +15,13 @@ leadVisual:
     src: "/blog/query-cloudflare-from-duckdb/overview-mobile.svg"
     width: 400
     height: 872
+nextStep:
+  title: "Grainlift"
+  pitch: "Proxy existing database drivers or build new data services behind one ADBC client interface, with Arrow-native results."
+  href: "/products/grainlift/"
+  cta: "Explore Grainlift"
+  extension: "grainlift"
+  repo: "https://github.com/Query-farm/grainlift"
 ---
 
 [Grainlift](/products/grainlift/) now lets you query data stored in Cloudflare's [D1](https://www.cloudflare.com/products/d1/), [Durable Objects](https://www.cloudflare.com/products/durable-objects/), and [Workers Analytics Engine](https://developers.cloudflare.com/analytics/analytics-engine/) from Haybarn, DuckDB, Python, and other [ADBC applications](https://arrow.apache.org/adbc/current/). You can browse tables and run SQL. In Haybarn or DuckDB, you can also join the results with a local CSV or Parquet file. Choose the browser, terminal, or Python tab below to try it yourself.

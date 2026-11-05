@@ -10,7 +10,6 @@ SELECT * FROM (VALUES
   (2, 'b', ST_GeomFromText('POLYGON((2 2,3 2,3 3,2 3,2 2))'))
 ) t(id, name, geom);
 
-
 -- roads(geom) for ST_Length aggregate
 CREATE OR REPLACE TABLE roads AS
 SELECT * FROM (VALUES
@@ -53,12 +52,23 @@ SELECT ST_GeomFromText('POINT(0.001 0.002)') AS geom;
 CREATE OR REPLACE TABLE parcels_geometry AS
 SELECT id, geom FROM raw_parcels;
 
--- Each Run starts with a compact geometry table and matching input files.
+-- parcels(id, name, geom GEOSILO) — the table the cookbook defines and fills
+-- in earlier blocks. Each in-browser example runs on its own, so it needs to
+-- exist up front. The polygons sit inside the cookbook's -78..-76 longitude,
+-- 39..41 latitude band, so its bounding-box filters return rows.
 CREATE OR REPLACE TABLE parcels (
-  id INTEGER, name VARCHAR,
-  geom GEOSILO('EPSG:4326') USING COMPRESSION zstd
+  id    INTEGER,
+  name  VARCHAR,
+  geom  GEOSILO('EPSG:4326') USING COMPRESSION zstd
 );
-INSERT INTO parcels SELECT id, name, geom FROM raw_parcels;
+INSERT INTO parcels
+SELECT * FROM (VALUES
+  (1, 'north lot', ST_GeomFromText('POLYGON((-77.2 39.8,-77.1 39.8,-77.1 39.9,-77.2 39.9,-77.2 39.8))')),
+  (2, 'river parcel', ST_GeomFromText('POLYGON((-76.9 40.1,-76.8 40.1,-76.8 40.2,-76.9 40.2,-76.9 40.1))')),
+  (3, 'west field', ST_GeomFromText('POLYGON((-79.5 38.0,-79.4 38.0,-79.4 38.1,-79.5 38.1,-79.5 38.0))'))
+) t(id, name, geom);
+
+-- Source table and input files the cookbook's load examples read.
 CREATE OR REPLACE TABLE raw_data AS SELECT id, geom FROM raw_parcels;
 COPY (SELECT id, name, ST_AsText(geom) AS wkt FROM raw_parcels)
 TO 'parcels.csv' (HEADER true);

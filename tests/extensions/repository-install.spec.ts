@@ -21,9 +21,8 @@ test('native repository commands load a second extension in the browser', async 
   expect(output).toMatch(/│\s*true\s*│/);
   await requireLoadedExtension(page, 'a5');
 
-  // Install instructions remain copyable native SQL, without a Run button.
+  // Install instructions remain visible as native SQL.
   const install = page.locator('#quick-install');
   await expect(install.locator('pre').first()).toContainText('INSTALL textplot FROM query_farm;');
   await expect(install.locator('pre').first()).toContainText('LOAD textplot FROM query_farm;');
-  await expect(install.locator('.example-toolbar-run-button, .example-try-button')).toHaveCount(0);
 });

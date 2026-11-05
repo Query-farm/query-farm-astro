@@ -1,5 +1,18 @@
 import { test, expect } from '@playwright/test';
 
+test('settled site searches preserve the shared search analytics event', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(() => {
+    const tracking = window as unknown as { searchEvents: unknown[][]; gtag: (...args: unknown[]) => void };
+    tracking.searchEvents = [];
+    tracking.gtag = (...args) => { tracking.searchEvents.push(args); };
+  });
+  await page.locator('#site-search-open').click();
+  await page.locator('#site-search-input').fill('airport');
+  await expect.poll(() => page.evaluate(() => (window as unknown as { searchEvents: unknown[][] }).searchEvents))
+    .toContainEqual(['event', 'search', { search_term: 'airport', search_area: 'site', search_results: expect.any(Number) }]);
+});
+
 test('site search shows popular extensions with icons and ranks direct names before mentions', async ({ page, request }) => {
   const catalog = await (await request.get('/search/extensions.json')).json();
   expect(catalog.some((extension: { id: string }) => ['example', 'chsql', 'quackscale'].includes(extension.id))).toBe(false);
@@ -93,6 +106,26 @@ test('extension navigation still works when the full-text index is unavailable',
   await dialog.getByRole('searchbox').fill('redis');
   await expect(dialog.locator('#site-search-results a').first()).toHaveAttribute('href', '/products/extensions/redis/');
   await expect(dialog.getByRole('status')).toContainText('Showing extension matches');
+});
+
+test('full-text results preserve the extension result selected with the keyboard', async ({ page }) => {
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/pagefind/pagefind.js', async route => {
+    await pending;
+    await route.continue();
+  });
+  await page.goto('/');
+  await page.locator('#site-search-open').click();
+  const loading = page.waitForRequest('**/pagefind/pagefind.js');
+  await page.locator('#site-search-input').fill('airport');
+  await loading;
+  const airport = page.locator('#site-search-results a[href="/products/extensions/airport/"]');
+  await page.locator('#site-search-input').press('ArrowDown');
+  await expect(airport).toBeFocused();
+  release();
+  await expect(page.locator('#site-search-results')).toHaveAttribute('aria-busy', 'false');
+  await expect(airport).toBeFocused();
 });
 
 test('an older full-text response cannot replace a new query or the popular shortcuts', async ({ page }) => {

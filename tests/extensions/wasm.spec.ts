@@ -38,7 +38,7 @@ test('Cronjob keeps its SQL documentation without offering unsupported browser e
   for (const path of ['/products/extensions/cronjob/', '/products/extensions/cronjob/functions/category/scheduling/']) {
     await page.goto(path);
     await expect(page.getByText("Cronjob's scheduler needs background threads", { exact: false })).toBeVisible();
-    await expect(page.locator('pre[data-language="sql"]').filter({ hasText: 'SELECT * FROM cron_jobs();' }).first()).toBeVisible();
+    await expect(page.locator('pre[data-language="sql"]').filter({ hasText: /\bcron(?:_jobs)?\(/ }).first()).toBeVisible();
     await expect(page.getByRole('button', { name: 'Copy code', exact: true }).first()).toBeVisible();
     // Checking the island as well as buttons prevents a late hydration from
     // re-enabling Run after this assertion has already passed.

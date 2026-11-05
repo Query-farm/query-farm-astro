@@ -1,213 +1,205 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = [
-#   "httpx>=0.27",
-# ]
+# dependencies = ["httpx>=0.27"]
 # ///
+"""Snapshot published extension builds by distribution, release, and platform.
+
+The default refresh checks Query.Farm's builds for the latest DuckDB release
+and the built-in community repository for the pinned Haybarn browser release. Builds use the
+committed snapshots without network access. Only a confirmed HTTP 404 means
+unavailable; failed requests abort the refresh before any snapshots are written.
 """
-Binary-size snapshot.
-
-Pulls per-(platform, architecture) compiled extension sizes for every Query.Farm
-extension from the Haybarn extension repository — a single central source that
-rebuilds and hosts both core and community DuckDB extensions — and writes them
-into each extension's generated/compatibility.json, alongside the platform
-matrix (derived from which binaries actually exist) and the Haybarn version
-probed.
-
-The committed JSON is the fallback. --soft warns and exits 0 on any failure so a
-build proceeds offline or in CI without reaching the network.
-
-Usage:
-  binary-sizes-snapshot.py --site <site-repo> [--haybarn-version vX.Y.Z] [--soft]
-"""
-
 import argparse
 import json
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 
-REPO = "http://haybarn-extensions.query.farm/community"
-# The CDN 403s the default python-urllib/httpx user agent; identify ourselves.
-HEADERS = {"User-Agent": "query-farm-site-binary-sizes/1.0"}
-
-# (haybarn platform key) -> (display platform, architecture, artifact suffix).
-# Order here defines the order platforms/architectures appear in the docs.
+REPOSITORIES = {
+    "duckdb": "https://duckdb-extensions.query.farm",
+    "haybarn": "https://haybarn-extensions.query.farm/community",
+}
+EXTENSION_NAMES = {"openprompt": "open_prompt"}
+HEADERS = {"User-Agent": "query-farm-site-binary-sizes/2.0"}
+ARTIFACT_TYPES = {
+    "application/gzip", "application/x-gzip", "application/wasm",
+    "application/octet-stream", "binary/octet-stream",
+}
 PLATFORMS = [
-    ("linux_amd64",      "Linux",        "x86_64",        "duckdb_extension.gz"),
-    ("linux_arm64",      "Linux",        "aarch64",       "duckdb_extension.gz"),
-    ("linux_amd64_musl", "Linux (musl)", "x86_64",        "duckdb_extension.gz"),
-    ("osx_amd64",        "macOS",        "Intel",         "duckdb_extension.gz"),
-    ("osx_arm64",        "macOS",        "Apple Silicon", "duckdb_extension.gz"),
-    ("windows_amd64",    "Windows",      "x86_64",        "duckdb_extension.gz"),
-    # All three WASM variants, each labelled: only `wasm_eh` was probed before,
-    # so `mvp` and `threads` never appeared in the docs even where published,
-    # and the blank architecture left the size table's Architecture cell empty
-    # for the one variant that did.
-    ("wasm_eh",          "WASM",         "eh",            "duckdb_extension.wasm"),
-    ("wasm_mvp",         "WASM",         "mvp",           "duckdb_extension.wasm"),
-    ("wasm_threads",     "WASM",         "threads",       "duckdb_extension.wasm"),
+    ("linux_amd64", "Linux", "x86_64", "duckdb_extension.gz"),
+    ("linux_arm64", "Linux", "aarch64", "duckdb_extension.gz"),
+    ("linux_amd64_musl", "Linux (musl)", "x86_64", "duckdb_extension.gz"),
+    ("linux_arm64_musl", "Linux (musl)", "aarch64", "duckdb_extension.gz"),
+    ("osx_amd64", "macOS", "Intel", "duckdb_extension.gz"),
+    ("osx_arm64", "macOS", "Apple Silicon", "duckdb_extension.gz"),
+    ("windows_amd64", "Windows", "x86_64", "duckdb_extension.gz"),
+    ("windows_arm64", "Windows", "ARM64", "duckdb_extension.gz"),
+    ("windows_amd64_mingw", "Windows", "x86_64 (MinGW)", "duckdb_extension.gz"),
+    ("wasm_eh", "WASM", "eh", "duckdb_extension.wasm"),
+    ("wasm_mvp", "WASM", "mvp", "duckdb_extension.wasm"),
+    ("wasm_threads", "WASM", "threads", "duckdb_extension.wasm"),
 ]
 
-# Not real installable extensions — never probed.
-SKIP_SLUGS = {"example"}
+
+def version_number(value: str) -> str:
+    number = value.removeprefix("v")
+    if not re.fullmatch(r"\d+\.\d+\.\d+", number):
+        raise ValueError(f"Invalid release version: {value}")
+    return number
+
+
+def browser_version(site: Path) -> str:
+    package = json.loads((site / "package.json").read_text())
+    pin = package["dependencies"]["@haybarn/haybarn-wasm"]
+    return version_number(pin.split("-", 1)[0])
 
 
 def probe_size(client: httpx.Client, url: str) -> tuple[int | None, bool]:
-    """Return (size_bytes, exists). `exists` is True when a binary is served at
-    `url`; `size_bytes` may still be None if the size can't be determined.
+    """Read artifact headers, falling back to a bounded signature read.
 
-    Tries HEAD first (works for the gzipped artifacts). Cloudflare serves some
-    artifacts (notably .wasm) without a Content-Length on HEAD, so fall back to
-    a single-byte ranged GET and read the total from Content-Range.
-
-    For .wasm the CDN answers neither: HEAD 200 carries no Content-Length, and
-    the ranged request is ignored — it replies 200 (not 206) with no
-    Content-Range. That combination used to land on `(None, True)`, "present but
-    size unknown", which is why every WASM build showed up as a platform and
-    none of them ever produced a row in the binary-size table. When the server
-    won't state the size, stream the body and count it."""
-    try:
-        r = client.head(url, follow_redirects=True)
-        if r.status_code == 404:
-            return None, False
-        if r.status_code == 200:
-            cl = r.headers.get("Content-Length")
-            if cl and cl.isdigit():
-                return int(cl), True
-    except httpx.HTTPError:
-        pass
-
-    try:
-        r = client.get(url, headers={"Range": "bytes=0-0"}, follow_redirects=True)
-        if r.status_code == 404:
-            return None, False
-        if r.status_code in (200, 206):
-            cr = r.headers.get("Content-Range")  # e.g. "bytes 0-0/13146769"
-            if cr and "/" in cr:
-                total = cr.rsplit("/", 1)[-1]
+    A missing Content-Length is permitted; a server error or an HTML response
+    is not evidence of an unavailable extension. Retry transient failures.
+    """
+    for attempt in range(3):
+        try:
+            response = client.head(url, follow_redirects=True)
+            if response.status_code == 404:
+                return None, False
+            if response.status_code not in (200, 405):
+                response.raise_for_status()
+                raise ValueError(f"Unexpected HEAD response {response.status_code}: {url}")
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0] if response.status_code == 200 else ""
+            if content_type and content_type not in ARTIFACT_TYPES:
+                raise ValueError(f"Not an extension artifact ({content_type}): {url}")
+            size = response.headers.get("Content-Length", "") if response.status_code == 200 else ""
+            if response.status_code == 200 and content_type and size.isdigit() and int(size) >= 512:
+                return int(size), True
+            # Use streaming even when Range is ignored; never download the
+            # whole extension just to determine whether it exists.
+            with client.stream("GET", url, headers={"Range": "bytes=0-3"}, follow_redirects=True) as sample:
+                if sample.status_code == 404:
+                    return None, False
+                if sample.status_code not in (200, 206):
+                    sample.raise_for_status()
+                    raise ValueError(f"Unexpected GET response {sample.status_code}: {url}")
+                sample_type = sample.headers.get("Content-Type", "").split(";", 1)[0] or content_type
+                if sample_type and sample_type not in ARTIFACT_TYPES:
+                    raise ValueError(f"Not an extension artifact ({sample_type}): {url}")
+                first = b""
+                for chunk in sample.iter_raw():
+                    first += chunk
+                    if len(first) >= 4:
+                        break
+                magic = b"\x00asm" if url.endswith(".wasm") else b"\x1f\x8b"
+                # Repositories may serve compressed WASM bytes without an
+                # HTTP Content-Encoding header. Trust their artifact MIME
+                # type; use magic only when the server omits Content-Type.
+                if len(first) < 4 or (not sample_type and not first.startswith(magic)):
+                    raise ValueError(f"Invalid extension file signature: {url}")
+                total = sample.headers.get("Content-Range", "").rsplit("/", 1)[-1]
                 if total.isdigit():
                     return int(total), True
-            cl = r.headers.get("Content-Length")
-            if r.status_code == 200 and cl and cl.isdigit():
-                return int(cl), True
-    except httpx.HTTPError:
-        pass
-
-    # Last resort: measure it. `iter_raw` counts the bytes as served, so this
-    # stays comparable with the Content-Length the .gz artifacts report rather
-    # than silently reporting a decompressed size.
-    try:
-        with client.stream("GET", url, follow_redirects=True) as r:
-            if r.status_code == 404:
-                return None, False
-            if r.status_code != 200:
-                return None, False
-            total = 0
-            for chunk in r.iter_raw():
-                total += len(chunk)
-            return total, True
-    except httpx.HTTPError:
-        pass
-    return None, False
+                if sample.status_code == 200:
+                    size = sample.headers.get("Content-Length", "") or size
+                if size.isdigit() and int(size) >= 512:
+                    return int(size), True
+                return None, True
+        except (httpx.HTTPError, ValueError):
+            if attempt == 2:
+                raise
+    raise AssertionError("unreachable")
 
 
-def snapshot_extension(client: httpx.Client, version: str, slug: str) -> dict | None:
-    """Probe every platform for one extension. Returns a compatibility dict
-    ({platforms, duckdbVersions, binarySizes}) or None if nothing was found."""
+def release_plan(client: httpx.Client, site: Path, duckdb: str | None) -> list[tuple[str, str]]:
+    if duckdb is None:
+        response = client.get("https://api.github.com/repos/duckdb/duckdb/releases/latest")
+        response.raise_for_status()
+        duckdb = response.json()["tag_name"]
+    # DuckDB 2 uses Query.Farm's custom repository. Haybarn 1.5 uses its
+    # built-in community repository and does not need custom registration.
+    return [
+        ("duckdb", version_number(duckdb)),
+        ("haybarn", browser_version(site)),
+    ]
+
+
+def snapshot_release(client: httpx.Client, distribution: str, version: str, slug: str) -> dict:
+    repository = REPOSITORIES[distribution]
     platforms: list[dict] = []
-    binary_sizes: list[dict] = []
+    sizes: list[dict] = []
     by_display: dict[str, dict] = {}
-
-    for plat_key, display, arch, suffix in PLATFORMS:
-        url = f"{REPO}/{version}/{plat_key}/{slug}.{suffix}"
+    for platform, display, architecture, suffix in PLATFORMS:
+        name = EXTENSION_NAMES.get(slug, slug)
+        url = f"{repository}/v{version}/{platform}/{name}.{suffix}"
         size, exists = probe_size(client, url)
         if not exists:
             continue
-        entry = by_display.get(display)
-        if entry is None:
-            entry = {"platform": display, "architectures": []}
-            by_display[display] = entry
-            platforms.append(entry)
-        if arch and arch not in entry["architectures"]:
-            entry["architectures"].append(arch)
+        if display not in by_display:
+            by_display[display] = {"platform": display, "architectures": []}
+            platforms.append(by_display[display])
+        by_display[display]["architectures"].append(architecture)
         if size is not None:
-            binary_sizes.append({"platform": display, "architecture": arch, "bytes": size})
+            sizes.append({"platform": display, "architecture": architecture, "bytes": size})
+    return {"distribution": distribution, "version": version, "repository": repository,
+            "platforms": platforms, "binarySizes": sizes}
 
-    if not platforms:
-        return None
-    return {
-        "platforms": platforms,
-        "duckdbVersions": [version.lstrip("v")],
-        "binarySizes": binary_sizes,
-    }
+
+def assemble_snapshot(releases: list[dict], browser: str, checked_at: str) -> dict:
+    # These legacy fields describe the pinned browser distribution, never a
+    # union of platforms from incompatible releases. Existing REPL consumers
+    # therefore cannot mistake a native 2.0.0 build for a browser 1.5.6 build.
+    runtime = next(r for r in releases if r["distribution"] == "haybarn" and r["version"] == browser)
+    versions = sorted({r["version"] for r in releases if r["platforms"]},
+                      key=lambda v: tuple(map(int, v.split("."))), reverse=True)
+    return {"platforms": runtime["platforms"], "duckdbVersions": versions,
+            "binarySizes": runtime["binarySizes"],
+            "compatibilityCheckedAt": checked_at, "compatibilityReleases": releases}
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--site", required=True, type=Path, help="Path to query-farm-astro repo")
-    ap.add_argument("--haybarn-version", default=None,
-                    help="Haybarn version tag to probe (default: site's latest, e.g. v1.5.3)")
-    ap.add_argument("--slug", default=None, help="Only refresh this extension")
-    ap.add_argument("--soft", action="store_true", help="Warn and exit 0 on any failure")
-    args = ap.parse_args()
-
-    version = args.haybarn_version
-    if not version:
-        vfile = args.site / "src/data/haybarn-versions.generated.json"
-        try:
-            version = json.loads(vfile.read_text())["latestVersion"]
-        except Exception as e:
-            msg = f"Could not read Haybarn version from {vfile}: {e}"
-            if args.soft:
-                print(f"[binary-sizes] skipped — {msg}", file=sys.stderr)
-                sys.exit(0)
-            print(f"Error: {msg}", file=sys.stderr)
-            sys.exit(1)
-
-    ext_dir = args.site / "src/data/extensions"
-    slugs = ([args.slug] if args.slug
-             else sorted(d.name for d in ext_dir.iterdir()
-                         if d.is_dir() and (d / "augment/metadata.json").exists()
-                         and d.name not in SKIP_SLUGS))
-
-    print(f"Probing Haybarn {version} for binary sizes ({len(slugs)} extensions)...")
-    written = 0
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--site", required=True, type=Path)
+    parser.add_argument("--duckdb-version", help="Override the DuckDB release to check in Query.Farm's repository")
+    parser.add_argument("--slug", help="Refresh just one extension")
+    parser.add_argument("--soft", action="store_true", help="Keep committed snapshots on errors")
+    args = parser.parse_args()
+    extension_dir = args.site / "src/data/extensions"
+    slugs = [args.slug] if args.slug else sorted(
+        directory.name for directory in extension_dir.iterdir()
+        if directory.is_dir() and directory.name != "example" and (directory / "augment/metadata.json").exists()
+    )
     try:
-        with httpx.Client(headers=HEADERS, timeout=20, http2=False,
-                          limits=httpx.Limits(max_connections=16)) as client:
-            def work(slug: str):
-                return slug, snapshot_extension(client, version, slug)
-
-            with ThreadPoolExecutor(max_workers=12) as pool:
-                results = list(pool.map(work, slugs))
-    except Exception as e:
-        if args.soft:
-            print(f"[binary-sizes] skipped — probe failed ({e}); keeping committed sizes", file=sys.stderr)
-            sys.exit(0)
-        print(f"Error probing Haybarn repository: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    for slug, compat in results:
-        if not compat:
-            print(f"  {slug}: no binaries found (left as-is)")
-            continue
-        target = ext_dir / slug / "generated" / "compatibility.json"
+        browser = browser_version(args.site)
+        with httpx.Client(headers=HEADERS, timeout=20, limits=httpx.Limits(max_connections=20)) as client:
+            plan = release_plan(client, args.site, args.duckdb_version)
+            print(f"Checking {len(slugs)} extensions across {plan}; browser stays on {browser}.", flush=True)
+            jobs = [(slug, distribution, version) for slug in slugs for distribution, version in plan]
+            def work(job):
+                slug, distribution, version = job
+                return slug, snapshot_release(client, distribution, version, slug)
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                results = list(pool.map(work, jobs))
+        checked_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        grouped: dict[str, list[dict]] = {slug: [] for slug in slugs}
+        for slug, release in results:
+            grouped[slug].append(release)
+        snapshots = {slug: assemble_snapshot(releases, browser, checked_at) for slug, releases in grouped.items()}
+    except Exception as error:
+        print(f"[binary-sizes] Refresh failed; all committed snapshots preserved: {error}", file=sys.stderr)
+        sys.exit(0 if args.soft else 1)
+    for slug, snapshot in snapshots.items():
+        target = extension_dir / slug / "generated/compatibility.json"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(compat, indent=2) + "\n")
-        n_plat = len(compat["platforms"])
-        n_size = len(compat["binarySizes"])
-        print(f"  {slug}: {n_plat} platforms, {n_size} sizes")
-        written += 1
-
-    print(f"\nWrote {written} compatibility.json files.")
-    if written == 0 and not args.soft:
-        print("Error: no extensions resolved any binaries — is the repository reachable?",
-              file=sys.stderr)
-        sys.exit(1)
+        target.write_text(json.dumps(snapshot, indent=2) + "\n")
+        counts = ", ".join(f'{r["distribution"]} {r["version"]}: {sum(len(p["architectures"]) for p in r["platforms"])} builds'
+                           for r in snapshot["compatibilityReleases"])
+        print(f"  {slug}: {counts}", flush=True)
+    print(f"Wrote {len(snapshots)} compatibility snapshots.")
 
 
 if __name__ == "__main__":
