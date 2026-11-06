@@ -523,6 +523,7 @@ async function runRepl(
 interface Props {
   extensionName: string;
   installSource: string;
+  mode?: "example" | "session";
   /** The example SQL this shell was opened from; auto-run on start. */
   sql: string;
   /** Raw check-fixtures.sql, run silently at session start so examples that
@@ -536,7 +537,7 @@ interface Props {
 // cold start and from a second shell on the same page can be told apart.
 let engineBooted = false;
 
-export default function ExampleShell({ extensionName, installSource, sql, fixtures, onClose }: Props) {
+export default function ExampleShell({ extensionName, installSource, sql, fixtures, onClose, mode = "example" }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -686,6 +687,10 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
         // Clear the booting line (carriage return + erase line) now that the
         // engine, extension, and session are ready.
         rl.write("\r\x1b[2K");
+        if (ext.ok && mode === "session") {
+          rl.println(`${extensionName} is loaded. Enter SQL below to use the extension.`);
+          rl.println("");
+        }
 
         await runRepl(
           { term, rl, session, tableFromIPC },
@@ -698,7 +703,7 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
             },
             extError: ext.ok
               ? undefined
-              : `${extensionName} may not have a WebAssembly build yet — the SQL below may not run in-browser.`,
+              : `Could not load ${extensionName}: ${ext.error ?? 'The extension is unavailable in this browser session.'}`,
             onExampleRun: (exampleOk) => {
               if (ext.ok) trackTry("try_extension_ready", { ...base, load_ms: loadMs, warm, example_ok: exampleOk });
             },
@@ -718,7 +723,7 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
       disposed = true;
       cleanup();
     };
-  }, [extensionName, installSource, sql, fixtures]);
+  }, [extensionName, installSource, sql, fixtures, mode]);
 
   return (
     <div className="example-shell" data-example-status={exampleStatus}>
@@ -728,7 +733,7 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
         <span className="example-shell-dot" aria-hidden="true" />
         <span>Haybarn shell · {extensionName}</span>
         {status === "loading" && <span className="example-shell-booting">· booting…</span>}
-        {status === "ready" && exampleStatus === "failed" && <span role="status">· example failed</span>}
+        {status === "ready" && exampleStatus === "failed" && <span role="status">· {mode === "session" ? "extension failed to load" : "example failed"}</span>}
         {onClose && (
           <button
             type="button"

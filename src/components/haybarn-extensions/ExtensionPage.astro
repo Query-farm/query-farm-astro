@@ -7,7 +7,8 @@ import DuckDBExtensionPragmaDoc from '../docs/DuckDBExtensionPragmaDoc.astro';
 import CodeBlock from '../ui/CodeBlock.astro';
 import QueryResult from '../docs/QueryResult.astro';
 import ExtensionKindIcon from '../docs/ExtensionKindIcon.astro';
-import { categories, categoryPath, directoryPath, referenceExtensions, platformLabel, prototypes, type PrototypeName } from '../../data/haybarn-extensions';
+import { catalog, categories, categoryPath, directoryPath, referenceExtensions, platformLabel, prototypes, type PrototypeName } from '../../data/haybarn-extensions';
+import { installationSQL } from '../../data/haybarn-extensions/details.mjs';
 import type { FunctionDocData } from '../../data/extension-types';
 
 interface Props { name: PrototypeName; }
@@ -16,6 +17,7 @@ const extension = referenceExtensions.find(entry => entry.name === name)!;
 const prototype = prototypes[name];
 const { inventory, docs } = prototype;
 const version = inventory.engine.library_version.replace(/^v/, '');
+const current = version === catalog.latestVersion;
 const availability = extension.availability.filter(item => item.version === version);
 const parametersDocs = docs.parameters as Record<string, { description: string; default?: string }>;
 const sourceSections = docs.sections as Record<string, string[]>;
@@ -40,7 +42,8 @@ const functions: FunctionDocData[] = inventory.functions.map(fn => ({
   returns: name === 'sheetreader' ? 'Columns and types are determined from the selected worksheet. Use `types` to specify the column types.' : 'Columns are determined from the selected sheet or range. Use `all_varchar` to read all values as text.',
   examples: fn.examples.map(code => ({ code, description: '' })),
 }));
-const summary = prototype.description;
+const summary = current ? prototype.description : `${prototype.description} Reference for Haybarn ${version}; no confirmed build for Haybarn ${catalog.latestVersion}.`;
+const title = current ? prototype.title : `${prototype.title} ${version}`;
 const exampleOutput = name === 'sheetreader' ? { columns: ['product', 'revenue'], rows: [['Coffee', '540'], ['Tea', '180']] } : null;
 const specimen = `SELECT product, sum(revenue) AS revenue\nFROM sheetreader('sales.xlsx', sheet_name = 'Sales', has_header = true)\nGROUP BY product\nORDER BY revenue DESC;`;
 const toc = [
@@ -53,7 +56,7 @@ const toc = [
 ];
 ---
 
-<PageLayout title={prototype.title} description={summary} ogImage={prototype.ogImage} jsonLd={{ '@context': 'https://schema.org', '@type': 'SoftwareApplication', name: prototype.name, description: summary, image: new URL(prototype.ogImage, Astro.site).href, applicationCategory: 'DeveloperApplication', url: `https://query.farm${directoryPath}/${name}`, codeRepository: extension.repository, license: extension.license }}>
+<PageLayout title={title} description={summary} ogImage={prototype.ogImage} jsonLd={{ '@context': 'https://schema.org', '@type': 'TechArticle', headline: title, description: summary, image: new URL(prototype.ogImage, Astro.site).href, url: `https://query.farm${directoryPath}/${name}/`, about: { '@type': 'SoftwareSourceCode', name: prototype.name, codeRepository: extension.repository, license: extension.license, runtimePlatform: `Haybarn ${version}` } }}>
   <HaybarnSubNav />
   <ExtensionHero name={prototype.name} description={summary} containerClass="section-container" />
   <div class="community-extension section-container">
@@ -65,8 +68,9 @@ const toc = [
       <a class="docs-link" href={extension.repository}>Source on GitHub ↗</a>
     </aside>
     <div class="extension-body">
+      {!current && <p>This reference covers Haybarn <strong>{version}</strong>. A build for Haybarn {catalog.latestVersion} has not been confirmed. Browse the <a href={directoryPath}>current extension directory</a> for available builds.</p>}
       <div class="extension-category-links" data-pagefind-ignore>{extension.categories.map(id => <a href={categoryPath(id)}>{categories.find(category => category.id === id)?.name}</a>)}</div>
-      <section id="install"><h2>Install</h2><CodeBlock code={`INSTALL ${name} FROM community;\nLOAD ${name};`} tryable={false} /></section>
+      <section id="install"><h2>Install in Haybarn {version}</h2><CodeBlock code={version.startsWith('2.') ? installationSQL(name) : `INSTALL ${name} FROM community;\nLOAD ${name};`} tryable={false} /></section>
       {name === 'gsheets' && <section id="authentication"><h2>Connect your account</h2><p>Run this in your local Haybarn session to sign in with Google. You need access to the spreadsheet you want to query.</p><CodeBlock code="CREATE SECRET (TYPE gsheet);" tryable={false} /><p>For a pipeline or application, the extension also supports access tokens and service account keys. Follow the <a href={`${prototype.docsUrl}/#authenticate`}>developer’s authentication instructions</a>.</p><div class="registered-secret"><ExtensionKindIcon kind="secret" /><span>Secret type <code>{inventory.secret_types[0]?.type}</code> · default provider <code>{inventory.secret_types[0]?.default_provider}</code></span></div></section>}
       <section id="functions"><h2>Arguments & returns</h2>{functions.map(fn => <DuckDBExtensionFunctionDoc {...fn} headingLevel="h3" />)}<p class="reference-source">Signatures from Haybarn {version}; explanations from the <a href={docs.parameterSource}>developer documentation</a>.</p></section>
       <section id="examples"><h2>{name === 'sheetreader' ? 'Query an Excel workbook' : 'Read a spreadsheet'}</h2>

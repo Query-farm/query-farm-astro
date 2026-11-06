@@ -52,19 +52,23 @@ function describeExtension(entry: typeof snapshot.extensions[number]) {
   const aliases = (searchAliases as Record<string, string[]>)[entry.name] ?? [];
   const repository = `https://github.com/${entry.repo.github}`;
   const linkedDocs = /\[[^\]]*(?:documentation|docs)[^\]]*\]\((https?:\/\/[^)]+)\)/i.exec(String(entry.docs.extended_description ?? ''))?.[1];
-  const href = existing ? `/products/extensions/${entry.name}` : prototype ? `${directoryPath}/${entry.name}` : linkedDocs || repository;
+  const href = existing ? `/products/extensions/${entry.name}` : `${directoryPath}/${entry.name}`;
   const name = existing?.name || prototype?.name || entry.name;
+  const owner = entry.repo.github.split('/')[0];
   return {
     ...entry, name: entry.name, displayName: name, description: plain(entry.description),
-    publisher: queryFarm ? 'Query Farm' : entry.repo.github.split('/')[0], queryFarm,
+    publisher: queryFarm ? 'Query Farm' : owner,
+    publisherId: queryFarm ? 'query-farm' : owner.toLowerCase(), queryFarm,
     categories: categoryList, aliases,
     icon: existing?.icon || prototype?.icon || categories.find(c => c.id === categoryList[0])?.icon || 'puzzle-piece',
-    href, external: !href.startsWith('/'), repository,
+    href, external: false, repository, docsUrl: prototype?.docsUrl || linkedDocs || repository,
+    hasQueryFarmPage: !!existing,
     searchText: plain([entry.name, name, entry.description, ...aliases, ...categoryList.map(id => categories.find(c => c.id === id)?.name), prototype?.inventory.functions.map(fn => fn.function_name).join(' ')].join(' ')),
     searchContent: plain([entry.description, entry.docs.hello_world, entry.docs.extended_description, ...aliases, ...(prototype?.inventory.functions.map(fn => `${fn.function_name} ${fn.parameters.join(' ')} ${fn.description ?? ''}`) ?? [])].join(' ')),
   };
 }
 export const extensions = catalog.extensions.map(describeExtension).sort((a, b) => a.name.localeCompare(b.name));
+export const communityExtensions = extensions.filter(extension => !extension.hasQueryFarmPage && !prototypes[extension.name as PrototypeName]);
 
 // Keep references for previously captured builds reachable across major releases.
 // Only the current catalog participates in extension discovery.

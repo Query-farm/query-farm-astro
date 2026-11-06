@@ -570,6 +570,9 @@ export default defineConfig({
     }
   },
   vite: {
+    // A production build must not replace the optimized dependencies used by
+    // the running dev server (which otherwise returns Outdated Optimize Dep).
+    cacheDir: process.env.NODE_ENV === 'production' ? 'node_modules/.vite-build' : 'node_modules/.vite-dev',
     plugins: [tailwindcss(), searchDevPlugin()],
     server: {
        allowedHosts: [

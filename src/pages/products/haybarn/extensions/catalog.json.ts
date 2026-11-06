@@ -6,7 +6,7 @@ export function GET() {
     extensions: extensions.map(extension => ({
       name: extension.name, displayName: extension.displayName, description: extension.description,
       publisher: extension.publisher, categories: extension.categories, aliases: extension.aliases,
-      href: extension.href, repository: extension.repository, license: extension.license,
+      href: extension.href, repository: extension.repository, docsUrl: extension.docsUrl, license: extension.license,
       availability: extension.availability, searchContent: extension.searchContent,
     })),
   }), { headers: { 'Content-Type': 'application/json; charset=utf-8' } });

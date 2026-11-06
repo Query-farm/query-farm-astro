@@ -5,7 +5,9 @@ import { examples } from './wasm-examples';
 import { captureTerminal, terminalText, waitForPrompt, runSQL, requireLoadedExtension, runButton } from './wasm-helpers';
 import { wasmPages, type WasmPage } from './wasm-pages';
 
-const pages = wasmPages();
+// Example runners promise executable documentation. Session launchers promise
+// an installed extension, checked by all-examples.spec and the session tests.
+const pages = wasmPages().filter(page => page.mode === 'example');
 const runners = [...new Map(pages.map(({ extension, source }) => [`${extension}:${source}`, { extension, source }])).values()]
   .sort((a, b) => a.extension.localeCompare(b.extension) || a.source.localeCompare(b.source));
 
@@ -29,7 +31,7 @@ async function openExample(page: Page, extension: string, source = 'community') 
   return target;
 }
 
-test('every extension offering a browser runner has a documented execution check', () => {
+test('every extension offering runnable examples has a documented execution check', () => {
   for (const { extension, source } of runners) examplePage(extension, source);
 });
 

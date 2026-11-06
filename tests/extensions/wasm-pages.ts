@@ -28,6 +28,7 @@ export interface WasmPage {
   path: string;
   extension: string;
   source: string;
+  mode: 'example' | 'session';
   selector: string;
   sql: string[];
 }
@@ -57,6 +58,7 @@ export function wasmPages(): WasmPage[] {
         path: `/${file.replace(/index\.html$/, '')}`,
         extension: extension.toLowerCase(),
         source,
+        mode: props.mode?.[1] ?? 'example',
         selector: props.codeBlockSelector?.[1] ?? 'pre[data-language="sql"]',
         // Used only to locate the supplemental result-oracle smoke queries.
         // Exhaustive coverage selects target.selector in the hydrated browser.
