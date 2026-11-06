@@ -1,0 +1,76 @@
+---
+title: Test a worker through SQL
+description: Verify worker behavior, Arrow transport, and SQL binding with repeatable assertions in any VGI SDK language.
+---
+
+import CodeBlock from '../../../../../components/ui/CodeBlock.astro';
+
+A worker is ready to use when the engine can attach it and its SQL returns the expected results.
+Test the business logic and the actual SQL interface. The same approach works for Python,
+TypeScript, Go, Rust, Java, and C#.
+
+## Three useful checks
+
+1. **Business logic:** known values, invalid inputs, and the behavior of the library or API you wrap.
+2. **Worker behavior:** schema declarations, nulls, empty results, and more than one Arrow batch.
+3. **SQL integration:** load VGI, attach the real worker, discover its catalog, and assert query results.
+
+Use fixtures for remote APIs so tests remain repeatable. Test live credentials and services
+separately when those checks are needed. For aggregate functions, include grouped SQL and the
+combine/finalize behavior. For table functions, verify pagination and explicit completion.
+
+## Use the portable verifier
+
+The [VGI skills repository](https://github.com/Query-farm/vgi-skills) includes a small verifier
+that launches a worker through DuckDB or Haybarn and writes a JSON report. The test driver uses Python;
+the worker uses whichever language you choose.
+
+Create `vgi-worker.json` in the worker project:
+
+<CodeBlock code={`{
+  "schema_version": 1,
+  "catalog": "demo",
+  "worker": ["./bin/my-worker"],
+  "checks": [
+    {"name": "known value", "sql": "SELECT demo.main.double(21)", "rows": [[42]]},
+    {"name": "null", "sql": "SELECT demo.main.double(NULL::BIGINT)", "rows": [[null]]},
+    {"name": "multiple batches", "sql": "SELECT count(*), sum(demo.main.double(i))::BIGINT FROM range(5000) t(i)", "rows": [[5000, 24995000]]}
+  ]
+}`} lang="json" title="vgi-worker.json" tryable={false} />
+
+Replace `worker` with the actual command arguments for your project. Build compiled workers first.
+Run from the project directory, using the path where you installed the skill:
+
+<CodeBlock code={`uv run --with duckdb==2.0.0 python \\
+  /path/to/vgi-worker/scripts/verify_worker.py \\
+  --project . --timeout 120 --output verification.json`} lang="bash" title="Verify the worker" tryable={false} />
+
+Every check needs expected rows. Add `ORDER BY` when ordering matters. The verifier returns a
+nonzero exit code on a failed assertion, startup error, or timeout. Inspect the JSON report and
+stderr; a startup or import failure is not a passing integration test.
+
+## Keep versions together
+
+Pin the SDK, runtime dependencies, and engine used by the project. Use examples from that SDK
+release. Repository main and a website page can describe a different release, including changes
+to schema paths or protocol versions. Rebuild and restart the worker before verifying a change.
+
+The default engine is stock DuckDB 2.0.0. The verifier configures the Query Farm repository, then runs `INSTALL vgi FROM query_farm` and `LOAD vgi FROM query_farm`. Use `--engine haybarn` with `haybarn==2.0.0rc11` to keep a Haybarn project’s engine. See the [complete setup](/vgi/build-with-an-agent/#engine).
+
+## Existing SQLLogicTest suites
+
+Keep a working project test harness. The published `haybarn-unittest` runner can execute SQLLogicTest
+fixtures without a local engine checkout:
+
+<CodeBlock code={`uvx haybarn-unittest==2.0.0rc11 test/sql/worker.test`} lang="bash" tryable={false} />
+
+The project must stage the test under its expected directory and supply the actual worker path.
+The [C# testing guide](/vgi/docs/csharp/how-to/testing/) shows the established example workflow.
+
+## Test what you distribute
+
+Extract or install the release artifact into a fresh directory and repeat the SQL checks.
+This catches missing runtime files and dependencies hidden by a development checkout.
+
+For agent-assisted implementation and repair, use the
+[agent quickstart](/vgi/build-with-an-agent/) or install the standalone `vgi-test` skill.

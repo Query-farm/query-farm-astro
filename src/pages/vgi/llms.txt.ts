@@ -17,6 +17,13 @@ export async function GET() {
     '> Protocol concepts and implementation documentation for building Vector Gateway Interface workers and clients.', '',
     `- [VGI overview](${origin}/vgi/)`,
     `- [Documentation home](${origin}/vgi/docs/)`, '',
+    '## Build with a coding agent', '',
+    'For a new worker, ask the developer to choose Python, TypeScript, Go, Rust, Java, or C# unless they already specified a language. Preserve the language of existing projects.', '',
+    `- [Agent quickstart](${origin}/vgi/build-with-an-agent/): Install the portable skill, choose a language, and build and test a worker locally.`,
+    '- [VGI skills](https://github.com/Query-farm/vgi-skills): Versioned language recipes, SQL verification helpers, packaging, and fresh-session evaluations.',
+    `- [Test a Python worker](${origin}/vgi/docs/python/how-to/testing/)`,
+    `- [Test a TypeScript worker](${origin}/vgi/docs/typescript/how-to/testing/)`,
+    'Use published SDK versions and matching release examples. The skills verify through stock DuckDB 2.0.0. Configure the Query Farm extension repository, then INSTALL vgi FROM query_farm and LOAD vgi FROM query_farm. Haybarn is also supported.', '',
   ];
 
   for (const section of sections) {

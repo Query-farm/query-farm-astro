@@ -190,6 +190,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'vgi/docs/concepts' },
             { label: 'Function lifecycle', slug: 'vgi/docs/concepts/lifecycle' },
             { label: 'Argument serialization', slug: 'vgi/docs/concepts/argument-serialization' },
+            { label: 'Test a worker through SQL', slug: 'vgi/docs/concepts/testing' },
           ],
         },
         {
@@ -210,6 +211,7 @@ export default defineConfig({
           label: 'How-to guides',
           items: [
             { label: 'Overview', slug: 'vgi/docs/python/how-to' },
+            { label: 'Test a worker', slug: 'vgi/docs/python/how-to/testing' },
             { label: 'Expose a catalog', slug: 'vgi/docs/python/how-to/catalogs' },
             { label: 'Publish global functions', slug: 'vgi/docs/python/how-to/global-functions' },
             { label: 'Add a custom COPY format', slug: 'vgi/docs/python/how-to/copy-formats' },
@@ -344,6 +346,7 @@ export default defineConfig({
               label: 'How-to guides',
               items: [
                 { label: 'Overview', slug: 'vgi/docs/typescript/how-to' },
+            { label: 'Test a worker', slug: 'vgi/docs/typescript/how-to/testing' },
                 { label: 'Value representations', slug: 'vgi/docs/typescript/how-to/value-representations' },
                 { label: 'Runtimes & entry points', slug: 'vgi/docs/typescript/how-to/runtimes' },
                 { label: 'Expose a catalog', slug: 'vgi/docs/typescript/how-to/catalogs' },
