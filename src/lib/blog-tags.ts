@@ -64,7 +64,8 @@ export async function getTagGroups(posts?: BlogPost[]): Promise<TagGroup[]> {
   return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
-/** Reading time from the raw markdown body. 200 wpm, floored at one minute. */
+/** Estimate at 200 wpm, excluding HTML markup and its non-visible attributes. */
 export function readingTime(body: string | undefined): number {
-  return Math.max(1, Math.round((body ?? '').trim().split(/\s+/).length / 200));
+  const text = (body ?? '').replace(/<!--[\s\S]*?-->|<[^>]*>/g, ' ');
+  return Math.max(1, Math.round(text.trim().split(/\s+/).length / 200));
 }
