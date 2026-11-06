@@ -1,6 +1,8 @@
 import { groupFunctions, compareSnapshots, signatureKey } from '../../../scripts/haybarn-functions/catalog.mjs';
 import { defaultSnapshotId } from '../data/settings';
-import { snapshotModules } from '../data/snapshots.generated';
+// Full snapshots in Astro and Node; metadata plus a loader in the Pages
+// Functions build (package.json "imports"). See ../data/function-data-paths.mjs.
+import { snapshotModules } from '#haybarn-snapshots';
 import { signatureParts } from './arguments';
 import { operatorNotation } from '../../../scripts/haybarn-functions/notation.mjs';
 import { currentReferenceIds } from '../../../scripts/haybarn-functions/canonicals.mjs';
@@ -55,8 +57,13 @@ export const snapshots: Snapshot[] = (snapshotModules as Snapshot[]).sort((a, b)
   a.engine === b.engine ? b.engineVersion.localeCompare(a.engineVersion, undefined, { numeric: true }) : a.engine === 'haybarn' ? -1 : 1);
 export const defaultSnapshot = snapshots.find(s => s.id === defaultSnapshotId)!;
 if (!defaultSnapshot) throw new Error(`Missing ${defaultSnapshotId}. Run npm run refresh:haybarn to capture the installed release before building.`);
-const equivalentCurrentIds = currentReferenceIds(snapshots, defaultSnapshotId);
-export function canonicalSnapshot(snapshot: Snapshot) { return equivalentCurrentIds.has(snapshot.id) ? defaultSnapshot : snapshot; }
+// Computed on first use: it can compare whole function catalogs, which the
+// Pages Functions build only has after loadSnapshotData().
+let equivalentCurrentIds: Set<string> | undefined;
+export function canonicalSnapshot(snapshot: Snapshot) {
+  equivalentCurrentIds ??= currentReferenceIds(snapshots, defaultSnapshotId);
+  return equivalentCurrentIds.has(snapshot.id) ? defaultSnapshot : snapshot;
+}
 
 export const categories = [
   { id: 'text', name: 'Text & patterns', icon: 'Aa', short: 'Clean, split, match, and reshape strings.', intent: 'Make messy text useful', color: 'clay' },

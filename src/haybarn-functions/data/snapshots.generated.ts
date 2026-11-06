@@ -12,3 +12,6 @@ import snapshot8 from './snapshots/haybarn-2.0.0-rc12.json';
 import snapshot9 from './snapshots/haybarn-2.0.0-rc8.json';
 
 export const snapshotModules = [snapshot0, snapshot1, snapshot2, snapshot3, snapshot4, snapshot5, snapshot6, snapshot7, snapshot8, snapshot9];
+
+/** The snapshots are imported above, so there is nothing to fetch. See snapshots.edge.generated.ts. */
+export async function loadSnapshotData(_fetchJson: (path: string) => Promise<unknown>): Promise<void> {}

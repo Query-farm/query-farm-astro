@@ -61,7 +61,8 @@ Pagefind and the Pages Function search endpoint serve separate concerns:
   the page's release selected by default. Readers can explicitly include other
   releases. Compact search records contain overloads, arguments, examples,
   macro bodies, aliases, and dialect translations. They are generated once
-  into the Function bundle rather than multiplied into Pagefind fragments.
+  into a single static file the Function fetches, rather than multiplied into
+  Pagefind fragments.
 - Haybarn guide prose remains in Pagefind under `scope:haybarn` and
   `snapshot:guide`. Browser search combines those guide and function results.
 
@@ -80,8 +81,21 @@ renderer. Ordinary HTML and asset requests stay on Pages' free static path.
 The build intentionally omits the per-function JSON and Markdown files, so
 adding a snapshot does not add thousands of deployable assets.
 
+Cloudflare rejects a Functions bundle over 25 MiB uncompressed, and bundling
+the snapshots and search records reached 31 MiB. The Functions therefore get
+snapshot metadata only. `package.json` `imports` resolves `#haybarn-snapshots`
+and `#haybarn-search` to metadata plus loaders under the `workerd` condition,
+and to the full data everywhere else (Astro, tests, the preview server). On its
+first request an isolate fetches the snapshots' function lists, or the search
+records, from minified static copies under `/haybarn-function-data/` through
+`env.ASSETS`. `npm run prepare:function-data` writes those copies to
+`public/haybarn-function-data/`, which is gitignored. Paths are in
+`src/haybarn-functions/data/function-data-paths.mjs`. Adding a snapshot now
+adds a static file, not bundle size.
+
 `npm run check:pages-functions` compiles the Pages Functions without deploying
-them. The custom `public/_routes.json` limits invocations to machine resources.
+them and fails when the bundle exceeds a 20 MiB budget. The custom
+`public/_routes.json` limits invocations to machine resources.
 `npm run preview` runs Pages with its Functions locally; the browser suite uses
 a lightweight equivalent server so it does not have to hash the full static
 tree before every test run.

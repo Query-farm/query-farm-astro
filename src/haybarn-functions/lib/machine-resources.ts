@@ -1,6 +1,9 @@
 import { snapshots, defaultSnapshot, getFunctions, type Snapshot } from './catalog';
 import { exportComparison, exportFunction, exportIndex, functionMarkdown, indexMarkdown } from './agent-docs';
-import generatedSearchRecords from '../data/search.generated.json';
+// Both resolve to bundled data in Node and to static-file loaders in the Pages
+// Functions build (package.json "imports"). See ../data/function-data-paths.mjs.
+import { loadSnapshotData } from '#haybarn-snapshots';
+import { getSearchRecords, loadSearchRecords } from '#haybarn-search';
 
 const CONTENT_SIGNAL = 'search=yes, ai-input=yes, ai-train=no';
 const MACHINE_ROOT = '/products/haybarn/functions/';
@@ -11,17 +14,6 @@ export interface RenderedResource {
   status: number;
   headers: Record<string, string>;
 }
-
-interface SearchRecord {
-  snapshotId: string;
-  release: string;
-  name: string;
-  description: string;
-  url: string;
-  content: string;
-}
-
-const searchRecords = generatedSearchRecords as SearchRecord[];
 
 function json(value: unknown, status = 200): RenderedResource {
   return {
@@ -87,7 +79,7 @@ function search(url: URL) {
   const selected = release === 'all' ? new Set(snapshots.map(snapshot => snapshot.id)) : new Set([release]);
   if (release !== 'all' && !snapshotById(release)) return json({ error: 'unknown_release', release }, 400);
 
-  const ranked = searchRecords.flatMap(record => {
+  const ranked = getSearchRecords().flatMap(record => {
     if (!selected.has(record.snapshotId)) return [];
     if (!terms.every(term => record.content.includes(term))) return [];
     const name = record.name.toLocaleLowerCase('en-US');
@@ -155,14 +147,32 @@ export function renderMachineResource(input: string | URL): RenderedResource | n
   return null;
 }
 
+interface AssetFetcher { fetch(input: Request | URL | string): Promise<Response> }
+
 /** Shared Pages Function handler for the exact machine-resource routes. */
-export function onRequestMachineResource(context: { request: Request }): Response {
-  const { request } = context;
+export async function onRequestMachineResource(context: { request: Request; env: { ASSETS: AssetFetcher } }): Promise<Response> {
+  const { request, env } = context;
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return new Response(null, {
       status: 405,
       headers: { Allow: 'GET, HEAD', 'Content-Signal': CONTENT_SIGNAL },
     });
+  }
+
+  // Load the data this isolate has not fetched yet: search needs only the
+  // records (snapshot ids come from the bundled metadata), everything else the
+  // snapshots. Both are no-ops outside the Pages Functions build.
+  const fetchJson = async (path: string) => {
+    const response = await env.ASSETS.fetch(new URL(path, request.url));
+    if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
+    return response.json();
+  };
+  try {
+    if (new URL(request.url).pathname === `${API_ROOT}search.json`) await loadSearchRecords(fetchJson);
+    else await loadSnapshotData(fetchJson);
+  } catch {
+    const unavailable = json({ error: 'data_unavailable' }, 503);
+    return new Response(request.method === 'HEAD' ? null : unavailable.body, { status: 503, headers: unavailable.headers });
   }
 
   let resource: RenderedResource | null;
