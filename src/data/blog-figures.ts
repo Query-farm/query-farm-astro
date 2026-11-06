@@ -60,6 +60,29 @@ export const BLOG_FIGURES: Record<string, BlogFigure> = {
     sparkRows: 3,
   },
 
+  'lindel-duckdb-2-curve-keys': {
+    title: 'Sorting by a Hilbert key made box queries 2.5× faster',
+    subtitle:
+      'Plain coordinate filter over 20 million random points in 100,000-row groups, before and after sorting by hilbert_encode(x, y). Median time; lower is better.',
+    rowHeader: 'Query',
+    series: [
+      { label: 'Random order', color: REFERENCE, unit: ' ms' },
+      { label: 'Hilbert-sorted', color: HAYBARN, unit: ' ms' },
+    ],
+    noteLabel: 'Row groups read',
+    precision: 0,
+    rows: [
+      { label: 'Parquet, small box', values: [20, 8], note: '200 → 2' },
+      { label: 'Parquet, large box', values: [20, 8], note: '200 → 7' },
+      { label: 'Native table, small box', values: [6, 2], note: 'zone maps' },
+      { label: 'Native table, large box', values: [6, 3], note: 'zone maps' },
+    ],
+    source:
+      'AWS c6g.12xlarge, 16 threads, median of five runs in a warm session. Row groups overlapping the box from parquet_metadata().',
+    sparkLabel: 'Box query time, random vs Hilbert-sorted',
+    sparkRows: 2,
+  },
+
   'one-query-one-arrow-stream-adbc-duckdb-2': {
     title: 'DuckDB finished these PostgreSQL queries 10–11× faster',
     subtitle:

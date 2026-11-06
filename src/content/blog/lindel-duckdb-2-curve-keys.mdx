@@ -1,0 +1,190 @@
+---
+title: "Lindel for DuckDB 2.0: curve keys that sort like your data"
+description: "Our Hilbert and Morton extension now keeps negative numbers, floats and dates in order, quantizes lat/lon onto a grid, and decomposes box queries into key ranges. Sorting 20 million points by a Hilbert key cut a Parquet box query from 200 row groups to 2. Joining on the key ranges never helped inside DuckDB."
+pubDate: 2026-11-06
+author: "Query Farm Team"
+tags: ["DuckDB", "Extensions", "Engineering", "Performance", "Geospatial"]
+heroImage: "/media/posts/lindel-duckdb-2-curve-keys/social.png"
+heroImageAlt: "Lindel for DuckDB 2.0: curve keys that sort like your data — engineering from Query.Farm."
+showDescription: false
+draft: false
+nextStep:
+  title: "Lindel"
+  pitch: "Hilbert and Morton (Z-order) keys for DuckDB: sort Parquet by a space-filling curve, quantize lat/lon onto a grid, and turn box queries into key ranges."
+  href: "/products/extensions/lindel/"
+  cta: "Explore Lindel"
+  extension: "lindel"
+  installNote: "The new functions and order-preserving keys need the DuckDB 2.0 build."
+  repo: "https://github.com/Query-farm/lindel"
+---
+
+import BarTable from '../../components/charts/BarTable.astro';
+import { BLOG_FIGURES } from '../../data/blog-figures';
+
+<aside class="article-brief" aria-labelledby="article-brief-title">
+  <div class="article-brief-inner">
+    <p id="article-brief-title" class="article-brief-label">In brief</p>
+    <ul>
+      <li>In the DuckDB 2.0 build of <a href="/products/extensions/lindel/">Lindel</a>, keys from negative numbers, floats, dates, timestamps and decimals sort like the values. <strong>Stored keys from signed or floating-point inputs change</strong>, so re-encode them after upgrading. Unsigned keys are unchanged.</li>
+      <li>New functions quantize latitude/longitude and other bounded values onto a grid, decode keys by naming their type, and turn a box into the key ranges that cover it.</li>
+      <li>Sorting 20 million points by a Hilbert key let a box query read 2 of 200 Parquet row groups instead of all 200, and run 2.5× faster. Joining on our own key ranges never beat a plain coordinate filter in DuckDB.</li>
+    </ul>
+  </div>
+</aside>
+
+[Lindel](/products/extensions/lindel/) computes Hilbert and Morton (Z-order) keys in DuckDB. It maps several coordinates to one integer so that sorting by the integer keeps nearby points near each other. Write a Parquet file in that order and each row group covers a compact area, so a query that filters on several columns can skip most of the file using min/max statistics.
+
+<figure>
+  <img src="/blog/lindel-duckdb-2-curve-keys/curves.svg" alt="Two 8 by 8 grids with each cell labelled by its key. On the Hilbert grid, a line drawn through the cells in key order moves only between neighbouring cells, starting at key 0 in the bottom-left corner. On the Morton grid, the line zig-zags through each 2 by 2 block and makes long diagonal jumps between quadrants." width="760" height="440" loading="lazy" />
+  <figcaption>Real keys from <code>hilbert_encode</code> and <code>morton_encode</code> for an 8 × 8 grid. The line follows key order.</figcaption>
+</figure>
+
+The extension was a thin wrapper around the [`lindel` Rust crate](https://crates.io/crates/lindel): pass a fixed-size array, get a key back. Working on the DuckDB 2.0 build, we found that the keys didn't sort like the values for half the types it accepted. We fixed that, then built the functions people kept writing by hand: grids for latitude and longitude, decoding by type, and box-to-range decomposition. Then we benchmarked whether the ranges help DuckDB at all. They don't.
+
+## Negative numbers sorted after positive ones
+
+Lindel used to encode signed integers and floats by their raw bit patterns. In two's complement, `-1` has every bit set, so it encoded as the largest possible coordinate. In IEEE 754, the sign bit is the top bit and negative magnitudes count upward from it. Sorting one-dimensional keys put the values in this order:
+
+| Values | Previous builds | DuckDB 2.0 build |
+| --- | --- | --- |
+| `INTEGER` −2 to 2 | 0, 1, 2, −2, −1 | −2, −1, 0, 1, 2 |
+| `DOUBLE` −2 to 2 | 0, 1, 2, −1, −2 | −2, −1, 0, 1, 2 |
+
+<figure>
+  <img src="/blog/lindel-duckdb-2-curve-keys/sign-order.svg" alt="Two number lines from minus 4 to 4 with arcs joining the values in key order. Previous builds: the arcs run from 0 up to 4, jump back across the whole line to minus 4, then run up to minus 1. DuckDB 2.0 build: the arcs run in one pass from minus 4 to 4." width="760" height="330" loading="lazy" />
+  <figcaption>Sort order of <code>TINYINT</code> keys from −4 to 4. With raw bits, −4 is 0xFC and −1 is 0xFF, so negative values sort after every positive one.</figcaption>
+</figure>
+
+With more dimensions, the curve kept points of the same sign together but split the space at zero. A box that crossed an axis landed in up to 2<sup>d</sup> separate parts of the curve. Nothing that relies on key order, such as decomposing a box into key ranges, could work on top of that.
+
+The DuckDB 2.0 build maps every coordinate to order-preserving bits before encoding. Signed integers have their sign bit flipped. For floats, negative values have all bits inverted and positive values have the sign bit set, which is the standard IEEE 754 total-order trick. Dates, times, timestamps and decimals use the same mapping on their integer storage, so dates before 1970 sort first:
+
+```sql
+SELECT x, hilbert_encode([x]::INTEGER[1]) AS key
+FROM (VALUES (-2), (-1), (0), (1), (2)) t(x)
+ORDER BY key;
+```
+
+| x | key |
+|---:|---:|
+| −2 | 2147483646 |
+| −1 | 2147483647 |
+| 0 | 2147483648 |
+| 1 | 2147483649 |
+| 2 | 2147483650 |
+
+Unsigned keys are unchanged. Keys computed from signed or floating-point values by earlier builds are different, so re-encode anything you've stored. Decoding a signed key needs `return_unsigned = false`, or the new typed form.
+
+We also stopped the Rust side from panicking across the FFI boundary. An unsupported argument now returns an error to DuckDB instead of aborting the process.
+
+## Latitude, longitude and other bounded values
+
+The documentation used to tell you to shift and scale coordinates yourself: `round((lat + 90) * 1e6)::UINTEGER`. Order-preserving keys make that unnecessary for correctness, but encoding `DOUBLE` values directly still isn't a good layout. Two doubles make a 128-bit key whose top bits come from the exponent, so the curve runs on a roughly logarithmic scale.
+
+`hilbert_encode_bounded` does the quantization properly. It scales each coordinate from a minimum to a maximum onto `2^bits` cells and returns the narrowest unsigned type that holds the key. `hilbert_encode_latlon` is the same function with latitude and longitude bounds and 32 bits per axis, about a centimetre of resolution:
+
+```sql
+SELECT hilbert_encode_latlon(52.52, 13.405) AS berlin,
+       hilbert_decode_latlon(hilbert_encode_latlon(52.52, 13.405)) AS decoded;
+```
+
+| berlin | decoded |
+|---:|---|
+| 13413847537087438956 | `{'lat': 52.520000010263175, 'lon': 13.40500000398606}` |
+
+Every cell of a full grid gets a distinct key, from 0 to 2<sup>dimensions × bits</sup> − 1. The decoders return the cell centre. The bounded encoder also takes a DuckDB 2.0 `GEOMETRY` and encodes the centre of its bounding box. Values outside the bounds clamp to the edge cells, while `hilbert_encode_latlon` rejects invalid coordinates.
+
+Grid keys nest, so a key's parent cell `k` levels up is `key >> (dimensions × k)`. We considered dedicated parent, child and neighbour functions and left them out, because a shift or a decode in SQL does the same job.
+
+## More types, a shorter call, and decoding by name
+
+Coordinates can now be `BOOLEAN`, `DATE`, `TIME`, any `TIMESTAMP` precision, `DECIMAL` up to 18 digits, and `ENUM`, as well as integers and floats. You can pass them as separate arguments instead of building a cast array. They're cast to their common type, and a `NULL` argument gives a `NULL` key:
+
+```sql
+SELECT hilbert_encode(pickup_date, dropoff_date) FROM trips;
+```
+
+The original decoder needed the dimension count plus two flags, and couldn't express a date. The new form names the type that was encoded:
+
+```sql
+SELECT hilbert_decode(hilbert_encode(DATE '2024-03-01', DATE '1965-07-04'), 'DATE[2]');
+-- [2024-03-01, 1965-07-04]
+```
+
+It rejects keys too large for the type, and keys that would decode to an invalid `BOOLEAN` or `ENUM` value.
+
+## Box queries as key ranges
+
+The feature we most expected to matter was range decomposition. Given a box, `hilbert_ranges` returns the sorted, disjoint key ranges that cover it:
+
+```sql
+SELECT * FROM hilbert_ranges([2, 3]::UTINYINT[2], [5, 6]::UTINYINT[2]);
+```
+
+| lo | hi |
+|---:|---:|
+| 9 | 10 |
+| 28 | 28 |
+| 31 | 35 |
+| 45 | 46 |
+| 50 | 55 |
+
+<figure>
+  <img src="/blog/lindel-duckdb-2-curve-keys/ranges.svg" alt="A 16 by 16 Hilbert grid with a dashed query box from x 3 to 10 and y 2 to 9. Inside the box, one 4 by 4 square, eight 2 by 2 squares and sixteen single cells are highlighted, and the curve segments inside them are drawn in blue. The 25 squares merge into 8 key ranges: 10 to 11, 24 to 48, 51 to 53, 69 to 70, 120 to 132, 135, 210 to 221 and 226 to 231. A strip of all 256 keys shows where those ranges fall." width="760" height="520" loading="lazy" />
+  <figcaption>The decomposition of one box on a 16 × 16 grid. The squares and ranges match <code>hilbert_ranges([3, 2]::UTINYINT[2], [10, 9]::UTINYINT[2])</code>.</figcaption>
+</figure>
+
+The algorithm walks the curve's aligned sub-squares (sub-cubes in higher dimensions), each of which is one contiguous run of keys. Squares wholly inside the box are emitted, and squares that straddle its edge are split again. The search stops after a fixed amount of work, keeps any straddling squares whole, and merges adjacent runs. If the result exceeds `max_ranges` (64 by default), it fills in the smallest gaps between runs. The cover can grow, but never misses a point in the box. Capped at four ranges, a box of 11,682 points on a 256 × 256 grid was covered by 13,999 keys. We checked exactness against every point of the grid for both curves, for signed, float and three-dimensional boxes, and for dates. `hilbert_ranges_bounded` does the same for grid keys.
+
+## The benchmark: sort by the key, filter on the coordinates
+
+We generated 20 million uniformly random `USMALLINT` points and wrote them twice with 100,000-row groups: once in random order and once sorted by `hilbert_encode(x, y)`. We also loaded both into native DuckDB tables. Then we ran a small box (1,360 matching rows) and a large one (166,920 rows) as a plain coordinate filter:
+
+```sql
+SELECT count(*) FROM 'points.parquet'
+WHERE x BETWEEN 30000 AND 30600 AND y BETWEEN 12000 AND 12500;
+```
+
+<figure>
+  <img src="/blog/lindel-duckdb-2-curve-keys/row-groups.svg" alt="Two panels of 1,024 random points split into 16 row groups of 64 rows, with each row group's min/max bounds drawn as a rectangle and a dashed query box. In random order every rectangle covers almost the whole area, so the query must read all 16 row groups. Sorted by hilbert_encode, the rectangles tile the area into compact regions and the query box overlaps only 4 of them." width="760" height="470" loading="lazy" />
+  <figcaption>Why sorting helps: a row group can be skipped when its min/max bounds miss the query box. A small-scale version of the benchmark below.</figcaption>
+</figure>
+
+<BarTable {...BLOG_FIGURES['lindel-duckdb-2-curve-keys']} />
+
+On Parquet, sorting took both queries from 20 ms to 8 ms. The reason shows up in the file's statistics. In random order, every one of the 200 row groups spans nearly the whole coordinate range, so none can be skipped. After sorting, the small box overlapped 2 row groups and the large box 7. DuckDB's native tables keep the same min/max zone maps, and the sorted table answered in 2–3 ms against 6 ms.
+
+Then we added the key ranges, joining the sorted data against `hilbert_ranges` with a 32-range budget and keeping the coordinate filter:
+
+```sql
+SELECT count(*) FROM 'points.parquet' p,
+     hilbert_ranges([30000, 12000]::USMALLINT[2], [30600, 12500]::USMALLINT[2], 32) r
+WHERE p.k BETWEEN r.lo AND r.hi
+  AND x BETWEEN 30000 AND 30600 AND y BETWEEN 12000 AND 12500;
+```
+
+| Query, median of five | Small box | Large box |
+| --- | ---: | ---: |
+| Parquet, random order, coordinate filter | 20 ms | 20 ms |
+| Parquet, Hilbert-sorted, coordinate filter | 8 ms | 8 ms |
+| Parquet, Hilbert-sorted, join on `hilbert_ranges` | 9 ms | 23 ms |
+| Native table, random order, coordinate filter | 6 ms | 6 ms |
+| Native table, Hilbert-sorted, coordinate filter | 2 ms | 3 ms |
+| Native table, Hilbert-sorted, join on `hilbert_ranges` | 4 ms | 23 ms |
+
+The join was never faster. On the large box it was 2.9× slower on Parquet and 7.7× slower on the native table. The coordinate filter already prunes to the same few row groups, because sorting made the row-group bounds tight. The join adds a range join that DuckDB evaluates row by row. Generating the ranges as a literal `k BETWEEN … OR …` predicate was slower too.
+
+So the ranges aren't a DuckDB query optimization, and we've documented them that way. They're for systems that store or index only the key: a key-value store, an engine with a B-tree on the key column, or files partitioned by key range. In DuckDB, the advice is simpler. Sort by the key when you write the data, and filter on the original columns.
+
+## Code and measurement details
+
+| Item | Detail |
+| --- | --- |
+| Lindel | [`d978907`](https://github.com/Query-farm/lindel/commit/d978907b88050afd8d9cab97a9ce9723c58bb36d) on the [`v2.0` branch](https://github.com/Query-farm/lindel/tree/v2.0), extension version `2026110602` |
+| DuckDB | [`d54cbbe`](https://github.com/duckdb/duckdb/tree/d54cbbe3df17e8e5ce68312f483b4155836112aa), a DuckDB 2.0 development checkout |
+| Machine | AWS c6g.12xlarge (48 Graviton2 cores, 96 GiB), `SET threads = 16` |
+| Data | 20,000,000 points, `x` and `y` uniform over `USMALLINT`, 100,000-row groups, 156 MB sorted and 240 MB unsorted as Parquet |
+| Boxes | Small: `x` 30,000–30,600, `y` 12,000–12,500. Large: `x` 20,000–26,000, `y` 40,000–46,000 |
+| Timing | DuckDB shell `.timer`, five runs per query in one warm session, median reported |
+
+Row-group overlap comes from `parquet_metadata()`: a row group counts if its `x` and `y` min/max ranges both intersect the box. The tests cover each new function for both curves, including brute-force checks that the key ranges cover exactly the points in the box. The [extension page](/products/extensions/lindel/) documents every function. If something doesn't behave as described, [open an issue](https://github.com/Query-farm/lindel/issues).
