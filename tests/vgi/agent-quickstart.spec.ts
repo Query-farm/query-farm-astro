@@ -59,7 +59,7 @@ test('recorded build exposes real source and SQL evidence, including slower runs
 
 test('newcomers and extension developers get distinct introductions', async ({ page }) => {
   await page.goto('/vgi/build-with-an-agent/');
-  await expect(page.getByRole('heading', { level:1 })).toContainText('Your next data integration');
+  await expect(page.getByRole('heading', { level:1 })).toContainText('Connect anything');
   const newcomer = page.getByRole('tab', { name:'New to database extensions?' });
   await expect(newcomer).toHaveAttribute('aria-selected','true');
   await expect(page.locator('#intro-new')).toContainText('An extension adds capabilities');
