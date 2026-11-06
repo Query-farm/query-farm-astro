@@ -24,7 +24,8 @@ test('confirmed load failures only restrict the tested engine and exact publishe
   const extension = { name: 'sitemap', availability: [{ version: '2.0.0', platform: 'wasm_eh', etag: 'W/"16d7c81014269657e39142c634ba26be"' }] };
   assert.match(browserSessionIssue(extension, '2.0.0-rc11'), /cannot load/);
   assert.match(browserSessionIssue({ ...extension, availability: [{ ...extension.availability[0], etag: '"16d7c81014269657e39142c634ba26be"' }] }, '2.0.0-rc11'), /cannot load/);
-  assert.equal(browserSessionIssue(extension, '2.0.0-rc12'), undefined);
+  assert.match(browserSessionIssue(extension, '2.0.0-rc12'), /cannot load/);
+  assert.equal(browserSessionIssue(extension, '2.0.0-rc13'), undefined);
   assert.equal(browserSessionIssue({ ...extension, availability: [{ ...extension.availability[0], etag: 'new-build' }] }, '2.0.0-rc11'), undefined);
   assert.equal(browserSessionIssue({ ...extension, name: 'webbed' }, '2.0.0-rc11'), undefined);
 });

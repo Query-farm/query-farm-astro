@@ -5,6 +5,8 @@ import { blogSitemapMetadata } from './scripts/blog-sitemap.mjs';
 import { satteri } from '@astrojs/markdown-satteri';
 import { tableBars } from './scripts/table-bars.mjs';
 import { defaultSnapshotId } from './src/haybarn-functions/data/haybarn-release.mjs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { currentReferenceIds } from './scripts/haybarn-functions/canonicals.mjs';
 
 import tailwindcss from '@tailwindcss/vite';
 import icon from 'astro-icon';
@@ -19,6 +21,8 @@ import starlight from '@astrojs/starlight';
 const GA_MEASUREMENT_ID = 'G-EZ01WJETLF';
 const GA_ENABLED = process.env.NODE_ENV === 'production';
 const blogSitemap = blogSitemapMetadata();
+const snapshotDirectory = new URL('./src/haybarn-functions/data/snapshots/', import.meta.url);
+const equivalentArchives = currentReferenceIds(readdirSync(snapshotDirectory).filter(name => name.endsWith('.json')).map(name => JSON.parse(readFileSync(new URL(name, snapshotDirectory), 'utf8'))), defaultSnapshotId);
 
 // Shiki theme, retuned for the Strata Sun palette (see DESIGN_BRIEF.md).
 // Ground is rock-900 (#1a1512) — the same surface every code block uses.
@@ -537,10 +541,10 @@ export default defineConfig({
         const { pathname } = new URL(page);
         // The report's original preview URL redirects to its published blog post.
         if (pathname === '/research/duckdb-2-release-activity/') return false;
-        // Current release archives resolve to the stable reference canonical;
-        // older release references keep their own indexable URLs.
-        const currentArchive = `/products/haybarn/functions/releases/${defaultSnapshotId}`;
-        if (pathname === currentArchive || pathname.startsWith(currentArchive + '/')) return false;
+        // Match the rendered canonical rules; materially different archives
+        // remain indexable, even when they share function names.
+        const archiveId = pathname.match(/^\/products\/haybarn\/functions\/releases\/([^/]+)(?:\/|$)/)?.[1];
+        if (archiveId && equivalentArchives.has(archiveId)) return false;
         if (pathname.startsWith('/products/haybarn/functions/compare/')) return false;
         // Blog noindex rules and authored dates are applied by serialize,
         // using the same metadata as the rendered posts and tag archives.

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync, readdirSync } from 'node:fs';
+import { wasmVersion } from '../../src/haybarn-functions/data/haybarn-release.mjs';
 
 const dataRoot = new URL('../../src/data/extensions/', import.meta.url);
 const entries = readdirSync(dataRoot).flatMap(slug => {
@@ -71,7 +72,7 @@ test('all extension entry pages retain introductions, complete examples, and rel
     await expect(page.locator('#quick-start')).toContainText(`INSTALL ${metadata.name}`);
     const native = compatibility.compatibilityReleases.find((release: any) => release.distribution === 'duckdb');
     await expect(page.locator('#compatibility').getByText('DuckDB v2.0.0', { exact: true })).toHaveCount(native.platforms.length ? 1 : 0);
-    await expect(page.locator('#compatibility')).toContainText(/Browser examples use Haybarn-Wasm 2\.0\.0-rc11/);
+    await expect(page.locator('#compatibility')).toContainText(`Browser examples use Haybarn-Wasm ${wasmVersion}`);
     expect(await page.evaluate(() => document.documentElement.scrollWidth), slug).toBeLessThanOrEqual(321);
   }
 });

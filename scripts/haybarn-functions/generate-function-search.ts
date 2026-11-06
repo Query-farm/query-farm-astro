@@ -36,7 +36,7 @@ const records = snapshots.flatMap(snapshot => getFunctions(snapshot).map(fn => {
     snapshotId: snapshot.id,
     release: snapshot.label,
     name: fn.name,
-    description: fn.description,
+    description: fn.description || doc.editorial.usage?.summary || '',
     url: functionUrl(snapshot, fn, snapshot.id !== defaultSnapshot.id),
     content: [...strings].join('\n').toLocaleLowerCase('en-US'),
   };

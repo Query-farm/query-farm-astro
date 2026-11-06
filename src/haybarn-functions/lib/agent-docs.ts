@@ -7,6 +7,7 @@ import { translationsFor, usesSameFunction } from './translations';
 import { runnableExamplesFor } from './examples';
 import { documentationFor } from './upstream-docs';
 import { operatorNotation, isOperatorName } from '../../../scripts/haybarn-functions/notation.mjs';
+import { usageFor } from './usage-guides';
 
 export const apiVersion = 1;
 export function functionJsonUrl(snapshot: Snapshot, fn: { slug: string }) { return `/products/haybarn/functions/api/v1/${snapshot.id}/functions/${fn.slug}.json`; }
@@ -68,6 +69,7 @@ function exportOverload(row: Overload, snapshot: Snapshot, fn: { slug: string })
 
 export function exportFunction(snapshot: Snapshot, fn: FunctionDoc) {
   const selectedKeys = new Set(fn.overloads.map(signatureKey));
+  const usage = usageFor(snapshot, fn.name);
   return {
     $schema: '/products/haybarn/functions/api/v1/function.schema.json', schemaVersion: apiVersion,
     name: fn.name, schema: 'main', slug: fn.slug,
@@ -77,6 +79,7 @@ export function exportFunction(snapshot: Snapshot, fn: FunctionDoc) {
     interpretation,
     overloads: orderedOverloads(fn).map(row => exportOverload(row, snapshot, fn)),
     editorial: { argumentNotes: [] as { name: string; note: string; overloadIds: string[] }[],
+      usage: usage ? { ...usage, source: 'guide-editorial', intendedRuntime: { engine: 'haybarn-wasm', packageVersion: wasmVersion } } : null,
       recipes: recipesFor(fn.name).map(recipe => ({ id: recipe.id, title: recipe.title, description: recipe.description,
         sql: recipe.sql, source: 'guide-recipe', verification: null, intendedRuntime: { engine: 'haybarn-wasm', packageVersion: wasmVersion } })),
     },
@@ -139,6 +142,13 @@ export function functionMarkdown(snapshot: Snapshot, fn: FunctionDoc) {
     );
     if (row.description && row.description !== fn.description) lines.push(row.description, '');
     if (row.macro_definition) lines.push('Macro definition:', '', fence(row.macro_definition, 'sql'), '');
+  }
+  if (doc.editorial.usage) {
+    const usage = doc.editorial.usage;
+    lines.push('', `## ${usage.purpose}`, '', usage.summary, '', usage.behavior, '',
+      `Intended runtime: Haybarn WASM ${wasmVersion}.`, '', fence(usage.sql, 'sql'), '', 'Expected result:', '',
+      `| ${usage.columns.map(cell).join(' | ')} |`, `| ${usage.columns.map(() => '---').join(' | ')} |`,
+      ...usage.rows.map(row => `| ${row.map(value => cell(value ?? 'NULL')).join(' | ')} |`), '', `Watch for: ${usage.pitfall}`, '');
   }
   lines.push('', '## Guide recipes', '');
   for (const recipe of doc.editorial.recipes) lines.push(`### ${recipe.title}`, '', recipe.description, '',

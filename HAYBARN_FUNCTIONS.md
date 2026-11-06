@@ -13,6 +13,7 @@ source revision and are not presented as execution-verified equivalents.
 | --- | --- |
 | Find and try functions | `/products/haybarn/functions/` |
 | Full current catalog | `/products/haybarn/functions/catalog/` |
+| Category guide | `/products/haybarn/functions/category/json/` |
 | Current function | `/products/haybarn/functions/strftime/` |
 | Explicit release catalog | `/products/haybarn/functions/releases/<release>/` |
 | Explicit release function | `/products/haybarn/functions/releases/<release>/strftime/` |
@@ -27,10 +28,26 @@ The current function and catalog URLs follow the package pin. Explicit release
 URLs remain available for every committed snapshot, including the current one.
 JSON and Markdown links retain explicit releases so agent requests are
 reproducible. The root `/llms.txt` points to the guide's discovery document.
-The current release archive uses the stable page as its canonical and stays
-out of the sitemap; older releases retain their own canonical URLs.
+The current release archive and provably equivalent archives use the stable
+page as their canonical and stay out of the sitemap. The shared comparison in
+`scripts/haybarn-functions/canonicals.mjs` requires identical binaries, catalog
+rows, engine identity, runtime bundle, and extension profiles. Materially
+different releases retain their own canonical URLs. This currently consolidates
+rc11 and rc12, without removing either version's HTML or machine exports.
 Open Graph metadata and favicons come from the shared site layout; function
 pages supply their own titles, descriptions, and Haybarn sharing image.
+
+Ten category guides provide task-oriented choices, examples, and ordinary HTML
+links to function references. Query-string catalog filters remain available.
+`data/usage-guides.ts` contains 24 authored function explanations, including
+NULL/edge behavior, common mistakes, runnable SQL, and static expected results.
+This guidance applies to the current WASM catalog and its proven equivalents;
+it does not overwrite captured descriptions or make claims about older native
+snapshots. Machine exports expose it separately as `editorial.usage`.
+
+The smoke suite checks all 24 examples twice using a single browser engine
+startup, plus category navigation and rendering without JavaScript. Export
+checks validate the built canonical tags, category links, and sitemap together.
 
 ## Search
 
@@ -71,6 +88,13 @@ tree before every test run.
 
 ## Updating the browser release
 
+The Haybarn 2.0 guide currently captures the published WASM `2.0.0-rc12`
+package, whose underlying engine reports `v2.0.0`. The rc12 function catalog
+and base WASM binary are identical to rc11; the package update changes browser
+startup. Both release snapshots remain available. The comparison catalog also
+includes native DuckDB `2.0.0`, captured from its published CLI, with native/WASM
+scope differences shown by the comparison pages.
+
 The exact `@haybarn/haybarn-wasm` version in `package.json` is the single pin
 for both the function guide and Query Farm's existing browser examples.
 `src/haybarn-functions/data/haybarn-release.mjs` derives the default snapshot
@@ -104,6 +128,13 @@ To capture a published native engine, use `npm run snapshot:haybarn-functions
 "DuckDB VERSION" --source https://...`. The convenience command
 `npm run snapshot:duckdb-functions` captures the release list maintained in
 `scripts/haybarn-functions/capture-releases.mjs`.
+
+To capture only a new upstream release, pass it explicitly, for example
+`npm run snapshot:duckdb-functions -- 2.0.0`. The capture tools support both
+the older ZIP assets and the 2.0 CLI tarballs, use the engine's supported
+extension-directory setting, and verify 2.0 argument layouts against its full
+binder signatures. Run `npm run prepare:function-data` after a native capture
+to update the shared snapshot imports and search records.
 
 ## WASM delivery
 
