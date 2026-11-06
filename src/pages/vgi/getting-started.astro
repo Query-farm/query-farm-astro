@@ -5,6 +5,8 @@ import VGISubNav from '../../components/sections/VGISubNav.astro';
 import PageHead from '../../components/ui/PageHead.astro';
 import Button from '../../components/ui/Button.astro';
 import CodeBlock from '../../components/ui/CodeBlock.astro';
+import CodeTabs from '../../components/ui/CodeTabs.astro';
+import { queryFarmInstallSql, queryFarmLoadSql } from '../../data/query-farm-repository';
 import ResultTable from '../../components/ui/ResultTable.astro';
 import PageToc from '../../components/vgi/PageToc.astro';
 import { GRID, HEAD_CONTAINER } from '../../lib/vgi-layout';
@@ -46,8 +48,7 @@ const CURRENT = '/vgi/getting-started';
 // numbers will differ; they are a sample of the shape, not a promise of values.
 const toc: { id: string; label: string; sub?: boolean }[] = [
   { id: 'attach', label: 'Attach your first worker' },
-  { id: 'run-haybarn', label: 'Run Haybarn', sub: true },
-  { id: 'install-vgi', label: 'Load VGI', sub: true },
+  { id: 'install-vgi', label: 'Install VGI', sub: true },
   { id: 'first-query', label: 'Attach and query', sub: true },
   { id: 'examples', label: 'More to query' },
   { id: 'compose', label: 'Workers compose' },
@@ -56,15 +57,54 @@ const toc: { id: string; label: string; sub?: boolean }[] = [
   { id: 'next-steps', label: 'Where to from here' },
 ];
 
-const runHaybarn = `# Haybarn is Query.Farm's DuckDB-compatible distribution.
+// Two ways to get the engine-side extension. Stock DuckDB 2.0 installs it from
+// the Query.Farm repository (verified 2026-11-06 against the official v2.0.0
+// CLI); Haybarn ships it in its own community channel. Same group as the
+// extension pages' tabs, so a reader's choice carries over.
+const installTabs = [
+  {
+    id: 'v2.0',
+    label: 'DuckDB 2.0',
+    icon: 'simple-icons:duckdb',
+    lang: 'sql',
+    steps: [
+      {
+        title: 'Install once',
+        description: 'In the DuckDB 2.0 shell or any DuckDB 2.0 client. Adds the Query.Farm extension repository and downloads the signed extension.',
+        code: queryFarmInstallSql('vgi'),
+      },
+      {
+        title: 'Load in every session',
+        description: 'Keep FROM query_farm: DuckDB stores extensions from custom repositories separately.',
+        code: queryFarmLoadSql('vgi'),
+      },
+    ],
+  },
+  {
+    id: 'haybarn',
+    label: 'Haybarn',
+    icon: 'simple-icons:duckdb',
+    lang: 'sql',
+    steps: [
+      {
+        title: 'Start Haybarn',
+        description: "Query.Farm's DuckDB-compatible distribution. It ships the VGI extension.",
+        code: `# In a terminal:
 npx haybarn@latest
 
 # Or with uvx / pipx:
 uvx haybarn-cli
-pipx run haybarn-cli`;
-
-const installVgi = `INSTALL vgi FROM community;
-LOAD vgi;`;
+pipx run haybarn-cli`,
+      },
+      {
+        title: 'Load VGI',
+        description: 'Once, inside the Haybarn shell. FORCE INSTALL vgi FROM community refreshes an older copy.',
+        code: `INSTALL vgi FROM community;
+LOAD vgi;`,
+      },
+    ],
+  },
+];
 
 // `strftime` rather than the bare timestamp: the raw column is
 // `timestamp with time zone`, which prints as `2026-08-14 21:58:21.564+00` under
@@ -100,13 +140,11 @@ const weatherSql = `ATTACH 'open_meteo' AS m (
 -- Geocode the place, then LATERAL-join its coordinates straight into the
 -- forecast call — one round trip per row, no separate lookup step.
 SELECT strftime(w.time, '%a %H:%M')              AS hour,
-       round(w.temperature_2m, 1)                AS temp_f,
+       round(w.temperature_2m * 9 / 5 + 32, 1)   AS temp_f,
        m.main.weather_code_emoji(w.weather_code) AS icon,
        m.main.weather_code_text(w.weather_code)  AS conditions
 FROM m.main.geocoding('Glen Allen, VA', count := 1, country_code := 'US') AS g,
-     LATERAL m.main.forecast_hourly(g.latitude, g.longitude,
-                                    forecast_days := 2,
-                                    temperature_unit := 'fahrenheit') AS w
+     LATERAL m.main.forecast_hourly(g.latitude, g.longitude) AS w
 WHERE w.time >= now()
 ORDER BY w.time
 LIMIT 5;`;
@@ -143,15 +181,20 @@ const earthquakesResult = {
   ],
 };
 
+// Re-verified 2026-11-06 on the official DuckDB v2.0.0 CLI with VGI from the
+// Query.Farm repository. The query converts °C itself instead of passing
+// temperature_unit := 'fahrenheit': named arguments in a correlated LATERAL
+// call need Haybarn's engine (duckdb/duckdb#27833), and this example has to run
+// on both.
 const weatherResult = {
   columns: ["hour", "temp_f", "icon", "conditions"],
   numericCols: [1],
   rows: [
-    ["Mon 21:00", 90.7, "☀️", "Clear sky"],
-    ["Mon 22:00", 89.0, "☀️", "Clear sky"],
-    ["Mon 23:00", 86.5, "☀️", "Clear sky"],
-    ["Tue 00:00", 83.9, "☁️", "Overcast"],
-    ["Tue 01:00", 79.0, "☁️", "Overcast"],
+    ["Fri 20:00", 65.1, "☁️", "Overcast"],
+    ["Fri 21:00", 64.2, "🌦️", "Light drizzle"],
+    ["Fri 22:00", 62.8, "☁️", "Overcast"],
+    ["Fri 23:00", 61.2, "🌤️", "Mainly clear"],
+    ["Sat 00:00", 59.0, "☀️", "Clear sky"],
   ],
 };
 
@@ -262,22 +305,26 @@ const jsonLd = [
       <!-- ── Attach ─────────────────────────────────────────── -->
       <h2 id="attach" class="mt-10 scroll-mt-32 text-2xl md:text-3xl text-soil-900">Attach your first worker</h2>
 
-      <h3 id="run-haybarn" class={H3}>Run Haybarn</h3>
+      <h3 id="install-vgi" class={H3}>Install VGI</h3>
       <p class={P}>
-        Haybarn is Query.Farm's DuckDB-compatible distribution, and it ships the VGI extension.
+        VGI runs in stock <a href="https://duckdb.org/" class={LINK} target="_blank" rel="noopener noreferrer">DuckDB 2.0</a>,
+        installed from the Query.Farm extension repository, and in
+        <a href="/products/haybarn" class={LINK}>Haybarn</a>, Query.Farm's DuckDB-compatible
+        distribution, which ships it. Every example on this page runs on both.
       </p>
-      <div class="mt-4"><CodeBlock code={runHaybarn} lang="bash" title="terminal" /></div>
+      <div class="mt-4">
+        <CodeTabs tabs={installTabs} group="duckdb-version" ariaLabel="Choose your engine" />
+      </div>
       <p class="mt-4 text-sm leading-relaxed text-soil-700">
-        Platform binaries, provenance verification and more install channels are in the
+        A few capabilities need engine changes that are in Haybarn but not yet in a DuckDB
+        release: named arguments in a correlated <code class={CODE}>LATERAL</code> call
+        (<code class={CODE}>LATERAL f(t.x, opt := 1)</code>; literal arguments such as
+        <code class={CODE}>f(1, opt := 1)</code> work everywhere), cancelling a query while an HTTP
+        request is in flight, <code class={CODE}>DELETE … RETURNING</code> on worker tables, and
+        pushing join filters down to workers. In current builds,
+        <code class={CODE}>SELECT * FROM vgi_engine_features()</code> reports which your engine
+        supports. Haybarn binaries and other install channels are in the
         <a href="/products/haybarn/install" class={LINK}>Haybarn install guide</a>.
-      </p>
-
-      <h3 id="install-vgi" class={H3}>Load VGI</h3>
-      <p class={P}>Once, inside the Haybarn shell:</p>
-      <div class="mt-4"><CodeBlock code={installVgi} lang="sql" title="Haybarn shell" tryable={false} /></div>
-      <p class="mt-4 text-sm leading-relaxed text-soil-700">
-        Already installed it before? <code class={CODE}>FORCE INSTALL vgi FROM community</code>
-        refreshes it.
       </p>
 
       <h3 id="first-query" class={H3}>Attach and query</h3>
@@ -286,7 +333,7 @@ const jsonLd = [
         <a href="https://earthquake.usgs.gov/" class={LINK} target="_blank" rel="noopener noreferrer">USGS Earthquake Hazards Program</a>
         — the same 30-day catalog seismologists watch — and serves it as a table.
       </p>
-      <div class="mt-4"><CodeBlock code={attachEarthquakes} lang="sql" title="Haybarn shell" /></div>
+      <div class="mt-4"><CodeBlock code={attachEarthquakes} lang="sql" title="SQL" /></div>
       <ResultTable columns={earthquakesResult.columns} rows={earthquakesResult.rows} numericCols={earthquakesResult.numericCols} />
       <p class={P}>
         That is the whole idea. The alias after <code class={CODE}>AS</code> becomes the catalog
@@ -322,7 +369,7 @@ const jsonLd = [
         is a free, open-source weather API. This worker exposes its geocoding and hourly-forecast
         endpoints as table functions, so a place name and a forecast join in one query.
       </p>
-      <div class="mt-4"><CodeBlock code={weatherSql} lang="sql" title="Haybarn shell" /></div>
+      <div class="mt-4"><CodeBlock code={weatherSql} lang="sql" title="SQL" /></div>
       <ResultTable columns={weatherResult.columns} rows={weatherResult.rows} numericCols={weatherResult.numericCols} />
       <!-- ── Compose ────────────────────────────────────────── -->
       <h2 id="compose" class={H2}>Workers compose</h2>
@@ -335,7 +382,7 @@ const jsonLd = [
         Attach both, then ask what the weather is right now at the sites of the largest recent
         earthquakes — one query, two services, no pipeline in between.
       </p>
-      <div class="mt-4"><CodeBlock code={joinSql} lang="sql" title="Haybarn shell" /></div>
+      <div class="mt-4"><CodeBlock code={joinSql} lang="sql" title="SQL" /></div>
       <ResultTable columns={joinResult.columns} rows={joinResult.rows} numericCols={joinResult.numericCols} />
       <p class="mt-4 text-sm leading-relaxed text-soil-700">
         These are live feeds, so your numbers will differ from the samples above.
@@ -368,7 +415,7 @@ const jsonLd = [
         Called on their own, with no <code class={CODE}>FROM</code> clause at all, they look like any
         other SQL function — because to DuckDB that is exactly what they are:
       </p>
-      <div class="mt-4"><CodeBlock code={functionsSql} lang="sql" title="Haybarn shell" /></div>
+      <div class="mt-4"><CodeBlock code={functionsSql} lang="sql" title="SQL" /></div>
       <ResultTable columns={functionsResult.columns} rows={functionsResult.rows} numericCols={functionsResult.numericCols} />
       <p class={P}>
         That matters because the code behind a function runs <em>in your worker</em>, in your
@@ -381,7 +428,7 @@ const jsonLd = [
         buffering — plus macros, and the tables and views you have already seen. Ask any worker what
         it publishes:
       </p>
-      <div class="mt-4"><CodeBlock code={listFunctionsSql} lang="sql" title="Haybarn shell" /></div>
+      <div class="mt-4"><CodeBlock code={listFunctionsSql} lang="sql" title="SQL" /></div>
       <p class="mt-4 text-sm leading-relaxed text-soil-700">
         The shapes are laid out in
         <a href="/vgi/docs/concepts/" class={LINK}>Concepts</a>, and in detail in

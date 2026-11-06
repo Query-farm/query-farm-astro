@@ -3,6 +3,7 @@ title: "Haybarn 2.0: DuckDB 2.0 with a much faster start in the browser"
 description: "Haybarn 2.0 moves our DuckDB distribution to DuckDB 2.0.0, with HTTP/2 for remote reads, a long list of fixes, and a Wasm build that starts much faster."
 showDescription: false
 pubDate: 2026-11-05
+updatedDate: 2026-11-06
 author: "Query Farm Team"
 tags: ["Haybarn", "DuckDB", "DuckDB-Wasm", "WebAssembly", "Extensions", "Release"]
 draft: false
@@ -395,11 +396,13 @@ Haybarn builds and signs its own copy of each extension, so what matters is what
 | No macOS or single-threaded WebAssembly build | polyglot |
 | No Windows x86-64 build | evalexpr_rhai |
 | No Windows MinGW build | duckdb_geoip_rs, gatekeeper, webmacro |
-| Only in Haybarn | crawler, erpl_web, [grainlift](/products/grainlift/), [vgi](/vgi/), waddle, and pdal on Windows x86-64 |
+| Only in Haybarn | crawler, erpl_web, [grainlift](/products/grainlift/), waddle, and pdal on Windows x86-64 |
 
 If you depend on something in the first two rows, stay on DuckDB for now, or [open an issue](https://github.com/Query-farm-haybarn/haybarn-community-extensions/issues) so we know it matters to you.
 
 One difference doesn't show in that table. For DuckDB 2.0 [we distribute our extensions from our own repository](/blog/duckdb-2-query-farm-repository), so about 30 of them are stubs in DuckDB's community repository, including its evalexpr_rhai and webmacro builds on the platforms above. In Haybarn, `INSTALL rapidfuzz FROM community` gets the real extension.
+
+**Update, November 6:** [VGI](/vgi/) was in the "Only in Haybarn" row when this post went out. It now also runs in DuckDB 2.0, installed from the Query.Farm repository; see [Install VGI](/vgi/getting-started/#install-vgi). A few capabilities, such as named arguments in a correlated `LATERAL` call, still need Haybarn's engine.
 
 Some platforms differ too. DuckDB publishes extensions for macOS Intel and the WebAssembly `mvp` bundle, and core extensions for Windows ARM64 and Linux musl. Haybarn 2.0 doesn't target macOS Intel, Windows ARM64 or `mvp`, and while its Linux musl CLIs still ship, they have only a handful of community extensions and no core ones. The Linux x86-64 CLI needs a CPU with AVX2 (x86-64-v3).
 

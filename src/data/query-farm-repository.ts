@@ -36,8 +36,33 @@ const repositoryExtensionNames: Record<string, string> = {
   textplot: 'textplot',
   tributary: 'tributary',
   tsid: 'tsid',
+  vgi: 'vgi',
   webmacro: 'webmacro',
 };
+
+// Extensions with no DuckDB 1.4/1.5 build in the community repository: their
+// pages offer no "DuckDB 1.5" install. VGI's community entry is a DuckDB 2.0
+// placeholder that points readers at the Query.Farm repository.
+const noLegacyCommunityBuild = new Set(['vgi']);
+
+export function hasLegacyCommunityBuild(name: string): boolean {
+  return !noLegacyCommunityBuild.has(name);
+}
+
+// Extensions Haybarn ships through its own community channel rather than its
+// copy of the Query.Farm repository (haybarn-extensions.query.farm).
+const haybarnCommunityExtensions = new Set(['vgi']);
+
+// Haybarn setup, without the per-session LOAD.
+export function haybarnInstallSql(name: string): string {
+  if (haybarnCommunityExtensions.has(name)) return `INSTALL ${name} FROM community;`;
+  return queryFarmInstallSql(name).replace(QUERY_FARM_REPOSITORY_PREFIX, 'https://haybarn-extensions.query.farm');
+}
+
+// Haybarn's per-session LOAD.
+export function haybarnLoadSql(name: string): string {
+  return haybarnCommunityExtensions.has(name) ? `LOAD ${name};` : queryFarmLoadSql(name);
+}
 
 export function queryFarmRepositoryName(slug: string): string | undefined {
   return repositoryExtensionNames[slug];
@@ -63,7 +88,7 @@ export function queryFarmLoadSql(name: string): string {
 // and the blog's "Try it" card, so the two never disagree. Pass the tabs to a
 // CodeTabs with group="duckdb-version" so a reader's choice follows them.
 export function queryFarmInstallTabs(repositoryName: string) {
-  return [
+  const tabs = [
     {
       id: 'v2.0',
       label: 'DuckDB 2.0',
@@ -101,4 +126,5 @@ export function queryFarmInstallTabs(repositoryName: string) {
       ],
     },
   ];
+  return hasLegacyCommunityBuild(repositoryName) ? tabs : tabs.filter(tab => tab.id !== 'v1.5');
 }
