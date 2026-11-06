@@ -12,7 +12,6 @@ const articles = [
   { slug: 'duckdb-wasm-startup-time', topic: 'DuckDB-Wasm · WebAssembly · Haybarn' },
   { slug: 'duckdb-2-upstream-contributions', topic: 'DuckDB · Extensions · Engineering' },
   { slug: 'bitfilters-filter-research', topic: 'DuckDB · Filters · Performance', extension: 'mdx' },
-  { slug: 'lindel-duckdb-2-curve-keys', topic: 'DuckDB · Space-filling curves · Performance', extension: 'mdx' },
 ];
 // Pass slugs to regenerate only those cards.
 const only = process.argv.slice(2);
