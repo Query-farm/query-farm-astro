@@ -30,7 +30,7 @@ test('copy uses the edited prompt and reports success', async ({ page }) => {
   const prompt = page.getByLabel('Your agent prompt · edit it to fit your project');
   await prompt.fill('Build my Go worker using the existing project conventions.');
   await page.getByRole('button', { name: 'Copy prompt', exact: true }).click();
-  await expect(page.getByRole('status')).toHaveText('Prompt copied. Paste it into your coding agent.');
+  await expect(page.locator('[data-agent-quickstart]').getByRole('status')).toHaveText('Prompt copied. Paste it into your coding agent.');
   expect(await page.evaluate(() => (window as typeof window & { copied: string }).copied)).toBe('Build my Go worker using the existing project conventions.');
 });
 
@@ -70,6 +70,52 @@ test('newcomers and extension developers get distinct introductions', async ({ p
   await expect(page.locator('#intro-new')).toBeHidden();
   await page.getByRole('tab', { name:'Familiar with extensions?' }).press('Home');
   await expect(page.locator('#intro-new')).toBeVisible();
+});
+
+test('VGI explanation is readable without motion and each step is keyboard accessible', async ({ page }) => {
+  await page.goto('/vgi/build-with-an-agent/');
+  const explanation = page.getByRole('region', { name: 'From an API to a SQL table.' });
+  await explanation.scrollIntoViewIfNeeded();
+  await expect(explanation.getByRole('heading', { name: 'Now the data is part of your query.' })).toBeVisible();
+  await expect(explanation).toHaveAttribute('data-playing', 'false');
+  const build = explanation.getByRole('button', { name: 'Your agent builds', exact: true });
+  await build.focus();
+  await page.keyboard.press('Enter');
+  await expect(build).toHaveAttribute('aria-pressed', 'true');
+  await expect(explanation.getByRole('heading', { name: 'Describe the connection you need.' })).toBeVisible();
+  await explanation.getByRole('button', { name: 'The worker fetches', exact: true }).click();
+  await expect(explanation).toContainText('The coding agent’s job is already done.');
+  await expect(explanation.locator('[data-step-caption="2"]')).toBeVisible();
+  await page.setViewportSize({width:320, height:740});
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+
+test('VGI animation advances once, pauses, and replays without moving focus', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.clock.install();
+  await page.goto('/vgi/build-with-an-agent/');
+  const explanation = page.locator('[data-vgi-explainer]');
+  await explanation.scrollIntoViewIfNeeded();
+  await expect(explanation).toHaveAttribute('data-playing', 'true');
+  await page.clock.fastForward(6000);
+  await expect(explanation.getByRole('heading', { name: 'An API becomes a function you can query.' })).toBeVisible();
+  await explanation.getByRole('button', { name: 'Pause animation' }).click();
+  await page.clock.fastForward(20000);
+  await expect(explanation.locator('[data-step-caption="1"]')).toBeVisible();
+  await explanation.getByRole('button', { name: 'Play animation' }).focus();
+  await page.keyboard.press('Enter');
+  await page.clock.fastForward(6000);
+  await expect(explanation.locator('[data-step-caption="2"]')).toBeVisible();
+  await page.clock.fastForward(6000);
+  await expect(explanation.locator('[data-step-caption="3"]')).toBeVisible();
+  await page.clock.fastForward(6500);
+  await expect(explanation.getByRole('button', { name: 'Replay animation' })).toBeFocused();
+  await expect(explanation).toHaveAttribute('data-playing', 'false');
+  await page.clock.fastForward(20000);
+  await expect(explanation.locator('[data-step-caption="3"]')).toBeVisible();
+  await explanation.getByRole('button', { name: 'Replay animation' }).click();
+  await expect(explanation.locator('[data-step-caption="0"]')).toBeVisible();
+  await expect(explanation).toHaveAttribute('data-playing', 'true');
 });
 
 test('integration ideas carry into the prompt without choosing a language', async ({ page }) => {

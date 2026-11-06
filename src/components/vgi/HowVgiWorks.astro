@@ -1,0 +1,202 @@
+---
+import { Icon } from 'astro-icon/components';
+import BrandMark from './BrandMark.astro';
+const steps = [
+  { label: 'Your agent builds', title: 'Describe the connection you need.', text: 'Your coding agent uses the VGI skill to write a worker and test it with real SQL. You choose the language; you keep the code.' },
+  { label: 'SQL calls the worker', title: 'An API becomes a function you can query.', text: 'GitHub releases live behind an API, but your project inventory is a local file. The VGI extension lets DuckDB call your worker from a SQL query.' },
+  { label: 'The worker fetches', title: 'Your worker does the integration.', text: 'VGI passes the function call to the worker. The worker calls GitHub’s API using ordinary code. The coding agent’s job is already done.' },
+  { label: 'Rows come back', title: 'Now the data is part of your query.', text: 'The worker returns typed rows in Arrow batches through VGI. Therefore DuckDB can filter, aggregate, and join those rows with your local project inventory.' },
+];
+---
+<section class="vgi-explainer not-prose" aria-labelledby="vgi-explainer-title" data-vgi-explainer data-step="0" data-playing="false">
+  <div class="explainer-heading">
+    <div><p class="eyebrow">How VGI works</p><h2 id="vgi-explainer-title">From an API to a SQL table.</h2></div>
+    <button class="playback" type="button" data-playback hidden><span class="play-icon"><Icon name="mdi:play-circle-outline" size={19} /></span><span class="pause-icon"><Icon name="mdi:pause-circle-outline" size={19} /></span><span data-playback-label>Play animation</span></button>
+  </div>
+  <p class="intro">VGI connects DuckDB to a <strong>worker</strong>—a separate program that fetches data or runs your code.</p>
+
+  <div class="diagram" role="group" aria-label="The coding agent builds and tests the worker. At query time, DuckDB calls the worker through VGI, the worker calls GitHub, and rows return to DuckDB.">
+    <div class="builder">
+      <span class="builder-label"><BrandMark name="codex" size={20} /><BrandMark name="claude-code" size={20} /> Your coding agent</span>
+      <span class="build-link"><span>Builds + tests</span><i aria-hidden="true"></i></span>
+    </div>
+    <div class="runtime">
+      <div class="node database">
+        <BrandMark name="duckdb" size={31} />
+        <strong>DuckDB</strong>
+        <span class="extension">VGI extension</span>
+        <span class="node-detail">Runs your SQL</span>
+        <span class="returned" aria-hidden="true"><i></i><i></i><i></i></span>
+      </div>
+      <div class="connection vgi-link" aria-hidden="true"><span class="outbound">Call</span><span class="inbound">Rows</span><div class="track"><i class="packet"></i><i class="packet"></i><i class="packet"></i></div></div>
+      <div class="node worker">
+        <Icon name="mdi:code-braces" size={31} />
+        <strong>Your worker</strong>
+        <span class="worker-language">Your language</span>
+        <span class="node-detail">Runs your code</span>
+      </div>
+      <div class="connection api-link" aria-hidden="true"><span class="outbound">Fetch</span><span class="inbound">Data</span><div class="track"><i class="packet"></i><i class="packet"></i><i class="packet"></i></div></div>
+      <div class="node source">
+        <BrandMark name="github" size={31} />
+        <strong>GitHub API</strong>
+        <span class="source-data">Release data</span>
+        <span class="node-detail">Your data source</span>
+      </div>
+    </div>
+    <div class="query-strip"><span class="query-label">A call in your SQL</span><code>SELECT * FROM<br class="mobile-break" /> github.main.releases('duckdb', 'duckdb');</code></div>
+  </div>
+
+  <div class="step-controls" role="group" aria-label="Animation steps" hidden>
+    {steps.map((step, i) => <button type="button" data-step-button={i} aria-pressed={i === 0 ? 'true' : 'false'} aria-controls={`vgi-explainer-step-${i}`}><span class="step-number" aria-hidden="true">{i + 1}</span><span>{step.label}</span></button>)}
+  </div>
+  <div class="captions">
+    {steps.map((step, i) => <div id={`vgi-explainer-step-${i}`} data-step-caption={i}><h3>{step.title}</h3><p>{step.text}</p></div>)}
+  </div>
+  <p class="sr-only" role="status" data-step-status></p>
+  <p class="explainer-footer">The same pattern works for APIs, local files, and libraries. <a href="#watch">Watch the actual agent build below →</a></p>
+</section>
+
+<script>
+  function setupVgiExplainers() {
+    document.querySelectorAll<HTMLElement>('[data-vgi-explainer]').forEach(root => {
+      if (root.dataset.ready) return;
+      root.dataset.ready = 'true';
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+      const buttons = [...root.querySelectorAll<HTMLButtonElement>('[data-step-button]')];
+      const captions = [...root.querySelectorAll<HTMLElement>('[data-step-caption]')];
+      const playback = root.querySelector<HTMLButtonElement>('[data-playback]')!;
+      const label = root.querySelector<HTMLElement>('[data-playback-label]')!;
+      const status = root.querySelector<HTMLElement>('[data-step-status]')!;
+      const durations = [5600, 5200, 5200, 6000];
+      let step = reducedMotion.matches ? 3 : 0;
+      let remaining = durations[step];
+      let startedAt = 0;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let wantsPlayback = !reducedMotion.matches;
+      let inView = false;
+      let finished = reducedMotion.matches;
+
+      const render = () => {
+        root.dataset.step = String(step);
+        playback.dataset.action = wantsPlayback ? 'pause' : 'play';
+        buttons.forEach((button, i) => button.setAttribute('aria-pressed', String(i === step)));
+        captions.forEach((caption, i) => caption.hidden = i !== step);
+        label.textContent = wantsPlayback ? 'Pause animation' : finished ? 'Replay animation' : 'Play animation';
+      };
+      const stopTimer = () => {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          remaining = Math.max(0, remaining - (performance.now() - startedAt));
+          timer = undefined;
+        }
+        root.dataset.playing = 'false';
+      };
+      const syncPlayback = () => {
+        stopTimer();
+        if (!wantsPlayback || !inView || document.hidden) return;
+        root.dataset.playing = 'true';
+        startedAt = performance.now();
+        timer = setTimeout(() => {
+          timer = undefined;
+          if (step === buttons.length - 1) {
+            wantsPlayback = false;
+            finished = true;
+            root.dataset.playing = 'false';
+          } else {
+            step += 1;
+            remaining = durations[step];
+            syncPlayback();
+          }
+          render();
+        }, remaining);
+      };
+      playback.hidden = false;
+      root.querySelector<HTMLElement>('.step-controls')!.hidden = false;
+      playback.addEventListener('click', () => {
+        if (finished) {
+          stopTimer(); step = 0; remaining = durations[0]; finished = false;
+        }
+        wantsPlayback = !wantsPlayback;
+        render(); syncPlayback();
+      });
+      buttons.forEach((button, i) => button.addEventListener('click', () => {
+        stopTimer(); wantsPlayback = false; finished = false;
+        step = i; remaining = durations[i]; render();
+        status.textContent = `Step ${i + 1}. ${captions[i].textContent}`;
+      }));
+      const observer = new IntersectionObserver(entries => {
+        inView = entries[0].isIntersecting;
+        syncPlayback();
+      }, { threshold: 0.25 });
+      observer.observe(root);
+      const visibilityChanged = () => syncPlayback();
+      const motionChanged = () => {
+        if (reducedMotion.matches) { stopTimer(); wantsPlayback = false; render(); }
+      };
+      document.addEventListener('visibilitychange', visibilityChanged);
+      reducedMotion.addEventListener('change', motionChanged);
+      document.addEventListener('astro:before-swap', () => {
+        stopTimer(); observer.disconnect();
+        document.removeEventListener('visibilitychange', visibilityChanged);
+        reducedMotion.removeEventListener('change', motionChanged);
+      }, { once: true });
+      render();
+    });
+  }
+  setupVgiExplainers();
+  document.addEventListener('astro:page-load', setupVgiExplainers);
+</script>
+
+<style>
+  .vgi-explainer { margin-top:3rem; padding:1.6rem 1.8rem 1.25rem; border:1px solid var(--color-soil-300); border-radius:1rem; background:#fffdf7; color:var(--color-soil-900); }
+  .explainer-heading { display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+  .eyebrow { font-size:.75rem; font-weight:600; color:var(--color-sun-700); margin:0 0 .35rem; }
+  h2 { font-size:clamp(1.5rem,3vw,2rem); line-height:1.2; margin:0; }
+  .intro { font-size:.9rem; line-height:1.75; max-width:80ch; margin:.8rem 0 0; color:var(--color-soil-700); }
+  .playback { display:flex; flex:none; align-items:center; gap:.4rem; padding:.6rem .7rem; border:1px solid var(--color-soil-300); border-radius:.4rem; font-size:.76rem; cursor:pointer; color:var(--color-field-700); min-height:44px; }
+  .play-icon,.pause-icon { display:flex; }.pause-icon,[data-action="pause"] .play-icon { display:none; }[data-action="pause"] .pause-icon { display:flex; }
+  [hidden] { display:none!important; }
+  button:focus-visible, a:focus-visible { outline:2px solid var(--color-field-700); outline-offset:4px; }
+  .diagram { max-width:920px; margin:1.5rem auto 0; }
+  .builder { display:flex; align-items:center; flex-direction:column; }
+  .builder-label { display:flex; align-items:center; gap:.5rem; border:1px dashed var(--color-soil-300); border-radius:.45rem; padding:.6rem 1rem; font-size:.8rem; background:var(--color-soil-50); }
+  .build-link { position:relative; display:flex; justify-content:center; width:100%; height:42px; }
+  .build-link>span { position:absolute; left:calc(50% + 12px); top:8px; font-size:.66rem; color:var(--color-soil-700); white-space:nowrap; }
+  .build-link>i { position:relative; border-left:1px dashed var(--color-soil-400); }
+  .build-link>i::after { content:''; position:absolute; bottom:4px; left:-4px; width:7px; height:7px; border-right:1px solid var(--color-soil-600); border-bottom:1px solid var(--color-soil-600); transform:rotate(45deg); }
+  .runtime { display:grid; grid-template-columns:minmax(0,1fr) 90px minmax(0,1fr) 90px minmax(0,1fr); align-items:stretch; }
+  .node { position:relative; display:flex; min-width:0; flex-direction:column; align-items:center; gap:.5rem; text-align:center; border:1px solid var(--color-soil-300); border-radius:.7rem; background:var(--color-soil-50); padding:1rem .5rem; transition:border-color .35s,box-shadow .35s,background .35s; }
+  .node strong { font-size:1rem; }.node-detail { font-size:.71rem; color:var(--color-soil-700); }
+  .extension,.worker-language,.source-data { display:block; font-size:.74rem; line-height:1.5; padding:.15rem .5rem; border:1px solid transparent; border-radius:.3rem; }
+  .extension { background:var(--color-soil-200); border-color:var(--color-soil-300); font-weight:600; }
+  .connection { align-self:center; color:var(--color-soil-600); font-size:.65rem; text-align:center; position:relative; }
+  .track { position:relative; margin:6px 0 18px; height:1px; background:var(--color-soil-300); }
+  .track::after { content:''; position:absolute; right:3px; top:-3px; width:7px; height:7px; border-top:1px solid currentColor; border-right:1px solid currentColor; transform:rotate(45deg); }
+  .packet { display:block; position:absolute; width:8px; height:8px; left:0; top:-3px; border-radius:2px; background:var(--color-field-700); opacity:0; }
+  .inbound { display:none; }
+  .returned { position:absolute; top:14px; right:12px; display:flex; flex-direction:column; gap:4px; opacity:0; }
+  .returned i { width:19px; height:4px; background:var(--color-field-700); border-radius:1px; }
+  [data-step="0"] .builder-label,[data-step="0"] .worker,[data-step="1"] .database,[data-step="2"] .worker,[data-step="2"] .source,[data-step="3"] .database { border-color:var(--color-field-700); box-shadow:0 0 0 2px #45632f16; background:#f0f4e9; }
+  [data-step="0"][data-playing="true"] .build-link>i::after { animation:build-arrival 1.6s ease-in-out 3; }
+  [data-step="1"] .vgi-link .packet,[data-step="2"] .api-link .packet,[data-step="3"] .connection .packet { animation:packet-out 1.6s linear 4; }
+  [data-step="3"] .connection .packet { animation-name:packet-back; }
+  [data-step="3"] .track::after { right:auto; left:3px; transform:rotate(-135deg); }
+  [data-step="3"] .outbound { display:none; }[data-step="3"] .inbound { display:inline; }
+  [data-step="3"] .returned { opacity:1; }
+  .connection .packet:nth-child(2) { animation-delay:.25s; }.connection .packet:nth-child(3) { animation-delay:.5s; }
+  [data-playing="false"] .packet,[data-playing="false"] .build-link>i::after { animation-play-state:paused!important; }
+  .query-strip { background:var(--color-rock-900); color:#f4ece0; border-radius:.5rem; padding:.8rem 1rem; margin-top:1.25rem; display:flex; gap:1.3rem; align-items:center; }
+  .query-label { color:#d4c7b4; font-size:.68rem; flex:none; }.query-strip code { font-size:.74rem; line-height:1.8; overflow-wrap:anywhere; }.mobile-break { display:none; }
+  .step-controls { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.6rem; margin-top:1.4rem; }
+  .step-controls button { display:flex; align-items:center; gap:.55rem; text-align:left; min-height:48px; padding:.5rem .65rem; border-bottom:2px solid var(--color-soil-300); font-size:.77rem; color:var(--color-soil-700); cursor:pointer; }
+  .step-number { display:flex; flex:none; align-items:center; justify-content:center; width:23px; height:23px; border-radius:50%; background:var(--color-soil-100); font-size:.7rem; font-family:'Noto Sans',sans-serif; }
+  .step-controls [aria-pressed="true"] { border-color:var(--color-field-700); color:var(--color-soil-900); font-weight:600; }.step-controls [aria-pressed="true"] .step-number { background:var(--color-field-700); color:white; }
+  .captions { padding:1.2rem 0 .6rem; min-height:110px; }.captions h3 { font-family:'Noto Sans',sans-serif; font-size:.9rem; font-weight:600; letter-spacing:normal; margin:0 0 .4rem; }.captions p { font-size:.85rem; line-height:1.8; max-width:99ch; margin:0; color:var(--color-soil-700); }
+  .explainer-footer { border-top:1px solid var(--color-soil-300); padding-top:.9rem; font-size:.73rem; line-height:1.8; color:var(--color-soil-700); }.explainer-footer a { color:var(--color-field-700); text-decoration:underline; text-underline-offset:3px; margin-left:.25rem; }
+  @keyframes packet-out { 0% { left:0; opacity:0; } 15% { opacity:1; } 85% { opacity:1; } 100% { left:calc(100% - 8px); opacity:0; } }
+  @keyframes packet-back { 0% { left:calc(100% - 8px); opacity:0; } 15% { opacity:1; } 85% { opacity:1; } 100% { left:0; opacity:0; } }
+  @keyframes build-arrival { 0% { bottom:30px; opacity:0; } 20% { opacity:1; } 100% { bottom:4px; opacity:1; } }
+  @media(max-width:800px) { .runtime { grid-template-columns:minmax(0,1fr) 45px minmax(0,1fr) 45px minmax(0,1fr); }.query-strip { display:block; }.query-label { display:block; margin-bottom:.35rem; }.step-controls { gap:.3rem; }.step-controls button { font-size:.72rem; padding:.5rem .3rem; }.captions { min-height:132px; } }
+  @media(max-width:540px) { .vgi-explainer { padding:1.2rem .85rem 1rem; margin-top:2rem; }.explainer-heading { flex-wrap:wrap; gap:.75rem; }.playback { font-size:.72rem; padding:.4rem .6rem; }.intro { font-size:.84rem; }.runtime { grid-template-columns:minmax(0,1fr) 26px minmax(0,1fr) 26px minmax(0,1fr); }.node { border-radius:.45rem; padding:.8rem .15rem; gap:.45rem; }.node strong { font-size:.78rem; }.node-detail { display:none; }.extension,.worker-language,.source-data { padding:.2rem .1rem; font-size:.75rem; }.connection { font-size:.55rem; }.builder-label { font-size:.73rem; padding:.5rem .7rem; }.returned { top:7px; right:6px; }.returned i { width:11px; height:3px; }.step-controls { grid-template-columns:repeat(2,minmax(0,1fr)); }.step-controls button { font-size:.72rem; min-height:46px; }.query-strip { padding:.7rem; }.query-strip code { font-size:.65rem; }.mobile-break { display:block; }.captions { min-height:165px; }.captions p { font-size:.8rem; }.captions h3 { font-size:.84rem; } }
+  @media(prefers-reduced-motion:reduce) { .node { transition:none; }.packet,.build-link>i::after { animation:none!important; } }
+</style>
