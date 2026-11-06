@@ -1,6 +1,6 @@
 ---
-title: "DuckDB has your data. Let it use your code."
-description: "VGI connects DuckDB to functions, libraries, and APIs in your language. Follow an order-margin example and see how a coding agent can build and test the worker."
+title: "Your coding agent can build a DuckDB function. Here's the proof."
+description: "A real request, an agent-written VGI worker, and passing SQL tests. See how Codex and Claude Code can turn an idea into a function you can query."
 pubDate: 2026-11-06
 author: "Query Farm Team"
 tags: ['VGI', 'DuckDB', 'Coding agents', 'Developer tools']
@@ -8,99 +8,89 @@ draft: false
 showDescription: false
 showLeadVisual: false
 nextStep:
-  title: "Bring your own code into DuckDB"
-  pitch: "Choose your language and agent. Start with the shipping example or describe the SQL capability your project needs."
+  title: "Give your agent its first VGI task"
+  pitch: "Choose your agent and language. Build a function, verify it in DuckDB, and keep the source and tests."
   href: '/vgi/build-with-an-agent/#start'
-  cta: 'Build a tested worker'
+  cta: 'Build one with your agent'
 ---
 
-import WorkerQueryFlow from '../../components/vgi/WorkerQueryFlow.astro';
-import ShippingStory from '../../components/vgi/ShippingStory.astro';
-import AgentBuildLoop from '../../components/vgi/AgentBuildLoop.astro';
+import AgentBuildProof from '../../components/vgi/AgentBuildProof.astro';
+import AgentCsvExample from '../../components/vgi/AgentCsvExample.astro';
 import AgentLanguageMarks from '../../components/vgi/AgentLanguageMarks.astro';
 import VgiWalkthroughVideo from '../../components/vgi/VgiWalkthroughVideo.astro';
 import { vgiSkillsFile } from '../../lib/vgi-agents';
 
-An order can look profitable until you include shipping.
+We gave Claude Code an empty project, a VGI skill, and a request: build a TypeScript function that turns text into URL slugs, preserve SQL NULL, and test it through DuckDB.
 
-Your order table already has revenue, product cost, destination, and parcel weight. DuckDB can read it from a CSV, a Parquet file, or your database. **But the shipping rule lives in your application.** It may belong to a Java library, a Python package, or an API client your team already maintains.
+**It wrote the worker, installed its dependencies, and ran its tests.** The build finished in 1 minute 38 seconds. A separate verifier checked the generated worker through stock DuckDB, including 10,000 input rows, in another second. No human corrections were supplied during the run.
 
-To answer “which orders lose money after delivery?”, the query needs that code's answer. Therefore, make the function available where you're asking the question.
+Here is what that means in one query:
 
-That's what **VGI—the Vector Gateway Interface—does**. It lets DuckDB call code running in another program. That program is a *worker*: ordinary source in your chosen language, using its normal packages and tools. The VGI extension discovers the worker's typed functions and makes them available from SQL.
+```sql
+SELECT demo.main.slugify('Hello, VGI!');
+-- hello-vgi
+```
 
-## Keep the rule where it belongs. Bring its answer into the query.
+The function runs in source code written by the agent. You can inspect it, change it, and rerun the tests after the agent session ends.
 
-In our example, the worker exposes `shipping.main.quote_cents(destination, weight_g)`. It returns a shipping estimate in integer cents. DuckDB can use that value in the same expression as the revenue and product cost it already holds.
+## You know the function you want. But how does DuckDB call it?
 
-<WorkerQueryFlow />
+Your project may already have a useful parser, validator, or calculation. Making that code available inside a query requires a connection between DuckDB and the program that owns it.
 
-The query runs in DuckDB. The shipping function runs in the worker. VGI carries the inputs and outputs as typed Arrow columns, so the worker can handle batches of rows. A coding agent can write this program, but it isn't asked to invent a shipping price each time you run a query.
+**VGI—the Vector Gateway Interface—provides that connection.** VGI is an installed DuckDB extension. A *worker* is a separate program in your chosen language that describes its functions and runs your code. VGI passes typed columns between the query and the worker.
 
-The result is a boundary you can understand: SQL owns the report; the library owns its rule.
+The coding agent's job is to build that worker. It can use the language's normal libraries and tools, and it can run DuckDB to check its work. Therefore, the handoff can be a working query, source, and tests.
 
-## One quote proves the connection. But the useful question is bigger.
+<AgentBuildProof />
 
-Start with a 500g parcel to the US. Our sample function returns $5.50. That's deliberately small enough to inspect.
+The slug function is deliberately small. It makes the request, generated code, and expected result easy to inspect. You could implement it in SQL too; the broader opportunity is to expose code your project already maintains, including packages that belong in another language.
 
-You could write this tiny rate formula directly in SQL. Here it stands in for a shipping library: the benefit becomes clear when your application already owns the rule, or when the calculation depends on a package or service you want to keep using. Wrapping that code lets the query use the same implementation.
+## Generated code needs proof. Therefore, the agent runs SQL.
 
-**But one quote does not identify the orders that need attention.** Therefore, call the function with the destination and weight columns from the order table, and use the returned prices to calculate margins.
+A worker can compile and still return the wrong type, lose NULL values, or fail when DuckDB sends another batch. A source file alone does not establish that the function works.
 
-<ShippingStory id="article-shipping-story" heading={false} />
+The **vgi-worker** skill gives the agent SDK guidance and a real SQL verifier. The request asks it to run the worker, compare actual rows with expected answers, and fix implementation failures before finishing.
 
-Two sample orders now have negative margins: A-103 loses $2.50 and A-102 loses $2.00 after shipping. That is a report someone can act on.
+In this recorded session, Claude Code ran 11 unit tests and seven SQL checks. Those checks covered accented text, punctuation, SQL NULL, the return type, multiple batches, and empty input. The independent verifier then tested known values, NULL, and 10,000 rows using assertions supplied outside the agent's own tests.
 
-There is another complication. Our fixture has no Australian rate. If the query only kept negative margins, the NULL calculation could quietly exclude that order. **Therefore, the report also keeps missing quotes visible.** A-105 needs review; it doesn't get a zero-dollar shipping estimate.
-
-The rates and orders are fictional, but the example is executable. We checked these displayed results against a running VGI worker in stock DuckDB, along with NULL handling, weight boundaries, empty input, and 10,000 rows. You can <a href={vgiSkillsFile('examples/shipping-margin/README.md')}>download the source and rerun the checks</a>.
-
-## The worker is useful. But someone still has to build it correctly.
-
-A coding agent can write the function and connect the SDK. It can also make a plausible mistake: return the wrong integer width, put a log message into the protocol stream, mishandle NULL, or stop after the first batch.
-
-That is why the task needs a result the agent can test. “Write a worker” is a starting instruction. “Make these SQL assertions pass through the actual engine, and leave the tests in the project” gives it a way to finish.
-
-<AgentBuildLoop />
-
-We've packaged that workflow into three [portable skills](https://github.com/Query-farm/vgi-skills). **vgi-worker** helps create or extend the worker, **vgi-test** reproduces failures through SQL, and **vgi-package** prepares a local artifact and checks it after extraction.
-
-The skill supplies the SDK details and verification tools. Your agent still works in your project: it writes source, runs commands, reads failures, and fixes the implementation. You keep the code and the tests when the session ends.
-
-<AgentLanguageMarks />
-
-Live evaluations cover Codex and Claude Code. We also verified installation for Cursor, GitHub Copilot, and OpenCode; that is installation compatibility, not a claim that every agent has completed every example.
-
-## Use the language that already has your library.
-
-The shipping example is written in TypeScript so there is a complete project to inspect. Your worker can use any of the six SDK languages:
-
-<AgentLanguageMarks kind="languages" />
-
-For a new project, you choose the language. For an existing worker, the skill preserves its language and tooling. A Python verifier does not turn your Java or Rust worker into a Python project.
-
-The same pattern extends beyond a scalar shipping function:
-
-| The missing piece | What a worker can expose | The query it makes possible |
-| --- | --- | --- |
-| Your application's validation library | Typed functions | Find records that fail the rules your application actually uses |
-| An API with paginated results | A table function | Join remote records with a local customer or order table |
-| A dataset behind a service | Tables, columns, and a catalog | Discover the available data and query it from SQL |
-
-These are extensions of the same idea: bring the capability to the query, using code your project can maintain. API authentication, pagination, and failures need their own tests; a good first worker gives you a place to add them.
-
-## Could your first worker take five minutes?
-
-For a small, well-specified task, yes. We gave the shipping request to a fresh Claude Code session. It built its own TypeScript worker in 2 minutes 48 seconds. A separate verifier then checked the quotes, the order report, missing rates, NULL handling, empty input, and 10,000 rows through stock DuckDB. Those checks passed in another 1.1 seconds.
-
-Our earlier Codex and Claude evaluations used a smaller slugification task. Some finished faster; one took more than five minutes. These runs used shared dependency caches. They show that an agent can complete the workflow, not that every library, API, or project has the same setup cost. The [full evidence](/vgi/build-with-an-agent/#proof) includes the engine versions, slower runs, and limitations.
-
-The more useful milestone is a passing query. Once you have that, you can ask the agent to replace the sample rate function with your real library and rerun the tests.
+You can <a href={vgiSkillsFile('examples/agent-duckdb-typescript-slugify/README.md')}>inspect the generated project and rerun its tests</a>. The video below replays selected actual tool calls and results. Setup and dependency inspection are omitted; source excerpts and the later CSV example are labeled.
 
 <VgiWalkthroughVideo compact />
 
-Stock DuckDB 2.0.0 can load VGI from the signed [Query Farm extension repository](/blog/duckdb-2-query-farm-repository/). The quickstart handles that setup; existing Haybarn projects can keep their engine. The artifact you build is a worker in your language, connected through the installed VGI extension.
+## One string proves the connection. Now use your data.
 
-Start with one function your query needs. Prove it on a few known inputs. Use it on the rows that matter.
+An article-title CSV gives the function a useful next job: prepare candidate URL slugs. The worker does not need to change. DuckDB reads the file and calls the same function for the title column.
 
-[Choose your language and build a tested worker →](/vgi/build-with-an-agent/#start)
+<AgentCsvExample heading={false} />
+
+There is no coding agent in the query's runtime path. The agent has already produced a normal program; DuckDB and VGI can keep using it.
+
+## Your agent. Your language. Your next function.
+
+The recorded example uses Claude Code and TypeScript. We also gave Codex a fresh Python project and the same slugification task. That stock-DuckDB build took 4 minutes 19 seconds, followed by independent SQL verification. Both agents produced working workers.
+
+<AgentLanguageMarks />
+
+Live evaluations cover Codex and Claude Code. We verified skill installation for Cursor, GitHub Copilot, and OpenCode too. The skills use a portable format so developers can add the same workflow to their coding tools.
+
+For your own worker, choose the language that has the code you want to use:
+
+<AgentLanguageMarks kind="languages" />
+
+A new project starts with your choice. An existing worker keeps its language and conventions. The skill can guide a Python wrapper around a Python package, a Java wrapper around a Java library, or an equivalent worker in any of the six SDK languages.
+
+The next request can be specific: “Expose this validation function to DuckDB. These inputs should pass; these should fail. Keep NULL visible and test more than one batch.” Workers can also expose tables and catalogs, which opens a path to querying API results or datasets through SQL.
+
+But each new capability brings its own cases to verify. Start with one function and known answers, then expand the tests with the worker. The companion **vgi-test** skill helps diagnose an existing worker, and **vgi-package** prepares a local archive and checks it after extraction.
+
+## Can the first build take five minutes?
+
+Our recorded builds show that it can. They also include a run that took longer. These are small tasks on macOS ARM64 with shared package caches, not a guarantee for every environment or library.
+
+<span id="proof"></span>
+
+The useful milestone is a query that passes. Our <a href={vgiSkillsFile('evals/RESULTS.md')}>full evaluation report</a> includes the slower runs, engine versions, compatibility limits, and reproduction commands. The [quickstart's recorded evidence](/vgi/build-with-an-agent/#proof) links the source and SQL results.
+
+Stock DuckDB 2.0.0 can load VGI from the signed [Query Farm extension repository](/blog/duckdb-2-query-farm-repository/). The skill guides that setup, so your first task can start with the function you want your agent to build.
+
+[Choose your agent and language →](/vgi/build-with-an-agent/#start)

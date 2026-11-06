@@ -17,7 +17,8 @@ test('language selection is explicit and every agent/language produces the right
     await expect(page.locator('[data-install-command]')).toContainText(`--agent ${id}`);
     await expect(prompt).toHaveValue(/Build a VGI worker in TypeScript/);
   }
-  await page.getByLabel('3. A starting idea').selectOption('api');
+  await page.getByText('Have something else in mind?', { exact: true }).click();
+  await page.getByLabel('A different starting idea').selectOption('api');
   await expect(prompt).toHaveValue(/Ask me for its URL or specification/);
 });
 
@@ -57,49 +58,71 @@ test('recorded build exposes real source and SQL evidence, including slower runs
 });
 
 
-test('story explains the worker before installation and preserves missing quotes', async ({ page }) => {
+test('agent authorship appears before installation and the same worker processes a CSV', async ({ page }) => {
   await page.goto('/vgi/build-with-an-agent/');
   expect(await page.evaluate(() => {
-    const story = document.querySelector('[data-shipping-story]')!;
+    const proof = document.querySelector('[data-agent-proof]')!;
     const setup = document.querySelector('[data-agent-quickstart]')!;
-    return Boolean(story.compareDocumentPosition(setup) & Node.DOCUMENT_POSITION_FOLLOWING);
+    return Boolean(proof.compareDocumentPosition(setup) & Node.DOCUMENT_POSITION_FOLLOWING);
   })).toBe(true);
-  await expect(page.getByRole('table', { name: 'One quote: verified SQL results' })).toContainText('$5.50');
-  await page.getByRole('tab', { name: 'Every order' }).click();
-  await expect(page.getByRole('table', { name: 'Every order: verified SQL results' })).toContainText('No quote');
-  await page.getByRole('tab', { name: 'Every order' }).press('ArrowRight');
-  const results = page.getByRole('table', { name: 'Orders at risk: verified SQL results' });
-  await expect(results).toContainText('A-103');
-  await expect(results).toContainText('-$2.50');
-  await expect(results).toContainText('A-105');
-  await expect(results).toContainText('Review');
-  await expect(results.locator('tbody tr')).toHaveCount(3);
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('Your coding agent can build');
+  await expect(page.locator('[data-agent-proof]')).toContainText('Written and tested by Claude Code');
+  await expect(page.locator('[data-agent-proof]')).toContainText('hello-vgi');
+  await expect(page.locator('[data-shipping-story]')).toHaveCount(0);
+  const rows = page.getByRole('table', { name: 'Article titles and verified slugs' });
+  await expect(rows.locator('tbody tr')).toHaveCount(3);
+  await expect(rows).toContainText('cafe-creme');
   await expect(page.locator('[data-agent-quickstart] [data-brand]')).toHaveCount(11);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.getByRole('radio', { name: 'Python', exact: true }).check();
+  await expect(page.locator('#worker-prompt')).toHaveValue(/article-title CSV/);
+  const csv = await page.request.get('/vgi/agents/articles.csv');
+  expect(csv.status()).toBe(200);
+  expect(await csv.text()).toContain('Café crème');
 });
 
-test('query animation is controllable and respects reduced motion', async ({ page }) => {
+test('build diagram is controllable and respects reduced motion', async ({ page }) => {
   await page.goto('/vgi/build-with-an-agent/');
-  const flow = page.locator('[data-worker-flow]');
-  await flow.getByRole('button', { name: 'Play the query' }).click();
-  await expect(flow).toHaveAttribute('data-phase', '1');
+  const flow = page.locator('[data-agent-proof]');
+  await flow.getByRole('button', { name: /Replay the build flow/ }).click();
+  await expect(flow).toHaveAttribute('data-step', '1');
   await expect(flow).not.toHaveAttribute('data-playing');
-  await flow.getByRole('button', { name: 'Next step' }).click();
-  await expect(flow).toHaveAttribute('data-phase', '2');
+  await flow.getByRole('button', { name: /Replay the build flow/ }).click();
+  await expect(flow).toHaveAttribute('data-step', '2');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await flow.getByRole('button', { name: 'Play the query' }).click();
+  await flow.getByRole('button', { name: /Replay the build flow/ }).click();
   await expect(flow).toHaveAttribute('data-playing', 'true');
-  await flow.getByRole('button', { name: 'Pause animation' }).click();
+  await flow.getByRole('button', { name: 'Pause the build flow' }).click();
   await expect(flow).not.toHaveAttribute('data-playing');
+});
+
+test('recorded session exposes generated code, actual tests, and an attributed follow-on', async ({ page }) => {
+  await page.goto('/vgi/agent-build-recording/');
+  const replay = page.locator('[data-session-replay]');
+  await expect(replay).toContainText('Recorded tool transcript · edited replay');
+  await page.getByRole('button', { name: 'Next chapter' }).click();
+  await expect(page.locator('[data-frame="1"]')).toBeVisible();
+  await page.getByRole('button', { name: 'Next chapter' }).click();
+  await expect(page.locator('[data-frame="2"]')).toContainText('defineScalarFunction');
+  await page.getByRole('button', { name: 'Next chapter' }).click();
+  await expect(page.locator('[data-frame="3"]')).toContainText('pass 11');
+  await page.getByRole('button', { name: 'Next chapter' }).click();
+  await expect(page.locator('[data-frame="4"]')).toContainText('passed SQL NULL preserved');
+  await page.getByRole('button', { name: 'Next chapter' }).click();
+  await expect(page.locator('[data-frame="5"]')).toContainText('[[10000]]');
+  await page.getByRole('button', { name: 'Next chapter' }).click();
+  await expect(page.locator('[data-frame="6"]')).toContainText('Verified follow-on');
+  await page.setViewportSize({ width:390, height:844 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const transcript = await page.request.get('/vgi/agents/build-transcript.txt');
+  expect(transcript.status()).toBe(200);
+  expect(await transcript.text()).not.toContain('/Users/');
 });
 
 test('article introduces VGI and includes the useful example and captioned video', async ({ page }) => {
   await page.goto('/blog/build-vgi-workers-with-coding-agents/');
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('DuckDB has your data');
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('Your coding agent can build a DuckDB function');
   await expect(page.locator('main')).toContainText('Vector Gateway Interface');
-  await page.getByRole('tab', { name: 'Orders at risk' }).click();
-  await expect(page.getByRole('table', { name: 'Orders at risk: verified SQL results' })).toContainText('Review');
+  await expect(page.getByRole('table', { name: 'Article titles and verified slugs' })).toContainText('version-2-0-beta');
   await expect(page.locator('video track[kind="captions"]')).toHaveCount(1);
   expect((await page.request.get('/vgi/agents/codex.svg')).status()).toBe(200);
   const duration = await page.locator('video').evaluate(element => {
@@ -111,7 +134,7 @@ test('article introduces VGI and includes the useful example and captioned video
     video.load();
     });
   });
-  expect(duration).toBeGreaterThan(49);
-  expect(duration).toBeLessThan(55);
-  expect((await page.request.get('/vgi/agents/worker-story.vtt')).status()).toBe(200);
+  expect(duration).toBeGreaterThan(62);
+  expect(duration).toBeLessThan(65);
+  expect((await page.request.get('/vgi/agents/agent-build.vtt')).status()).toBe(200);
 });
