@@ -74,7 +74,7 @@ test('newcomers and extension developers get distinct introductions', async ({ p
 
 test('VGI explanation is readable without motion and each step is keyboard accessible', async ({ page }) => {
   await page.goto('/vgi/build-with-an-agent/');
-  const explanation = page.getByRole('region', { name: 'From an API to a SQL table.' });
+  const explanation = page.getByRole('region', { name: 'From an API to a SQL catalog with tables.' });
   await explanation.scrollIntoViewIfNeeded();
   await expect(explanation.getByRole('heading', { name: 'Now the data is part of your query.' })).toBeVisible();
   await expect(explanation).toHaveAttribute('data-playing', 'false');
@@ -83,9 +83,18 @@ test('VGI explanation is readable without motion and each step is keyboard acces
   await page.keyboard.press('Enter');
   await expect(build).toHaveAttribute('aria-pressed', 'true');
   await expect(explanation.getByRole('heading', { name: 'Describe the connection you need.' })).toBeVisible();
+  await expect(explanation.locator('[data-attached-catalog]')).toBeHidden();
+  await explanation.getByRole('button', { name: 'ATTACH the worker', exact: true }).click();
+  await expect(explanation.getByRole('heading', { name: 'Bring a database into your session.' })).toBeVisible();
+  await expect(explanation.locator('[data-attached-catalog]')).toBeVisible();
+  await expect(explanation.locator('[data-attached-catalog]')).toContainText('github');
+  await expect(explanation.locator('.catalog-schema')).toContainText('main');
+  await expect(explanation.locator('.catalog-function')).toContainText('releases(…)');
+  await expect(explanation.locator('.attach-sql')).toContainText("ATTACH 'github' AS github");
+  await expect(explanation.locator('.agent-options [data-brand]')).toHaveCount(5);
   await explanation.getByRole('button', { name: 'The worker fetches', exact: true }).click();
   await expect(explanation).toContainText('The coding agent’s job is already done.');
-  await expect(explanation.locator('[data-step-caption="2"]')).toBeVisible();
+  await expect(explanation.locator('[data-step-caption="3"]')).toBeVisible();
   await page.setViewportSize({width:320, height:740});
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
@@ -98,7 +107,7 @@ test('VGI animation advances once, pauses, and replays without moving focus', as
   await explanation.scrollIntoViewIfNeeded();
   await expect(explanation).toHaveAttribute('data-playing', 'true');
   await page.clock.fastForward(6000);
-  await expect(explanation.getByRole('heading', { name: 'An API becomes a function you can query.' })).toBeVisible();
+  await expect(explanation.getByRole('heading', { name: 'Bring a database into your session.' })).toBeVisible();
   await explanation.getByRole('button', { name: 'Pause animation' }).click();
   await page.clock.fastForward(20000);
   await expect(explanation.locator('[data-step-caption="1"]')).toBeVisible();
@@ -108,11 +117,13 @@ test('VGI animation advances once, pauses, and replays without moving focus', as
   await expect(explanation.locator('[data-step-caption="2"]')).toBeVisible();
   await page.clock.fastForward(6000);
   await expect(explanation.locator('[data-step-caption="3"]')).toBeVisible();
+  await page.clock.fastForward(6000);
+  await expect(explanation.locator('[data-step-caption="4"]')).toBeVisible();
   await page.clock.fastForward(6500);
   await expect(explanation.getByRole('button', { name: 'Replay animation' })).toBeFocused();
   await expect(explanation).toHaveAttribute('data-playing', 'false');
   await page.clock.fastForward(20000);
-  await expect(explanation.locator('[data-step-caption="3"]')).toBeVisible();
+  await expect(explanation.locator('[data-step-caption="4"]')).toBeVisible();
   await explanation.getByRole('button', { name: 'Replay animation' }).click();
   await expect(explanation.locator('[data-step-caption="0"]')).toBeVisible();
   await expect(explanation).toHaveAttribute('data-playing', 'true');
