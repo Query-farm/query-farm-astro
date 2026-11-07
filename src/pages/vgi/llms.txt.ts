@@ -21,6 +21,9 @@ export async function GET() {
 
   for (const section of sections) {
     lines.push(`## ${section.name}`, '', section.blurb, '');
+    if ('starter' in section && section.starter) {
+      lines.push(`- [${section.name} starter template](${section.starter}): GitHub template repository with a tested worker, CI, Docker, signed releases and AGENTS.md; create a project with \`gh repo create <name> --template ${section.starter.replace('https://github.com/', '')}\` then \`make init NAME=<name>\``);
+    }
     const prefix = `vgi/docs/${section.slug}`;
     const entries = docs
       .filter(entry => entry.id === prefix || entry.id.startsWith(`${prefix}/`))
