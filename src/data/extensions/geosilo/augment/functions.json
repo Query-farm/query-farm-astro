@@ -4,7 +4,7 @@
     "categories": [
       "Encoding"
     ],
-    "description": "Encode a `GEOMETRY` into the compact GEOSILO format and return a `BLOB`. With one argument, the integer scale is derived from the geometry's CRS — degrees default to `1e7` (≈1 cm), projected meters to `100` (1 cm). With two arguments, the second explicitly sets the scale. To use the result with the native GEOSILO `ST_*` overloads, cast it with `::GEOSILO`: the explicit `BLOB → GEOSILO` cast validates the silo header and fails on a bad one (`TRY_CAST` returns `NULL` instead). There is no cast from `GEOSILO` back to `BLOB`. `geosilo_decode` and `geosilo_metadata` accept the `BLOB` directly.",
+    "description": "Encode a `GEOMETRY` into the compact GEOSILO format and return a `BLOB`. With one argument, the integer scale is derived from the geometry's CRS — degrees default to `1e7` (≈1 cm), projected meters to `100` (1 cm). With two arguments, the second explicitly sets the scale. To use the result with the native GEOSILO `ST_*` overloads, cast it with `::GEOSILO`: the explicit `BLOB → GEOSILO` cast validates the silo header and fails on a bad one (`TRY_CAST` returns `NULL` instead). There is no cast from `GEOSILO` back to `BLOB`. `geosilo_decode` and `geosilo_metadata` accept the `BLOB` directly.\n\n**DuckDB 2.0 build:** `scale` must be a positive integer — `0` or a negative scale raises an error (the Haybarn 1.5 build silently returned `POINT EMPTY` for `0`). Scaled coordinates must fit a 32-bit integer (about ±214 at `1e7`, ±21,474,836 at `100`), otherwise encoding fails with an overflow error. Z, M and ZM geometries encode and decode correctly, and the `BLOB → GEOSILO` cast validates the whole blob rather than only its header.",
     "examples": [
       {
         "description": "Default scale (auto from CRS, or `1e7` if absent)",
@@ -16,7 +16,7 @@
       },
       {
         "description": "Cast the BLOB to GEOSILO for the native `ST_*` overloads",
-        "code": "SELECT ST_Area(geosilo_encode(ST_GeomFromText('POLYGON((0 0, 4 0, 4 3, 0 3, 0 0))'))::GEOSILO);\n-- 11.999999999999998"
+        "code": "SELECT ST_Area(geosilo_encode(ST_GeomFromText('POLYGON((0 0, 4 0, 4 3, 0 3, 0 0))'))::GEOSILO);\n-- 12.0"
       }
     ],
     "relatedFunctions": [
@@ -29,7 +29,7 @@
     "categories": [
       "Encoding"
     ],
-    "description": "Decode a GEOSILO blob back into a standard `GEOMETRY`. Most callers don't need to call this directly — the implicit `GEOSILO → GEOMETRY` cast runs it on demand for any `ST_*` function that doesn't have a native GEOSILO overload (e.g. `ST_Buffer`, `ST_Union`, `ST_AsText`).",
+    "description": "Decode a GEOSILO blob back into a standard `GEOMETRY`. Most callers don't need to call this directly — the implicit `GEOSILO → GEOMETRY` cast runs it on demand for any `ST_*` function that doesn't have a native GEOSILO overload (e.g. `ST_Buffer`, `ST_Union`, `ST_AsText`).\n\n**DuckDB 2.0 build:** Every read is bounds-checked: a truncated or corrupt blob raises an `Invalid Input Error` instead of crashing the process, and nesting deeper than 16 levels is rejected. Use [`try_geosilo_decode`](#try_geosilo_decode) to get `NULL` instead of an error, or [`geosilo_is_valid`](#geosilo_is_valid) to filter untrusted blobs first.",
     "examples": [
       {
         "description": "Round-trip a polygon through the encoding",
@@ -38,7 +38,9 @@
     ],
     "relatedFunctions": [
       "geosilo_encode",
-      "geosilo_metadata"
+      "geosilo_metadata",
+      "try_geosilo_decode",
+      "geosilo_is_valid"
     ]
   },
   {
@@ -46,7 +48,7 @@
     "categories": [
       "Encoding"
     ],
-    "description": "Read a GEOSILO blob's header **without decoding the geometry**. Returns `STRUCT(geometry_type VARCHAR, vertex_type VARCHAR, scale BIGINT)`. Useful for filtering by geometry type or auditing the integer scale of a stored column before any heavy spatial work.",
+    "description": "Read a GEOSILO blob's header **without decoding the geometry**. Returns `STRUCT(geometry_type VARCHAR, vertex_type VARCHAR, scale BIGINT)`. Useful for filtering by geometry type or auditing the integer scale of a stored column before any heavy spatial work.\n\n**DuckDB 2.0 build:** The header is fully validated (magic byte, version, geometry and vertex type, positive scale); an empty or malformed blob raises an error, and a `NULL` input gives a `NULL` struct whose fields are also `NULL`.",
     "examples": [
       {
         "description": "Inspect the header of stored silo blobs",
@@ -56,6 +58,58 @@
     "relatedFunctions": [
       "geosilo_encode",
       "geosilo_decode"
+    ]
+  },
+  {
+    "name": "geosilo_is_valid",
+    "categories": [
+      "Validation"
+    ],
+    "description": "**DuckDB 2.0 build only.** Returns `TRUE` when the value is a structurally valid GEOSILO blob — a known header, element counts consistent with the data, nesting of at most 16 levels and no trailing bytes — and `FALSE` otherwise. It never raises an error for malformed input, so use it to filter untrusted `BLOB`s (from files, other systems or user input) before decoding them. Accepts `GEOSILO` or `BLOB`; `NULL` gives `NULL`.",
+    "examples": [
+      {
+        "description": "A valid blob and a corrupt one",
+        "code": "SELECT geosilo_is_valid(geosilo_encode(ST_Point(1, 2))) AS good,\n       geosilo_is_valid('\\x54\\xff\\xff\\xff\\x7f'::BLOB) AS truncated;"
+      }
+    ],
+    "relatedFunctions": [
+      "geosilo_validate",
+      "try_geosilo_decode",
+      "geosilo_decode"
+    ]
+  },
+  {
+    "name": "geosilo_validate",
+    "categories": [
+      "Validation"
+    ],
+    "description": "**DuckDB 2.0 build only.** Validates a GEOSILO blob and returns `NULL` when it is valid, otherwise a message describing the first problem found — truncated data, a bad magic byte, an unsupported version, an element count larger than the data, excessive nesting or trailing bytes. Use it to report why a blob is rejected. Accepts `GEOSILO` or `BLOB`.",
+    "examples": [
+      {
+        "description": "Explain why blobs are rejected",
+        "code": "SELECT b, geosilo_validate(b) AS problem\nFROM (VALUES (geosilo_encode(ST_Point(1, 2))), ('\\x47\\x01'::BLOB), ('\\x54\\xff\\xff\\xff\\x7f'::BLOB)) t(b);"
+      }
+    ],
+    "relatedFunctions": [
+      "geosilo_is_valid",
+      "try_geosilo_decode"
+    ]
+  },
+  {
+    "name": "try_geosilo_decode",
+    "categories": [
+      "Validation"
+    ],
+    "description": "**DuckDB 2.0 build only.** Decodes a GEOSILO blob into a `GEOMETRY` like [`geosilo_decode`](#geosilo_decode), but returns `NULL` instead of raising an error when the blob is malformed. Accepts `GEOSILO` or `BLOB`.",
+    "examples": [
+      {
+        "description": "Decode a column that may contain corrupt values",
+        "code": "SELECT ST_AsText(try_geosilo_decode(b)) AS wkt\nFROM (VALUES (geosilo_encode(ST_Point(1, 2))), ('\\x54\\xff'::BLOB)) t(b);"
+      }
+    ],
+    "relatedFunctions": [
+      "geosilo_decode",
+      "geosilo_is_valid"
     ]
   },
   {
@@ -81,7 +135,7 @@
     "categories": [
       "Introspection (native)"
     ],
-    "description": "Native GEOSILO overload — `TRUE` if the encoded geometry has no vertices.",
+    "description": "Native GEOSILO overload — `TRUE` if the encoded geometry has no vertices, including polygons, multi-geometries and collections made only of empty parts (`GEOMETRYCOLLECTION(POINT EMPTY)` is empty).",
     "examples": [
       {
         "description": "Empty-geometry check",
@@ -98,7 +152,7 @@
     "categories": [
       "Introspection (native)"
     ],
-    "description": "Native GEOSILO overload — total vertex count, read from the silo header.",
+    "description": "Native GEOSILO overload — total vertex count, walking the encoded geometry: every ring and sub-geometry is counted, polygon rings include their closing vertex (as in WKB), and empty points count as 0. Matches spatial's `ST_NPoints`.\n\n**DuckDB 2.0 build:** `MULTI*` geometries and `GEOMETRYCOLLECTION`s are counted correctly (the Haybarn 1.5 build returns `0` for them and `1` for `POINT EMPTY`).",
     "examples": [
       {
         "description": "Vertex count",
@@ -115,7 +169,7 @@
     "categories": [
       "Introspection (native)"
     ],
-    "description": "Native GEOSILO overload — X coordinate of a single-point geometry, decoded from the silo header without materializing a `GEOMETRY`.",
+    "description": "Native GEOSILO overload — X coordinate of a POINT, read straight from the silo bytes without materializing a `GEOMETRY`. Returns `NULL` for `POINT EMPTY` and raises an error for any other geometry type, like spatial's `ST_X`.\n\n**DuckDB 2.0 build:** `POINT EMPTY` gives `NULL` (the Haybarn 1.5 build returns `NaN`).",
     "examples": [
       {
         "description": "X coordinate of a point",
@@ -133,7 +187,7 @@
     "categories": [
       "Introspection (native)"
     ],
-    "description": "Native GEOSILO overload — Y coordinate of a single-point geometry, decoded from the silo header without materializing a `GEOMETRY`.",
+    "description": "Native GEOSILO overload — Y coordinate of a POINT, read straight from the silo bytes without materializing a `GEOMETRY`. Returns `NULL` for `POINT EMPTY` and raises an error for any other geometry type, like spatial's `ST_Y`.\n\n**DuckDB 2.0 build:** `POINT EMPTY` gives `NULL` (the Haybarn 1.5 build returns `NaN`).",
     "examples": [
       {
         "description": "Y coordinate of a point",
@@ -151,7 +205,7 @@
     "categories": [
       "Introspection (native)"
     ],
-    "description": "Native GEOSILO overload — minimum X across the geometry, computed by walking the integer delta stream. Pair with `ST_XMax` / `ST_YMin` / `ST_YMax` for native bounding-box prefilters.",
+    "description": "Native GEOSILO overload — minimum X across the geometry, computed by walking the integer delta stream. Pair with `ST_XMax` / `ST_YMin` / `ST_YMax` for native bounding-box prefilters. Returns `NULL` for an empty geometry.\n\n**DuckDB 2.0 build:** empty geometries return `NULL` instead of `NaN`, and coordinates on both sides of the antimeridian are handled exactly.",
     "examples": [
       {
         "description": "Minimum X",
@@ -169,7 +223,7 @@
     "categories": [
       "Introspection (native)"
     ],
-    "description": "Native GEOSILO overload — maximum X across the geometry. Walks the integer delta stream; no WKB decode.",
+    "description": "Native GEOSILO overload — maximum X across the geometry. Walks the integer delta stream; no WKB decode. Returns `NULL` for an empty geometry.\n\n**DuckDB 2.0 build:** empty geometries return `NULL` instead of `NaN`, and coordinates on both sides of the antimeridian are handled exactly.",
     "examples": [
       {
         "description": "Maximum X",
@@ -187,7 +241,7 @@
     "categories": [
       "Introspection (native)"
     ],
-    "description": "Native GEOSILO overload — minimum Y across the geometry. Walks the integer delta stream; no WKB decode.",
+    "description": "Native GEOSILO overload — minimum Y across the geometry. Walks the integer delta stream; no WKB decode. Returns `NULL` for an empty geometry.\n\n**DuckDB 2.0 build:** empty geometries return `NULL` instead of `NaN`, and coordinates on both sides of the antimeridian are handled exactly.",
     "examples": [
       {
         "description": "Minimum Y",
@@ -205,7 +259,7 @@
     "categories": [
       "Introspection (native)"
     ],
-    "description": "Native GEOSILO overload — maximum Y across the geometry. Walks the integer delta stream; no WKB decode.",
+    "description": "Native GEOSILO overload — maximum Y across the geometry. Walks the integer delta stream; no WKB decode. Returns `NULL` for an empty geometry.\n\n**DuckDB 2.0 build:** empty geometries return `NULL` instead of `NaN`, and coordinates on both sides of the antimeridian are handled exactly.",
     "examples": [
       {
         "description": "Maximum Y",
@@ -223,11 +277,15 @@
     "categories": [
       "Measurement (native)"
     ],
-    "description": "Native GEOSILO overload — polygon area computed via the shoelace formula directly on int64 coordinates rebuilt from the delta stream. Skips the WKB decode entirely.",
+    "description": "Native GEOSILO overload — planar area of the polygonal parts, computed with the [shoelace formula](https://en.wikipedia.org/wiki/Shoelace_formula) directly on the integer coordinates rebuilt from the delta stream (no WKB decode). Each polygon contributes its exterior ring minus its holes regardless of ring orientation; `MULTIPOLYGON`s and polygons inside a `GEOMETRYCOLLECTION` are summed; points and linestrings contribute `0`. Matches spatial's `ST_Area`.\n\n**DuckDB 2.0 build:** linestrings return `0` and holes are always subtracted (the Haybarn 1.5 build returns a non-zero area for a closed `LINESTRING` and mis-handles holes wound in the same direction as the shell); the sum is accumulated in double precision so large polygons at scale `1e7` cannot overflow.",
     "examples": [
       {
-        "description": "Polygon area (rounded at the encode scale)",
-        "code": "SELECT ST_Area(ST_GeomFromText('POLYGON((0 0, 4 0, 4 3, 0 3, 0 0))')::GEOSILO);\n-- 11.999999999999998"
+        "description": "Polygon area",
+        "code": "SELECT ST_Area(ST_GeomFromText('POLYGON((0 0, 4 0, 4 3, 0 3, 0 0))')::GEOSILO);\n-- 12.0"
+      },
+      {
+        "description": "A hole is subtracted whichever way it is wound",
+        "code": "SELECT ST_Area(ST_GeomFromText('POLYGON((0 0, 10 0, 10 10, 0 10, 0 0), (2 2, 8 2, 8 8, 2 8, 2 2))')::GEOSILO);\n-- 64.0"
       }
     ],
     "relatedFunctions": [
@@ -240,11 +298,15 @@
     "categories": [
       "Measurement (native)"
     ],
-    "description": "Native GEOSILO overload — total length of linear geometries, computed on the integer delta stream without rehydrating a `GEOMETRY`.",
+    "description": "Native GEOSILO overload — total planar length of the linear parts (`LINESTRING`, `MULTILINESTRING`, and linestrings inside a `GEOMETRYCOLLECTION`), computed on the integer delta stream without rehydrating a `GEOMETRY`. Polygons and points return `0` — use [`ST_Perimeter`](#st_perimeter) for polygon boundaries. Matches spatial's `ST_Length`.\n\n**DuckDB 2.0 build:** polygons return `0` (the Haybarn 1.5 build returns their perimeter), and segments that cross the antimeridian are measured correctly: `LINESTRING(-179 0, 179 0)` has length `358`.",
     "examples": [
       {
         "description": "Line length",
         "code": "SELECT ST_Length(ST_GeomFromText('LINESTRING(0 0, 3 4)')::GEOSILO);\n-- 5.0"
+      },
+      {
+        "description": "Segments spanning the full longitude range",
+        "code": "SELECT ST_Length(ST_GeomFromText('LINESTRING(-179 0, 179 0)')::GEOSILO);\n-- 358.0"
       }
     ],
     "relatedFunctions": [
@@ -257,7 +319,7 @@
     "categories": [
       "Measurement (native)"
     ],
-    "description": "Native GEOSILO overload — perimeter of polygonal geometries, computed on the integer delta stream without rehydrating a `GEOMETRY`.",
+    "description": "Native GEOSILO overload — perimeter of the polygonal parts, summed over every ring (holes included), computed on the integer delta stream without rehydrating a `GEOMETRY`. Points and linestrings return `0`. Matches spatial's `ST_Perimeter`.\n\n**DuckDB 2.0 build:** linestrings return `0`, and linestrings inside a `GEOMETRYCOLLECTION` are no longer added to the perimeter.",
     "examples": [
       {
         "description": "Polygon perimeter",

@@ -152,7 +152,7 @@ FROM read_parquet('parcels_silo.parquet')
 LIMIT 5;
 ```
 
-To use a silo `BLOB` with the native `ST_*` overloads, cast it with `::GEOSILO`. The cast is explicit only and validates the silo header: a bad header raises a conversion error, or gives `NULL` with `TRY_CAST`. There is no cast from `GEOSILO` back to `BLOB`.
+To use a silo `BLOB` with the native `ST_*` overloads, cast it with `::GEOSILO`. The cast is explicit only and validates the blob (on the DuckDB 2.0 build the whole structure, on the Haybarn 1.5 build the header): a bad blob raises a conversion error, or gives `NULL` with `TRY_CAST`. There is no cast from `GEOSILO` back to `BLOB`.
 
 ```sql
 -- Native ST_* overloads on a silo BLOB, plus a header check
@@ -167,6 +167,26 @@ For a custom integer scale (e.g. millimeter-precision projected data), pass the 
 
 ```sql
 SELECT geosilo_encode(geom, 1000) FROM mm_precision_data;
+```
+
+## Validate blobs from untrusted sources
+
+Silo `BLOB`s read from files or other systems may be truncated or corrupt. On the DuckDB 2.0 build, [`geosilo_is_valid`](#geosilo_is_valid) filters them without raising errors, [`geosilo_validate`](#geosilo_validate) says what is wrong, and [`try_geosilo_decode`](#try_geosilo_decode) decodes or returns `NULL`:
+
+```sql
+SELECT id,
+       geosilo_validate(silo)              AS problem,
+       ST_AsText(try_geosilo_decode(silo)) AS wkt
+FROM (VALUES (1, geosilo_encode(ST_Point(1, 2))),
+             (2, '\x54\xff\xff\xff\x7f'::BLOB)) t(id, silo);
+```
+
+Keep only the valid rows before using the native `ST_*` overloads:
+
+```sql
+SELECT ST_XMin(silo::GEOSILO) AS xmin
+FROM (VALUES (geosilo_encode(ST_Point(1, 2))), ('\x47\x01'::BLOB)) t(silo)
+WHERE geosilo_is_valid(silo);
 ```
 
 ## Mix native fast paths with GEOS-backed operations
