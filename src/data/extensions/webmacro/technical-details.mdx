@@ -24,7 +24,7 @@ import Callout from '../../../components/docs/Callout.astro';
 - **Only load from URLs you control or fully trust.** Your own Git repos, your team's internal artifact host, your own gists — not arbitrary URLs from chat messages, blog posts, or Stack Overflow snippets.
 - **Checking the statement is not a sandbox.** The extension parses the response and accepts only one `CREATE MACRO` statement, so a file can't run anything else when it loads. But a macro's body can do whatever your session can, such as reading files or URLs, and it runs whenever you call the macro.
 - **Pin URLs to immutable revisions.** Prefer `https://raw.githubusercontent.com/org/repo/<commit-sha>/macros/foo.sql` over `.../main/macros/foo.sql` so a rebase or branch compromise doesn't silently change what you load.
-- **Keep HTTPS.** Plain `http://` URLs are vulnerable to in-flight tampering. The extension speaks TLS by default — use it.
+- **Keep HTTPS.** Plain `http://` URLs are vulnerable to in-flight tampering. On DuckDB 2.0 the extension refuses them unless you `SET webmacro_allow_http = true`, and it refuses to fetch anything when `enable_external_access` is false.
 
 In a multi-tenant or hosted DuckDB environment, consider not loading the WebMacro extension at all, or restricting which roles can use it. See [OWASP — Code Injection](https://owasp.org/www-community/attacks/Code_Injection) for the threat model.
 </Callout>
@@ -35,11 +35,20 @@ The whole API surface is one scalar function: `load_macro_from_url(url VARCHAR) 
 
 [`load_macro_from_url`](#load_macro_from_url) does exactly three things, in order:
 
-1. `GET` the URL (HTTPS supported via OpenSSL; redirects followed; 10 s read timeout).
-2. Parse the response with DuckDB's parser and require exactly one [`CREATE MACRO`](https://duckdb.org/docs/sql/statements/create_macro) or `CREATE OR REPLACE MACRO` statement. Nothing runs if the response holds anything else, including a macro followed by another statement. `TEMP` macros are rejected because the macro is created on a separate connection, where it wouldn't last.
-3. Create the macro and return `Successfully loaded macro: <name>`.
+1. `GET` the URL. On DuckDB 2.0 this uses DuckDB's HTTP stack (httpfs is autoloaded for `https://`), so `http_timeout`, `http_retries`, `http_proxy` and HTTP secrets apply; redirects are followed and every hop is checked again; responses over `webmacro_max_response_size` bytes are refused. The Haybarn 1.5 build uses cpp-httplib with a 10 s read timeout.
+2. Parse the response with DuckDB's parser and require exactly one [`CREATE MACRO`](https://duckdb.org/docs/sql/statements/create_macro) or `CREATE OR REPLACE MACRO` statement. Nothing runs if the response holds anything else, including a macro followed by another statement.
+3. Create the macro and return `Successfully loaded macro: <name>`. On DuckDB 2.0 the macro is created in your own transaction and search path, like typing the `CREATE MACRO` yourself: `TEMP` macros work and a `ROLLBACK` removes the macro. The Haybarn 1.5 build creates it on a separate connection and rejects `TEMP` macros.
 
 The macro is then callable by name, like any hand-typed `CREATE MACRO`. There's no separate registry to query and no `unload` — drop the macro with [`DROP MACRO`](https://duckdb.org/docs/sql/statements/drop) when you no longer need it.
+
+## Settings (DuckDB 2.0)
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `webmacro_allow_http` | `false` | Allow plain `http://` URLs. The response runs as SQL, so anyone on the network path could swap the macro; use only for localhost or lab networks. |
+| `webmacro_max_response_size` | `1048576` | Largest response, in bytes, that `load_macro_from_url` accepts. |
+
+DuckDB's own `http_timeout` (default 30 s), `http_retries` and `http_proxy` settings apply too. `load_macro_from_url` is `VOLATILE`, so `EXPLAIN` or constant folding never fetches a URL or creates a macro.
 
 ## Hosting the macro
 
@@ -47,7 +56,7 @@ WebMacro doesn't care where the URL lives, only that an HTTP `GET` against it re
 
 - **Git raw URL** (recommended): `https://raw.githubusercontent.com/org/repo/<sha>/macros/foo.sql`. Pinning to a commit SHA makes the macro deterministic forever.
 - **Gist raw URL**: `https://gist.githubusercontent.com/<user>/<id>/raw/foo.sql`. Convenient for one-off sharing; harder to review than a Git PR.
-- **Internal artifact server / S3 + presigned URL**: any HTTP(S) endpoint that returns the SQL body works. TLS is honored.
+- **Internal artifact server / S3 + presigned URL**: any HTTPS endpoint that returns the SQL body works. TLS certificates are verified.
 - **Self-hosted "macro registry"**: a tiny static site at `macros.your-org.internal/` mapping path → SQL. The whole thing can be a directory of `.sql` files behind any static webserver.
 
 ## Loading at session start

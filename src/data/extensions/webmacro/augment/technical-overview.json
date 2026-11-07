@@ -32,20 +32,20 @@
       "description": "`load_macro_from_url` is a single scalar function. Internally: `GET` the URL, parse the body, create the macro, return a status string. There is no caching, no manifest, no dependency graph — it's deliberately the simplest possible primitive.",
       "bulletPoints": [
         {
-          "label": "Plain HTTP(S) GET",
-          "description": "Uses [`cpp-httplib`](https://github.com/yhirose/cpp-httplib) with OpenSSL for TLS. Redirects are followed automatically (so a `gist.github.com/...` URL that 301s to `gist.githubusercontent.com/...` works). The read timeout is 10 seconds."
+          "label": "HTTPS GET",
+          "description": "On DuckDB 2.0 the request goes through DuckDB's own HTTP stack, the same one `read_csv('https://...')` uses: httpfs is autoloaded for `https://`, and `http_timeout`, `http_retries`, `http_proxy` and [HTTP secrets](https://duckdb.org/docs/extensions/httpfs/https) (e.g. a bearer token) apply. Redirects are followed (so a `gist.github.com/...` URL that 301s to `gist.githubusercontent.com/...` works), and every hop is checked again, so an `https://` URL can't be redirected to plain `http://`. Responses larger than `webmacro_max_response_size` (default 1 MiB) are refused. The Haybarn 1.5 build uses [`cpp-httplib`](https://github.com/yhirose/cpp-httplib) with a 10 second read timeout."
         },
         {
           "label": "Parser validation",
-          "description": "The fetched body is parsed with DuckDB's own parser and must be exactly one `CREATE MACRO` or `CREATE OR REPLACE MACRO` statement. Anything else raises an error and nothing runs. `TEMP` macros are rejected because the macro is created on a separate connection, where it wouldn't last."
+          "description": "The fetched body is parsed with DuckDB's own parser and must be exactly one `CREATE MACRO` or `CREATE OR REPLACE MACRO` statement. Anything else raises an error and nothing runs. On DuckDB 2.0 `TEMP` macros are allowed; the Haybarn 1.5 build rejects them because it creates the macro on a separate connection."
         },
         {
           "label": "Registration",
-          "description": "The macro is created in the attached database, like a hand-typed `CREATE MACRO`. In an in-memory database it lasts until the database closes; in a database file it stays until you drop it."
+          "description": "On DuckDB 2.0 the macro is created in your own transaction, exactly like running the `CREATE MACRO` statement yourself: your `search_path` decides where an unqualified macro goes, a `ROLLBACK` removes it, and read-only databases or `READ ONLY` transactions refuse it. In an in-memory database it lasts until the database closes; in a database file it stays until you drop it."
         },
         {
           "label": "WASM build",
-          "description": "In DuckDB-WASM the extension uses a WASM-friendly HTTP shim instead of OpenSSL httplib — same function surface, browser-fetch under the hood."
+          "description": "In DuckDB-WASM the extension fetches with the browser's `XMLHttpRequest` — same function surface and the same URL, size and statement checks; TLS, redirects and CORS are handled by the browser."
         }
       ]
     },
@@ -67,8 +67,8 @@
           "description": "If you load from a Git host, prefer URLs with a commit SHA over branch names — `.../<sha>/macros/foo.sql` rather than `.../main/macros/foo.sql`. That way a compromised or rebased branch doesn't silently change what you load tomorrow."
         },
         {
-          "label": "TLS is on by default — keep it on",
-          "description": "HTTPS prevents network-level tampering between your DuckDB and the macro host. Plain `http://` URLs work but should be avoided outside of localhost / lab networks."
+          "label": "HTTPS only by default",
+          "description": "HTTPS prevents network-level tampering between your DuckDB and the macro host. On DuckDB 2.0 plain `http://` URLs are refused unless you `SET webmacro_allow_http = true` (use only for localhost or lab networks), and `load_macro_from_url` refuses to run at all when `enable_external_access` is false."
         },
         {
           "label": "No cross-session caching",
