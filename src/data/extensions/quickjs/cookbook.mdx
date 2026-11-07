@@ -9,7 +9,7 @@ JavaScript inside SQL isn't a goal — it's an escape hatch. Reach for QuickJS w
 Don't reach for it for:
 
 - **Anything DuckDB has a native function for.** Native primitives are 10–100× faster.
-- **Long-running computation.** QuickJS is fast for an embedded interpreter; it's still slower than vectorized SQL.
+- **Long-running computation.** QuickJS is fast for an embedded interpreter; it's still slower than vectorized SQL. In the DuckDB 2.0 build, cap runaway scripts with `SET quickjs_timeout_ms = 1000` (heap is capped by `quickjs_memory_limit`, 256MB by default).
 - **Untrusted input** in a multi-tenant context. Even sandboxed JS engines have a history of escapes.
 
 ## Scalar form
@@ -26,7 +26,7 @@ SELECT quickjs('let m = "Hello, World!"; m');            -- 'Hello, World!'
 SELECT quickjs_eval('(a, b) => a + b', 5, 3);            -- 8 (JSON)
 ```
 
-For string literals with nested quotes, prefer assigning to a JS variable first to avoid SQL parser confusion.
+For string literals with nested quotes, prefer assigning to a JS variable first to avoid SQL parser confusion. Each row of the scalar `quickjs` runs in a fresh context, so `let` declarations never collide between rows.
 
 ## Table form (array → rows)
 
@@ -38,7 +38,7 @@ SELECT * FROM quickjs('[1, 2, 3, 4, 5]');
 Pass parameters and have JS return a transformed array:
 
 ```sql
--- arg0 = raw param, parsed_arg0 = JSON.parse(arg0) when arg0 is a string
+-- arg0 = raw param, parsed_arg0 = JSON.parse(arg0) when arg0 is a JSON string (otherwise arg0)
 SELECT *
 FROM quickjs('parsed_arg0.map(x => x * arg1)',
              '[1, 2, 3, 4, 5]', 3);
@@ -76,9 +76,27 @@ SELECT extracted->>'$.user' AS user,
 FROM transformed_events;
 ```
 
+## Pass lists, structs and dates directly
+
+In the DuckDB 2.0 build, `quickjs_eval` receives SQL values as native JavaScript values — no `JSON.parse` or string splitting needed:
+
+```sql
+SELECT quickjs_eval('(xs) => xs.reduce((a, b) => a + b, 0) / xs.length', [2, 4, 9]);  -- 5
+```
+
+```sql
+SELECT quickjs_eval('(d) => d.toISOString().slice(0, 7)', DATE '2024-07-04');           -- "2024-07"
+```
+
+Return `undefined` to produce SQL `NULL`:
+
+```sql
+SELECT quickjs_eval('(s) => s.includes("@") ? s.split("@")[1] : undefined', 'nobody') IS NULL;  -- true
+```
+
 ## Performance
 
-QuickJS-NG is one of the smallest and fastest embedded JS engines available — but you're still paying interpretation cost per row. Roughly 1–10 μs per call depending on the snippet. At 100K rows that's 0.1–1 second, which is fine for most ETL but bad for hot OLAP paths.
+QuickJS-NG is one of the smallest and fastest embedded JS engines available — but you're still paying interpretation cost per row. In the DuckDB 2.0 build `quickjs_eval` compiles its function once per thread, so a small arrow function costs around a microsecond per row: 100K rows take roughly 0.1 seconds. The scalar `quickjs` builds a fresh context for every row (around 100 µs each), so prefer `quickjs_eval` for per-row work.
 
 Where possible, prefer:
 

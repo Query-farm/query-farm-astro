@@ -1,23 +1,66 @@
 [
   {
     "name": "quickjs",
-    "categories": ["Execute"],
-    "description": "Evaluate JavaScript code and return the result. Has both a scalar form (returns a single value as VARCHAR) and a table-valued form (when the JS returns an array, each element becomes a row).",
-    "examples": [
-      { "description": "Simple expression", "code": "SELECT quickjs('2 + 2');" },
-      { "description": "Array → table", "code": "SELECT * FROM quickjs('[1, 2, 3, 4, 5]');" },
-      { "description": "Array with parameter passthrough", "code": "SELECT * FROM quickjs('parsed_arg0.map(x => x * arg1)', '[1, 2, 3, 4, 5]', 3);" }
+    "categories": [
+      "Execute"
     ],
-    "relatedFunctions": ["quickjs_eval"]
+    "description": "Evaluate JavaScript code and return its completion value (the value of the last expression or statement). Has a scalar form (returns the value converted to VARCHAR; each row runs in a fresh JavaScript context) and a table form (the code must evaluate to an array and each element becomes a row of the JSON column `result`). In the table form extra arguments are available as `arg0`, `arg1`, … and `parsed_arg0` (arg0 parsed as JSON when it is a JSON string, otherwise arg0 itself); the code may contain several statements. A returned Promise is awaited. Execution is bounded by `quickjs_memory_limit`, `quickjs_timeout_ms` and `max_execution_time`, and can be cancelled.",
+    "examples": [
+      {
+        "description": "Simple expression",
+        "code": "SELECT quickjs('2 + 2');"
+      },
+      {
+        "description": "Several statements; the last expression is the result",
+        "code": "SELECT quickjs('let words = [\"duck\", \"db\"]; words.map(w => w.toUpperCase()).join(\" \")');"
+      },
+      {
+        "description": "Array → table",
+        "code": "SELECT * FROM quickjs('[1, 2, 3, 4, 5]');"
+      },
+      {
+        "description": "Array with parameter passthrough",
+        "code": "SELECT * FROM quickjs('parsed_arg0.map(x => x * arg1)', '[1, 2, 3, 4, 5]', 3);"
+      },
+      {
+        "description": "Native list argument and a multi-statement script (DuckDB 2.0 build)",
+        "code": "SELECT * FROM quickjs('const out = []; for (const x of arg0) out.push({x, square: x * x}); out', [1, 2, 3]);"
+      }
+    ],
+    "relatedFunctions": [
+      "quickjs_eval"
+    ]
   },
   {
     "name": "quickjs_eval",
-    "categories": ["Execute"],
-    "description": "Call a JavaScript function with the given arguments. The first argument is a JS function expression; subsequent arguments are passed positionally. The result is serialized as JSON.",
-    "examples": [
-      { "description": "Two-argument adder", "code": "SELECT quickjs_eval('(a, b) => a + b', 5, 3);" },
-      { "description": "Custom JSON munging — better than chaining json_extract_*", "code": "SELECT quickjs_eval('(payload) => { const d = JSON.parse(payload); return { user: d.user, os: d.meta.os }; }', payload) AS extracted FROM events;" }
+    "categories": [
+      "Execute"
     ],
-    "relatedFunctions": ["quickjs"]
+    "description": "Call a JavaScript function with the given arguments and return its result as JSON. The first argument is a JS function expression; the remaining arguments are passed positionally as native JavaScript values: integers and DECIMAL as numbers (BIGINT/HUGEINT beyond 2^53 as BigInt), VARCHAR as strings, BOOLEAN as booleans, DATE and TIMESTAMP types as Date, BLOB as Uint8Array, LIST/ARRAY as arrays, STRUCT/MAP as objects, NULL as null; other types arrive as their string form. The result is serialized with JSON.stringify (BigInt as a JSON number); `undefined` returns SQL NULL. Async functions are awaited. The function is compiled once per thread and reused while the script text stays the same.",
+    "examples": [
+      {
+        "description": "Two-argument adder",
+        "code": "SELECT quickjs_eval('(a, b) => a + b', 5, 3);"
+      },
+      {
+        "description": "Lists and structs arrive as arrays and objects (DuckDB 2.0 build)",
+        "code": "SELECT quickjs_eval('(tags, user) => tags.map(t => user.name + \":\" + t)', ['a', 'b'], {'name': 'duck'});"
+      },
+      {
+        "description": "Dates arrive as JavaScript Date objects (DuckDB 2.0 build)",
+        "code": "SELECT quickjs_eval('(d) => d.getUTCDay()', DATE '2024-07-04');"
+      },
+      {
+        "description": "Custom JSON munging — better than chaining json_extract_*",
+        "code": "SELECT quickjs_eval('(payload) => { const d = JSON.parse(payload); return { user: d.user, os: d.meta.os }; }', payload) AS extracted FROM events;"
+      },
+      {
+        "description": "undefined becomes SQL NULL",
+        "code": "SELECT quickjs_eval('(x) => x > 0 ? x : undefined', -1) IS NULL;"
+      }
+    ],
+    "relatedFunctions": [
+      "quickjs"
+    ]
   }
 ]

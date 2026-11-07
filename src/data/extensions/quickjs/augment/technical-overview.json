@@ -29,7 +29,7 @@
     {
       "icon": "⚙️",
       "title": "How it works",
-      "description": "The extension links [QuickJS-NG](https://github.com/quickjs-ng/quickjs) — an actively-maintained fork of [Fabrice Bellard's QuickJS](https://bellard.org/quickjs/) — into DuckDB as scalar and table functions. Each call instantiates a JS context, evaluates the supplied source, and converts the result back across the SQL boundary. There is no shared state between rows.",
+      "description": "The extension links [QuickJS-NG](https://github.com/quickjs-ng/quickjs) — an actively-maintained fork of [Fabrice Bellard's QuickJS](https://bellard.org/quickjs/) — into DuckDB as scalar and table functions. The scalar `quickjs` gives every row a fresh JS context, so nothing leaks between rows; `quickjs_eval` compiles its function once per thread and reuses it while the script text stays the same.",
       "bulletPoints": [
         {
           "label": "Two surfaces, picked by call site",
@@ -37,15 +37,15 @@
         },
         {
           "label": "Argument binding",
-          "description": "Positional arguments to the table form of `quickjs` are exposed inside the JS as `arg0`, `arg1`, … . When an argument is a JSON-shaped string, a parsed copy is also bound as `parsed_arg0`, `parsed_arg1`, … so you don't pay for `JSON.parse` in the snippet."
+          "description": "`quickjs_eval` passes SQL values as native JS values — numbers (BigInt beyond 2^53), strings, booleans, `Date` for DATE/TIMESTAMP, `Uint8Array` for BLOB, arrays for LIST, objects for STRUCT/MAP, `null` for NULL. The table form of `quickjs` exposes its extra arguments as `arg0`, `arg1`, … plus `parsed_arg0`: `arg0` parsed as JSON when it is a JSON string. (DuckDB 2.0 build; the DuckDB 1.5 build passes most non-numeric types as strings.)"
         },
         {
           "label": "Modern ECMAScript",
-          "description": "QuickJS-NG implements the bulk of the [ECMAScript](https://tc39.es/ecma262/) standard — arrow functions, destructuring, `let`/`const`, `Map`/`Set`, `Promise`, modern `Array` / `String` / `Object` methods. No browser, no Node APIs (no `fetch`, `fs`, etc.) — this is a pure language runtime."
+          "description": "QuickJS-NG implements the bulk of the [ECMAScript](https://tc39.es/ecma262/) standard — arrow functions, destructuring, `let`/`const`, `Map`/`Set`, `Promise` and `async`/`await` (returned promises are awaited), modern `Array` / `String` / `Object` methods. No browser, no Node APIs (no `fetch`, `fs`, etc.) — this is a pure language runtime."
         },
         {
-          "label": "Per-row evaluation",
-          "description": "Snippets are JIT-compiled within the QuickJS context per call. There's no cross-row caching of compiled functions, so cost scales linearly with input row count."
+          "label": "Compiled once, called per row",
+          "description": "In the DuckDB 2.0 build `quickjs_eval` keeps one JS runtime, context and compiled function per thread, so a per-row call costs roughly a microsecond. The scalar `quickjs` still pays for a fresh context per row (on the order of 100 µs) in exchange for isolation — prefer `quickjs_eval` for per-row work."
         }
       ]
     },
@@ -63,8 +63,8 @@
           "description": "Per-row JS interpretation is fine for ETL and ad-hoc work over millions of rows. It is not the right tool for an interactive dashboard query that runs against a billion-row fact table on every refresh."
         },
         {
-          "label": "Untrusted input is risky",
-          "description": "QuickJS is a sandbox in the sense that it has no I/O surface. It is not hardened against adversarial JS — don't `quickjs_eval` user-supplied source in a multi-tenant context."
+          "label": "Bounded, but not a security boundary",
+          "description": "QuickJS has no I/O surface. In the DuckDB 2.0 build each runtime's heap is capped by `quickjs_memory_limit` (256MB by default), `quickjs_timeout_ms` and DuckDB's `max_execution_time` stop runaway loops, Ctrl-C cancels a running script, and deep recursion raises an error instead of crashing. It is still not hardened against adversarial JS — don't `quickjs_eval` user-supplied source in a multi-tenant context."
         },
         {
           "label": "Consider Rhai for tighter SQL integration",

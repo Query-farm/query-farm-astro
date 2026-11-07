@@ -60,7 +60,7 @@ SELECT quickjs_eval('(a, b) => a + b', 5, 3);  -- 8 (JSON)
 
 ## Argument binding
 
-Positional arguments to the table form of [`quickjs`](#quickjs) are exposed inside the snippet as `arg0`, `arg1`, … . When an argument is a JSON-shaped string, a parsed copy is also bound as `parsed_arg0`, `parsed_arg1`, … so the snippet doesn't have to call `JSON.parse` itself:
+Positional arguments to the table form of [`quickjs`](#quickjs) are exposed inside the snippet as `arg0`, `arg1`, … . `parsed_arg0` holds `arg0` parsed as JSON when `arg0` is a string containing valid JSON, and `arg0` itself otherwise, so the snippet doesn't have to call `JSON.parse`:
 
 ```sql
 SELECT *
@@ -69,7 +69,35 @@ FROM quickjs('parsed_arg0.map(x => x * arg1)',
 -- 3, 6, 9, 12, 15
 ```
 
-For [`quickjs_eval`](#quickjs_eval), arguments map to the function's formal parameters — no `argN` aliasing.
+The table form's code runs as a script: its result is the value of the last expression, so it may declare variables and loop before producing the array.
+
+```sql
+SELECT * FROM quickjs('const out = []; for (const x of arg0) out.push(x * x); out', [1, 2, 3]);
+-- 1, 4, 9
+```
+
+For [`quickjs_eval`](#quickjs_eval), arguments map to the function's formal parameters — no `argN` aliasing. In the DuckDB 2.0 build both functions hand SQL values to JavaScript as native values:
+
+| SQL type | JavaScript value |
+|---|---|
+| `TINYINT` … `BIGINT`, unsigned and `HUGEINT` integers | `number`; `BigInt` when the magnitude exceeds 2^53 − 1, so no digits are lost |
+| `FLOAT`, `DOUBLE`, `DECIMAL` | `number` |
+| `VARCHAR`, `JSON` | `string` (JSON text is not parsed automatically) |
+| `BOOLEAN` | `boolean` |
+| `DATE`, `TIMESTAMP`, `TIMESTAMPTZ`, `TIMESTAMP_S/MS/NS` | `Date` (UTC, millisecond precision); infinite values arrive as strings |
+| `BLOB` | `Uint8Array` |
+| `LIST`, `ARRAY` | array |
+| `STRUCT`, `MAP` | object (MAP keys are stringified) |
+| `UNION` | the active member's value |
+| `NULL` | `null` |
+| anything else (`UUID`, `INTERVAL`, `ENUM`, `TIME`, …) | its string form |
+
+```sql
+SELECT quickjs_eval('(tags, user) => tags.map(t => user.name + ":" + t)', ['a', 'b'], {'name': 'duck'});
+-- ["duck:a","duck:b"]
+```
+
+Results go back through `JSON.stringify`. `BigInt` values serialize as JSON numbers, and a result with no JSON form (`undefined`, a function, a symbol) is SQL `NULL`. A returned `Promise` — for example from an `async` function — is awaited; a rejection becomes an error.
 
 ## What's in the language
 
@@ -79,10 +107,48 @@ There is no browser layer and no Node API surface — no `fetch`, no `fs`, no `p
 
 ## Performance shape
 
-Each call instantiates a JS context, evaluates the supplied source, and converts the result back across the SQL boundary. There is no cross-row caching of compiled functions, so cost scales linearly with row count. Empirically, expect microseconds-per-row for typical snippets — fine for ETL and ad-hoc work over millions of rows, wrong for hot interactive paths.
+In the DuckDB 2.0 build, [`quickjs_eval`](#quickjs_eval) keeps one JavaScript runtime, context and compiled function per worker thread and recompiles only when the script text changes, so the per-row cost is the call itself — around a microsecond for a small arrow function (200,000 rows of `(x) => x * 2` take about 0.2 s). Because the context is reused, globals a function mutates persist between the rows one thread processes; don't rely on that state.
+
+The scalar [`quickjs`](#quickjs) gives each row a fresh context so declarations never collide between rows. Creating a context costs on the order of 100 µs, so use `quickjs_eval` for per-row work and keep `quickjs` for one-off expressions.
 
 The standard playbook:
 
 1. Start in pure SQL. If the [scalar function reference](https://duckdb.org/docs/sql/functions/overview) or [`json_*`](https://duckdb.org/docs/data/json/loading_json.html) family covers it, you're done.
 2. If regex isn't expressive enough or `CASE` chains are getting unreadable, reach for QuickJS.
 3. If the snippet is small and type-driven (numbers, strings, simple records), benchmark against [`evalexpr_rhai`](/products/extensions/evalexpr_rhai) — Rhai's tighter SQL-type integration sometimes wins.
+
+## Resource limits
+
+The DuckDB 2.0 build bounds every script so a bad snippet fails the query instead of taking down the process:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `quickjs_memory_limit` | `'256MB'` | Maximum heap of each QuickJS runtime (one per thread and query). Accepts DuckDB memory sizes; `'none'` disables it. Exceeding it raises `InternalError: out of memory (quickjs_memory_limit is …)`. |
+| `quickjs_timeout_ms` | `0` (off) | Maximum wall-clock time of one evaluation: one row of `quickjs` / `quickjs_eval`, or the whole table form. |
+
+```sql
+SET quickjs_timeout_ms = 1000;
+SET quickjs_memory_limit = '64MB';
+```
+
+Independently of these settings, a running script stops when the query is cancelled (Ctrl-C, `interrupt()`) or exceeds DuckDB's [`max_execution_time`](https://duckdb.org/docs/configuration/overview). Unbounded recursion or deeply nested input raises `RangeError: Maximum call stack size exceeded`; the stack limit is sized to the native thread stack the query actually runs on.
+
+The JavaScript environment has no filesystem, network, process or module loader access, so the functions keep working when `enable_external_access` is `false`.
+
+## Changes in the DuckDB 2.0 release
+
+<Callout type="warning" title="Behaviour changes in the DuckDB 2.0 build">
+- **Native argument types.** `quickjs_eval` and table-form arguments arrive as numbers, BigInt, Date, Uint8Array, arrays and objects (see [Argument binding](#argument-binding)). Earlier builds passed SMALLINT, TINYINT, DECIMAL, dates, lists and structs as strings, so `quickjs_eval('(x) => x + 1', 1::SMALLINT)` returned `"11"`; it now returns `2`. Snippets that called string methods on such arguments need updating.
+- **`undefined` is SQL NULL.** `quickjs_eval` used to return the text `undefined` in its JSON column.
+- **NULL arguments reach JavaScript as `null`** instead of being stringified.
+- **Table form runs as a script.** Multi-statement code works, and `parsed_arg0` falls back to `arg0` when `arg0` is not valid JSON instead of failing.
+- **Promises are awaited** instead of being returned as `{}`.
+- **Lone UTF-16 surrogates** in results are replaced with U+FFFD rather than producing invalid UTF-8.
+</Callout>
+
+Also new in the DuckDB 2.0 build:
+
+- **Crash fixes:** returning or throwing a `Symbol` and deep recursion no longer crash DuckDB.
+- **Limits and cancellation:** `quickjs_memory_limit`, `quickjs_timeout_ms`, `max_execution_time` and Ctrl-C (see [Resource limits](#resource-limits)).
+- **Performance:** `quickjs_eval` reuses its compiled function per thread instead of building a new engine for every row — over 100× faster on per-row workloads.
+- **QuickJS-NG 0.18.0.**
