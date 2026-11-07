@@ -60,15 +60,15 @@ The full row shape from `radio_received_messages()` / `radio_subscription_receiv
 For loops that need to act *as* messages arrive (rather than polling on a timer), [`radio_listen`](#radio_listen) blocks the connection until something lands in the inbox or a timeout elapses:
 
 ```sql
--- Block up to 30 seconds for a message on any subscription.
--- Args: (return_on_first_message, max_wait).
+-- Block up to 30 seconds for an unread message on any subscription.
+-- Args: (wait_for_messages, timeout). Returns the subscriptions with unread messages.
 CALL radio_listen(true, INTERVAL '30 seconds');
 
 -- Then drain
 SELECT * FROM radio_received_messages() ORDER BY receive_time DESC LIMIT 1;
 ```
 
-Pair with [`radio_sleep`](#radio_sleep) when scripting between polls.
+Reading messages marks them seen, so the next `radio_listen` waits for new ones. Pair with [`radio_sleep`](#radio_sleep) when scripting between polls. On the DuckDB 2.0 build a message that arrives while `radio_listen` is starting its wait is never missed, and the wait can be interrupted with Ctrl-C.
 
 ## Send a message and track delivery
 
@@ -110,19 +110,40 @@ See [`radio_subscription_transmit_messages_delete_finished`](#radio_subscription
 
 ## Test pipelines without a real upstream
 
-Inject messages straight into a subscription's inbox to exercise downstream SQL — no broker, no real WebSocket, no flake:
+Inject messages straight into a subscription's inbox to exercise downstream SQL — no broker, no real WebSocket, no flake. On the DuckDB 2.0 build the `loopback://` transport needs no server at all: messages transmitted on it come back to the same subscription.
 
+<!-- check: skip DuckDB 2.0 build only (loopback transport) -->
 ```sql
-CALL radio_subscription_received_message_add(
-  'wss://stream.example.com/events',
-  'channel-name',
-  '{"type":"test","value":42}'::BLOB
-);
-
-SELECT * FROM radio_subscription_received_messages('wss://stream.example.com/events');
+CALL radio_subscribe('loopback://test');
 ```
 
-See [`radio_subscription_received_message_add`](#radio_subscription_received_message_add). Useful for unit-testing pipelines that consume `radio_*` tables.
+<!-- check: skip DuckDB 2.0 build only (loopback transport) -->
+```sql
+-- Inject a message as if it had arrived from the network
+CALL radio_subscription_received_message_add('loopback://test', 'orders', '{"type":"test","value":42}');
+
+-- Or transmit one and let the loopback deliver it
+CALL radio_transmit_message('loopback://test', 'orders', '{"type":"test","value":43}', 3, INTERVAL '10 seconds');
+CALL radio_flush(INTERVAL '5 seconds');
+
+SELECT channel, decode(message)::JSON ->> 'value' AS value
+FROM radio_subscription_received_messages('loopback://test')
+ORDER BY message_id;
+```
+
+See [`radio_subscription_received_message_add`](#radio_subscription_received_message_add). On the Haybarn 1.5 build, which has no loopback transport, inject into any subscribed URL instead (the message must be a `BLOB` there).
+
+## Detect dropped messages
+
+Each subscription's receive queue holds `receive_message_capacity` messages (default 1000) and evicts the oldest when full. On the DuckDB 2.0 build, [`radio_subscriptions`](#radio_subscriptions) counts the evicted messages nobody had read:
+
+<!-- check: skip DuckDB 2.0 build only (new columns) -->
+```sql
+SELECT url, received_messages_queued, received_messages_dropped_unseen
+FROM radio_subscriptions();
+```
+
+If `received_messages_dropped_unseen` grows, read more often or resubscribe with a larger `receive_message_capacity`.
 
 ## Tear down
 
@@ -136,7 +157,20 @@ See [`radio_unsubscribe`](#radio_unsubscribe).
 ## Diagnostics
 
 ```sql
-SELECT radio_version();   -- e.g. '0.4.x'
+SELECT radio_version();   -- e.g. '2026110701' on the DuckDB 2.0 build
 ```
 
-Use [`radio_version`](#radio_version) to confirm what's loaded when matching against bug reports. [`radio_flush`](#radio_flush) drains all currently-buffered messages so subsequent reads see only fresh data.
+Use [`radio_version`](#radio_version) to confirm what's loaded when matching against bug reports. [`radio_flush`](#radio_flush) waits for every subscription's outgoing messages to be sent (or given up on) and returns whether they all finished in time — it does not touch received messages.
+
+## Sandboxed sessions
+
+On the DuckDB 2.0 build, `radio_subscribe` and `radio_transmit_message` refuse WebSocket and Redis URLs once `enable_external_access` is false:
+
+<!-- check: skip disabling external access would break the remaining examples -->
+```sql
+SET enable_external_access = false;
+CALL radio_subscribe('wss://stream.example.com/events');
+-- Permission Error: radio_subscribe is disabled because enable_external_access is false
+```
+
+Existing subscriptions can still be inspected, and `loopback://` subscriptions keep working.
