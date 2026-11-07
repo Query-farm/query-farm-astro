@@ -272,7 +272,7 @@ function enrich(w: WorkerRecord): Worker {
     macros && 'macros',
   ].filter(Boolean) as string[];
   // Declared, not guessed: a secret type or a required/secret ATTACH option.
-  const secretTypes = (w as unknown as { secret_types?: { name: string }[] }).secret_types ?? [];
+  const secretTypes = w.secret_types ?? [];
   const needsCredentials = secretTypes.length > 0 || w.attach_options.some(o => o.required || (o as { secret?: boolean }).secret);
   const platforms = Array.from(
     new Set((w.release?.assets ?? []).map(a => a.platform).filter(p => p in PLATFORM_LABEL)),
@@ -298,7 +298,15 @@ function enrich(w: WorkerRecord): Worker {
   };
 }
 
-export const workers: Worker[] = parsed.workers.map(enrich).sort((a, b) => a.slug.localeCompare(b.slug));
+const all = parsed.workers.map(enrich).sort((a, b) => a.slug.localeCompare(b.slug));
+
+/** Listing rule: a worker is listed only once it has been verified — attached the
+ *  way its page tells users to, with every executable example passing. Records
+ *  from before `vgi-lint dump` fall back to "the harvest attached it". */
+const isListed = (w: Worker) => (w.verification ? w.verification.verified : w.harvest?.status === 'ok');
+export const workers: Worker[] = all.filter(isListed);
+/** Known but not listed (failed verification or not attachable) — for reports, not pages. */
+export const unlistedWorkers = all.filter(w => !isListed(w)).map(w => ({ repo: w.repo, reason: w.verification?.status ?? w.harvest?.error ?? w.harvest?.status ?? 'unknown' }));
 
 // Build-time contract: every listed worker is classified.
 const unclassified = workers.filter(w => w.categoryIds.length === 0).map(w => w.slug);

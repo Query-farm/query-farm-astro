@@ -697,6 +697,33 @@ def load_fleet(path: Path) -> dict[str, dict[str, Any]]:
     return {w["name"]: w for w in data.get("workers", [])}
 
 
+def from_dump(d: dict[str, Any]) -> dict[str, Any]:
+    """Adapt a `vgi-lint dump` document (schema_version 1) to the harvest shape."""
+    v = d.get("verify") or {}
+    lint = d.get("lint") or {}
+    return {
+        "status": "ok" if d.get("status") in (None, "ok") and d.get("catalog") else d.get("status") or "attach_failed",
+        "error": d.get("error"),
+        "method": d.get("transport"),
+        "run_command": d.get("location"),
+        "catalog": d.get("catalog") or {},
+        "secret_types": d.get("secret_types") or [],
+        "lint": {"score": lint.get("score"), "level": lint.get("level")} if lint else None,
+        "verification": {
+            "verified": bool(d.get("verified")),
+            "status": v.get("status"),
+            "total": v.get("total"),
+            "passed": v.get("passed"),
+            "failed": v.get("failed"),
+            "needs_credentials": v.get("needs_credentials"),
+            "location": d.get("location"),
+            "transport": d.get("transport"),
+            "environment": d.get("environment"),
+            "checked_at": d.get("generated_at"),
+        },
+    }
+
+
 def merge_worker(g: dict[str, Any], c: dict[str, Any] | None,
                  fleet: dict[str, dict[str, Any]], plan: dict[str, Any]) -> dict[str, Any]:
     repo = g["repo"]
@@ -717,8 +744,8 @@ def merge_worker(g: dict[str, Any], c: dict[str, Any] | None,
         elif method == "binary":
             run_cmd = f"./{repo}-worker"
     fl = fleet.get(repo)
-    lint = None
-    if fl and fl.get("score") is not None:
+    lint = c.get("lint")
+    if lint is None and fl and fl.get("score") is not None:
         lint = {"score": fl.get("score"), "level": fl.get("level_label")}
     empty_counts = {"tables": 0, "views": 0, "scalar_functions": 0, "table_functions": 0,
                     "macros": 0}
@@ -748,6 +775,8 @@ def merge_worker(g: dict[str, Any], c: dict[str, Any] | None,
         "schemas": cat.get("schemas") or [],
         "counts": cat.get("counts") or empty_counts,
         "lint": lint,
+        "secret_types": c.get("secret_types") or [],
+        "verification": c.get("verification"),
         "harvest": {
             "status": c.get("status"),
             "method": c.get("method") or method,
@@ -762,11 +791,16 @@ def phase_merge(args: argparse.Namespace) -> None:
     github = json.loads((work / "github.json").read_text())
     plan = {p["repo"]: p for p in json.loads((work / "plan.json").read_text())}
     catdir = Path(args.catalogs) if args.catalogs else work / "catalogs"
+    dumps = Path(args.dumps) if getattr(args, "dumps", None) else None
     fleet = load_fleet(Path(args.fleet))
     workers = []
     for g in sorted(github, key=lambda x: x["repo"]):
-        f = catdir / f"{g['repo']}.json"
-        c = json.loads(f.read_text()) if f.exists() else None
+        if dumps is not None:
+            f = dumps / f"{g['repo']}.json"
+            c = from_dump(json.loads(f.read_text())) if f.exists() else None
+        else:
+            f = catdir / f"{g['repo']}.json"
+            c = json.loads(f.read_text()) if f.exists() else None
         workers.append(merge_worker(g, c, fleet, plan.get(g["repo"], {})))
     doc = {
         "generated_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
@@ -777,6 +811,52 @@ def phase_merge(args: argparse.Namespace) -> None:
     out.write_text(json.dumps(doc, indent=1, ensure_ascii=False) + "\n")
     ok = sum(1 for w in workers if w["harvest"]["status"] == "ok")
     log(f"merge: wrote {out} ({len(workers)} workers, {ok} ok)")
+
+
+# --------------------------------------------------------------------------
+# manifest: user-facing LOCATIONs for `vgi-lint fleet dump`
+# --------------------------------------------------------------------------
+
+# Python console scripts that are the bare repo name rather than `<repo>-worker`.
+BARE_SCRIPT = {"vgi-docgen", "vgi-explain", "vgi-match", "vgi-ortools", "vgi-recommender",
+               "vgi-statsmodels"}
+DOCKER_PRIMARY = {"vgi-libpostal"}  # needs a system C library + ~2 GB of model data
+
+
+def user_location(g: dict[str, Any]) -> tuple[str, str | None]:
+    """The LOCATION a user is told to ATTACH, plus an optional jar URL to fetch first."""
+    repo, rel = g["repo"], g.get("release") or {}
+    tag = rel.get("tag", "main")
+    if repo in DOCKER_PRIMARY:
+        return f"docker://ghcr.io/{ORG.lower()}/{repo}:{tag.removeprefix('v')}", None
+    lang = g["language"]
+    if lang == "Python":
+        script = repo if repo in BARE_SCRIPT else f"{repo}-worker"
+        return f"uvx --from git+https://github.com/{ORG}/{repo}@{tag} {script}", None
+    if lang == "Java":
+        jar = next((a for a in rel.get("assets", []) if a["name"].endswith(".jar")), None)
+        if jar:
+            return f"java -jar {{jar_dir}}/{jar['name']}", jar["url"]
+    return f"github-auto://{ORG}/{repo}@{tag}", None
+
+
+def phase_manifest(args: argparse.Namespace) -> None:
+    work = Path(args.work)
+    github = json.loads((work / "github.json").read_text())
+    lines = ["# Generated by harvest.py manifest — attach each worker as its README instructs.",
+             "[defaults]", f"timeout = {args.timeout}", ""]
+    fetch = ["#!/bin/sh", "set -e", f'mkdir -p "{args.jar_dir}"']
+    for g in sorted(github, key=lambda x: x["repo"]):
+        loc, jar_url = user_location(g)
+        loc = loc.replace("{jar_dir}", args.jar_dir)
+        if jar_url:
+            fetch.append(f'[ -f "{args.jar_dir}/{jar_url.rsplit("/", 1)[1]}" ] || '
+                         f'curl -fsSL --retry 3 -o "{args.jar_dir}/{jar_url.rsplit("/", 1)[1]}" {jar_url}')
+        lines += ["[[worker]]", f'name = "{g["repo"]}"', f"location = {json.dumps(loc)}", ""]
+    out = Path(args.out)
+    out.write_text("\n".join(lines))
+    (out.parent / "fetch-jars.sh").write_text("\n".join(fetch) + "\n")
+    log(f"manifest: wrote {out} and fetch-jars.sh ({len(github)} workers)")
 
 
 # --------------------------------------------------------------------------
@@ -854,9 +934,20 @@ def main() -> None:
     p = sub.add_parser("merge")
     common(p)
     p.add_argument("--catalogs", help="per-worker catalog dir (default <work>/catalogs)")
+    p.add_argument("--dumps", help="directory of `vgi-lint fleet dump` output (preferred: "
+                   "adds verification, fresh lint, secret types)")
     p.add_argument("--fleet", default=str(DEFAULT_FLEET))
     p.add_argument("--out", default=str(DEFAULT_OUT))
     p.set_defaults(fn=phase_merge)
+
+    p = sub.add_parser("manifest", help="write a `vgi-lint fleet dump` manifest that attaches each "
+                       "worker the way its README tells users to")
+    common(p)
+    p.add_argument("--out", required=True, help="manifest TOML path")
+    p.add_argument("--jar-dir", default="$W/harvest/jars",
+                   help="where the box keeps downloaded release jars")
+    p.add_argument("--timeout", type=int, default=300)
+    p.set_defaults(fn=phase_manifest)
 
     p = sub.add_parser("all")
     common(p)

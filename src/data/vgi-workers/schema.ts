@@ -138,6 +138,26 @@ export const workerRecordSchema = z.object({
     })
     .nullable()
     .optional(),
+  secret_types: z
+    .array(z.object({ name: z.string(), description: str, provider: str }).passthrough())
+    .default([]),
+  // From `vgi-lint dump`: the worker was attached the way users are told to and
+  // every executable example ran. Only verified workers are listed.
+  verification: z
+    .object({
+      verified: z.boolean(),
+      status: str,
+      total: z.number().nullable().optional(),
+      passed: z.number().nullable().optional(),
+      failed: z.number().nullable().optional(),
+      needs_credentials: z.number().nullable().optional(),
+      location: str,
+      transport: str,
+      environment: z.record(z.string(), z.unknown()).nullable().optional(),
+      checked_at: str,
+    })
+    .nullable()
+    .optional(),
   // Commercial model. Every harvested public worker is open and self-run; paid
   // and managed listings (the Orchard connectors) share the same record shape.
   offering: z
