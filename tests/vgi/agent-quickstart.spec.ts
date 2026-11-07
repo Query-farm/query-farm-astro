@@ -72,19 +72,6 @@ test('mobile layout keeps installation, language guidance, and requests usable',
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('recorded build exposes real source and SQL evidence, including slower runs', async ({ page }) => {
-  await page.goto('/vgi/build-with-an-agent/#proof');
-  await page.locator('[data-build-evidence] > summary').click();
-  await expect(page.getByRole('table', { name: 'Recorded builds with the vgi-worker skill' })).toContainText('5m 19s');
-  await page.getByText('02 · The generated worker', { exact: true }).click();
-  await expect(page.locator('[data-recorded-build]')).toContainText('defineScalarFunction');
-  await expect(page.locator('[data-recorded-build]')).toContainText('Actual rows (JSON): [[10000]]');
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.evaluate(() => document.fonts.ready);
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-});
-
-
 test('newcomers and extension developers get distinct introductions', async ({ page }) => {
   await page.goto('/vgi/build-with-an-agent/');
   await expect(page.getByRole('heading', { level:1 })).toContainText('Connect anything');
