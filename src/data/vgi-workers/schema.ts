@@ -91,6 +91,11 @@ export const workerRecordSchema = z.object({
       method: z.string().nullable().optional(),
       command: str,
       location_example: str,
+      /** Console script for uvx (Python), e.g. `vgi-conform-worker`. */
+      script: str,
+      /** Verified LOCATION strings, when the harvest checked them. */
+      uvx: str,
+      github_auto: str,
     })
     .nullable()
     .optional(),

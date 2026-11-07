@@ -104,110 +104,79 @@ function quote(s: string) {
   return `'${s.replace(/'/g, "''")}'`;
 }
 
-/** The LOCATION a user passes to ATTACH for a given way of running the worker. */
-function locationFor(w: WorkerRecord, method: string): string {
-  const cmd = w.run?.command?.trim();
-  const tag = w.release?.tag;
-  switch (method) {
-    case 'binary':
-      return cmd ? (cmd.startsWith('./') || cmd.startsWith('/') ? cmd : `./${cmd}`) : `./${w.repo}-worker`;
-    case 'jar': {
-      const jar = w.release?.assets.find(a => a.platform === 'jar')?.name ?? `${w.repo}.jar`;
-      return `java -jar ${jar}`;
-    }
-    case 'docker':
-      return `docker run --rm -i ${w.image}${tag ? `:${tag.replace(/^v/, '')}` : ''}`;
-    case 'uv':
-    default:
-      return cmd || w.run?.location_example || `uv run ${w.slug}_worker.py`;
-  }
-}
+const imageTag = (w: WorkerRecord) => (w.release?.tag ? w.release.tag.replace(/^v/, '') : 'latest');
 
-function attachSql(w: WorkerRecord, location: string) {
-  const alias = w.catalog;
+/** `github-auto://` picks the release asset for the host platform by name. */
+const githubAuto = (w: WorkerRecord) => w.run?.github_auto ?? `github-auto://Query-farm/${w.repo}@${w.release?.tag ?? 'latest'}`;
+/** Python workers aren't on PyPI; uvx installs them straight from the release tag. */
+const uvxLocation = (w: WorkerRecord) =>
+  w.run?.uvx ?? `uvx --from git+${w.repo_url}@${w.release?.tag ?? 'main'} ${w.run?.script ?? `${w.repo}-worker`}`;
+
+function attachSql(w: WorkerRecord, location: string, comment?: string) {
   const required = w.attach_options.filter(o => o.required);
   const opts = [`TYPE vgi`, `LOCATION ${quote(location)}`, ...required.map(o => `${o.name.toUpperCase()} '…'`)];
+  const first = w.example_queries[0]?.sql?.trim();
   return [
     'INSTALL vgi FROM community;',
     'LOAD vgi;',
     '',
-    `ATTACH ${quote(w.catalog)} AS ${alias} (`,
+    ...(comment ? [`-- ${comment}`] : []),
+    `ATTACH ${quote(w.catalog)} AS ${w.catalog} (`,
     opts.map(o => `  ${o}`).join(',\n'),
     ');',
+    ...(first ? ['', first.endsWith(';') ? first : `${first};`] : []),
   ].join('\n');
 }
 
+// Install recipes, best first. The vgi extension's transports do the fetching:
+// `github-auto://` downloads, SHA-256-checks and caches the platform binary,
+// `docker://` runs the signed image, and a uvx command builds a Python worker
+// from its tag. Manual download stays as the fallback.
 function installMethods(w: WorkerRecord): InstallMethod[] {
   const out: InstallMethod[] = [];
   const assets = w.release?.assets ?? [];
-  const tag = w.release?.tag ?? 'latest';
   const tarballs = assets.filter(a => /_(amd64|arm64)$/.test(a.platform) && a.name.endsWith('.tar.gz'));
-
-  if (tarballs.length) {
-    const pick = (p: string) => tarballs.find(a => a.platform === p);
-    const unix = ['osx_arm64', 'linux_amd64', 'linux_arm64']
-      .map(pick)
-      .filter((a): a is NonNullable<typeof a> => Boolean(a));
-    const loc = locationFor(w, 'binary');
-    unix.forEach(a => {
-      out.push({
-        id: a.platform,
-        label: platformLabel(a.platform),
-        icon: a.platform.startsWith('osx') ? 'simple-icons:apple' : 'simple-icons:linux',
-        steps: [
-          {
-            title: 'Download and verify',
-            description: 'Every release asset ships with a SHA-256 checksum and a Sigstore cosign bundle.',
-            lang: 'bash',
-            code: [
-              `curl -LO ${a.url}`,
-              `curl -LO ${a.url.replace(/\.tar\.gz$/, '.sha256')}`,
-              `shasum -a 256 -c ${a.name.replace(/\.tar\.gz$/, '.sha256')}`,
-              `tar xzf ${a.name}`,
-            ].join('\n'),
-          },
-          { title: 'Attach it', lang: 'sql', code: attachSql(w, loc) },
-        ],
-      });
-    });
-    const win = pick('windows_amd64');
-    if (win)
-      out.push({
-        id: 'windows_amd64',
-        label: 'Windows',
-        icon: 'mdi:microsoft-windows',
-        steps: [
-          { title: 'Download', lang: 'powershell', code: `Invoke-WebRequest ${win.url} -OutFile ${win.name}\ntar xzf ${win.name}` },
-          { title: 'Attach it', lang: 'sql', code: attachSql(w, loc.replace(/^\.\//, '.\\') + '.exe') },
-        ],
-      });
-  }
-
   const jar = assets.find(a => a.platform === 'jar');
-  if (jar)
+  const runsOnDockerOnly = w.run?.method === 'docker';
+
+  if (tarballs.length && !runsOnDockerOnly)
     out.push({
-      id: 'jar',
-      label: 'Java (any OS)',
-      icon: 'simple-icons:openjdk',
+      id: 'github',
+      label: 'From GitHub',
+      icon: 'simple-icons:github',
       steps: [
-        { title: 'Download the jar', description: 'Needs Java 21 or newer.', lang: 'bash', code: `curl -LO ${jar.url}` },
-        { title: 'Attach it', lang: 'sql', code: attachSql(w, locationFor(w, 'jar')) },
+        {
+          title: 'Attach the release directly',
+          description: `The vgi extension downloads the ${w.release?.tag} build for your platform (${tarballs.map(a => platformLabel(a.platform)).join(', ')}), checks its SHA-256 and caches it.`,
+          lang: 'sql',
+          code: attachSql(w, githubAuto(w)),
+        },
       ],
     });
 
-  if (w.language === 'Python')
+  if (w.language === 'Python' && !runsOnDockerOnly)
     out.push({
-      id: 'uv',
-      label: 'uv (any OS)',
+      id: 'uvx',
+      label: 'uvx',
       icon: 'simple-icons:python',
       steps: [
         {
-          title: 'Get the source',
-          description: 'Python workers run from source with uv, which resolves the pinned dependencies on first run.',
-          lang: 'bash',
-          code: `git clone --depth 1 --branch ${tag} ${w.repo_url}.git\ncd ${w.repo}`,
+          title: 'Attach with uvx',
+          description: 'Needs uv. uvx builds the worker from its release tag on first attach and reuses the cached environment after that.',
+          lang: 'sql',
+          code: attachSql(w, uvxLocation(w)),
         },
-        { title: 'Attach it', lang: 'sql', code: attachSql(w, locationFor(w, 'uv')) },
+      ],
+    });
+
+  if (jar)
+    out.push({
+      id: 'jar',
+      label: 'Java',
+      icon: 'simple-icons:openjdk',
+      steps: [
+        { title: 'Download the jar', description: 'Needs Java 21 or newer.', lang: 'bash', code: `curl -LO ${jar.url}` },
+        { title: 'Attach it', lang: 'sql', code: attachSql(w, `java -jar ${jar.name}`) },
       ],
     });
 
@@ -218,13 +187,35 @@ function installMethods(w: WorkerRecord): InstallMethod[] {
       icon: 'simple-icons:docker',
       steps: [
         {
-          title: 'Pull the signed image',
-          lang: 'bash',
-          code: `docker pull ${w.image}${w.release?.tag ? `:${w.release.tag.replace(/^v/, '')}` : ''}`,
+          title: 'Attach the signed image',
+          description: 'Needs Docker, Podman or another OCI runtime. The extension runs the container and talks to it over stdio.',
+          lang: 'sql',
+          code: attachSql(w, `docker://${w.image}:${imageTag(w)}`),
         },
-        { title: 'Attach it', lang: 'sql', code: attachSql(w, locationFor(w, 'docker')) },
       ],
     });
+
+  if (tarballs.length) {
+    const unix = tarballs.filter(a => !a.platform.startsWith('windows'));
+    const cmd = w.run?.command?.trim() ?? `./${w.repo}-worker`;
+    const loc = cmd.startsWith('./') || cmd.startsWith('/') ? cmd : `./${cmd}`;
+    out.push({
+      id: 'manual',
+      label: 'Manual download',
+      icon: 'ph:download-simple',
+      steps: [
+        {
+          title: 'Download, verify and unpack',
+          description: 'Each asset has a SHA-256 checksum and a Sigstore cosign bundle next to it on the release page.',
+          lang: 'bash',
+          code: unix
+            .map(a => [`# ${platformLabel(a.platform)}`, `curl -LO ${a.url}`, `curl -LO ${a.url.replace(/\.tar\.gz$/, '.sha256')}`, `shasum -a 256 -c ${a.name.replace(/\.tar\.gz$/, '.sha256')} && tar xzf ${a.name}`].join('\n'))
+            .join('\n\n'),
+        },
+        { title: 'Attach it', lang: 'sql', code: attachSql(w, loc) },
+      ],
+    });
+  }
   return out;
 }
 
@@ -271,7 +262,7 @@ function enrich(w: WorkerRecord): Worker {
     new Set((w.release?.assets ?? []).map(a => a.platform).filter(p => p in PLATFORM_LABEL)),
   ) as Platform[];
   const methods = installMethods(w);
-  const preferred = methods.find(m => m.id === 'osx_arm64') ?? methods[0];
+  const preferred = methods[0];
 
   return {
     ...w,
@@ -283,7 +274,7 @@ function enrich(w: WorkerRecord): Worker {
     tint: tintClasses[(primary?.tint ?? 'slate') as keyof typeof tintClasses],
     platforms,
     installMethods: methods,
-    attachSql: preferred?.steps.at(-1)?.code ?? attachSql(w, locationFor(w, w.run?.method ?? 'uv')),
+    attachSql: preferred?.steps.at(-1)?.code ?? attachSql(w, uvxLocation(w)),
     objects,
     totals: { tables, functions, tableFunctions, macros },
     facets: { surfaces, needsCredentials, network, indexed: w.harvest?.status === 'ok' },
