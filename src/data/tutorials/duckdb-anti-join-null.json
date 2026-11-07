@@ -1,0 +1,179 @@
+{
+  "slug": "duckdb-anti-join-null",
+  "extension": "DuckDB",
+  "batch": "practical-ten",
+  "setup": "CREATE OR REPLACE TABLE customers(id INTEGER, name VARCHAR);\nINSERT INTO customers VALUES (1,'Ada'), (2,'Ben'), (3,'Cy'), (4,'Dee');\nCREATE OR REPLACE TABLE orders(id INTEGER, customer_id INTEGER);\nINSERT INTO orders VALUES (101,1), (102,1), (103,NULL), (104,3);\n",
+  "examples": [
+    {
+      "id": "not-in-truth",
+      "title": "Inspect the predicate before putting it in WHERE",
+      "sql": "SELECT id, name,\n  id NOT IN (SELECT customer_id FROM orders) AS passes_not_in\nFROM customers ORDER BY id;\n",
+      "expectedColumns": [
+        "id",
+        "name",
+        "passes_not_in"
+      ],
+      "expectedRows": [
+        [
+          1,
+          "Ada",
+          false
+        ],
+        [
+          2,
+          "Ben",
+          null
+        ],
+        [
+          3,
+          "Cy",
+          false
+        ],
+        [
+          4,
+          "Dee",
+          null
+        ]
+      ]
+    },
+    {
+      "id": "anti-join",
+      "title": "Keep customers with no matching order",
+      "sql": "SELECT c.id, c.name FROM customers c\nANTI JOIN orders o ON c.id = o.customer_id\nORDER BY c.id;\n",
+      "expectedColumns": [
+        "id",
+        "name"
+      ],
+      "expectedRows": [
+        [
+          2,
+          "Ben"
+        ],
+        [
+          4,
+          "Dee"
+        ]
+      ]
+    },
+    {
+      "id": "not-exists",
+      "title": "Express the same existence test with a correlated subquery",
+      "sql": "SELECT c.id, c.name FROM customers c\nWHERE NOT EXISTS (\n  SELECT 1 FROM orders o WHERE o.customer_id = c.id\n) ORDER BY c.id;\n",
+      "expectedColumns": [
+        "id",
+        "name"
+      ],
+      "expectedRows": [
+        [
+          2,
+          "Ben"
+        ],
+        [
+          4,
+          "Dee"
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "customers",
+      "title": "Four known customers",
+      "description": "Customer IDs are non-NULL in this fixture.",
+      "previewLimit": null
+    },
+    {
+      "table": "orders",
+      "title": "Two repeat orders and one unattributed order",
+      "description": "Order 103 has no customer ID. That one NULL changes the NOT IN predicate.",
+      "previewLimit": null
+    }
+  ],
+  "challenge": {
+    "id": "unmatched-orders",
+    "title": "Turn the audit around",
+    "prompt": "Return order_id for orders with no matching customer, including orders with a NULL customer_id.",
+    "hint": "Put orders on the left of the anti join. A NULL left key also makes NOT IN unknown.",
+    "starter": "SELECT id AS order_id FROM orders WHERE customer_id NOT IN (SELECT id FROM customers) ORDER BY id;\n",
+    "solution": "SELECT o.id AS order_id FROM orders o ANTI JOIN customers c ON o.customer_id = c.id ORDER BY o.id;\n",
+    "success": "Order 103 remains visible for review. The anti join tests whether a matching row exists; it does not need a non-NULL customer_id to preserve the order.",
+    "columns": [
+      "order_id"
+    ],
+    "rows": [
+      [
+        103
+      ]
+    ]
+  },
+  "sampleTables": [
+    {
+      "table": "customers",
+      "title": "Four known customers",
+      "description": "Customer IDs are non-NULL in this fixture.",
+      "columns": [
+        "id",
+        "name"
+      ],
+      "rows": [
+        [
+          1,
+          "Ada"
+        ],
+        [
+          2,
+          "Ben"
+        ],
+        [
+          3,
+          "Cy"
+        ],
+        [
+          4,
+          "Dee"
+        ]
+      ],
+      "totalRows": 4,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "customers.csv"
+        }
+      ]
+    },
+    {
+      "table": "orders",
+      "title": "Two repeat orders and one unattributed order",
+      "description": "Order 103 has no customer ID. That one NULL changes the NOT IN predicate.",
+      "columns": [
+        "id",
+        "customer_id"
+      ],
+      "rows": [
+        [
+          101,
+          1
+        ],
+        [
+          102,
+          1
+        ],
+        [
+          103,
+          null
+        ],
+        [
+          104,
+          3
+        ]
+      ],
+      "totalRows": 4,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "orders.csv"
+        }
+      ]
+    }
+  ]
+}

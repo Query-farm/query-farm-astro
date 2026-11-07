@@ -1,0 +1,83 @@
+---
+title: "Build a Conversion Funnel That Respects Event Order"
+description: "Build an ordered DuckDB funnel from supplied event data. Handle repeat clicks, session boundaries, and a fixed conversion window with visible results."
+pubDate: "2026-11-06"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: true
+outcome: "Count sessions that viewed, ran an example, and enquired in order within a declared conversion window."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "analyze-data"
+technologies: ["duckdb"]
+estimatedMinutes: 8
+level: "Intermediate"
+runtime: "browser"
+order: 15
+showLeadVisual: false
+nextStep: {"title": "Take the next question to your data", "pitch": "Keep exploring with these SQL patterns in Haybarn.", "href": "/products/haybarn/", "cta": "Explore Haybarn"}
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-conversion-funnel.json';
+
+**Ben has a page view, an example run, and an enquiry. He still should not count as a completed tutorial funnel.** His example run happened before the page view.
+
+A funnel is a sequence with rules, not a shopping list of event names. We will build one where readers can inspect the evidence behind every count.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Define the question before counting
+
+We use the fictional website from the [session tutorial](/tutorials/duckdb-event-sessions/). The full setup is included here too. A new session begins after more than 30 minutes of inactivity.
+
+Our funnel starts at the **first view in each session**. A qualifying run must be strictly later than that view. An enquiry must be strictly later than the qualifying run. Both later steps must fall within 30 minutes of the first view, including the deadline. All three events must share the same user and session.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+This is a session conversion rate. A returning person can contribute more than one entry. Events with equal timestamps do not establish a strict sequence here; a production event sequence field could support a different tie policy.
+
+## See how presence-only counting goes wrong
+
+This query checks only whether each kind of event exists:
+
+<TutorialExample example={demo.examples[0]} />
+
+It returns three sessions: Ada’s, Ben’s, and Dee’s. Ben ran the example at 10:00, viewed at 10:05, and enquired at 10:08. Every event name exists, but the required journey does not.
+
+Cy illustrates another boundary: the enquiry arrives 58 minutes after the run, in a new session. It cannot complete the earlier session’s funnel.
+
+## Find the first valid next step
+
+Build the sequence in stages. First find the entry timestamp. Then find the earliest eligible run after it. Finally find the earliest eligible enquiry after that run.
+
+<TutorialExample example={demo.examples[1]} />
+
+Notice where the event and time conditions sit: **inside each LEFT JOIN condition**. That preserves an entry when no next step exists, leaving its timestamp NULL. Moving those conditions into a later `WHERE` would remove the dropouts we need to measure.
+
+`min` chooses one qualifying timestamp per stage, so Ada’s repeated run does not duplicate her session. Choosing the earliest eligible run also leaves the greatest possible time for the enquiry under this policy. A later view does not restart this funnel’s fixed clock.
+
+The setup saves these stages as `funnel_steps`; every browser example can run independently.
+
+## Count the journeys that remain
+
+<TutorialExample example={demo.examples[2]} />
+
+Nine sessions contain an entry view. Three proceed to a valid run. Two finish with an enquiry: Ada’s first session and Dee’s session. The entry-to-enquiry rate is **2 / 9 = 22.22%**.
+
+`count(*)` counts all entries. `count(ran_at)` and `count(enquired_at)` ignore NULL timestamps, counting only reached steps. `nullif` avoids division by zero when a filtered dataset has no entries.
+
+<TutorialChallenge post={demo.slug} />
+
+## Match the metric to the decision
+
+This result diagnoses recorded behavior, not why someone stopped. Missing events, blocked tracking, and a broken form can resemble abandonment. Check instrumentation before drawing a product conclusion from a changing funnel.
+
+To compare acquisition channels, attach the entry session’s channel under a clear attribution rule, then group this result. To ask whether people return later, move to [retention cohorts](/tutorials/duckdb-retention-cohorts/). Keeping those questions separate makes both metrics easier to explain.
+
+<TutorialTracking post={demo.slug} />

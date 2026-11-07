@@ -1,0 +1,89 @@
+---
+title: "Why Your SQL JOIN Doubled the Total—and How to Fix It"
+description: "Diagnose inflated sums after a one-to-many join in DuckDB. Inspect the multiplied rows, aggregate at the right level, and check a repair in your browser."
+pubDate: "2026-11-06"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: true
+outcome: "Recognize row multiplication and produce a total that counts each order once."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "sql-fundamentals"
+technologies: ["duckdb"]
+estimatedMinutes: 6
+level: "Beginner"
+runtime: "browser"
+order: 5
+showLeadVisual: false
+nextStep:
+  title: "Keep exploring with your own data"
+  pitch: "Use these queries as a starting point in Haybarn, or download the complete walkthrough to run locally."
+  href: "/products/haybarn/"
+  cta: "Explore Haybarn"
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-join-double-counting.json';
+
+**The orders total 240. The joined report says 420.** The database added the numbers correctly. We gave it the wrong rows to add.
+
+A join can change what one row represents. Order totals belong to orders; item details belong to items. Put them together carelessly and the same order total appears once for every item.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Two tables, two meanings of a row
+
+There are three purchases and five item rows. Ada's order totals 100, Ben's 60, and Cy's 80. The line totals happen to reconcile with their orders, but they remain different measures at different levels.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+Before calculating anything, look at the joined records:
+
+<TutorialExample example={demo.examples[0]} />
+
+Ada's 100 appears twice. Ben's 60 appears once. Cy's 80 appears twice. The join is doing precisely what its condition requests: returning each matching order–item pair.
+
+## The aggregate that looks reasonable
+
+Now sum the order total over those pairs:
+
+<TutorialExample example={demo.examples[1]} />
+
+The result is `100 + 100 + 60 + 80 + 80 = 420`. Adding a `GROUP BY customer` would not fix the duplication; it would merely place the repeated amounts into customer groups.
+
+`SUM(DISTINCT order_total)` is not a general repair either. Two different orders can legitimately have the same total. Deduplicating amounts would then erase a real purchase. The order's identity is its key, not its price.
+
+## Bring both sides to one row per order
+
+Suppose the report needs an order total, an item count, and an item subtotal. Aggregate the item table by `order_id` first, then join that result to orders:
+
+<TutorialExample example={demo.examples[2]} />
+
+The right side now has at most one row per order ID. Combined with the unique `orders.id` in this fixture, the join preserves one row per order. The left join would also retain an order with no items, leaving its item summaries NULL. Decide whether those mean missing data or should be displayed as zero.
+
+If all you need is the overall order revenue, query the orders table directly:
+
+<TutorialExample example={demo.examples[3]} />
+
+There is no need to join another table merely because it is available. Join when its columns or its existence change the question you need to answer.
+
+## Filtering by items without multiplying orders
+
+“Revenue from orders with at least two items” needs information from both tables. First identify qualifying order IDs; then sum each matching order once. `IN` or `EXISTS` can express that eligibility test without returning every item pair.
+
+<TutorialChallenge post={demo.slug} />
+
+## A small checklist for a suspicious total
+
+Inspect a few joined keys before running the full aggregate. Count matches per key on each side. State what one result row should mean, and verify that the join preserves it. A relationship that is one-to-many in today's sample can become many-to-many when a supposedly unique lookup table gains duplicates.
+
+Pre-aggregation is useful when you need summarized detail columns. An existence test is useful when you only need to know whether a related record qualifies. Neither removes the need to check the key assumptions.
+
+For a larger query, [EXPLAIN ANALYZE](/tutorials/duckdb-explain-analyze/) can reveal the same expansion in actual operator row counts. Once you recognize the pattern here, a join producing twice its input is a concrete lead to investigate.
+
+<TutorialTracking post={demo.slug} />

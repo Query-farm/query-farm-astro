@@ -1,0 +1,93 @@
+---
+title: "Slow DuckDB Query? Check Where the Aggregate Runs"
+description: "DuckDB can push an aggregate to a remote server—or compute it locally. Learn to spot the difference in an execution plan when diagnosing a slow query."
+pubDate: 2026-11-04
+author: "Query Farm Team"
+tags: ["DuckDB", "PostgreSQL", "ADBC", "Performance", "Tutorials"]
+extensions: ["adbc_scanner"]
+draft: true
+outcome: "Find where an aggregate runs and use that boundary to investigate a slow query."
+prerequisites: ["SQL aggregation and GROUP BY", "No setup needed to follow the captured plans or run the browser example"]
+category: "performance-operations"
+technologies: ["duckdb", "postgresql", "adbc"]
+estimatedMinutes: 4
+level: "Intermediate"
+runtime: "browser"
+order: 3
+showLeadVisual: false
+heroImage: "/media/posts/duckdb-postgresql-query-pushdown/social.png"
+heroImageAlt: "The same aggregate moves four result rows with whole-query pushdown, or 8,000 filtered rows for local aggregation."
+thumbnail: "/media/posts/duckdb-postgresql-query-pushdown/workflow.png"
+nextStep:
+  title: "Inspect the work in your own query"
+  pitch: "Use ADBC Scanner’s generated remote SQL and execution plans to see where your query does its work."
+  href: "/products/extensions/adbc_scanner/"
+  cta: "Explore ADBC Scanner"
+---
+
+import TutorialResult from '../../components/tutorials/TutorialResult.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialVisual from '../../components/tutorials/TutorialVisual.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import demo from '../../data/tutorials/duckdb-postgresql-query-pushdown.json';
+
+**A query that returns four rows might fetch thousands to calculate them.** When DuckDB queries a remote database, it can sometimes push the aggregate to that server and receive only the totals. In other cases, it fetches the input rows and aggregates locally.
+
+That boundary depends on the connector, its version, and the expressions in your query. If a query feels slow, finding where the work happens gives you a useful place to investigate.
+
+<TutorialVisual kind="pushdown" />
+
+## Same answer, different work
+
+Our example has 10,000 orders across four regions. Every fifth order is cancelled, leaving 8,000 paid orders. Here are the first eight rows; the CSV contains the full dataset.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+
+This query asks for four regional totals. Here, `pg` names an existing PostgreSQL connection through ADBC Scanner:
+
+<CodeBlock tryable={false} code={demo.examples[0].sql.replace('FROM orders', 'FROM pg.public.orders')} />
+
+<TutorialResult resultId="native-aggregate-rows" columns={demo.nativeResults.aggregate.columns} rows={demo.nativeResults.aggregate.rows} label="Same result with remote or local aggregation" />
+
+The result alone cannot tell you where the aggregation happened. The execution plan can.
+
+## Read the two plans
+
+**When the aggregate runs remotely**, the captured plan contains `GROUP BY` inside `Remote SQL`, and the remote scan returns **4 rows**:
+
+<TutorialResult resultId="native-aggregate-plan" text={demo.nativeResults.aggregate.planExcerpt} label="Aggregate in PostgreSQL · captured plan excerpt" />
+
+PostgreSQL filters, groups, and sums. DuckDB receives the finished totals.
+
+**When the aggregate runs locally**, the scan returns **8,000 rows**, then a DuckDB `Hash Group By` reduces them to four:
+
+<TutorialResult resultId="native-local_control-plan" text={demo.nativeResults.local_control.planExcerpt} label="Aggregate in DuckDB · captured plan excerpt" />
+
+For this comparison, we disabled whole-query pushdown on a second attachment, `pg_local`, using `query_pushdown false`. Both attachments read the same data. The filter still runs in PostgreSQL; the aggregate moves to DuckDB. Pushdown is not necessarily all-or-nothing.
+
+## Find the boundary when a query is slow
+
+You can cross that boundary by changing an expression, too. In our tested connector build, `sum(length(status))` fell back to local aggregation—even though PostgreSQL has a `length` function. The connector must support translating the complete expression safely. Its [dialect checks](https://github.com/Query-farm/adbc_scanner/blob/02ccfac995/src/adbc_sql_dialect.cpp) determine what it can translate; support can change between releases.
+
+For your own query:
+
+1. **Inspect the plan.** Prefix it with `EXPLAIN`. Look for the aggregate in generated remote SQL, or a local grouping operator above the remote scan. Operator names and details vary by connector.
+2. **Measure the work.** Use `EXPLAIN ANALYZE` when you are ready to execute the query. Compare rows entering the local aggregate with rows leaving it, and inspect operator timings. A large reduction tells you many input rows arrived for a small answer.
+3. **Try one change.** Simplify a suspect expression and inspect the plan again. Check that the results stay equivalent before comparing elapsed time. Record the engine, connector, and driver versions.
+4. **Follow the evidence.** If the aggregate already runs remotely, inspect the remote query's plan and server-side work. If it runs locally, investigate the rows being fetched and the local operators.
+
+Fewer transferred rows can help, but they do not prove a faster query. Remote aggregation also consumes server resources. The useful skill is knowing which side is doing the work, then measuring that work.
+
+## Optional: try the calculation
+
+Use the same orders to check an aggregate of your own. This runs **locally**; the captured plans above demonstrate remote pushdown.
+
+<TutorialChallenge post={demo.slug} />
+
+<a href="/media/posts/duckdb-postgresql-query-pushdown/walkthrough.sql" download data-tutorial-download="walkthrough">Download the sample data SQL and query</a>.
+
+The captured plans use DuckDB 2.0.0, PostgreSQL 14.24, ADBC PostgreSQL 1.13.0, and ADBC Scanner build `02ccfac995`. Timings are omitted. The <a href="/media/posts/duckdb-postgresql-query-pushdown/evidence.json" data-tutorial-download="measured_plans">full evidence</a> and <a href="/media/posts/duckdb-postgresql-query-pushdown/reproduce.py" download data-tutorial-download="native_reproduction">reproduction script</a> are available if you want to examine the measurements.
+
+<TutorialTracking post={demo.slug} />

@@ -1,0 +1,94 @@
+---
+title: "Use parquet_metadata() to Understand Parquet Filter Performance"
+description: "Inspect Parquet row groups, column statistics, and filter opportunities with DuckDB parquet_metadata(). Compare sorted and mixed layouts using real downloadable files."
+pubDate: "2026-11-06"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials", "parquet"]
+draft: true
+outcome: "Read row-group statistics and explain which groups a date filter could rule out."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "performance-operations"
+technologies: ["duckdb", "parquet"]
+estimatedMinutes: 8
+level: "Intermediate"
+runtime: "browser"
+order: 11
+showLeadVisual: false
+nextStep:
+  title: "Keep exploring with your own data"
+  pitch: "Use these queries as a starting point in Haybarn, or download the complete walkthrough to run locally."
+  href: "/products/haybarn/"
+  cta: "Explore Haybarn"
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-parquet-metadata.json';
+
+**Same rows. Same filter. Different opportunities to skip work.** A Parquet file can keep each day's events together or scatter every day across every row group. The query's answer stays the same, but the metadata describes very different ranges.
+
+We will write both layouts, inspect them with `parquet_metadata()`, and identify which row groups could contain one selected day. This is a way to investigate a slow filter before guessing at compression or adding hardware.
+
+<TutorialExperiment slug={demo.slug} />
+
+## One dataset, two real files
+
+There are 8,192 events over four days, with 2,048 events per day. The first file sorts by date. The second interleaves the four dates. Both use a requested row-group size of 2,048; we verify the resulting groups rather than assuming the writer produced them.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+
+Download the complete <a href="/media/posts/duckdb-parquet-metadata/sorted.parquet" download data-tutorial-download="sorted_parquet">sorted Parquet file</a> and <a href="/media/posts/duckdb-parquet-metadata/mixed.parquet" download data-tutorial-download="mixed_parquet">mixed Parquet file</a>. The browser creates its own copies from the same data. File paths come from `getvariable('sorted_file')` and `getvariable('mixed_file')`; locally, you can use `'sorted.parquet'` and `'mixed.parquet'` in their place.
+
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+## Read metadata for the column you filter
+
+[`parquet_metadata()`](https://duckdb.org/docs/2.0/data/parquet/metadata) exposes information for column chunks within row groups. It does **not** return one row per event or simply one row per row group. Filter `path_in_schema` to the column whose statistics you want to inspect.
+
+<TutorialExample example={demo.examples[0]} />
+
+Each group contains 2,048 rows, and each group's date minimum equals its maximum. Group 1 holds January 2. The other groups' ranges cannot contain that date.
+
+`row_group_id` is local to a file. When querying a glob of files, keep `file_name` with the group ID so group 1 in one file is not confused with group 1 in another. Also avoid summing `row_group_num_rows` across all column-chunk records: that repeats the same group's row count for each column.
+
+## Compare the mixed layout
+
+Now inspect the same column in the interleaved file:
+
+<TutorialExample example={demo.examples[1]} />
+
+Every group ranges from January 1 to January 4. A filter for January 2 overlaps every range. Min/max statistics cannot rule out any of these groups, even though only a quarter of the records match.
+
+A row group's bounds describe possibilities, not its complete contents. If a group's range is January 1–4, it need not contain every date between them. Overlap means “might match”; a disjoint range can prove that it cannot match, under the relevant type and comparison semantics.
+
+## Keep the answer separate from the work
+
+Run the same date filter against both files:
+
+<TutorialExample example={demo.examples[2]} />
+
+Both return 2,048 matching rows. This checks the logical answer. It does not prove how many bytes were read or how much time the query saved.
+
+DuckDB can push supported filters into a Parquet scan and use statistics to avoid unnecessary work. Inspect the actual plan with [EXPLAIN](/tutorials/duckdb-explain/) and the measured execution with [EXPLAIN ANALYZE](/tutorials/duckdb-explain-analyze/). A filter that is not available to the scan cannot benefit in the same way from these ranges.
+
+## Identify candidate groups yourself
+
+The metadata's statistics fields are strings. Cast them to the column's type before comparing them. A missing or unparseable bound cannot safely prove exclusion, so the challenge keeps those groups as candidates.
+
+<TutorialChallenge post={demo.slug} />
+
+This is a diagnostic query for our DATE fixture, not a replacement for the scanner's pruning logic. For other types, consider ordering, truncated or inexact statistics, and fields such as `min_is_exact` and `max_is_exact`. NULL predicates also need their own reasoning, including `stats_null_count`.
+
+## Use the finding to choose an experiment
+
+If many groups span the full range of a frequently filtered column, try a layout that clusters related values together and measure the same query again. Sorting for one access pattern can help that pattern while doing less for another. Writing more, smaller groups also has metadata and processing costs; 2,048 is deliberately small for this demonstration, not a production recommendation.
+
+For size investigations, `total_compressed_size` describes an individual column chunk. It is useful for comparing stored layouts, but summing candidate chunks is not a measurement of actual query I/O: metadata, caching, page reads, and other behavior also matter.
+
+Start with the range evidence, choose one layout change, verify equivalent results, and measure on representative data. The file can only skip work that its layout and the query make possible.
+
+<TutorialTracking post={demo.slug} />

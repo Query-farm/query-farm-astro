@@ -1,0 +1,87 @@
+---
+title: "Read Nested JSON in DuckDB: Turn Orders into Rows"
+description: "Extract JSON fields, expand nested arrays, and preserve orders with no items. Run the sample data in DuckDB-Wasm and check your own query."
+pubDate: "2026-11-06"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials", "json"]
+draft: true
+outcome: "Flatten an order document without losing the orders whose item arrays are empty."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "files-formats"
+technologies: ["duckdb", "json"]
+estimatedMinutes: 7
+level: "Beginner"
+runtime: "browser"
+order: 4
+showLeadVisual: false
+nextStep:
+  title: "Keep exploring with your own data"
+  pitch: "Use these queries as a starting point in Haybarn, or download the complete walkthrough to run locally."
+  href: "/products/haybarn/"
+  cta: "Explore Haybarn"
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-nested-json.json';
+
+**Three orders went into the report. Only two came out.** Nothing failed: one order simply had an empty items array. Expanding that array produced no rows, and the order disappeared.
+
+This is the important decision in nested-data work: are you building a table of items, or a table that must still account for every order? We will build both, then count the items correctly.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Meet the documents before flattening them
+
+Each input row contains an order ID and one JSON document. Ada ordered two different items, Ben has none, and Cy ordered one. A quantity of two means two units of one item; it does not mean two item rows.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+Start with a field and the array length. You can inspect JSON without expanding it:
+
+<TutorialExample example={demo.examples[0]} />
+
+The `->>` operator extracts text. `json_array_length` tells us the array contains two, zero, and one elements respectively. All three orders still exist at this stage.
+
+The setup uses `json_transform` to give the nested document a SQL shape: a customer string and a list of item structs, each with `sku` and `qty`. That makes `order_data.customer` and `item.sku` typed field access rather than repeated JSON path expressions. The complete transformation is in the setup disclosure.
+
+## One row per item
+
+An `UNNEST` in the select list expands each list into rows. For an item-level report, that is exactly what we want:
+
+<TutorialExample example={demo.examples[1]} />
+
+Ada contributes two rows; Cy contributes one. Ben contributes zero. There are three output rows, but that happens to equal the number of input orders. **Matching row counts do not prove that all order IDs survived.** Check the keys and the intended meaning of a row.
+
+DuckDB documents that [empty lists and NULL lists unnest to zero rows](https://duckdb.org/docs/2.0/sql/query_syntax/unnest). Missing arrays therefore need an explicit policy too. Here, the inputs are known, valid order documents; a missing or incorrectly typed `items` field should be validated before treating it as an ordinary empty cart.
+
+## Preserve the parent order
+
+Use a left join to the unnested list when every parent must remain. `ON true` associates each order with all of its items; the left join supplies a NULL placeholder when there are none.
+
+<TutorialExample example={demo.examples[2]} />
+
+Now there are four rows. Ben is present, with NULL item fields. That placeholder is useful evidence, not an item that someone bought.
+
+This also explains why `COUNT(*)` is the wrong item count after this join: it counts the placeholder. `COUNT(item.sku)` counts non-NULL SKU values. Our contract requires every real item to have a SKU; if your real data allows missing SKUs, choose a different reliable item marker.
+
+<TutorialChallenge post={demo.slug} />
+
+## Keep the shape of the result deliberate
+
+A few questions prevent surprising totals:
+
+- Does one output row mean an order, an item, or a unit? Summing `qty` answers a different question from counting item rows.
+- Must orders with empty arrays survive? Use the left-join form when the answer is yes.
+- Are missing arrays allowed? Preserve the original payload so you can distinguish absent, NULL, and explicitly empty values before flattening.
+
+Avoid expanding two independent arrays at once unless you have decided how their elements relate. Two table-function unnests joined together can multiply combinations; side-by-side select-list unnests follow different rules. Test the intended relationship on a tiny document first.
+
+Next, use [JSON Schema validation](/tutorials/duckdb-json-schema-validation/) to check the document contract, or explore [join multiplication](/tutorials/duckdb-join-double-counting/) to see how a valid expansion can still break a revenue report.
+
+<TutorialTracking post={demo.slug} />

@@ -1,0 +1,82 @@
+---
+title: "Combine CSV and Parquet Files When Columns Change"
+description: "Combine evolving file schemas with DuckDB union_by_name, keep source filenames, and audit numeric conversions using supplied CSV and Parquet files."
+pubDate: "2026-11-06"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: true
+outcome: "Read files with an added optional column while preserving provenance and diagnosing incompatible values."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "files-formats"
+technologies: ["duckdb", "csv", "parquet"]
+estimatedMinutes: 7
+level: "Intermediate"
+runtime: "browser"
+order: 17
+showLeadVisual: false
+nextStep: {"title": "Take the next question to your data", "pitch": "Keep exploring with these SQL patterns in Haybarn.", "href": "/products/haybarn/", "cta": "Explore Haybarn"}
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-combine-changing-files.json';
+
+**Yesterday’s export had an ID and an amount. Today’s adds a coupon column—and one amount says “pending.”** You want all four rows without silently losing the new field or pretending every value is usable.
+
+We will solve the two separate problems: combine the schemas, then validate the values. The browser creates real CSV and Parquet files from the sample tables, so the queries exercise the file readers.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Two exports, one evolving contract
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+The earlier rows have no coupon field. The later rows do, but one coupon is itself NULL. Once combined, those cases both appear as NULL; the source filename lets us recover which schema supplied a row.
+
+Download the exact files used by the examples:
+
+- CSV: <a href="/media/posts/duckdb-combine-changing-files/schema-early.csv" download data-tutorial-download="schema-early.csv">earlier export</a> · <a href="/media/posts/duckdb-combine-changing-files/schema-later.csv" download data-tutorial-download="schema-later.csv">later export</a>
+- Parquet: <a href="/media/posts/duckdb-combine-changing-files/schema-early.parquet" download data-tutorial-download="schema-early.parquet">earlier export</a> · <a href="/media/posts/duckdb-combine-changing-files/schema-later.parquet" download data-tutorial-download="schema-later.parquet">later export</a>
+
+The full setup writes these names into your DuckDB working directory. In the browser, they live in the example’s virtual filesystem. No upload or remote storage account is needed.
+
+## Ask for the union of column names
+
+<TutorialExample example={demo.examples[0]} />
+
+[`union_by_name`](https://duckdb.org/docs/2.0/data/multiple_files/combining_schemas) asks the reader to combine the discovered column names. Missing fields become NULL. The explicit file list makes this small experiment reproducible; a glob can cover a larger export directory.
+
+For CSV, `all_varchar = true` preserves the source fields as text instead of relying on type inference. We cast the known-good IDs deliberately. `parse_filename(filename)` reduces the reader’s provenance column to a readable basename.
+
+This aligns fields, not business meanings. If the exporter renames `amount_text` to `total`, both names become separate columns. Decide whether the fields mean the same thing, alias each source to a common contract, and then combine them.
+
+## Use the same idea with Parquet
+
+<TutorialExample example={demo.examples[1]} />
+
+Parquet already stores column types. Our fixtures deliberately store `amount_text` as VARCHAR in both files, so schema alignment succeeds. We then choose `DECIMAL(10,2)` as the analytical amount type.
+
+`try_cast` converts `pending` to NULL instead of aborting the query. That makes the query run, but it also introduces a review obligation. A later sum would ignore this amount; it would not prove the source value was zero.
+
+`union_by_name` is not a promise that arbitrary incompatible Parquet types can always be reconciled. For incompatible source contracts, read and normalize each source separately before combining the results.
+
+## Keep a conversion audit
+
+<TutorialExample example={demo.examples[2]} />
+
+The original text remains beside the converted amount. ID 4 is marked `review`; the other three rows are accepted under this narrow amount rule. A missing amount would have its own status.
+
+This is the same principle as our [messy CSV lesson](/tutorials/duckdb-clean-messy-csv/): preserve the evidence while making data usable. Avoid passing every row through an aggregate and hoping the total exposes a bad value.
+
+<TutorialChallenge post={demo.slug} />
+
+## A small contract goes a long way
+
+For a recurring import, record the expected key, units, field meanings, and required columns. Adding an optional coupon is different from changing dollars to cents. Retain source provenance, audit rejected values, and check duplicate IDs before treating the combined dataset as one authoritative table.
+
+<TutorialTracking post={demo.slug} />

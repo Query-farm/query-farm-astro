@@ -16,6 +16,7 @@ test('blog posts use real parent pages and their canonical URL', () => {
 test('nested routes omit URL segments that are not navigation destinations', () => {
   for (const [path, names] of [
     ['/company/contact', ['Home', 'Current page']],
+    ['/tutorials/compare-parquet-duckdb/', ['Home', 'Tutorials', 'Current page']],
     ['/blog/tags/sql', ['Home', 'Blog', 'Current page']],
     ['/products/grainlift/', ['Home', 'Products', 'Current page']],
     ['/products/haybarn/functions/releases/duckdb-1.4/abs/', ['Home', 'Products', 'Haybarn', 'Functions', 'Current page']],

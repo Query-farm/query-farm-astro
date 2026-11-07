@@ -1,0 +1,183 @@
+{
+  "slug": "duckdb-seven-day-average",
+  "extension": "DuckDB",
+  "batch": "practical-ten",
+  "setup": "CREATE OR REPLACE TABLE daily_orders(id INTEGER, day DATE, orders INTEGER);\nINSERT INTO daily_orders VALUES\n (1,'2026-01-01',70), (2,'2026-01-02',0), (3,'2026-01-04',14),\n (4,'2026-01-05',28), (5,'2026-01-08',42), (6,'2026-01-09',56),\n (7,'2026-01-10',70), (8,'2026-01-11',84);\nCREATE OR REPLACE VIEW calendar_days AS\nSELECT day::DATE AS day FROM generate_series(\n DATE '2026-01-01', DATE '2026-01-11', INTERVAL 1 DAY) AS t(day);\nCREATE OR REPLACE VIEW complete_days AS\nSELECT c.day, coalesce(o.orders, 0) AS orders\nFROM calendar_days c LEFT JOIN daily_orders o USING(day);\n",
+  "examples": [
+    {
+      "id": "rows-versus-range",
+      "title": "Compare seven observations with a seven-day interval",
+      "sql": "WITH moving AS (\n SELECT day, orders,\n   round(avg(orders) OVER (ORDER BY day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW), 2) AS last_7_rows,\n   round(avg(orders) OVER (ORDER BY day RANGE BETWEEN INTERVAL 6 DAY PRECEDING AND CURRENT ROW), 2) AS observed_7_days\n FROM daily_orders\n) SELECT * FROM moving WHERE day = DATE '2026-01-11';\n",
+      "expectedColumns": [
+        "day",
+        "orders",
+        "last_7_rows",
+        "observed_7_days"
+      ],
+      "expectedRows": [
+        [
+          "2026-01-11",
+          84,
+          42.0,
+          56.0
+        ]
+      ]
+    },
+    {
+      "id": "fill-calendar",
+      "title": "Show every calendar date, with the zero-fill assumption explicit",
+      "sql": "SELECT c.day, o.orders AS recorded_orders,\n  coalesce(o.orders, 0) AS orders_if_complete\nFROM calendar_days c LEFT JOIN daily_orders o USING(day)\nWHERE c.day BETWEEN DATE '2026-01-05' AND DATE '2026-01-11'\nORDER BY c.day;\n",
+      "expectedColumns": [
+        "day",
+        "recorded_orders",
+        "orders_if_complete"
+      ],
+      "expectedRows": [
+        [
+          "2026-01-05",
+          28,
+          28
+        ],
+        [
+          "2026-01-06",
+          null,
+          0
+        ],
+        [
+          "2026-01-07",
+          null,
+          0
+        ],
+        [
+          "2026-01-08",
+          42,
+          42
+        ],
+        [
+          "2026-01-09",
+          56,
+          56
+        ],
+        [
+          "2026-01-10",
+          70,
+          70
+        ],
+        [
+          "2026-01-11",
+          84,
+          84
+        ]
+      ]
+    },
+    {
+      "id": "complete-window",
+      "title": "Report only full seven-day windows",
+      "sql": "WITH moving AS (\n SELECT day, count(*) OVER w AS days_in_frame,\n   round(avg(orders) OVER w, 2) AS daily_average\n FROM complete_days\n WINDOW w AS (ORDER BY day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW)\n) SELECT day, days_in_frame, daily_average FROM moving\nWHERE day = DATE '2026-01-11' AND days_in_frame = 7;\n",
+      "expectedColumns": [
+        "day",
+        "days_in_frame",
+        "daily_average"
+      ],
+      "expectedRows": [
+        [
+          "2026-01-11",
+          7,
+          40.0
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "daily_orders",
+      "title": "Daily counts with gaps",
+      "description": "January 2 is a recorded zero. January 3, 6, and 7 have no source row; deciding what those gaps mean is part of the lesson.",
+      "previewLimit": null
+    }
+  ],
+  "challenge": {
+    "id": "find-missing-days",
+    "title": "Find missing dates without confusing them with zero",
+    "prompt": "Return day for calendar dates with no source row, across January 1–11. Keep the recorded zero on January 2 out of the result.",
+    "hint": "Test the joined source key for NULL before coalescing the count.",
+    "starter": "SELECT day FROM complete_days WHERE orders = 0 ORDER BY day;\n",
+    "solution": "SELECT c.day FROM calendar_days c LEFT JOIN daily_orders o USING(day) WHERE o.id IS NULL ORDER BY c.day;\n",
+    "success": "January 3, 6, and 7 have no source row. A zero-filled calendar cannot by itself tell you which dates were missing.",
+    "columns": [
+      "day"
+    ],
+    "rows": [
+      [
+        "2026-01-03"
+      ],
+      [
+        "2026-01-06"
+      ],
+      [
+        "2026-01-07"
+      ]
+    ]
+  },
+  "sampleTables": [
+    {
+      "table": "daily_orders",
+      "title": "Daily counts with gaps",
+      "description": "January 2 is a recorded zero. January 3, 6, and 7 have no source row; deciding what those gaps mean is part of the lesson.",
+      "columns": [
+        "id",
+        "day",
+        "orders"
+      ],
+      "rows": [
+        [
+          1,
+          "2026-01-01",
+          70
+        ],
+        [
+          2,
+          "2026-01-02",
+          0
+        ],
+        [
+          3,
+          "2026-01-04",
+          14
+        ],
+        [
+          4,
+          "2026-01-05",
+          28
+        ],
+        [
+          5,
+          "2026-01-08",
+          42
+        ],
+        [
+          6,
+          "2026-01-09",
+          56
+        ],
+        [
+          7,
+          "2026-01-10",
+          70
+        ],
+        [
+          8,
+          "2026-01-11",
+          84
+        ]
+      ],
+      "totalRows": 8,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "daily_orders.csv"
+        }
+      ]
+    }
+  ]
+}

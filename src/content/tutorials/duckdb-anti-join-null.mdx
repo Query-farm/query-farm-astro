@@ -1,0 +1,83 @@
+---
+title: "Find Missing Records with ANTI JOIN—and Avoid the NULL Trap"
+description: "Find unmatched customers and orders in DuckDB. See why NOT IN with a NULL subquery value differs from ANTI JOIN and NOT EXISTS."
+pubDate: "2026-11-06"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: true
+outcome: "Audit unmatched records with existence semantics and explain how NULL changes a NOT IN predicate."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "sql-fundamentals"
+technologies: ["duckdb"]
+estimatedMinutes: 6
+level: "Intermediate"
+runtime: "browser"
+order: 23
+showLeadVisual: false
+nextStep: {"title": "Take the next question to your data", "pitch": "Keep exploring with these SQL patterns in Haybarn.", "href": "/products/haybarn/", "cta": "Explore Haybarn"}
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-anti-join-null.json';
+
+**You ask for customers without orders. The query returns nobody. Yet Ben and Dee have never ordered.** One unattributed order—with a NULL customer ID—is enough to explain the surprise.
+
+We will inspect the predicate, find the missing customers, and turn the same audit around to find orders without a known customer. Every row is small enough to reason about by hand.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Four customers, four orders
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+Ada has two orders, Cy has one, and order 103 has no recorded customer ID. Ben and Dee should appear in a “customers with no matching orders” report.
+
+The report is about whether a matching record exists. It is not asking how many orders each customer has. Repeated right-hand matches should not multiply a customer in the answer.
+
+## Inspect NOT IN before filtering
+
+A common first attempt is `WHERE id NOT IN (SELECT customer_id FROM orders)`. Look at that predicate as a result column first:
+
+<TutorialExample example={demo.examples[0]} />
+
+Ada and Cy receive `false`: their IDs definitely appear in the subquery. Ben and Dee receive **NULL**, not `true`. The list contains an unknown customer ID, so SQL cannot establish that either ID is absent from every value in it.
+
+A `WHERE` clause keeps only `true`. It removes both `false` and NULL, which is why the original attempt returns no customers. This follows SQL’s [NULL logic](https://duckdb.org/docs/2.0/sql/data_types/nulls), rather than being a missing-data bug in the join engine.
+
+Filtering NULLs out of this subquery would fix that particular query because our customer IDs are non-NULL. But it is often clearer to express the actual existence question directly.
+
+## Keep rows that have no match
+
+<TutorialExample example={demo.examples[1]} />
+
+An [`ANTI JOIN`](https://duckdb.org/docs/2.0/sql/query_syntax/from#semi-and-anti-joins) keeps a left-hand row when the join condition finds no right-hand match. Ben and Dee remain. Ada’s two matching orders do not duplicate or otherwise alter the answer.
+
+The NULL customer ID in order 103 matches no customer under ordinary equality. It therefore cannot disqualify Ben or Dee. The join asks “did any row match this customer?” rather than evaluating membership against a list containing an unknown value.
+
+The choice of equality matters. If two NULL keys are supposed to count as equal in your domain, use an explicit null-safe condition such as `IS NOT DISTINCT FROM` and test that rule. That is different from ordinary `=` semantics.
+
+## Use NOT EXISTS for the same question
+
+<TutorialExample example={demo.examples[2]} />
+
+The correlated subquery searches for an order belonging to the current customer. `NOT EXISTS` keeps the customer only when that search finds no rows. `SELECT 1` is enough because the selected values are irrelevant; only existence matters.
+
+Both forms return the same two customers here. Choose the expression your team finds clearest. This example is about meaning, not a claim that one spelling is always faster.
+
+<TutorialChallenge post={demo.slug} />
+
+## Turn the audit into a useful workflow
+
+The challenge puts orders on the left, preserving order 103 for review. Its missing customer ID is evidence to investigate, not a reason to silently discard the order from a reconciliation.
+
+For “customers without a paid order,” put the paid-status restriction in the match condition or inside the `NOT EXISTS` subquery. The set of rows allowed to count as a match defines what absence means.
+
+Finally, an anti join preserves duplicates that already exist on its left side. If you need one row per customer, validate that key or deduplicate it under an explicit rule. The [latest-row tutorial](/tutorials/duckdb-latest-row-per-group/) demonstrates a deterministic way to select a current record from an update history.
+
+<TutorialTracking post={demo.slug} />

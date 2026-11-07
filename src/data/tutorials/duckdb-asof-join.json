@@ -1,0 +1,248 @@
+{
+  "slug": "duckdb-asof-join",
+  "extension": "DuckDB",
+  "setup": "CREATE OR REPLACE TABLE prices(id INTEGER, sku VARCHAR, effective_at TIMESTAMP, price DECIMAL(10,2));\nINSERT INTO prices VALUES\n  (1,'WREN','2026-01-08 09:00:00',10),\n  (2,'WREN','2026-01-08 09:10:00',12),\n  (3,'WREN','2026-01-08 09:25:00',11.50),\n  (4,'FIR','2026-01-08 09:05:00',20);\nCREATE OR REPLACE TABLE orders(id INTEGER, sku VARCHAR, ordered_at TIMESTAMP, qty INTEGER);\nINSERT INTO orders VALUES\n  (101,'WREN','2026-01-08 08:55:00',2),\n  (102,'WREN','2026-01-08 09:00:00',1),\n  (103,'WREN','2026-01-08 09:15:00',3),\n  (104,'WREN','2026-01-08 09:30:00',2),\n  (105,'FIR','2026-01-08 09:10:00',1);\n",
+  "examples": [
+    {
+      "id": "ordinary-range-join",
+      "title": "A regular inequality join keeps every earlier price",
+      "sql": "SELECT o.id, p.effective_at::VARCHAR AS price_time, p.price\nFROM orders o LEFT JOIN prices p\n  ON o.sku = p.sku AND o.ordered_at >= p.effective_at\nWHERE o.id = 104 ORDER BY p.effective_at;",
+      "expectedColumns": [
+        "id",
+        "price_time",
+        "price"
+      ],
+      "expectedRows": [
+        [
+          104,
+          "2026-01-08 09:00:00",
+          10.0
+        ],
+        [
+          104,
+          "2026-01-08 09:10:00",
+          12.0
+        ],
+        [
+          104,
+          "2026-01-08 09:25:00",
+          11.5
+        ]
+      ]
+    },
+    {
+      "id": "one-applicable-price",
+      "title": "Match the closest earlier price for each order",
+      "sql": "SELECT o.id, o.sku, p.effective_at::VARCHAR AS price_time, p.price\nFROM orders o\nASOF LEFT JOIN prices p\n  ON o.sku = p.sku AND o.ordered_at >= p.effective_at\nORDER BY o.id;",
+      "expectedColumns": [
+        "id",
+        "sku",
+        "price_time",
+        "price"
+      ],
+      "expectedRows": [
+        [
+          101,
+          "WREN",
+          null,
+          null
+        ],
+        [
+          102,
+          "WREN",
+          "2026-01-08 09:00:00",
+          10.0
+        ],
+        [
+          103,
+          "WREN",
+          "2026-01-08 09:10:00",
+          12.0
+        ],
+        [
+          104,
+          "WREN",
+          "2026-01-08 09:25:00",
+          11.5
+        ],
+        [
+          105,
+          "FIR",
+          "2026-01-08 09:05:00",
+          20.0
+        ]
+      ]
+    },
+    {
+      "id": "priced-orders",
+      "title": "Calculate amounts while preserving the unpriced order",
+      "sql": "SELECT o.id, o.qty, p.price, o.qty * p.price AS amount\nFROM orders o\nASOF LEFT JOIN prices p\n  ON o.sku = p.sku AND o.ordered_at >= p.effective_at\nORDER BY o.id;",
+      "expectedColumns": [
+        "id",
+        "qty",
+        "price",
+        "amount"
+      ],
+      "expectedRows": [
+        [
+          101,
+          2,
+          null,
+          null
+        ],
+        [
+          102,
+          1,
+          10.0,
+          10.0
+        ],
+        [
+          103,
+          3,
+          12.0,
+          36.0
+        ],
+        [
+          104,
+          2,
+          11.5,
+          23.0
+        ],
+        [
+          105,
+          1,
+          20.0,
+          20.0
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "prices",
+      "title": "The price history",
+      "description": "Prices apply from their effective timestamp, including that instant, until the next price for the same SKU.",
+      "previewLimit": null
+    },
+    {
+      "table": "orders",
+      "title": "Orders placed along that timeline",
+      "description": "Order 101 predates every WREN price. FIR has its own independent price history.",
+      "previewLimit": null
+    }
+  ],
+  "challenge": {
+    "id": "unpriced-orders",
+    "title": "Find orders with no earlier price",
+    "prompt": "Return id for orders with no applicable price at or before their timestamp. Keep the SKU equality condition.",
+    "hint": "An equality join mistakes an unchanged price for a missing one. Use ASOF LEFT JOIN and then test the matched price ID.",
+    "starter": "SELECT o.id FROM orders o\nLEFT JOIN prices p\n  ON o.sku = p.sku AND o.ordered_at = p.effective_at\nWHERE p.id IS NULL ORDER BY o.id;",
+    "solution": "SELECT o.id\nFROM orders o\nASOF LEFT JOIN prices p\n  ON o.sku = p.sku AND o.ordered_at >= p.effective_at\nWHERE p.id IS NULL ORDER BY o.id;",
+    "success": "Only order 101 lacks an earlier price. Orders between price updates use the previous price.",
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        101
+      ]
+    ]
+  },
+  "batch": "next-ten",
+  "sampleTables": [
+    {
+      "table": "prices",
+      "title": "The price history",
+      "description": "Prices apply from their effective timestamp, including that instant, until the next price for the same SKU.",
+      "columns": [
+        "id",
+        "sku",
+        "effective_at",
+        "price"
+      ],
+      "rows": [
+        [
+          1,
+          "WREN",
+          "2026-01-08 09:00:00",
+          10.0
+        ],
+        [
+          2,
+          "WREN",
+          "2026-01-08 09:10:00",
+          12.0
+        ],
+        [
+          3,
+          "WREN",
+          "2026-01-08 09:25:00",
+          11.5
+        ],
+        [
+          4,
+          "FIR",
+          "2026-01-08 09:05:00",
+          20.0
+        ]
+      ],
+      "totalRows": 4,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "prices.csv"
+        }
+      ]
+    },
+    {
+      "table": "orders",
+      "title": "Orders placed along that timeline",
+      "description": "Order 101 predates every WREN price. FIR has its own independent price history.",
+      "columns": [
+        "id",
+        "sku",
+        "ordered_at",
+        "qty"
+      ],
+      "rows": [
+        [
+          101,
+          "WREN",
+          "2026-01-08 08:55:00",
+          2
+        ],
+        [
+          102,
+          "WREN",
+          "2026-01-08 09:00:00",
+          1
+        ],
+        [
+          103,
+          "WREN",
+          "2026-01-08 09:15:00",
+          3
+        ],
+        [
+          104,
+          "WREN",
+          "2026-01-08 09:30:00",
+          2
+        ],
+        [
+          105,
+          "FIR",
+          "2026-01-08 09:10:00",
+          1
+        ]
+      ],
+      "totalRows": 5,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "orders.csv"
+        }
+      ]
+    }
+  ]
+}

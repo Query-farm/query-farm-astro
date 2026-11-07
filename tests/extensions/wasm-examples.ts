@@ -2,6 +2,8 @@
 // a constant SELECT: the expected result must exercise the extension itself.
 // Rows include terminal table borders so echoed SQL cannot satisfy the check.
 export const examples: Record<string, { sql: RegExp; result: RegExp }> = {
+  // Core SQL runs without an extension; the article seeds local orders.
+  duckdb: { sql: /^SELECT region, sum\(amount\) AS total\s+FROM orders/, result: /│\s*East\s*│\s*102,?000\s*│/ },
   a5: { sql: /^SELECT a5_get_resolution\(a5_lonlat_to_cell\(-122\.4, 37\.8, 10\)\);$/, result: /│\s*10\s*│/ },
   bitfilters: { sql: /^SELECT bitfilters_duckdb_hash\('v2\.0', 42\);$/, result: /│\s*\d+\s*│/ },
   datasketches: { sql: /datasketch_hll\(12, user_id\) AS sketch/, result: /│\s*3(?:\.0\d*)?\s*│/ },

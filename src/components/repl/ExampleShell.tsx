@@ -529,13 +529,15 @@ interface Props {
   fixtures?: string | null;
   /** Called when the user closes the shell (host unmounts + removes it). */
   onClose?: () => void;
+  /** Stable authored identifier; never derived from visitor SQL. */
+  exampleId?: string;
 }
 
 // Whether this page has already booted the engine, so load times from a
 // cold start and from a second shell on the same page can be told apart.
 let engineBooted = false;
 
-export default function ExampleShell({ extensionName, installSource, sql, fixtures, onClose }: Props) {
+export default function ExampleShell({ extensionName, installSource, sql, fixtures, onClose, exampleId }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -550,7 +552,13 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
     let cleanup = () => {};
     const openedAt = performance.now();
     const warm = engineBooted;
-    const base = { extension: extensionName, page_type: tryPageType() };
+    const base = {
+      extension: extensionName, page_type: tryPageType(),
+      ...(exampleId ? {
+        example_id: exampleId,
+        post: document.querySelector<HTMLElement>('[data-tutorial-post]')?.dataset.tutorialPost ?? '',
+      } : {}),
+    };
     let stage = "boot";
     trackTry("try_extension", base);
 
@@ -715,7 +723,7 @@ export default function ExampleShell({ extensionName, installSource, sql, fixtur
       disposed = true;
       cleanup();
     };
-  }, [extensionName, installSource, sql, fixtures]);
+  }, [extensionName, installSource, sql, fixtures, exampleId]);
 
   return (
     <div className="example-shell" data-example-status={exampleStatus}>

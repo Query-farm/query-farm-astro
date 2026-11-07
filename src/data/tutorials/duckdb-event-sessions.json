@@ -1,0 +1,383 @@
+{
+  "slug": "duckdb-event-sessions",
+  "extension": "DuckDB",
+  "batch": "practical-ten",
+  "setup": "CREATE OR REPLACE TABLE visitors(id INTEGER, name VARCHAR, signed_up DATE);\nINSERT INTO visitors VALUES\n (1,'Ada','2026-01-05'), (2,'Ben','2026-01-06'),\n (3,'Cy','2026-01-12'), (4,'Dee','2026-01-13'), (5,'Eli','2026-01-19');\nCREATE OR REPLACE TABLE events(id INTEGER, user_id INTEGER, happened_at TIMESTAMP, event VARCHAR);\nINSERT INTO events VALUES\n (1,1,'2026-01-05 09:00:00','view'),\n (2,1,'2026-01-05 09:05:00','run'),\n (3,1,'2026-01-05 09:06:00','run'),\n (4,1,'2026-01-05 09:15:00','enquiry'),\n (5,1,'2026-01-05 09:45:00','view'),\n (6,1,'2026-01-05 10:20:00','view'),\n (7,2,'2026-01-06 10:00:00','run'),\n (8,2,'2026-01-06 10:05:00','view'),\n (9,2,'2026-01-06 10:08:00','enquiry'),\n (10,3,'2026-01-12 09:00:00','view'),\n (11,3,'2026-01-12 09:02:00','run'),\n (12,3,'2026-01-12 10:00:00','enquiry'),\n (13,4,'2026-01-13 11:00:00','view'),\n (14,4,'2026-01-13 11:04:00','run'),\n (15,4,'2026-01-13 11:12:00','enquiry'),\n (16,1,'2026-01-14 12:00:00','view'),\n (17,2,'2026-01-20 12:00:00','view'),\n (18,5,'2026-01-19 09:00:00','view'),\n (19,1,'2026-01-20 14:00:00','view');\nCREATE OR REPLACE VIEW session_events AS\nWITH gaps AS (\n SELECT *, lag(happened_at) OVER (\n   PARTITION BY user_id ORDER BY happened_at, id\n ) AS previous_at FROM events\n), starts AS (\n SELECT *, CASE WHEN previous_at IS NULL\n   OR happened_at - previous_at > INTERVAL 30 MINUTE\n   THEN 1 ELSE 0 END AS new_session\n FROM gaps\n)\nSELECT id, user_id, happened_at, event,\n sum(new_session) OVER (\n   PARTITION BY user_id ORDER BY happened_at, id\n   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n )::INTEGER AS session_no\nFROM starts;\n",
+  "examples": [
+    {
+      "id": "measure-gaps",
+      "title": "Inspect Ada’s gaps before assigning sessions",
+      "sql": "SELECT id, event, happened_at::TIME::VARCHAR AS time,\n  date_diff('minute', lag(happened_at) OVER (\n    ORDER BY happened_at, id), happened_at) AS gap_minutes\nFROM events WHERE user_id = 1 AND happened_at::DATE = DATE '2026-01-05'\nORDER BY happened_at, id;\n",
+      "expectedColumns": [
+        "id",
+        "event",
+        "time",
+        "gap_minutes"
+      ],
+      "expectedRows": [
+        [
+          1,
+          "view",
+          "09:00:00",
+          null
+        ],
+        [
+          2,
+          "run",
+          "09:05:00",
+          5
+        ],
+        [
+          3,
+          "run",
+          "09:06:00",
+          1
+        ],
+        [
+          4,
+          "enquiry",
+          "09:15:00",
+          9
+        ],
+        [
+          5,
+          "view",
+          "09:45:00",
+          30
+        ],
+        [
+          6,
+          "view",
+          "10:20:00",
+          35
+        ]
+      ]
+    },
+    {
+      "id": "assign-sessions",
+      "title": "Start a session only when the gap exceeds 30 minutes",
+      "sql": "WITH gaps AS (\n SELECT *, lag(happened_at) OVER (\n   PARTITION BY user_id ORDER BY happened_at, id\n ) AS previous_at FROM events\n), starts AS (\n SELECT *, CASE WHEN previous_at IS NULL\n   OR happened_at - previous_at > INTERVAL 30 MINUTE\n   THEN 1 ELSE 0 END AS new_session\n FROM gaps\n)\nSELECT id, user_id, happened_at, event,\n sum(new_session) OVER (\n   PARTITION BY user_id ORDER BY happened_at, id\n   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n )::INTEGER AS session_no\nFROM starts\nORDER BY user_id, happened_at, id;\n",
+      "expectedColumns": [
+        "id",
+        "user_id",
+        "happened_at",
+        "event",
+        "session_no"
+      ],
+      "expectedRows": [
+        [
+          1,
+          1,
+          "2026-01-05 09:00:00",
+          "view",
+          1
+        ],
+        [
+          2,
+          1,
+          "2026-01-05 09:05:00",
+          "run",
+          1
+        ],
+        [
+          3,
+          1,
+          "2026-01-05 09:06:00",
+          "run",
+          1
+        ],
+        [
+          4,
+          1,
+          "2026-01-05 09:15:00",
+          "enquiry",
+          1
+        ],
+        [
+          5,
+          1,
+          "2026-01-05 09:45:00",
+          "view",
+          1
+        ],
+        [
+          6,
+          1,
+          "2026-01-05 10:20:00",
+          "view",
+          2
+        ],
+        [
+          16,
+          1,
+          "2026-01-14 12:00:00",
+          "view",
+          3
+        ],
+        [
+          19,
+          1,
+          "2026-01-20 14:00:00",
+          "view",
+          4
+        ],
+        [
+          7,
+          2,
+          "2026-01-06 10:00:00",
+          "run",
+          1
+        ],
+        [
+          8,
+          2,
+          "2026-01-06 10:05:00",
+          "view",
+          1
+        ],
+        [
+          9,
+          2,
+          "2026-01-06 10:08:00",
+          "enquiry",
+          1
+        ],
+        [
+          17,
+          2,
+          "2026-01-20 12:00:00",
+          "view",
+          2
+        ],
+        [
+          10,
+          3,
+          "2026-01-12 09:00:00",
+          "view",
+          1
+        ],
+        [
+          11,
+          3,
+          "2026-01-12 09:02:00",
+          "run",
+          1
+        ],
+        [
+          12,
+          3,
+          "2026-01-12 10:00:00",
+          "enquiry",
+          2
+        ],
+        [
+          13,
+          4,
+          "2026-01-13 11:00:00",
+          "view",
+          1
+        ],
+        [
+          14,
+          4,
+          "2026-01-13 11:04:00",
+          "run",
+          1
+        ],
+        [
+          15,
+          4,
+          "2026-01-13 11:12:00",
+          "enquiry",
+          1
+        ],
+        [
+          18,
+          5,
+          "2026-01-19 09:00:00",
+          "view",
+          1
+        ]
+      ]
+    },
+    {
+      "id": "summarize-sessions",
+      "title": "Inspect Ada’s first two sessions",
+      "sql": "SELECT session_no, count(*) AS events,\n  min(happened_at)::TIME::VARCHAR AS start_time,\n  date_diff('minute', min(happened_at), max(happened_at)) AS observed_minutes,\n  bool_or(event IN ('run','enquiry')) AS engaged\nFROM session_events\nWHERE user_id = 1 AND happened_at::DATE = DATE '2026-01-05'\nGROUP BY session_no ORDER BY session_no;\n",
+      "expectedColumns": [
+        "session_no",
+        "events",
+        "start_time",
+        "observed_minutes",
+        "engaged"
+      ],
+      "expectedRows": [
+        [
+          1,
+          5,
+          "09:00:00",
+          45,
+          true
+        ],
+        [
+          2,
+          1,
+          "10:20:00",
+          0,
+          false
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "visitors",
+      "title": "Meet the fictional visitors",
+      "description": "Five stable user IDs; signup dates also anchor the retention lesson.",
+      "previewLimit": null
+    },
+    {
+      "table": "events",
+      "title": "A tiny website event log",
+      "description": "All 19 synthetic events are included in the CSV and setup. Times use one shared UTC clock.",
+      "previewLimit": 8
+    }
+  ],
+  "challenge": {
+    "id": "single-event",
+    "title": "Find Ada’s single-event sessions",
+    "prompt": "Return session_no for Ada (user_id = 1) where the session contains exactly one event, across the whole dataset.",
+    "hint": "Group the already assigned events by session, then filter groups with HAVING.",
+    "starter": "SELECT session_no FROM session_events WHERE user_id = 1 GROUP BY session_no ORDER BY session_no;\n",
+    "solution": "SELECT session_no FROM session_events WHERE user_id = 1 GROUP BY session_no HAVING count(*) = 1 ORDER BY session_no;\n",
+    "success": "Sessions 2, 3, and 4 contain one observed event each. Their observed duration is zero, which does not prove the visitor spent no time there.",
+    "columns": [
+      "session_no"
+    ],
+    "rows": [
+      [
+        2
+      ],
+      [
+        3
+      ],
+      [
+        4
+      ]
+    ]
+  },
+  "sampleTables": [
+    {
+      "table": "visitors",
+      "title": "Meet the fictional visitors",
+      "description": "Five stable user IDs; signup dates also anchor the retention lesson.",
+      "columns": [
+        "id",
+        "name",
+        "signed_up"
+      ],
+      "rows": [
+        [
+          1,
+          "Ada",
+          "2026-01-05"
+        ],
+        [
+          2,
+          "Ben",
+          "2026-01-06"
+        ],
+        [
+          3,
+          "Cy",
+          "2026-01-12"
+        ],
+        [
+          4,
+          "Dee",
+          "2026-01-13"
+        ],
+        [
+          5,
+          "Eli",
+          "2026-01-19"
+        ]
+      ],
+      "totalRows": 5,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "visitors.csv"
+        }
+      ]
+    },
+    {
+      "table": "events",
+      "title": "A tiny website event log",
+      "description": "All 19 synthetic events are included in the CSV and setup. Times use one shared UTC clock.",
+      "columns": [
+        "id",
+        "user_id",
+        "happened_at",
+        "event"
+      ],
+      "rows": [
+        [
+          1,
+          1,
+          "2026-01-05 09:00:00",
+          "view"
+        ],
+        [
+          2,
+          1,
+          "2026-01-05 09:05:00",
+          "run"
+        ],
+        [
+          3,
+          1,
+          "2026-01-05 09:06:00",
+          "run"
+        ],
+        [
+          4,
+          1,
+          "2026-01-05 09:15:00",
+          "enquiry"
+        ],
+        [
+          5,
+          1,
+          "2026-01-05 09:45:00",
+          "view"
+        ],
+        [
+          6,
+          1,
+          "2026-01-05 10:20:00",
+          "view"
+        ],
+        [
+          7,
+          2,
+          "2026-01-06 10:00:00",
+          "run"
+        ],
+        [
+          8,
+          2,
+          "2026-01-06 10:05:00",
+          "view"
+        ]
+      ],
+      "totalRows": 19,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "events.csv"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,190 @@
+{
+  "slug": "duckdb-clean-messy-csv",
+  "extension": "DuckDB",
+  "setup": "CREATE OR REPLACE TABLE invoice_source(id VARCHAR, billed_on VARCHAR, amount VARCHAR);\nINSERT INTO invoice_source VALUES\n  ('1','2026-01-01','42.50'), ('2','2026-01-02',' 19.95 '),\n  ('3','2026-01-02','pending'), ('4','2026-01-03',NULL),\n  ('5','2026-02-30','10.00'), ('6','2026-01-03','-5.00'),\n  ('7','2026-01-04','1,200.00');\nSET VARIABLE invoice_csv = 'invoices_' || uuid()::VARCHAR || '.csv';\nCOPY invoice_source TO (getvariable('invoice_csv')) (FORMAT CSV, HEADER);\nCREATE OR REPLACE VIEW raw_invoices AS\nSELECT * FROM read_csv(getvariable('invoice_csv'), all_varchar = true);\nCREATE OR REPLACE VIEW parsed_invoices AS\nSELECT id, billed_on, amount,\n       try_strptime(trim(billed_on), '%Y-%m-%d')::DATE AS parsed_date,\n       TRY_CAST(replace(trim(amount), ',', '') AS DECIMAL(12,2)) AS parsed_amount\nFROM raw_invoices;\nCREATE OR REPLACE VIEW reviewed_invoices AS\nSELECT *, CASE\n  WHEN parsed_date IS NULL THEN 'invalid date'\n  WHEN amount IS NULL OR trim(amount) = '' THEN 'missing amount'\n  WHEN parsed_amount IS NULL THEN 'invalid amount'\n  WHEN parsed_amount < 0 THEN 'negative invoice'\n  ELSE NULL END AS issue\nFROM parsed_invoices;\n",
+  "examples": [
+    {
+      "id": "parse-values",
+      "title": "Convert values without losing the source text",
+      "sql": "SELECT id,\n       try_strptime(trim(billed_on), '%Y-%m-%d')::DATE AS billed_on,\n       TRY_CAST(replace(trim(amount), ',', '') AS DECIMAL(12,2)) AS amount\nFROM raw_invoices ORDER BY id;",
+      "expectedColumns": [
+        "id",
+        "billed_on",
+        "amount"
+      ],
+      "expectedRows": [
+        [
+          "1",
+          "2026-01-01",
+          42.5
+        ],
+        [
+          "2",
+          "2026-01-02",
+          19.95
+        ],
+        [
+          "3",
+          "2026-01-02",
+          null
+        ],
+        [
+          "4",
+          "2026-01-03",
+          null
+        ],
+        [
+          "5",
+          null,
+          10.0
+        ],
+        [
+          "6",
+          "2026-01-03",
+          -5.0
+        ],
+        [
+          "7",
+          "2026-01-04",
+          1200.0
+        ]
+      ]
+    },
+    {
+      "id": "review-failures",
+      "title": "Keep the rejected rows and their first issue",
+      "sql": "SELECT id, billed_on, amount, issue\nFROM reviewed_invoices WHERE issue IS NOT NULL ORDER BY id;",
+      "expectedColumns": [
+        "id",
+        "billed_on",
+        "amount",
+        "issue"
+      ],
+      "expectedRows": [
+        [
+          "3",
+          "2026-01-02",
+          "pending",
+          "invalid amount"
+        ],
+        [
+          "4",
+          "2026-01-03",
+          null,
+          "missing amount"
+        ],
+        [
+          "5",
+          "2026-02-30",
+          "10.00",
+          "invalid date"
+        ],
+        [
+          "6",
+          "2026-01-03",
+          "-5.00",
+          "negative invoice"
+        ]
+      ]
+    },
+    {
+      "id": "reconcile-rows",
+      "title": "Account for every source row",
+      "sql": "SELECT count(*) AS input_rows,\n       count(*) FILTER (WHERE issue IS NULL) AS accepted,\n       count(*) FILTER (WHERE issue IS NOT NULL) AS rejected\nFROM reviewed_invoices;",
+      "expectedColumns": [
+        "input_rows",
+        "accepted",
+        "rejected"
+      ],
+      "expectedRows": [
+        [
+          7,
+          3,
+          4
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "raw_invoices",
+      "title": "The CSV as text",
+      "description": "Seven records from a real CSV created by the setup. Commas are thousands separators under this export’s explicit formatting convention.",
+      "previewLimit": null
+    }
+  ],
+  "challenge": {
+    "id": "accepted-invoice-total",
+    "title": "Total only accepted invoices",
+    "prompt": "Return one column, accepted_total, summing parsed_amount only for records with no issue.",
+    "hint": "A numeric amount can still belong to an invalid date or violate the nonnegative-invoice rule. Use the complete issue flag.",
+    "starter": "SELECT sum(parsed_amount) AS accepted_total\nFROM reviewed_invoices\nWHERE parsed_amount IS NOT NULL;",
+    "solution": "SELECT sum(parsed_amount) AS accepted_total\nFROM reviewed_invoices\nWHERE issue IS NULL;",
+    "success": "The accepted total is 1262.45. Invalid rows remain available for review.",
+    "columns": [
+      "accepted_total"
+    ],
+    "rows": [
+      [
+        1262.45
+      ]
+    ]
+  },
+  "batch": "next-ten",
+  "sampleTables": [
+    {
+      "table": "raw_invoices",
+      "title": "The CSV as text",
+      "description": "Seven records from a real CSV created by the setup. Commas are thousands separators under this export’s explicit formatting convention.",
+      "columns": [
+        "id",
+        "billed_on",
+        "amount"
+      ],
+      "rows": [
+        [
+          "1",
+          "2026-01-01",
+          "42.50"
+        ],
+        [
+          "2",
+          "2026-01-02",
+          " 19.95 "
+        ],
+        [
+          "3",
+          "2026-01-02",
+          "pending"
+        ],
+        [
+          "4",
+          "2026-01-03",
+          null
+        ],
+        [
+          "5",
+          "2026-02-30",
+          "10.00"
+        ],
+        [
+          "6",
+          "2026-01-03",
+          "-5.00"
+        ],
+        [
+          "7",
+          "2026-01-04",
+          "1,200.00"
+        ]
+      ],
+      "totalRows": 7,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "raw_invoices.csv"
+        }
+      ]
+    }
+  ]
+}

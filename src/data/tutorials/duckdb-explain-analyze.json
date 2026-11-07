@@ -1,0 +1,317 @@
+{
+  "slug": "duckdb-explain-analyze",
+  "extension": "DuckDB",
+  "setup": "CREATE OR REPLACE TABLE orders AS\nSELECT i::INTEGER AS id,\n       CASE i % 4 WHEN 0 THEN 'East' WHEN 1 THEN 'West'\n         WHEN 2 THEN 'North' ELSE 'South' END AS region,\n       CASE WHEN i % 5 = 0 THEN 'cancelled' ELSE 'paid' END AS status\nFROM generate_series(1, 10000) AS r(i);\nCREATE OR REPLACE TABLE promotions(id INTEGER, region VARCHAR, campaign VARCHAR);\nINSERT INTO promotions VALUES\n (1,'East','Spring'),(2,'East','Loyalty'),(3,'West','Spring'),(4,'West','Loyalty'),\n (5,'North','Spring'),(6,'North','Loyalty'),(7,'South','Spring'),(8,'South','Loyalty');\n",
+  "examples": [
+    {
+      "id": "profile-expanded-join",
+      "title": "Run and profile the query with the duplicated matches",
+      "sql": "EXPLAIN ANALYZE\nSELECT count(*) AS qualifying_orders\nFROM orders o JOIN promotions p ON o.region = p.region\nWHERE o.status = 'paid';",
+      "plan": true,
+      "planFacts": [
+        {
+          "name": "RESULT_COLLECTOR",
+          "rows": 0,
+          "extra": {}
+        },
+        {
+          "name": "EXPLAIN_ANALYZE",
+          "rows": 0,
+          "extra": {}
+        },
+        {
+          "name": "UNGROUPED_AGGREGATE",
+          "rows": 1,
+          "extra": {
+            "Aggregates": "count_star()",
+            "Estimated Cardinality": "1"
+          }
+        },
+        {
+          "name": "HASH_JOIN",
+          "rows": 16000,
+          "extra": {
+            "Join Type": "INNER",
+            "Conditions": "region = region",
+            "Estimated Cardinality": "10000"
+          }
+        },
+        {
+          "name": "TABLE_SCAN",
+          "rows": 8000,
+          "extra": {
+            "Table": "memory.main.orders",
+            "Type": "Sequential Scan",
+            "Projections": "region",
+            "Filters": "(status = 'paid')",
+            "Estimated Cardinality": "5000"
+          }
+        },
+        {
+          "name": "TABLE_SCAN",
+          "rows": 8,
+          "extra": {
+            "Table": "memory.main.promotions",
+            "Type": "Sequential Scan",
+            "Projections": "region",
+            "Estimated Cardinality": "8"
+          }
+        }
+      ],
+      "planExcerpt": "Recorded query total time: 0.566 ms\n\nUNGROUPED_AGGREGATE\n  Aggregates: count_star()\n  Estimated Cardinality: 1\n  Actual output rows: 1\n  Operator time: 0.001 ms\n\nHASH_JOIN\n  Join Type: INNER\n  Conditions: region = region\n  Estimated Cardinality: 10000\n  Actual output rows: 16,000\n  Operator time: 0.119 ms\n\nTABLE_SCAN\n  Table: memory.main.orders\n  Type: Sequential Scan\n  Filters: (status = 'paid')\n  Estimated Cardinality: 5000\n  Actual output rows: 8,000\n  Operator time: 0.132 ms\n\nTABLE_SCAN\n  Table: memory.main.promotions\n  Type: Sequential Scan\n  Estimated Cardinality: 8\n  Actual output rows: 8\n  Operator time: 0.002 ms",
+      "planLabel": "Captured execution profile · selected operators",
+      "planNote": "Captured with native DuckDB 2.0.0 on these fixtures. Projection/internal operators omitted; browser formatting can differ. Timings are one recorded run, not a benchmark."
+    },
+    {
+      "id": "expanded-count",
+      "title": "See what that query actually counts",
+      "sql": "SELECT count(*) AS qualifying_orders\nFROM orders o JOIN promotions p ON o.region = p.region\nWHERE o.status = 'paid';",
+      "expectedColumns": [
+        "qualifying_orders"
+      ],
+      "expectedRows": [
+        [
+          16000
+        ]
+      ]
+    },
+    {
+      "id": "count-orders-once",
+      "title": "Express eligibility with EXISTS",
+      "sql": "SELECT count(*) AS qualifying_orders\nFROM orders o\nWHERE o.status = 'paid'\n  AND EXISTS (SELECT 1 FROM promotions p WHERE p.region = o.region);",
+      "expectedColumns": [
+        "qualifying_orders"
+      ],
+      "expectedRows": [
+        [
+          8000
+        ]
+      ]
+    },
+    {
+      "id": "profile-exists",
+      "title": "Profile the corrected eligibility query",
+      "sql": "EXPLAIN ANALYZE\nSELECT count(*) AS qualifying_orders\nFROM orders o\nWHERE o.status = 'paid'\n  AND EXISTS (SELECT 1 FROM promotions p WHERE p.region = o.region);",
+      "plan": true,
+      "planFacts": [
+        {
+          "name": "RESULT_COLLECTOR",
+          "rows": 0,
+          "extra": {}
+        },
+        {
+          "name": "EXPLAIN_ANALYZE",
+          "rows": 0,
+          "extra": {}
+        },
+        {
+          "name": "UNGROUPED_AGGREGATE",
+          "rows": 1,
+          "extra": {
+            "Aggregates": "count_star()",
+            "Estimated Cardinality": "1"
+          }
+        },
+        {
+          "name": "HASH_JOIN",
+          "rows": 8000,
+          "extra": {
+            "Join Type": "SEMI",
+            "Conditions": "region = region",
+            "Estimated Cardinality": "1000"
+          }
+        },
+        {
+          "name": "TABLE_SCAN",
+          "rows": 8000,
+          "extra": {
+            "Table": "memory.main.orders",
+            "Type": "Sequential Scan",
+            "Projections": "region",
+            "Filters": "(status = 'paid')",
+            "Estimated Cardinality": "5000"
+          }
+        },
+        {
+          "name": "TABLE_SCAN",
+          "rows": 8,
+          "extra": {
+            "Table": "memory.main.promotions",
+            "Type": "Sequential Scan",
+            "Projections": "region",
+            "Estimated Cardinality": "8"
+          }
+        }
+      ],
+      "planExcerpt": "Recorded query total time: 0.496 ms\n\nUNGROUPED_AGGREGATE\n  Aggregates: count_star()\n  Estimated Cardinality: 1\n  Actual output rows: 1\n  Operator time: 0.001 ms\n\nHASH_JOIN\n  Join Type: SEMI\n  Conditions: region = region\n  Estimated Cardinality: 1000\n  Actual output rows: 8,000\n  Operator time: 0.062 ms\n\nTABLE_SCAN\n  Table: memory.main.orders\n  Type: Sequential Scan\n  Filters: (status = 'paid')\n  Estimated Cardinality: 5000\n  Actual output rows: 8,000\n  Operator time: 0.130 ms\n\nTABLE_SCAN\n  Table: memory.main.promotions\n  Type: Sequential Scan\n  Estimated Cardinality: 8\n  Actual output rows: 8\n  Operator time: 0.001 ms",
+      "planLabel": "Captured execution profile · selected operators",
+      "planNote": "Captured with native DuckDB 2.0.0 on these fixtures. Projection/internal operators omitted; browser formatting can differ. Timings are one recorded run, not a benchmark."
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "orders",
+      "title": "Orders to test for eligibility",
+      "description": "First eight of 10,000 generated orders. Exactly 8,000 are paid.",
+      "previewLimit": 8
+    },
+    {
+      "table": "promotions",
+      "title": "Two campaigns in each region",
+      "description": "An order qualifies if its region has any campaign. A second campaign should not count the order again.",
+      "previewLimit": null
+    }
+  ],
+  "challenge": {
+    "id": "eligible-regional-orders",
+    "title": "Count eligible orders by region",
+    "prompt": "Return region and qualifying_orders for paid orders with at least one regional campaign. Count each order once.",
+    "hint": "Use EXISTS or a semijoin for eligibility. Group the order records, not repeated campaign matches.",
+    "starter": "SELECT o.region, count(*) AS qualifying_orders\nFROM orders o JOIN promotions p ON o.region = p.region\nWHERE o.status = 'paid'\nGROUP BY o.region ORDER BY o.region;",
+    "solution": "SELECT o.region, count(*) AS qualifying_orders\nFROM orders o\nWHERE o.status = 'paid'\n  AND EXISTS (SELECT 1 FROM promotions p WHERE p.region = o.region)\nGROUP BY o.region ORDER BY o.region;",
+    "success": "Each region has 2,000 qualifying orders. Multiple campaigns no longer multiply the order count.",
+    "columns": [
+      "region",
+      "qualifying_orders"
+    ],
+    "rows": [
+      [
+        "East",
+        2000
+      ],
+      [
+        "North",
+        2000
+      ],
+      [
+        "South",
+        2000
+      ],
+      [
+        "West",
+        2000
+      ]
+    ]
+  },
+  "batch": "next-ten",
+  "sampleTables": [
+    {
+      "table": "orders",
+      "title": "Orders to test for eligibility",
+      "description": "First eight of 10,000 generated orders. Exactly 8,000 are paid.",
+      "columns": [
+        "id",
+        "region",
+        "status"
+      ],
+      "rows": [
+        [
+          1,
+          "West",
+          "paid"
+        ],
+        [
+          2,
+          "North",
+          "paid"
+        ],
+        [
+          3,
+          "South",
+          "paid"
+        ],
+        [
+          4,
+          "East",
+          "paid"
+        ],
+        [
+          5,
+          "West",
+          "cancelled"
+        ],
+        [
+          6,
+          "North",
+          "paid"
+        ],
+        [
+          7,
+          "South",
+          "paid"
+        ],
+        [
+          8,
+          "East",
+          "paid"
+        ]
+      ],
+      "totalRows": 10000,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "orders.csv"
+        }
+      ]
+    },
+    {
+      "table": "promotions",
+      "title": "Two campaigns in each region",
+      "description": "An order qualifies if its region has any campaign. A second campaign should not count the order again.",
+      "columns": [
+        "id",
+        "region",
+        "campaign"
+      ],
+      "rows": [
+        [
+          1,
+          "East",
+          "Spring"
+        ],
+        [
+          2,
+          "East",
+          "Loyalty"
+        ],
+        [
+          3,
+          "West",
+          "Spring"
+        ],
+        [
+          4,
+          "West",
+          "Loyalty"
+        ],
+        [
+          5,
+          "North",
+          "Spring"
+        ],
+        [
+          6,
+          "North",
+          "Loyalty"
+        ],
+        [
+          7,
+          "South",
+          "Spring"
+        ],
+        [
+          8,
+          "South",
+          "Loyalty"
+        ]
+      ],
+      "totalRows": 8,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "promotions.csv"
+        }
+      ]
+    }
+  ]
+}

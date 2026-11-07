@@ -3,12 +3,11 @@ import { z } from 'astro/zod';
 import { glob } from 'astro/loaders';
 import { docsLoader } from '@astrojs/starlight/loaders';
 import { docsSchema } from '@astrojs/starlight/schema';
+import { tutorialCategoryIds, tutorialTechnologyIds } from './data/tutorial-taxonomy';
 
 const docs = defineCollection({ loader: docsLoader(), schema: docsSchema() });
 
-const blog = defineCollection({
-  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/blog' }),
-  schema: z.object({
+const articleSchema = z.object({
     title: z.string(),
     description: z.string(),
     pubDate: z.coerce.date(),
@@ -17,7 +16,7 @@ const blog = defineCollection({
     author: z.string().default('Query Farm Team'),
     tags: z.array(z.string()).default([]),
     // Extension slugs the article is about. Each listed extension's docs page
-    // links back to it under "From the blog" (src/lib/blog-extensions.ts).
+    // links back to it under "Tutorials and articles" (src/lib/article-extensions.ts).
     // nextStep.extension is included automatically; list it here only for
     // posts that cover several extensions or have no nextStep card.
     extensions: z.array(z.string()).default([]),
@@ -54,10 +53,29 @@ const blog = defineCollection({
         height: z.number().int().positive(),
       }).optional(),
     }).optional(),
-  }).refine(({ pubDate, updatedDate }) => !updatedDate || updatedDate >= pubDate, {
-    message: 'updatedDate must not precede pubDate',
-    path: ['updatedDate'],
-  }),
 });
 
-export const collections = { blog, docs };
+const validDates = ({ pubDate, updatedDate }: { pubDate: Date; updatedDate?: Date }) => !updatedDate || updatedDate >= pubDate;
+const dateValidation = { message: 'updatedDate must not precede pubDate', path: ['updatedDate'] };
+
+const blog = defineCollection({
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/blog' }),
+  schema: articleSchema.refine(validDates, dateValidation),
+});
+
+const tutorials = defineCollection({
+  loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/tutorials' }),
+  schema: articleSchema.extend({
+    outcome: z.string(),
+    prerequisites: z.array(z.string()).min(1),
+    estimatedMinutes: z.number().int().min(1).max(9),
+    category: z.enum(tutorialCategoryIds),
+    technologies: z.array(z.enum(tutorialTechnologyIds)).min(1).refine(values => new Set(values).size === values.length, 'Remove duplicate technologies'),
+    level: z.enum(['Beginner', 'Intermediate', 'Advanced']),
+    runtime: z.enum(['browser', 'browser-and-native', 'native']),
+    // Optional editorial priority; the rest sort alphabetically.
+    order: z.number().int().positive().optional(),
+  }).refine(validDates, dateValidation),
+});
+
+export const collections = { blog, tutorials, docs };

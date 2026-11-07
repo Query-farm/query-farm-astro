@@ -1,0 +1,326 @@
+{
+  "slug": "duckdb-retention-cohorts",
+  "extension": "DuckDB",
+  "batch": "practical-ten",
+  "setup": "CREATE OR REPLACE TABLE visitors(id INTEGER, name VARCHAR, signed_up DATE);\nINSERT INTO visitors VALUES\n (1,'Ada','2026-01-05'), (2,'Ben','2026-01-06'),\n (3,'Cy','2026-01-12'), (4,'Dee','2026-01-13'), (5,'Eli','2026-01-19');\nCREATE OR REPLACE TABLE events(id INTEGER, user_id INTEGER, happened_at TIMESTAMP, event VARCHAR);\nINSERT INTO events VALUES\n (1,1,'2026-01-05 09:00:00','view'),\n (2,1,'2026-01-05 09:05:00','run'),\n (3,1,'2026-01-05 09:06:00','run'),\n (4,1,'2026-01-05 09:15:00','enquiry'),\n (5,1,'2026-01-05 09:45:00','view'),\n (6,1,'2026-01-05 10:20:00','view'),\n (7,2,'2026-01-06 10:00:00','run'),\n (8,2,'2026-01-06 10:05:00','view'),\n (9,2,'2026-01-06 10:08:00','enquiry'),\n (10,3,'2026-01-12 09:00:00','view'),\n (11,3,'2026-01-12 09:02:00','run'),\n (12,3,'2026-01-12 10:00:00','enquiry'),\n (13,4,'2026-01-13 11:00:00','view'),\n (14,4,'2026-01-13 11:04:00','run'),\n (15,4,'2026-01-13 11:12:00','enquiry'),\n (16,1,'2026-01-14 12:00:00','view'),\n (17,2,'2026-01-20 12:00:00','view'),\n (18,5,'2026-01-19 09:00:00','view'),\n (19,1,'2026-01-20 14:00:00','view');\nCREATE OR REPLACE VIEW cohort_members AS\nSELECT id AS user_id, date_trunc('week', signed_up)::DATE AS cohort_week FROM visitors;\nCREATE OR REPLACE VIEW active_weeks AS\nSELECT DISTINCT user_id, date_trunc('week', happened_at)::DATE AS active_week\nFROM events WHERE happened_at < TIMESTAMP '2026-01-26 00:00:00';\nCREATE OR REPLACE VIEW retention AS\nWITH sizes AS (\n SELECT cohort_week, count(*) AS cohort_size FROM cohort_members GROUP BY cohort_week\n), counts AS (\n SELECT c.cohort_week, date_diff('week', c.cohort_week, a.active_week) AS week_number,\n   count(DISTINCT c.user_id) AS active_users\n FROM cohort_members c JOIN active_weeks a USING(user_id)\n WHERE a.active_week >= c.cohort_week\n GROUP BY c.cohort_week, week_number\n)\nSELECT s.cohort_week, w.week_number, s.cohort_size,\n CASE WHEN s.cohort_week + w.week_number * INTERVAL 1 WEEK < DATE '2026-01-26'\n   THEN coalesce(c.active_users, 0) END AS active_users,\n CASE WHEN s.cohort_week + w.week_number * INTERVAL 1 WEEK < DATE '2026-01-26'\n   THEN round(100.0 * coalesce(c.active_users, 0) / s.cohort_size, 1) END AS retention_pct\nFROM sizes s CROSS JOIN range(3) w(week_number)\nLEFT JOIN counts c ON c.cohort_week = s.cohort_week AND c.week_number = w.week_number;\n",
+  "examples": [
+    {
+      "id": "cohort-members",
+      "title": "Assign each signup to its Monday cohort",
+      "sql": "SELECT v.name, c.cohort_week, a.active_week,\n  date_diff('week', c.cohort_week, a.active_week) AS week_number\nFROM cohort_members c JOIN visitors v ON v.id = c.user_id\nJOIN active_weeks a USING(user_id)\nORDER BY c.cohort_week, v.name, a.active_week;\n",
+      "expectedColumns": [
+        "name",
+        "cohort_week",
+        "active_week",
+        "week_number"
+      ],
+      "expectedRows": [
+        [
+          "Ada",
+          "2026-01-05",
+          "2026-01-05",
+          0
+        ],
+        [
+          "Ada",
+          "2026-01-05",
+          "2026-01-12",
+          1
+        ],
+        [
+          "Ada",
+          "2026-01-05",
+          "2026-01-19",
+          2
+        ],
+        [
+          "Ben",
+          "2026-01-05",
+          "2026-01-05",
+          0
+        ],
+        [
+          "Ben",
+          "2026-01-05",
+          "2026-01-19",
+          2
+        ],
+        [
+          "Cy",
+          "2026-01-12",
+          "2026-01-12",
+          0
+        ],
+        [
+          "Dee",
+          "2026-01-12",
+          "2026-01-12",
+          0
+        ],
+        [
+          "Eli",
+          "2026-01-19",
+          "2026-01-19",
+          0
+        ]
+      ]
+    },
+    {
+      "id": "retention-grid",
+      "title": "Build the cohort grid, leaving future weeks unknown",
+      "sql": "WITH sizes AS (\n SELECT cohort_week, count(*) AS cohort_size FROM cohort_members GROUP BY cohort_week\n), counts AS (\n SELECT c.cohort_week, date_diff('week', c.cohort_week, a.active_week) AS week_number,\n   count(DISTINCT c.user_id) AS active_users\n FROM cohort_members c JOIN active_weeks a USING(user_id)\n WHERE a.active_week >= c.cohort_week\n GROUP BY c.cohort_week, week_number\n)\nSELECT s.cohort_week, w.week_number, s.cohort_size,\n CASE WHEN s.cohort_week + w.week_number * INTERVAL 1 WEEK < DATE '2026-01-26'\n   THEN coalesce(c.active_users, 0) END AS active_users,\n CASE WHEN s.cohort_week + w.week_number * INTERVAL 1 WEEK < DATE '2026-01-26'\n   THEN round(100.0 * coalesce(c.active_users, 0) / s.cohort_size, 1) END AS retention_pct\nFROM sizes s CROSS JOIN range(3) w(week_number)\nLEFT JOIN counts c ON c.cohort_week = s.cohort_week AND c.week_number = w.week_number\nORDER BY s.cohort_week, w.week_number;\n",
+      "expectedColumns": [
+        "cohort_week",
+        "week_number",
+        "cohort_size",
+        "active_users",
+        "retention_pct"
+      ],
+      "expectedRows": [
+        [
+          "2026-01-05",
+          0,
+          2,
+          2,
+          100.0
+        ],
+        [
+          "2026-01-05",
+          1,
+          2,
+          1,
+          50.0
+        ],
+        [
+          "2026-01-05",
+          2,
+          2,
+          2,
+          100.0
+        ],
+        [
+          "2026-01-12",
+          0,
+          2,
+          2,
+          100.0
+        ],
+        [
+          "2026-01-12",
+          1,
+          2,
+          0,
+          0.0
+        ],
+        [
+          "2026-01-12",
+          2,
+          2,
+          null,
+          null
+        ],
+        [
+          "2026-01-19",
+          0,
+          1,
+          1,
+          100.0
+        ],
+        [
+          "2026-01-19",
+          1,
+          1,
+          null,
+          null
+        ],
+        [
+          "2026-01-19",
+          2,
+          1,
+          null,
+          null
+        ]
+      ]
+    },
+    {
+      "id": "retention-report",
+      "title": "Turn the percentages into a cohort report",
+      "sql": "PIVOT retention ON week_number IN (0, 1, 2)\nUSING max(retention_pct) GROUP BY cohort_week, cohort_size\nORDER BY cohort_week;\n",
+      "expectedColumns": [
+        "cohort_week",
+        "cohort_size",
+        "0",
+        "1",
+        "2"
+      ],
+      "expectedRows": [
+        [
+          "2026-01-05",
+          2,
+          100.0,
+          50.0,
+          100.0
+        ],
+        [
+          "2026-01-12",
+          2,
+          100.0,
+          0.0,
+          null
+        ],
+        [
+          "2026-01-19",
+          1,
+          100.0,
+          null,
+          null
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "visitors",
+      "title": "Meet the fictional visitors",
+      "description": "Five stable user IDs; signup dates also anchor the retention lesson.",
+      "previewLimit": null
+    },
+    {
+      "table": "events",
+      "title": "A tiny website event log",
+      "description": "All 19 synthetic events are included in the CSV and setup. Times use one shared UTC clock.",
+      "previewLimit": 8
+    }
+  ],
+  "challenge": {
+    "id": "week-one-returners",
+    "title": "Inspect the people behind one retention cell",
+    "prompt": "Return name for members of the January 5 cohort who were active in week 1 (January 12–18). Return each name once.",
+    "hint": "Filter both the signup cohort and the activity week. Joining only on cohort membership includes people who did not return that week.",
+    "starter": "SELECT v.name FROM cohort_members c JOIN visitors v ON v.id = c.user_id WHERE c.cohort_week = DATE '2026-01-05' ORDER BY v.name;\n",
+    "solution": "SELECT DISTINCT v.name FROM cohort_members c JOIN visitors v ON v.id = c.user_id JOIN active_weeks a USING(user_id) WHERE c.cohort_week = DATE '2026-01-05' AND a.active_week = DATE '2026-01-12' ORDER BY v.name;\n",
+    "success": "Ada is the one returning member out of the two-person January 5 cohort: 50%.",
+    "columns": [
+      "name"
+    ],
+    "rows": [
+      [
+        "Ada"
+      ]
+    ]
+  },
+  "sampleTables": [
+    {
+      "table": "visitors",
+      "title": "Meet the fictional visitors",
+      "description": "Five stable user IDs; signup dates also anchor the retention lesson.",
+      "columns": [
+        "id",
+        "name",
+        "signed_up"
+      ],
+      "rows": [
+        [
+          1,
+          "Ada",
+          "2026-01-05"
+        ],
+        [
+          2,
+          "Ben",
+          "2026-01-06"
+        ],
+        [
+          3,
+          "Cy",
+          "2026-01-12"
+        ],
+        [
+          4,
+          "Dee",
+          "2026-01-13"
+        ],
+        [
+          5,
+          "Eli",
+          "2026-01-19"
+        ]
+      ],
+      "totalRows": 5,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "visitors.csv"
+        }
+      ]
+    },
+    {
+      "table": "events",
+      "title": "A tiny website event log",
+      "description": "All 19 synthetic events are included in the CSV and setup. Times use one shared UTC clock.",
+      "columns": [
+        "id",
+        "user_id",
+        "happened_at",
+        "event"
+      ],
+      "rows": [
+        [
+          1,
+          1,
+          "2026-01-05 09:00:00",
+          "view"
+        ],
+        [
+          2,
+          1,
+          "2026-01-05 09:05:00",
+          "run"
+        ],
+        [
+          3,
+          1,
+          "2026-01-05 09:06:00",
+          "run"
+        ],
+        [
+          4,
+          1,
+          "2026-01-05 09:15:00",
+          "enquiry"
+        ],
+        [
+          5,
+          1,
+          "2026-01-05 09:45:00",
+          "view"
+        ],
+        [
+          6,
+          1,
+          "2026-01-05 10:20:00",
+          "view"
+        ],
+        [
+          7,
+          2,
+          "2026-01-06 10:00:00",
+          "run"
+        ],
+        [
+          8,
+          2,
+          "2026-01-06 10:05:00",
+          "view"
+        ]
+      ],
+      "totalRows": 19,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "events.csv"
+        }
+      ]
+    }
+  ]
+}

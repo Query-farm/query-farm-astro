@@ -1,0 +1,87 @@
+---
+title: "DuckDB ASOF JOIN: Find the Price at the Time of an Order"
+description: "Match orders to the most recent applicable price with ASOF LEFT JOIN. Explore a timeline, preserve unmatched orders, and run the complete example in your browser."
+pubDate: "2026-11-06"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: true
+outcome: "Match each event to the nearest earlier state for the same key, including events with no prior state."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "sql-fundamentals"
+technologies: ["duckdb"]
+estimatedMinutes: 6
+level: "Beginner"
+runtime: "browser"
+order: 10
+showLeadVisual: false
+nextStep:
+  title: "Keep exploring with your own data"
+  pitch: "Use these queries as a starting point in Haybarn, or download the complete walkthrough to run locally."
+  href: "/products/haybarn/"
+  cta: "Explore Haybarn"
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-asof-join.json';
+
+**An order arrived at 09:15. The price changed at 09:10 and again at 09:25.** An equality join finds no price at 09:15. A plain “earlier than” join finds too many. We want the most recent price already in effect.
+
+That is an as-of match: pair each event with the applicable earlier state of the same entity.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Two timelines that do not line up
+
+A price applies from its effective timestamp, including that instant, until the next price for the same SKU. The fixture uses local, timezone-free timestamps under one shared clock. A production system must normalize its time semantics before comparing events.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+WREN has three price updates. FIR has a separate history. Order 101 arrives before any WREN price, so we cannot legitimately assign it one from this dataset.
+
+## Why an ordinary inequality join returns too much
+
+Look at order 104, placed at 09:30. A regular join on an earlier-or-equal price time keeps all three WREN prices:
+
+<TutorialExample example={demo.examples[0]} />
+
+Every row satisfies the condition. Only the last is the applicable price. If you multiplied the quantity by every matching price and summed, you would invent extra charges.
+
+A regular equality join has the opposite problem: it only matches an order placed exactly when a price was published. An unchanged price remains applicable between updates.
+
+## Ask for the closest earlier match
+
+[`ASOF JOIN`](https://duckdb.org/docs/2.0/guides/sql_features/asof_join) combines the equality key with the time inequality. The left side contains events; the right side contains the state changes we want to look backward through.
+
+<TutorialExample example={demo.examples[1]} />
+
+The SKU condition keeps the two product histories separate. `ordered_at >= effective_at` chooses the latest right-hand timestamp that is not after the order. The equality part of that inequality makes the 09:00 price valid for the 09:00 order.
+
+`LEFT` preserves order 101 with NULL price fields. An inner as-of join would remove an order with no match, which is inconvenient if the task is to audit every order.
+
+The result has at most one matched right-hand row per left-hand row. Do not rely on an arbitrary winner if your price history contains duplicate `(sku, effective_at)` keys. Resolve those duplicates under a documented rule before joining; [the latest-record lesson](/tutorials/duckdb-latest-row-per-group/) demonstrates an explicit tie-break.
+
+## Calculate with the matched state
+
+Once the applicable price is attached, the amount is quantity times price:
+
+<TutorialExample example={demo.examples[2]} />
+
+Order 103 uses 12.00, producing 36.00. Order 104 uses 11.50, producing 23.00. Order 101 stays unpriced. Replacing that missing price with zero would convert “we cannot price it” into “it was free,” which is a different business statement.
+
+<TutorialChallenge post={demo.slug} />
+
+## Put boundaries around “applicable”
+
+This example assumes a price stays valid until the next update. If prices expire after a fixed interval, add a policy that checks the age of the matched state. An earlier match can be technically correct yet too stale for the business question.
+
+If timestamps come from different time zones, decide whether they represent local wall-clock values or actual instants. Normalize them consistently; changing a display format is not a time-zone conversion.
+
+The same pattern works for exchange rates, sensor readings, and account status at the time of an event. Each needs the same decisions: the equality key, the direction of time, whether an exact-time match counts, what happens before the first state, and how stale a match may be.
+
+<TutorialTracking post={demo.slug} />

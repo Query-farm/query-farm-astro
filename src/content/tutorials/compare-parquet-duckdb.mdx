@@ -1,0 +1,115 @@
+---
+title: "Compare Two Parquet Files with DuckDB: Added, Deleted, and Changed Rows"
+description: "Diff Parquet snapshots by key with a full outer join and NULL-safe comparisons. Run real Parquet examples in your browser and check duplicate keys before trusting the result."
+pubDate: 2026-11-04
+author: "Query Farm Team"
+tags: ["DuckDB", "Parquet", "Tutorials", "Data Engineering"]
+draft: true
+outcome: "Find added, deleted, and changed records across two Parquet exports."
+prerequisites: ["Basic SQL SELECT"]
+category: "files-formats"
+technologies: ["duckdb", "parquet"]
+estimatedMinutes: 8
+level: "Beginner"
+runtime: "browser"
+order: 1
+showLeadVisual: false
+heroImage: "/media/posts/compare-parquet-duckdb/social.png"
+heroImageAlt: "Two Parquet snapshots compared by customer ID, revealing two changes, one deletion, and one addition."
+thumbnail: "/media/posts/compare-parquet-duckdb/workflow.png"
+nextStep:
+  title: "Take the comparison to your own data"
+  pitch: "Run DuckDB SQL with Haybarn, or use the downloaded walkthrough as the starting point for your snapshot checks."
+  href: "/products/haybarn/"
+  cta: "Explore Haybarn"
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialVisual from '../../components/tutorials/TutorialVisual.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import demo from '../../data/tutorials/compare-parquet-duckdb.json';
+
+**The export still has five rows. So nothing changed?** That is the trap. A customer can disappear while another arrives, and a plan change can hide in plain sight.
+
+Play spot-the-difference below, then build the query that catches every change. You'll use a full outer join, discover why `NULL` needs special treatment, and finish with an audit you can actually read: who arrived, who left, and whose details changed.
+
+<TutorialVisual kind="snapshots" />
+
+## Your two exports, every row included
+
+Here are the exact files we will compare. Download the Parquet files to use them locally, or run the examples here: the browser writes and reads its own copies. Your computer's files are never uploaded.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+## Define the comparison before writing the join
+
+For this walkthrough, `id` is a unique, non-NULL customer key. We compare `name` and `plan`, exactly and case-sensitively. Two NULL values count as unchanged; a NULL becoming a value counts as changed. Physical row order is irrelevant.
+
+The sample setup creates `previous` and `current` views over the two files. On your machine, point those views at your own snapshots:
+
+<CodeBlock tryable={false} code={`CREATE VIEW previous AS
+SELECT id, name, plan FROM read_parquet('previous_snapshot.parquet');
+CREATE VIEW current AS
+SELECT id, name, plan FROM read_parquet('current_snapshot.parquet');`} />
+
+[DuckDB reads Parquet directly](https://duckdb.org/docs/2.0/data/parquet/overview), so you do not need to import either file into a permanent database. Compare explicit columns. An added ingestion timestamp should not make every customer look changed unless that field belongs in your comparison contract.
+
+## Check both keys first
+
+A duplicate ID on both sides multiplies rows in the join. A NULL ID also breaks the presence checks we use below. Find those problems before interpreting the diff:
+
+<TutorialExample example={demo.examples[0]} />
+
+**Expected result: zero rows.** If this query returns anything, stop and resolve the key definition. A composite key may be appropriate; arbitrarily keeping one duplicate can discard a meaningful record.
+
+Try the failure case independently:
+
+<TutorialExample example={demo.examples[3]} />
+
+It returns ID 1 with two occurrences. The same validation belongs in an automated comparison job, where a nonempty result should fail the job instead of being silently ignored.
+
+## Classify every changed record
+
+A full outer join retains keys found on either side. Because we checked that stored IDs cannot be NULL, a missing joined ID tells us which snapshot lacks the record:
+
+<TutorialExample example={demo.examples[1]} />
+
+The SQL returns `NULL` for an unknown field and for fields on the missing side of the join. Read `change` to distinguish them: Ben exists in both snapshots but had no plan; Cy has no current record; Eli has no previous record. IDs 4 and 6 are unchanged and omitted.
+
+<TutorialChallenge post={demo.slug} />
+
+For a composite key, join on every key column and validate their combined uniqueness. Make the presence marker an explicitly non-NULL column; do not guess whether a row exists from an optional field such as `plan`.
+
+## Use NULL-safe comparisons
+
+This looks plausible but is wrong for our contract:
+
+<CodeBlock tryable={false} code="WHERE p.plan <> c.plan" />
+
+Comparisons involving NULL return NULL, which does not pass a `WHERE` filter. That would lose Ben's change from NULL to `free`. Run the expressions side by side:
+
+<TutorialExample example={demo.examples[2]} />
+
+`IS DISTINCT FROM` reports Ben's change as true and Finn's NULL-to-NULL pair as false. DuckDB documents the corresponding [NULL comparison semantics](https://duckdb.org/docs/2.0/sql/data_types/nulls).
+
+The predicate must list every field you intend to audit. When a new business column arrives, update the contract and the predicate together. Do not allow a schema change to silently shrink what “unchanged” means.
+
+## Handle schema changes and larger files deliberately
+
+Inspect both schemas with `DESCRIBE SELECT * FROM read_parquet(...)` before comparing unfamiliar exports. Align types explicitly when the intended meaning is the same. Decide separately whether a missing column means an error, an intentional schema change, or a default value; automatically filling it with NULL can hide the distinction.
+
+For decimals, timestamps, and floating-point measurements, write down the equality rule. Exact decimal comparison can suit currency; measured floating-point data may require a tolerance. Keep that tolerance in the SQL and the audit output.
+
+Start with the exact join before introducing hashes. Equal hashes are not proof of equal rows, and hashing still requires reading the input. A fingerprint can help a carefully designed workflow, but it does not remove the need to reason about collisions and schema consistency. The [Hashfuncs article](/blog/hashfuncs-for-duckdb-2/) covers typed fingerprints in more detail.
+
+On larger datasets, project only the needed columns, inspect the plan, and allow for join memory and temporary disk use. Partitioning both exports by the same stable key can make comparisons manageable; a partition based on a field that changes can put the two versions of a record in different places.
+
+To save the result, wrap the diff query in `COPY (...) TO 'changes.parquet' (FORMAT PARQUET)` on your machine. Preserve the source snapshot identifiers alongside it. You now have an explicit audit of **which records changed and how**, with the assumptions needed to trust it.
+
+<TutorialTracking post={demo.slug} />

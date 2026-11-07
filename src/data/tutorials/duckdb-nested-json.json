@@ -1,0 +1,166 @@
+{
+  "slug": "duckdb-nested-json",
+  "extension": "DuckDB",
+  "setup": "CREATE OR REPLACE TABLE incoming(id INTEGER, payload JSON);\nINSERT INTO incoming VALUES\n  (101, '{\"customer\":\"Ada\",\"items\":[{\"sku\":\"MUG\",\"qty\":2},{\"sku\":\"TEA\",\"qty\":1}]}'),\n  (102, '{\"customer\":\"Ben\",\"items\":[]}'),\n  (103, '{\"customer\":\"Cy\",\"items\":[{\"sku\":\"MUG\",\"qty\":1}]}');\nCREATE OR REPLACE VIEW orders AS\nSELECT id, json_transform(payload,\n  '{\"customer\":\"VARCHAR\",\"items\":[{\"sku\":\"VARCHAR\",\"qty\":\"INTEGER\"}]}') AS order_data\nFROM incoming;\n",
+  "examples": [
+    {
+      "id": "inspect-json",
+      "title": "Read a field before expanding the array",
+      "sql": "SELECT id, payload ->> '$.customer' AS customer,\n       json_array_length(payload, '$.items') AS item_count\nFROM incoming ORDER BY id;",
+      "expectedColumns": [
+        "id",
+        "customer",
+        "item_count"
+      ],
+      "expectedRows": [
+        [
+          101,
+          "Ada",
+          2
+        ],
+        [
+          102,
+          "Ben",
+          0
+        ],
+        [
+          103,
+          "Cy",
+          1
+        ]
+      ]
+    },
+    {
+      "id": "expand-items",
+      "title": "Expand one order into its items",
+      "sql": "SELECT id, order_data.customer AS customer,\n       unnest(order_data.items).sku AS sku\nFROM orders\nORDER BY id, sku;",
+      "expectedColumns": [
+        "id",
+        "customer",
+        "sku"
+      ],
+      "expectedRows": [
+        [
+          101,
+          "Ada",
+          "MUG"
+        ],
+        [
+          101,
+          "Ada",
+          "TEA"
+        ],
+        [
+          103,
+          "Cy",
+          "MUG"
+        ]
+      ]
+    },
+    {
+      "id": "keep-empty-orders",
+      "title": "Keep the order with no items",
+      "sql": "SELECT o.id, o.order_data.customer AS customer,\n       item.sku AS sku, item.qty AS qty\nFROM orders o\nLEFT JOIN UNNEST(o.order_data.items) AS u(item) ON true\nORDER BY o.id, sku;",
+      "expectedColumns": [
+        "id",
+        "customer",
+        "sku",
+        "qty"
+      ],
+      "expectedRows": [
+        [
+          101,
+          "Ada",
+          "MUG",
+          2
+        ],
+        [
+          101,
+          "Ada",
+          "TEA",
+          1
+        ],
+        [
+          102,
+          "Ben",
+          null,
+          null
+        ],
+        [
+          103,
+          "Cy",
+          "MUG",
+          1
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "incoming",
+      "title": "Three complete order documents",
+      "description": "Every document is shown. Ben has an empty items array; his order still exists.",
+      "previewLimit": null
+    }
+  ],
+  "challenge": {
+    "id": "count-json-items",
+    "title": "Count items, including an empty order",
+    "prompt": "Return id and item_count for every order. Count item rows, not units, and keep orders with zero items.",
+    "hint": "After a LEFT JOIN, count a non-NULL item field. COUNT(*) also counts the placeholder row for Ben.",
+    "starter": "SELECT o.id, count(*) AS item_count\nFROM orders o\nLEFT JOIN UNNEST(o.order_data.items) AS u(item) ON true\nGROUP BY o.id ORDER BY o.id;",
+    "solution": "SELECT o.id, count(item.sku) AS item_count\nFROM orders o\nLEFT JOIN UNNEST(o.order_data.items) AS u(item) ON true\nGROUP BY o.id ORDER BY o.id;",
+    "success": "Three orders remain, and Ben correctly has zero items.",
+    "columns": [
+      "id",
+      "item_count"
+    ],
+    "rows": [
+      [
+        101,
+        2
+      ],
+      [
+        102,
+        0
+      ],
+      [
+        103,
+        1
+      ]
+    ]
+  },
+  "batch": "next-ten",
+  "sampleTables": [
+    {
+      "table": "incoming",
+      "title": "Three complete order documents",
+      "description": "Every document is shown. Ben has an empty items array; his order still exists.",
+      "columns": [
+        "id",
+        "payload"
+      ],
+      "rows": [
+        [
+          101,
+          "{\"customer\":\"Ada\",\"items\":[{\"sku\":\"MUG\",\"qty\":2},{\"sku\":\"TEA\",\"qty\":1}]}"
+        ],
+        [
+          102,
+          "{\"customer\":\"Ben\",\"items\":[]}"
+        ],
+        [
+          103,
+          "{\"customer\":\"Cy\",\"items\":[{\"sku\":\"MUG\",\"qty\":1}]}"
+        ]
+      ],
+      "totalRows": 3,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "incoming.csv"
+        }
+      ]
+    }
+  ]
+}

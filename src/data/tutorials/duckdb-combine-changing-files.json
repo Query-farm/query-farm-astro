@@ -1,0 +1,215 @@
+{
+  "slug": "duckdb-combine-changing-files",
+  "extension": "DuckDB",
+  "batch": "practical-ten",
+  "setup": "CREATE OR REPLACE TABLE early_export(id INTEGER, amount_text VARCHAR);\nINSERT INTO early_export VALUES (1,'10.00'), (2,'20.00');\nCREATE OR REPLACE TABLE later_export(id INTEGER, amount_text VARCHAR, coupon VARCHAR);\nINSERT INTO later_export VALUES (3,'30.50','SAVE'), (4,'pending',NULL);\nCOPY early_export TO 'schema-early.csv' (FORMAT CSV, HEADER);\nCOPY later_export TO 'schema-later.csv' (FORMAT CSV, HEADER);\nCOPY early_export TO 'schema-early.parquet' (FORMAT PARQUET);\nCOPY later_export TO 'schema-later.parquet' (FORMAT PARQUET);\n",
+  "examples": [
+    {
+      "id": "csv-union",
+      "title": "Keep both CSV schemas and retain file provenance",
+      "sql": "SELECT id::INTEGER AS id, amount_text, coupon,\n  parse_filename(filename) AS source_file\nFROM read_csv(['schema-early.csv','schema-later.csv'],\n  union_by_name = true, all_varchar = true)\nORDER BY id;\n",
+      "expectedColumns": [
+        "id",
+        "amount_text",
+        "coupon",
+        "source_file"
+      ],
+      "expectedRows": [
+        [
+          1,
+          "10.00",
+          null,
+          "schema-early.csv"
+        ],
+        [
+          2,
+          "20.00",
+          null,
+          "schema-early.csv"
+        ],
+        [
+          3,
+          "30.50",
+          "SAVE",
+          "schema-later.csv"
+        ],
+        [
+          4,
+          "pending",
+          null,
+          "schema-later.csv"
+        ]
+      ]
+    },
+    {
+      "id": "parquet-union",
+      "title": "Combine the Parquet equivalents with a deliberate amount type",
+      "sql": "SELECT id, try_cast(amount_text AS DECIMAL(10,2)) AS amount,\n  coupon, parse_filename(filename) AS source_file\nFROM read_parquet(['schema-early.parquet','schema-later.parquet'], union_by_name = true)\nORDER BY id;\n",
+      "expectedColumns": [
+        "id",
+        "amount",
+        "coupon",
+        "source_file"
+      ],
+      "expectedRows": [
+        [
+          1,
+          10.0,
+          null,
+          "schema-early.parquet"
+        ],
+        [
+          2,
+          20.0,
+          null,
+          "schema-early.parquet"
+        ],
+        [
+          3,
+          30.5,
+          "SAVE",
+          "schema-later.parquet"
+        ],
+        [
+          4,
+          null,
+          null,
+          "schema-later.parquet"
+        ]
+      ]
+    },
+    {
+      "id": "audit-conversion",
+      "title": "Keep the original value beside the conversion decision",
+      "sql": "SELECT id::INTEGER AS id, amount_text,\n  try_cast(amount_text AS DECIMAL(10,2)) AS amount,\n  CASE WHEN amount_text IS NULL THEN 'missing'\n    WHEN try_cast(amount_text AS DECIMAL(10,2)) IS NULL THEN 'review'\n    ELSE 'accepted' END AS amount_status\nFROM read_csv(['schema-early.csv','schema-later.csv'],\n  union_by_name = true, all_varchar = true)\nORDER BY id;\n",
+      "expectedColumns": [
+        "id",
+        "amount_text",
+        "amount",
+        "amount_status"
+      ],
+      "expectedRows": [
+        [
+          1,
+          "10.00",
+          10.0,
+          "accepted"
+        ],
+        [
+          2,
+          "20.00",
+          20.0,
+          "accepted"
+        ],
+        [
+          3,
+          "30.50",
+          30.5,
+          "accepted"
+        ],
+        [
+          4,
+          "pending",
+          null,
+          "review"
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "early_export",
+      "title": "The earlier export",
+      "description": "Two columns; the coupon field did not yet exist.",
+      "previewLimit": null
+    },
+    {
+      "table": "later_export",
+      "title": "The later export",
+      "description": "A new optional column and an amount that still needs review.",
+      "previewLimit": null
+    }
+  ],
+  "challenge": {
+    "id": "review-file-rows",
+    "title": "Find values that failed numeric conversion",
+    "prompt": "Return id and amount_text only for non-NULL source amounts that cannot become DECIMAL(10,2). Read both CSV files.",
+    "hint": "Use TRY_CAST to test conversion, and keep the original text for diagnosis.",
+    "starter": "SELECT id::INTEGER AS id, amount_text FROM read_csv(['schema-early.csv','schema-later.csv'], union_by_name=true, all_varchar=true) ORDER BY id;\n",
+    "solution": "SELECT id::INTEGER AS id, amount_text FROM read_csv(['schema-early.csv','schema-later.csv'], union_by_name=true, all_varchar=true) WHERE amount_text IS NOT NULL AND try_cast(amount_text AS DECIMAL(10,2)) IS NULL ORDER BY id;\n",
+    "success": "ID 4 needs review. Adding a column is a schema problem; pending in a numeric field is a value problem.",
+    "columns": [
+      "id",
+      "amount_text"
+    ],
+    "rows": [
+      [
+        4,
+        "pending"
+      ]
+    ]
+  },
+  "files": [
+    "schema-early.csv",
+    "schema-later.csv",
+    "schema-early.parquet",
+    "schema-later.parquet"
+  ],
+  "sampleTables": [
+    {
+      "table": "early_export",
+      "title": "The earlier export",
+      "description": "Two columns; the coupon field did not yet exist.",
+      "columns": [
+        "id",
+        "amount_text"
+      ],
+      "rows": [
+        [
+          1,
+          "10.00"
+        ],
+        [
+          2,
+          "20.00"
+        ]
+      ],
+      "totalRows": 2,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "early_export.csv"
+        }
+      ]
+    },
+    {
+      "table": "later_export",
+      "title": "The later export",
+      "description": "A new optional column and an amount that still needs review.",
+      "columns": [
+        "id",
+        "amount_text",
+        "coupon"
+      ],
+      "rows": [
+        [
+          3,
+          "30.50",
+          "SAVE"
+        ],
+        [
+          4,
+          "pending",
+          null
+        ]
+      ],
+      "totalRows": 2,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "later_export.csv"
+        }
+      ]
+    }
+  ]
+}

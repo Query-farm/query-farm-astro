@@ -1,3 +1,4 @@
+
 export interface BlogWasmExamples {
   extensionName: string;
   installSource: string;

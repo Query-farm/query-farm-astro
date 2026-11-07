@@ -69,7 +69,7 @@ for (const { extension, source } of runners) {
       const output = await terminalText(page);
       assert.doesNotMatch(output, /may\s+not\s+have\s+a\s+WebAssembly\s+build|(?:Error|Exception):/, [output, ...engineErrors].join('\n'));
       assert.match(output, examples[extension].result, `${extension}: the real documentation query must return the expected result:\n${output}`);
-      await requireLoadedExtension(page, extension);
+      if (source !== 'builtin') await requireLoadedExtension(page, extension);
     } finally {
       await info.attach('terminal', { body: await terminalText(page).catch(() => ''), contentType: 'text/plain' });
       await info.attach('artifact-failures', { body: failedDownloads.join('\n'), contentType: 'text/plain' });

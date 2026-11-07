@@ -1,0 +1,84 @@
+---
+title: "Reshape API Responses with JSONata in DuckDB"
+description: "Transform supplied nested JSON payloads into consistent output documents with JSONata. Handle empty and single-item arrays and run every example in your browser."
+pubDate: "2026-11-06"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: true
+outcome: "Construct a new JSON contract with renamed fields, calculated totals, and consistent array shapes."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "files-formats"
+technologies: ["duckdb", "json", "jsonata"]
+estimatedMinutes: 7
+level: "Intermediate"
+runtime: "browser"
+order: 21
+showLeadVisual: false
+extensions: ["jsonata"]
+nextStep: {"title": "Build your next JSON transformation", "pitch": "Explore JSONata expressions for filtering arrays, reshaping documents, and calculating values.", "href": "/products/extensions/jsonata/", "cta": "Explore JSONata", "extension": "jsonata"}
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-jsonata-api-responses.json';
+
+**The API response has the data you need, but it is shaped for somebody else’s application.** Your consumer wants `order_id`, a customer name, a total, and an array of SKUs. The source buries those values in an order document.
+
+We will transform three supplied payloads using [JSONata](/products/extensions/jsonata/), directly inside DuckDB. No live API, credentials, or setup service is required.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Test zero, one, and many
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+Ada’s order contains two items, Ben’s contains none, and Cy’s contains one. These are intentionally different: a transformation that looks right for two matches may produce an inconvenient scalar for a single match.
+
+Each row contains one JSON order. The examples assume the source contract guarantees a buyer name, a currency, and an `items` array containing numeric quantities and unit prices. Transformation does not replace validation; the [JSON Schema lesson](/tutorials/duckdb-json-schema-validation/) handles that earlier step.
+
+## Construct the object you want
+
+The `jsonata` function takes an expression followed by the input document. Inside the expression, field paths refer to the current JSON document:
+
+<TutorialExample example={demo.examples[0]} />
+
+The output has `order_id` and `customer`, regardless of how those fields were nested or named in the source. Unselected fields stay out of the result. Object key order is not part of the JSON contract; consumers should look up fields by name.
+
+Notice the two quoting layers: SQL uses single quotes around the JSONata expression, while the object’s field names use double quotes. The cast to VARCHAR makes the resulting JSON text convenient to display in the result table.
+
+For one simple field extraction, DuckDB’s built-in JSON functions may be enough. JSONata becomes useful when the task is a document transformation, especially when you already have rules expressed in that language.
+
+## Make arrays predictable
+
+<TutorialExample example={demo.examples[1]} />
+
+The explicit `[items.sku]` array constructor produces an array for every order: two elements for Ada, none for Ben, one for Cy. A receiving application can iterate the same shape in all three cases.
+
+`$count(items)` counts line items, not purchased units. Ada has two lines but three units. The distinction matters when naming a field such as `item_count` in an API response. [JSONata’s construction guide](https://docs.jsonata.org/construction) explains explicit array and object construction.
+
+## Calculate while reshaping
+
+Now build the complete summary:
+
+<TutorialExample example={demo.examples[2]} />
+
+`items.(qty * unit_price)` evaluates the line amount within each item. `$sum` adds those values. The empty-array branch explicitly returns zero for an order with no items, so Ben’s output still contains a numeric `total`.
+
+Ada’s amount is 2 × 12.50 + 1 × 8.00 = **33**. Cy’s is **12.50**. The result keeps `currency` beside the total; summing different currencies together would require another policy.
+
+These are illustrative prices that do not expose floating-point rounding. For monetary settlement, choose a documented minor-unit or decimal calculation policy and test rounding boundaries. Renaming a field does not make an approximate numeric representation suitable for every financial use.
+
+<TutorialChallenge post={demo.slug} />
+
+## Separate shape from meaning
+
+A well-shaped output can still contain invalid business values. Missing buyer fields, negative quantities, or malformed prices need explicit handling under the input contract. Validate or quarantine those documents before calling their transformed totals authoritative.
+
+If your goal is a relational item report instead, use the [nested JSON tutorial](/tutorials/duckdb-nested-json/). Here we deliberately keep one output document per order, ready to hand to another JSON-speaking system.
+
+<TutorialTracking post={demo.slug} />

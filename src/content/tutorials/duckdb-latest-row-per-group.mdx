@@ -1,0 +1,85 @@
+---
+title: "Keep the Latest Row per Customer in DuckDB"
+description: "Use ROW_NUMBER and QUALIFY to keep the latest complete record per customer. Resolve timestamp ties and avoid filtering old subscriptions into current reports."
+pubDate: "2026-11-06"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: true
+outcome: "Choose one deterministic latest record per key, then filter its current state."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "clean-match"
+technologies: ["duckdb"]
+estimatedMinutes: 6
+level: "Beginner"
+runtime: "browser"
+order: 6
+showLeadVisual: false
+nextStep:
+  title: "Keep exploring with your own data"
+  pitch: "Use these queries as a starting point in Haybarn, or download the complete walkthrough to run locally."
+  href: "/products/haybarn/"
+  cta: "Explore Haybarn"
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-latest-row-per-group.json';
+
+**Ben used to be on Pro. He downgraded this morning.** A report that finds his latest *Pro* record will still call him a Pro customer. A report that finds his latest record first will get the current state right.
+
+We will solve both parts of the problem: choose one complete row per customer, and apply a current-state filter at the correct stage.
+
+<TutorialExperiment slug={demo.slug} />
+
+## The update history
+
+These are complete customer snapshots, not partial patches. Every update contains the whole current plan. `id` is a unique ingestion sequence number; a larger ID wins when two updates have the same timestamp. That is our explicit tie-break policy, not a claim that every source system should use ingestion order.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+Ada has two records at 10:00. Ben has a later downgrade. Cy has only a record with an unknown timestamp. These cases make an apparently simple “latest” query worth examining.
+
+## Rank the complete records
+
+Partition the rows by customer and order each partition from newest to oldest:
+
+<TutorialExample example={demo.examples[0]} />
+
+`ROW_NUMBER` assigns a unique rank within each customer. `updated_at DESC` puts newer events first. `NULLS LAST` makes the policy for unknown times visible. `id DESC` resolves Ada's timestamp tie reproducibly.
+
+Cy still receives rank 1 because there is no competing record. If your business rule excludes undated updates entirely, apply that as a separate documented rule. “Unknown timestamp” is not the same as “oldest known event.”
+
+A query using only `MAX(updated_at)` gives you a timestamp, not necessarily the rest of the matching record. Joining that maximum back to the history can return both of Ada's tied updates. Selecting unrelated maxima for the plan and name can even assemble a row that never existed.
+
+## Keep rank one with QUALIFY
+
+DuckDB's [`QUALIFY` clause](https://duckdb.org/docs/2.0/sql/query_syntax/qualify) filters the results of window functions. It lets us keep the winning row without exposing the rank as a final column:
+
+<TutorialExample example={demo.examples[1]} />
+
+The result keeps Ada's Pro record, Ben's Free record, and Cy's only record. We have preserved entire records under a declared ordering rule.
+
+This ordering must be total for the result to be deterministic. If your final tie-break column also has duplicates, either add a stable unique key or return ties for review. Do not let a convenient row order become an accidental business decision.
+
+## Filter current state after selecting it
+
+`WHERE plan = 'pro'` removes rows before the window function runs. That would hide Ben's downgrade and allow his earlier Pro record to win. Put the latest-record query in a CTE, then filter its output.
+
+<TutorialChallenge post={demo.slug} />
+
+The distinction generalizes: latest *successful* payment and latest payment *if successful* answer different questions. Choose the sequence that matches the wording of the report.
+
+## Know what “latest” means in your system
+
+An event timestamp and an ingestion timestamp describe different things. A late-arriving correction can be newest by ingestion time but older by event time. Establish which one governs the report before choosing an `ORDER BY`.
+
+This example also assumes full snapshots. For patch events that omit unchanged fields, choosing one row is not enough; you must reconstruct state or use a source that already provides complete versions.
+
+Once the latest-record query is reliable, save it as a view and test the tie and downgrade cases whenever its rules change. You can then [compare snapshots](/tutorials/compare-parquet-duckdb/) to audit which customers' current states changed between runs.
+
+<TutorialTracking post={demo.slug} />

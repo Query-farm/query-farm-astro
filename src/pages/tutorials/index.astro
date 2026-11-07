@@ -1,0 +1,81 @@
+---
+import { getCollection } from 'astro:content';
+import PageLayout from '../../layouts/PageLayout.astro';
+import TutorialSubNav from '../../components/tutorials/TutorialSubNav.astro';
+import TutorialCardArt from '../../components/tutorials/TutorialCardArt.astro';
+import TutorialLibraryHero from '../../components/tutorials/TutorialLibraryHero.astro';
+import { tutorialCategories, tutorialTechnologies, tutorialCategoryLabel, tutorialTechnologyLabel } from '../../data/tutorial-taxonomy';
+const includeDrafts = import.meta.env.DEV || process.env.INCLUDE_DRAFTS === 'true';
+const tutorials = (await getCollection('tutorials'))
+  .filter(tutorial => includeDrafts || !tutorial.data.draft)
+  .sort((a, b) => (a.data.order ?? Number.MAX_SAFE_INTEGER) - (b.data.order ?? Number.MAX_SAFE_INTEGER) || a.data.title.localeCompare(b.data.title));
+const hasPublished = tutorials.some(tutorial => !tutorial.data.draft);
+const categories = tutorialCategories.filter(category => tutorials.some(tutorial => tutorial.data.category === category.id));
+// A tool shared by every lesson does not narrow the catalog.
+const technologies = tutorialTechnologies.filter(tool => tutorials.some(tutorial => tutorial.data.technologies.includes(tool.id)) && !tutorials.every(tutorial => tutorial.data.technologies.includes(tool.id)));
+const title = 'Hands-on DuckDB and SQL Tutorials';
+const description = 'Find practical DuckDB and SQL tutorials by task and the tools you use. Each includes sample data and visible results.';
+const jsonLd = {
+  '@context': 'https://schema.org', '@type': 'CollectionPage',
+  name: title, description, url: 'https://query.farm/tutorials/',
+  mainEntity: { '@type': 'ItemList', itemListElement: tutorials.map((tutorial, index) => ({
+    '@type': 'ListItem', position: index + 1, name: tutorial.data.title,
+    url: `https://query.farm/tutorials/${tutorial.id}/`,
+  })) },
+};
+---
+<PageLayout title={title} description={description} jsonLd={jsonLd} noindex={!hasPublished}>
+  <TutorialSubNav slot="subnav" />
+  <div class="tutorial-library mx-auto max-w-[1200px] px-6 pb-20 sm:px-10">
+    <TutorialLibraryHero hasTutorials={tutorials.length > 0} featuredHref={tutorials.some(tutorial => tutorial.id === 'compare-parquet-duckdb') ? '/tutorials/compare-parquet-duckdb/' : undefined} />
+    {tutorials.length > 0 ? <section id="tutorial-catalog" aria-labelledby="choose-tutorial" data-tutorial-catalog>
+      <h2 id="choose-tutorial">Explore tutorials</h2>
+      <form class="catalog-controls" data-catalog-controls hidden role="search" aria-label="Search tutorial library">
+        <label class="sr-only" for="tutorial-search">Search tutorials</label>
+        <input id="tutorial-search" name="q" type="search" placeholder="Search tutorials…" autocomplete="off" maxlength="200" />
+      </form>
+      <noscript><p>All tutorials are listed below. Enable JavaScript to search and narrow the list.</p></noscript>
+      <div class="catalog-layout">
+        <aside class="catalog-facets" data-catalog-facets hidden aria-label="Narrow tutorials">
+          <fieldset><legend>By task</legend>
+            {categories.map(category => <label class="facet-option"><input type="checkbox" name="category" value={category.id} aria-label={category.label} /><span>{category.label}</span><span class="facet-count" data-facet-count aria-hidden="true">{tutorials.filter(tutorial => tutorial.data.category === category.id).length}</span></label>)}
+          </fieldset>
+          {technologies.length > 0 && <fieldset><legend>Tools &amp; formats</legend>
+            {technologies.map(tool => <label class="facet-option"><input type="checkbox" name="tool" value={tool.id} aria-label={tool.label} /><span>{tool.label}</span><span class="facet-count" data-facet-count aria-hidden="true">{tutorials.filter(tutorial => tutorial.data.technologies.includes(tool.id)).length}</span></label>)}
+          </fieldset>}
+        </aside>
+        <div class="catalog-results">
+          <div class="catalog-status"><p data-catalog-count role="status" aria-live="polite" tabindex="-1">{tutorials.length} tutorials</p><button type="button" data-catalog-clear data-catalog-reset hidden>Clear all</button></div>
+          <div class="catalog-selections" data-catalog-selections aria-label="Selected filters" hidden></div>
+      <div class="tutorial-list" data-catalog-items>
+        {tutorials.map(tutorial => <article class="tutorial-card" data-tutorial-card={tutorial.id} data-catalog-item={JSON.stringify({id:tutorial.id,title:tutorial.data.title,outcome:tutorial.data.outcome,category:tutorial.data.category,technologies:tutorial.data.technologies,order:tutorial.data.order,keywords:[...tutorial.data.tags,tutorialCategoryLabel(tutorial.data.category),...tutorial.data.technologies.map(tutorialTechnologyLabel)]})}>
+          <a class="tutorial-card-image" href={`/tutorials/${tutorial.id}/`} tabindex="-1" aria-hidden="true"><TutorialCardArt slug={tutorial.id} /></a>
+          <div class="tutorial-card-copy">
+            <a class="card-category" href={`/tutorials/?category=${tutorial.data.category}`}>{tutorialCategoryLabel(tutorial.data.category)}</a>
+            <h3><a href={`/tutorials/${tutorial.id}/`}>{tutorial.data.title}</a></h3>
+            <p class="card-outcome">{tutorial.data.outcome}</p>
+            <p class="card-tools">{tutorial.data.technologies.map(tutorialTechnologyLabel).join(' · ')}</p>
+            <p class="card-meta"><span>{tutorial.data.level}</span><span>{tutorial.data.estimatedMinutes} min read</span>{tutorial.data.draft && <span>Draft</span>}</p>
+            <p class="card-runtime">{tutorial.data.runtime === 'browser' ? 'Runs in your browser' : tutorial.data.runtime === 'native' ? 'Runs with local tools' : 'Browser + local tools'}</p>
+            <a class="tutorial-open" href={`/tutorials/${tutorial.id}/`} aria-label={`Start tutorial: ${tutorial.data.title}`}>Start tutorial <span aria-hidden="true">→</span></a>
+          </div>
+        </article>)}
+      </div>
+      <div class="catalog-empty" data-catalog-empty hidden><h3>No tutorials match yet.</h3><p>Try a broader search or remove a filter.</p><button type="button" data-catalog-reset>Clear filters</button></div>
+      <nav class="catalog-pagination" data-catalog-pagination hidden aria-label="Tutorial pages"><button type="button" data-catalog-previous>← Previous</button><span data-catalog-page>Page 1</span><button type="button" data-catalog-next>Next →</button></nav>
+        </div>
+      </div>
+    </section> : <section class="py-10"><h2 class="text-2xl">New walkthroughs are on the way.</h2><p class="mt-3 text-soil-700">Explore the <a class="text-link underline" href="/products/extensions">DuckDB extension documentation</a> or read our <a class="text-link underline" href="/blog">engineering blog</a>.</p></section>}
+    <aside class="library-footer"><h2>Take it to your own data.</h2><p>Use <a href="/products/haybarn/">Haybarn</a> to explore your queries, browse the <a href="/products/extensions/">extension reference</a>, or <a href="/consulting/">work with Query.Farm</a> on your next data project.</p></aside>
+  </div>
+</PageLayout>
+<script>
+  import '../../scripts/tutorial-catalog';
+</script>
+<style>
+  .tutorial-library [hidden]{display:none!important}#choose-tutorial,.library-footer h2{font-size:25px;line-height:1.2}#tutorial-catalog{scroll-margin-top:125px}.catalog-controls{margin:22px 0 28px;max-width:640px}.catalog-controls input{width:100%;min-height:46px;padding:12px 15px;background:#fffdf7;border:1px solid var(--color-soil-400);border-radius:7px;font:15px var(--font-sans);color:var(--color-soil-900)}.catalog-layout{display:grid;grid-template-columns:200px minmax(0,1fr);gap:32px;align-items:start}.catalog-layout:has(.catalog-facets[hidden]){grid-template-columns:minmax(0,1fr)}.catalog-facets{display:grid;gap:28px;padding-top:3px}.catalog-facets fieldset{min-width:0;margin:0;padding:0;border:0}.catalog-facets legend{margin-bottom:12px;font-size:13px;font-weight:600;color:var(--color-soil-900)}.facet-option{display:grid;grid-template-columns:16px minmax(0,1fr) auto;align-items:start;gap:9px;padding:8px 0;font-size:13px;line-height:1.5;color:var(--color-soil-700);cursor:pointer}.facet-option input{width:16px;height:16px;margin:2px 0 0;accent-color:var(--color-field-700)}.facet-option:has(input:checked){color:var(--color-field-700);font-weight:600}.facet-option:has(input:disabled){opacity:.45;cursor:default}.facet-count{font-size:12px;font-variant-numeric:tabular-nums}.catalog-results{min-width:0}.catalog-status{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:0 0 16px;font-size:13px;color:var(--color-soil-700);min-height:24px}.catalog-status button,.catalog-empty button{color:var(--color-field-700);text-decoration:underline;text-underline-offset:3px;cursor:pointer}.catalog-selections{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}.catalog-selections :global(button){padding:7px 10px;border:0;border-radius:5px;background:#e8eddf;color:var(--color-field-700);font-size:12px;cursor:pointer}.catalog-controls input:focus-visible,.catalog-facets input:focus-visible,.catalog-pagination button:focus-visible,.catalog-selections :global(button:focus-visible){outline:2px solid var(--color-field-700);outline-offset:3px}
+  .tutorial-list{margin-top:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}.tutorial-card{min-width:0;display:flex;flex-direction:column;border:0;border-radius:12px;background:#fffdf7;overflow:hidden}.tutorial-card-image{display:flex;align-items:center;justify-content:center;overflow:hidden;height:170px;padding:10px 18px;background:#eee7d7}.tutorial-card-copy{display:flex;flex-direction:column;flex:1;padding:23px}.card-category{font-size:12px;font-weight:600;color:var(--color-field-700);text-decoration:none}.card-category:hover{text-decoration:underline}.tutorial-card h3{margin:12px 0;font-size:25px;line-height:1.2;letter-spacing:-.02em}.tutorial-card h3 a{color:var(--color-soil-900);text-decoration:none}.tutorial-card h3 a:hover{color:var(--color-field-700);text-decoration:underline;text-underline-offset:4px}.card-outcome{font-size:14px;line-height:1.7;color:var(--color-soil-700)}.card-tools{margin-top:16px;font-size:12px;color:var(--color-soil-600)}.card-meta{display:flex;flex-wrap:wrap;gap:12px;margin-top:14px;font-size:11px;font-weight:600;color:var(--color-soil-600)}.card-runtime{margin:9px 0 20px;font-size:12px;color:var(--color-field-700)}.tutorial-open{display:flex;justify-content:space-between;gap:18px;margin-top:auto;padding-top:3px;color:var(--color-field-700);font-size:13px;font-weight:600;text-decoration:none}.tutorial-open:hover{text-decoration:underline;text-underline-offset:3px}
+  .catalog-empty{padding:40px 0;text-align:center}.catalog-empty h3{font-size:24px}.catalog-empty p{margin:12px 0;color:var(--color-soil-700)}.catalog-pagination{display:flex;align-items:center;justify-content:center;gap:24px;margin-top:32px;font-size:13px}.catalog-pagination button{padding:10px 15px;background:var(--color-field-700);color:white;border-radius:6px;cursor:pointer}.catalog-pagination button:disabled{background:var(--color-soil-200);color:var(--color-soil-600);cursor:default}.library-footer{margin-top:48px;padding-top:16px}.library-footer p{margin-top:12px;max-width:66ch;line-height:1.8;color:var(--color-soil-700)}.library-footer a{color:var(--color-field-700);text-decoration:underline;text-underline-offset:3px}
+  @media(max-width:760px){.catalog-layout{grid-template-columns:minmax(0,1fr);gap:24px}.catalog-facets{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.catalog-controls{max-width:none;margin-bottom:20px}}
+  @media(max-width:580px){.tutorial-list{grid-template-columns:minmax(0,1fr)}.facet-option{font-size:12px;gap:7px}.tutorial-card-image{height:165px}.catalog-pagination{gap:12px}}
+</style>

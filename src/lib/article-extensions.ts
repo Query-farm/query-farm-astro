@@ -1,22 +1,27 @@
 import { extensions } from '../data/extensions';
-import { getPublishedPosts, type BlogPost } from './blog-tags';
+import { getCollection, type CollectionEntry } from 'astro:content';
+import { getPublishedPosts } from './blog-tags';
+
+export type RelatedArticle = CollectionEntry<'blog'> | CollectionEntry<'tutorials'>;
 
 
-let index: Promise<Map<string, BlogPost[]>> | undefined;
+let index: Promise<Map<string, RelatedArticle[]>> | undefined;
 
-/** Published posts per extension slug, newest first. Built once per build.
+/** Published articles per extension slug, newest first. Built once per build.
  *  A post is linked from every slug in its `extensions` list, where an unknown
  *  slug fails the build (a typo would otherwise drop the link silently), and
  *  from its nextStep extension when that has a docs page here — nextStep may
  *  name a repository-only extension such as grainlift, which has none. */
-function buildIndex(): Promise<Map<string, BlogPost[]>> {
-  index ??= getPublishedPosts().then(posts => {
+function buildIndex(): Promise<Map<string, RelatedArticle[]>> {
+  index ??= Promise.all([getPublishedPosts(), getCollection('tutorials')]).then(([blog, tutorials]) => {
+    const posts: RelatedArticle[] = [...blog, ...tutorials.filter(tutorial => !tutorial.data.draft)]
+      .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
     const known = new Set(extensions.map(e => e.id));
-    const bySlug = new Map<string, BlogPost[]>();
+    const bySlug = new Map<string, RelatedArticle[]>();
     for (const post of posts) {
       for (const slug of post.data.extensions) {
         if (!known.has(slug)) {
-          throw new Error(`Blog post "${post.id}" names unknown extension "${slug}"`);
+          throw new Error(`Article "${post.id}" names unknown extension "${slug}"`);
         }
       }
       const fromNextStep = post.data.nextStep?.extension;
@@ -31,6 +36,6 @@ function buildIndex(): Promise<Map<string, BlogPost[]>> {
   return index;
 }
 
-export async function getPostsForExtension(slug: string): Promise<BlogPost[]> {
+export async function getArticlesForExtension(slug: string): Promise<RelatedArticle[]> {
   return (await buildIndex()).get(slug) ?? [];
 }

@@ -1,0 +1,121 @@
+{
+  "slug": "duckdb-overall-p95",
+  "extension": "datasketches",
+  "batch": "practical-ten",
+  "setup": "CREATE OR REPLACE TABLE requests AS\nSELECT i::INTEGER AS id,\n CASE WHEN i <= 95 THEN 'fast' ELSE 'slow' END AS region,\n CASE WHEN i <= 95 THEN 100.0 ELSE 1000.0 END::DOUBLE AS latency_ms\nFROM range(1,101) t(i);\n",
+  "examples": [
+    {
+      "id": "regional-percentiles",
+      "title": "Two regions have very different request counts",
+      "sql": "SELECT region, count(*) AS requests,\n  quantile_disc(latency_ms, 0.95) AS p95_ms\nFROM requests GROUP BY region ORDER BY region;\n",
+      "expectedColumns": [
+        "region",
+        "requests",
+        "p95_ms"
+      ],
+      "expectedRows": [
+        [
+          "fast",
+          95,
+          100.0
+        ],
+        [
+          "slow",
+          5,
+          1000.0
+        ]
+      ]
+    },
+    {
+      "id": "pooled-percentile",
+      "title": "Neither average of regional percentiles is the overall p95",
+      "sql": "WITH regional AS (\n SELECT count(*) AS n, quantile_disc(latency_ms, 0.95) AS p95\n FROM requests GROUP BY region\n)\nSELECT (SELECT avg(p95) FROM regional) AS mean_of_p95,\n  (SELECT sum(n * p95) / sum(n) FROM regional) AS weighted_mean_of_p95,\n  quantile_disc(latency_ms, 0.95) AS overall_p95\nFROM requests;\n",
+      "expectedColumns": [
+        "mean_of_p95",
+        "weighted_mean_of_p95",
+        "overall_p95"
+      ],
+      "expectedRows": [
+        [
+          550.0,
+          145.0,
+          100.0
+        ]
+      ]
+    },
+    {
+      "id": "merge-quantile-sketches",
+      "title": "Merge the distributions, then ask for percentiles",
+      "sql": "WITH regional AS (\n SELECT region, datasketch_kll(200, latency_ms) AS sketch\n FROM requests GROUP BY region\n), combined AS (\n SELECT datasketch_kll(200, sketch) AS sketch FROM regional\n)\nSELECT datasketch_kll_quantile(sketch, 0.50, true) AS p50_ms,\n  datasketch_kll_quantile(sketch, 0.95, true) AS p95_ms,\n  datasketch_kll_quantile(sketch, 0.99, true) AS p99_ms\nFROM combined;\n",
+      "expectedColumns": [
+        "p50_ms",
+        "p95_ms",
+        "p99_ms"
+      ],
+      "expectedRows": [
+        [
+          100.0,
+          100.0,
+          1000.0
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "requests",
+      "title": "One hundred synthetic requests",
+      "description": "IDs 1–95 take 100 ms; IDs 96–100 take 1,000 ms. The preview shows one of each; the CSV includes all 100.",
+      "previewLimit": null,
+      "previewQuery": "SELECT * FROM requests WHERE id IN (1,96) ORDER BY id"
+    }
+  ],
+  "challenge": {
+    "id": "overall-p99",
+    "title": "Find the overall discrete p99",
+    "prompt": "Return one column, p99_ms, containing the exact discrete 99th percentile across all requests.",
+    "hint": "Compute the percentile over request observations. An average of regional p99 values answers a different question.",
+    "starter": "WITH regional AS (SELECT region, quantile_disc(latency_ms, 0.99) AS p99 FROM requests GROUP BY region) SELECT avg(p99) AS p99_ms FROM regional;\n",
+    "solution": "SELECT quantile_disc(latency_ms, 0.99) AS p99_ms FROM requests;\n",
+    "success": "The 99th sorted observation is a slow-region request: 1,000 ms. The tail can change sharply even when most requests are fast.",
+    "columns": [
+      "p99_ms"
+    ],
+    "rows": [
+      [
+        1000.0
+      ]
+    ]
+  },
+  "sampleTables": [
+    {
+      "table": "requests",
+      "title": "One hundred synthetic requests",
+      "description": "IDs 1–95 take 100 ms; IDs 96–100 take 1,000 ms. The preview shows one of each; the CSV includes all 100.",
+      "columns": [
+        "id",
+        "region",
+        "latency_ms"
+      ],
+      "rows": [
+        [
+          1,
+          "fast",
+          100.0
+        ],
+        [
+          96,
+          "slow",
+          1000.0
+        ]
+      ],
+      "totalRows": 100,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "requests.csv"
+        }
+      ]
+    }
+  ]
+}

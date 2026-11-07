@@ -11,6 +11,7 @@ const destinations = [
   { name: 'Compatibility status', href: '/products/haybarn/status' },
   { name: 'Orchard', href: '/products/orchard' },
   { name: 'Blog', href: '/blog' },
+  { name: 'Tutorials', href: '/tutorials' },
   { name: 'VGI', href: '/vgi' },
   { name: 'VGI Docs', href: DOCS_ROOT },
 ];

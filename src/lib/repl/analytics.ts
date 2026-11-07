@@ -13,6 +13,7 @@ type Gtag = (...args: unknown[]) => void;
 
 /** Where the shell was opened from, from the URL. */
 export function tryPageType(pathname = location.pathname): string {
+  if (pathname.startsWith('/tutorials/')) return 'tutorial';
   if (pathname.startsWith('/blog/')) return 'blog';
   if (/^\/products\/extensions\/[^/]+\/functions\//.test(pathname)) return 'extension_function';
   if (pathname.startsWith('/products/extensions/')) return 'extension';
@@ -21,7 +22,7 @@ export function tryPageType(pathname = location.pathname): string {
 }
 
 export function trackTry(event: string, params: Record<string, string | number | boolean>) {
-  (window as unknown as { gtag?: Gtag }).gtag?.('event', event, params);
+  (window as unknown as { gtag?: Gtag }).gtag?.('event', event, { ...params, ...(tryPageType() === 'tutorial' ? { content_type: 'tutorial' } : {}) });
 }
 
 /** Statement text compared loosely, to tell an edited query from the example. */

@@ -1,0 +1,294 @@
+{
+  "slug": "duckdb-conversion-funnel",
+  "extension": "DuckDB",
+  "batch": "practical-ten",
+  "setup": "CREATE OR REPLACE TABLE visitors(id INTEGER, name VARCHAR, signed_up DATE);\nINSERT INTO visitors VALUES\n (1,'Ada','2026-01-05'), (2,'Ben','2026-01-06'),\n (3,'Cy','2026-01-12'), (4,'Dee','2026-01-13'), (5,'Eli','2026-01-19');\nCREATE OR REPLACE TABLE events(id INTEGER, user_id INTEGER, happened_at TIMESTAMP, event VARCHAR);\nINSERT INTO events VALUES\n (1,1,'2026-01-05 09:00:00','view'),\n (2,1,'2026-01-05 09:05:00','run'),\n (3,1,'2026-01-05 09:06:00','run'),\n (4,1,'2026-01-05 09:15:00','enquiry'),\n (5,1,'2026-01-05 09:45:00','view'),\n (6,1,'2026-01-05 10:20:00','view'),\n (7,2,'2026-01-06 10:00:00','run'),\n (8,2,'2026-01-06 10:05:00','view'),\n (9,2,'2026-01-06 10:08:00','enquiry'),\n (10,3,'2026-01-12 09:00:00','view'),\n (11,3,'2026-01-12 09:02:00','run'),\n (12,3,'2026-01-12 10:00:00','enquiry'),\n (13,4,'2026-01-13 11:00:00','view'),\n (14,4,'2026-01-13 11:04:00','run'),\n (15,4,'2026-01-13 11:12:00','enquiry'),\n (16,1,'2026-01-14 12:00:00','view'),\n (17,2,'2026-01-20 12:00:00','view'),\n (18,5,'2026-01-19 09:00:00','view'),\n (19,1,'2026-01-20 14:00:00','view');\nCREATE OR REPLACE VIEW session_events AS\nWITH gaps AS (\n SELECT *, lag(happened_at) OVER (\n   PARTITION BY user_id ORDER BY happened_at, id\n ) AS previous_at FROM events\n), starts AS (\n SELECT *, CASE WHEN previous_at IS NULL\n   OR happened_at - previous_at > INTERVAL 30 MINUTE\n   THEN 1 ELSE 0 END AS new_session\n FROM gaps\n)\nSELECT id, user_id, happened_at, event,\n sum(new_session) OVER (\n   PARTITION BY user_id ORDER BY happened_at, id\n   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW\n )::INTEGER AS session_no\nFROM starts;\nCREATE OR REPLACE VIEW funnel_steps AS\nWITH entries AS (\n SELECT user_id, session_no,\n   min(happened_at) FILTER (WHERE event = 'view') AS viewed_at\n FROM session_events GROUP BY user_id, session_no\n), runs AS (\n SELECT v.*, min(e.happened_at) AS ran_at\n FROM entries v LEFT JOIN session_events e\n   ON e.user_id = v.user_id AND e.session_no = v.session_no\n  AND e.event = 'run' AND e.happened_at > v.viewed_at\n  AND e.happened_at <= v.viewed_at + INTERVAL 30 MINUTE\n WHERE v.viewed_at IS NOT NULL\n GROUP BY v.user_id, v.session_no, v.viewed_at\n)\nSELECT r.*, min(e.happened_at) AS enquired_at\nFROM runs r LEFT JOIN session_events e\n ON e.user_id = r.user_id AND e.session_no = r.session_no\n AND e.event = 'enquiry' AND e.happened_at > r.ran_at\n AND e.happened_at <= r.viewed_at + INTERVAL 30 MINUTE\nGROUP BY r.user_id, r.session_no, r.viewed_at, r.ran_at;\n",
+  "examples": [
+    {
+      "id": "unordered-funnel",
+      "title": "A presence-only check counts Ben as a conversion",
+      "sql": "SELECT user_id, session_no FROM session_events\nGROUP BY user_id, session_no\nHAVING bool_or(event = 'view') AND bool_or(event = 'run')\n   AND bool_or(event = 'enquiry')\nORDER BY user_id, session_no;\n",
+      "expectedColumns": [
+        "user_id",
+        "session_no"
+      ],
+      "expectedRows": [
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          4,
+          1
+        ]
+      ]
+    },
+    {
+      "id": "ordered-funnel",
+      "title": "Choose the first valid event after each preceding step",
+      "sql": "WITH entries AS (\n SELECT user_id, session_no,\n   min(happened_at) FILTER (WHERE event = 'view') AS viewed_at\n FROM session_events GROUP BY user_id, session_no\n), runs AS (\n SELECT v.*, min(e.happened_at) AS ran_at\n FROM entries v LEFT JOIN session_events e\n   ON e.user_id = v.user_id AND e.session_no = v.session_no\n  AND e.event = 'run' AND e.happened_at > v.viewed_at\n  AND e.happened_at <= v.viewed_at + INTERVAL 30 MINUTE\n WHERE v.viewed_at IS NOT NULL\n GROUP BY v.user_id, v.session_no, v.viewed_at\n)\nSELECT r.*, min(e.happened_at) AS enquired_at\nFROM runs r LEFT JOIN session_events e\n ON e.user_id = r.user_id AND e.session_no = r.session_no\n AND e.event = 'enquiry' AND e.happened_at > r.ran_at\n AND e.happened_at <= r.viewed_at + INTERVAL 30 MINUTE\nGROUP BY r.user_id, r.session_no, r.viewed_at, r.ran_at\nORDER BY r.user_id, r.session_no;\n",
+      "expectedColumns": [
+        "user_id",
+        "session_no",
+        "viewed_at",
+        "ran_at",
+        "enquired_at"
+      ],
+      "expectedRows": [
+        [
+          1,
+          1,
+          "2026-01-05 09:00:00",
+          "2026-01-05 09:05:00",
+          "2026-01-05 09:15:00"
+        ],
+        [
+          1,
+          2,
+          "2026-01-05 10:20:00",
+          null,
+          null
+        ],
+        [
+          1,
+          3,
+          "2026-01-14 12:00:00",
+          null,
+          null
+        ],
+        [
+          1,
+          4,
+          "2026-01-20 14:00:00",
+          null,
+          null
+        ],
+        [
+          2,
+          1,
+          "2026-01-06 10:05:00",
+          null,
+          null
+        ],
+        [
+          2,
+          2,
+          "2026-01-20 12:00:00",
+          null,
+          null
+        ],
+        [
+          3,
+          1,
+          "2026-01-12 09:00:00",
+          "2026-01-12 09:02:00",
+          null
+        ],
+        [
+          4,
+          1,
+          "2026-01-13 11:00:00",
+          "2026-01-13 11:04:00",
+          "2026-01-13 11:12:00"
+        ],
+        [
+          5,
+          1,
+          "2026-01-19 09:00:00",
+          null,
+          null
+        ]
+      ]
+    },
+    {
+      "id": "funnel-counts",
+      "title": "Count qualifying sessions, not event rows",
+      "sql": "SELECT count(*) AS entered,\n  count(ran_at) AS ran_example,\n  count(enquired_at) AS sent_enquiry,\n  round(100.0 * count(enquired_at) / nullif(count(*), 0), 2) AS conversion_pct\nFROM funnel_steps;\n",
+      "expectedColumns": [
+        "entered",
+        "ran_example",
+        "sent_enquiry",
+        "conversion_pct"
+      ],
+      "expectedRows": [
+        [
+          9,
+          3,
+          2,
+          22.22
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "visitors",
+      "title": "Meet the fictional visitors",
+      "description": "Five stable user IDs; signup dates also anchor the retention lesson.",
+      "previewLimit": null
+    },
+    {
+      "table": "events",
+      "title": "A tiny website event log",
+      "description": "All 19 synthetic events are included in the CSV and setup. Times use one shared UTC clock.",
+      "previewLimit": 8
+    }
+  ],
+  "challenge": {
+    "id": "no-valid-run",
+    "title": "Find where the funnel stops before the example",
+    "prompt": "Return user_id and session_no for sessions with a view but no qualifying run.",
+    "hint": "funnel_steps already contains only sessions with a view. Test ran_at, not enquired_at.",
+    "starter": "SELECT user_id, session_no FROM funnel_steps WHERE enquired_at IS NULL ORDER BY user_id, session_no;\n",
+    "solution": "SELECT user_id, session_no FROM funnel_steps WHERE ran_at IS NULL ORDER BY user_id, session_no;\n",
+    "success": "Six sessions stop before a valid run. Cy’s first session did run an example, so it does not belong in this result.",
+    "columns": [
+      "user_id",
+      "session_no"
+    ],
+    "rows": [
+      [
+        1,
+        2
+      ],
+      [
+        1,
+        3
+      ],
+      [
+        1,
+        4
+      ],
+      [
+        2,
+        1
+      ],
+      [
+        2,
+        2
+      ],
+      [
+        5,
+        1
+      ]
+    ]
+  },
+  "sampleTables": [
+    {
+      "table": "visitors",
+      "title": "Meet the fictional visitors",
+      "description": "Five stable user IDs; signup dates also anchor the retention lesson.",
+      "columns": [
+        "id",
+        "name",
+        "signed_up"
+      ],
+      "rows": [
+        [
+          1,
+          "Ada",
+          "2026-01-05"
+        ],
+        [
+          2,
+          "Ben",
+          "2026-01-06"
+        ],
+        [
+          3,
+          "Cy",
+          "2026-01-12"
+        ],
+        [
+          4,
+          "Dee",
+          "2026-01-13"
+        ],
+        [
+          5,
+          "Eli",
+          "2026-01-19"
+        ]
+      ],
+      "totalRows": 5,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "visitors.csv"
+        }
+      ]
+    },
+    {
+      "table": "events",
+      "title": "A tiny website event log",
+      "description": "All 19 synthetic events are included in the CSV and setup. Times use one shared UTC clock.",
+      "columns": [
+        "id",
+        "user_id",
+        "happened_at",
+        "event"
+      ],
+      "rows": [
+        [
+          1,
+          1,
+          "2026-01-05 09:00:00",
+          "view"
+        ],
+        [
+          2,
+          1,
+          "2026-01-05 09:05:00",
+          "run"
+        ],
+        [
+          3,
+          1,
+          "2026-01-05 09:06:00",
+          "run"
+        ],
+        [
+          4,
+          1,
+          "2026-01-05 09:15:00",
+          "enquiry"
+        ],
+        [
+          5,
+          1,
+          "2026-01-05 09:45:00",
+          "view"
+        ],
+        [
+          6,
+          1,
+          "2026-01-05 10:20:00",
+          "view"
+        ],
+        [
+          7,
+          2,
+          "2026-01-06 10:00:00",
+          "run"
+        ],
+        [
+          8,
+          2,
+          "2026-01-06 10:05:00",
+          "view"
+        ]
+      ],
+      "totalRows": 19,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "events.csv"
+        }
+      ]
+    }
+  ]
+}

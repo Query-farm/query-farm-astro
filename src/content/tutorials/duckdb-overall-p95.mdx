@@ -1,0 +1,82 @@
+---
+title: "Calculate Overall p95 Latency Without Averaging Percentiles"
+description: "Calculate an exact pooled percentile in DuckDB, see why weighted regional percentiles fail, and merge KLL sketches with the DataSketches extension."
+pubDate: "2026-11-06"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: true
+outcome: "Calculate overall latency percentiles from observations or mergeable distributions instead of averaging percentile values."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "analyze-data"
+technologies: ["duckdb", "datasketches"]
+estimatedMinutes: 7
+level: "Intermediate"
+runtime: "browser"
+order: 20
+showLeadVisual: false
+extensions: ["datasketches"]
+nextStep: {"title": "Keep useful summaries as your data grows", "pitch": "Explore mergeable sketches for quantiles, distinct counts, and frequent items.", "href": "/products/extensions/datasketches/", "cta": "Explore DataSketches", "extension": "datasketches"}
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-overall-p95.json';
+
+**One region reports p95 latency of 100 ms. Another reports 1,000 ms. Is the overall p95 550 ms?** No. A percentile is a position in a distribution, and two summary values do not preserve that distribution.
+
+This example makes the error visible with just 100 requests. Then we will keep mergeable summaries using the [DataSketches extension](/products/extensions/datasketches/).
+
+<TutorialExperiment slug={demo.slug} />
+
+## Start with a distribution you can count
+
+Ninety-five requests take 100 ms. Five take 1,000 ms. The preview shows one row from each region; the download and setup contain all 100 requests.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+We use the **discrete percentile** throughout the comparison: sort the observations and select the first observed value whose cumulative proportion reaches the requested fraction. At p95, the 95th observation in this 100-row fixture is still 100 ms.
+
+An interpolated continuous percentile is a different definition. `quantile_cont` can return a value between observations. Pick a definition before comparing dashboards or testing a sketch against an exact reference.
+
+## Regional percentiles lose information
+
+<TutorialExample example={demo.examples[0]} />
+
+The fast region contributes 95 requests; the slow region contributes only five. Averaging their p95 values gives each region equal weight, even though their traffic volumes differ dramatically.
+
+Weighting those percentile values by request count seems like a repair. It still does not reconstruct the overall distribution:
+
+<TutorialExample example={demo.examples[1]} />
+
+The simple average is **550 ms**, the weighted average is **145 ms**, and the exact pooled discrete p95 is **100 ms**. The weighted calculation answers a question about regional summary numbers, not the rank of all requests together.
+
+Use DuckDB’s [`quantile_disc`](https://duckdb.org/docs/2.0/sql/functions/aggregates) over the pooled observations when you need this exact answer and have the underlying data available.
+
+## Merge distributions, then ask the question
+
+A KLL sketch retains a compact approximation of a distribution. Build one per region, merge the sketches, and only then extract the overall percentiles:
+
+<TutorialExample example={demo.examples[2]} />
+
+The first `datasketch_kll(200, latency_ms)` aggregates numeric observations. The overloaded `datasketch_kll(200, sketch)` aggregates compatible sketches. The final calls request inclusive quantiles from the combined summary.
+
+For this small fixture, the sketch retains enough information to reproduce p50 = 100, p95 = 100, and p99 = 1,000. **That exact agreement is not a promise for larger data.** KLL is approximate; its accuracy is described in rank space, which does not translate to a fixed millisecond error when the distribution has a sharp jump.
+
+The parameter 200 controls the sketch’s accuracy/space tradeoff. All component sketches here use the same parameter and numeric input type. See the [extension reference](/products/extensions/datasketches/#functions) before mixing saved states from different configurations.
+
+<TutorialChallenge post={demo.slug} />
+
+## Know what the summary can answer
+
+Merge sketches from disjoint request partitions. Including a region or day twice counts its observations twice; merging does not deduplicate requests. Keep the partition identity beside saved summaries.
+
+A sketch also cannot retroactively answer arbitrary filters whose dimensions you discarded. If you will compare endpoints, preserve summaries at that grain or retain raw observations.
+
+This 100-row exercise demonstrates correctness and the merge pattern, not a performance benchmark. Use real volumes and an explicit error requirement before choosing sketches for a production latency report. The [distinct-count lesson](/tutorials/duckdb-merge-distinct-counts/) explores a related problem with a different kind of mergeable summary.
+
+<TutorialTracking post={demo.slug} />

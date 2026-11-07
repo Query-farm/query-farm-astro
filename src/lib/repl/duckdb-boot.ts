@@ -105,6 +105,10 @@ export function ensureExtension(
   name: string,
   source: string,
 ): Promise<{ ok: boolean; error?: string }> {
+  // Core-SQL tutorials need the engine, without installing a pretend extension.
+  if (name === 'DuckDB' && source === 'builtin') {
+    return ensureEngine().then(() => ({ ok: true }));
+  }
   let pending = extensionLoads.get(name);
   if (!pending) {
     pending = extensionQueue.then(async () => {
@@ -204,7 +208,9 @@ export interface Session {
 const fixtureCopies = new Map<string, Promise<QueryResult>>();
 export async function runFixtureStatement(session: Session, sql: string): Promise<QueryResult> {
   const statement = sql.replace(/^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)+/, "");
-  if (!/^COPY\b/i.test(statement)) return session.runQuery(sql);
+  // An expression destination (for example getvariable('prefix')) can resolve
+  // to a different filename in each session. Its SQL text is not a cache key.
+  if (!/^COPY\b/i.test(statement) || /\bTO\s*\(/i.test(statement)) return session.runQuery(sql);
   let pending = fixtureCopies.get(sql);
   if (!pending) {
     pending = session.runQuery(sql);
