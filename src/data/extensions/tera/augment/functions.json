@@ -4,7 +4,7 @@
     "categories": [
       "Render"
     ],
-    "description": "Render a Tera template, optionally with a JSON context. Supports the full Tera vocabulary: variables, filters, conditionals, for loops, autoescape, and inclusion. Options are keyword-only named parameters with defaults — `autoescape := false` for non-HTML output, `template_path := './templates/*.html'` to load templates from disk by name. They must be constant expressions; unknown option names or values of the wrong type are rejected when the query is bound, and a NULL argument (including a NULL option) makes the result NULL.",
+    "description": "Render a Tera template, optionally with a JSON context. Supports the full Tera vocabulary: variables, filters, conditionals, for loops, autoescape, and inclusion. Options are keyword-only named parameters with defaults — `autoescape := false` for non-HTML output, `template_path := './templates/*.html'` to load templates from disk by name. They must be constant expressions; unknown option names or values of the wrong type are rejected when the query is bound, and a NULL argument (including a NULL option) makes the result NULL.\n\n**DuckDB 2.0 build:** Tera's `get_env()` function is disabled (it would expose the server's environment variables) unless you `SET tera_allow_get_env = true` while `enable_external_access` is on. `template_path` files are read through DuckDB's file system, so they are refused when `enable_external_access` is false unless `allowed_directories`/`allowed_paths` cover them. The context must be a JSON object (any value that casts to JSON works, including a struct or a whole row). Templates that would overflow the stack — self-including or self-importing templates, recursive macros, or more than 64 levels of nested tags or brackets — are rejected with an error.",
     "examples": [
       {
         "description": "Inline variable",
@@ -13,6 +13,10 @@
       {
         "description": "Nested context",
         "code": "SELECT tera_render('Hello {{ user.name }}', '{\"user\":{\"name\":\"Alice\"}}');"
+      },
+      {
+        "description": "Struct as context",
+        "code": "SELECT tera_render('{{ user.name }} has {{ tags | length }} tags', {'user': {'name': 'Alice'}, 'tags': ['a', 'b']});"
       },
       {
         "description": "Disable autoescape",
@@ -36,7 +40,7 @@
         "type": "JSON",
         "paramType": "positional",
         "optional": true,
-        "description": "JSON context the template is rendered against — a literal, a JSON column, or `json_object(...)` built from columns. Omit it for templates without variables."
+        "description": "Context the template is rendered against: a JSON object — a literal, a JSON column, `json_object(...)` built from columns, or any value that casts to JSON such as a struct or a whole row. Arrays, scalars and JSON `null` are rejected on the DuckDB 2.0 build. Omit it for templates without variables."
       },
       {
         "name": "autoescape",
@@ -50,7 +54,7 @@
         "type": "VARCHAR",
         "paramType": "named",
         "default": "''",
-        "description": "Glob of template files to load (for example `'./templates/*.html'`). When set, `template` is a template name, which enables `{% extends %}` / `{% include %}` / `{% import %}`. Empty means inline templates only."
+        "description": "A template file, or a glob of them (for example `'./templates/*.html'` or `'./templates/**/*.html'`); templates are named by their path relative to the glob's directory. When set, `template` is a template name, which enables `{% extends %}` / `{% include %}` / `{% import %}`. Empty means inline templates only. On the DuckDB 2.0 build the files are read once per query through DuckDB's file system, so `enable_external_access`, `allowed_directories` and `allowed_paths` apply, and a glob that matches nothing is an error."
       },
       {
         "name": "autoescape_extensions",

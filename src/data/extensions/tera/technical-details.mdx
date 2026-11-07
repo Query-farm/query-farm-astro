@@ -42,7 +42,7 @@ SELECT tera_render(
 FROM users;
 ```
 
-The files are read and parsed once per query (per worker thread), not once per row, and inline templates are likewise parsed once and reused for every row that uses the same template text.
+The files are read and parsed once per query, not once per row (on the DuckDB 2.0 build they are read when the query is bound and parsed once per worker thread), and inline templates are likewise parsed once and reused for every row that uses the same template text. Templates are named by their path relative to the glob's directory, so `template_path := './templates/**/*.html'` makes `partials/header.html` available to `{% include %}`; a plain file path with no glob characters loads just that file.
 
 Loading from disk is what unlocks Tera's [`{% extends %}` / `{% include %}` / `{% import %}`](https://keats.github.io/tera/docs/#inheritance) constructs — you can't `extends "base.html"` against a template that has no name. Authoring large templates in a `.html` file alongside the rest of your project is also nicer than embedding them as SQL string literals.
 
@@ -89,7 +89,7 @@ tera_render(template VARCHAR, context JSON, *, ...same options...)
 | Option | Default | Effect |
 |---|---|---|
 | `autoescape` | `true` | HTML-escape interpolated values, in inline templates and `template_path` files alike. Pass `false` for configs, SQL, JSON or plain text. |
-| `template_path` | `''` | Glob of template files; `template` is then a template name. |
+| `template_path` | `''` | A template file or glob of template files; `template` is then a template name. Read through DuckDB's file system on the DuckDB 2.0 build. |
 | `autoescape_extensions` | `[]` | With `template_path`, restrict escaping to file templates whose names end with one of these suffixes (for example `['.html']`); the others render unescaped. With the default `[]`, `autoescape` escapes every template whatever its extension. Inline templates ignore this list. |
 
 - **Keyword-only.** Options are always passed as `name := value`; `tera_render('Hello', '{}', false)` does not match any signature. The positional arguments can be named too, in any order: `tera_render(context := '{"a": 1}', template := '{{ a }}')`.
@@ -107,6 +107,30 @@ SELECT tera_render('{{ v }}', '{"v": "B&O"}', autoescape := 'false');
 Tera interpolation is **not** an injection-safe parameterization mechanism. A context value that contains `{{ ... }}` or `{% ... %}` syntax won't be re-evaluated, but a template body assembled from untrusted input absolutely can render arbitrary SQL or shell strings. Keep the template surface fixed and authored by trusted code; only the context (the second argument) should come from query data or user input.
 
 For SQL specifically: use Tera to template the **shape** of a query (column lists, table names from a metadata table, predicates from a config), and use ordinary parameter binding for any value that originated outside your control.
+
+## Changes in the DuckDB 2.0 release
+
+<Callout type="warning" title="Breaking: get_env() is disabled in the DuckDB 2.0 build">
+Tera's built-in `get_env()` function let any SQL user read the server's environment variables — cloud credentials included — through a template such as `{{ get_env(name="AWS_SECRET_ACCESS_KEY") }}`. It now raises an error unless you opt in with `SET tera_allow_get_env = true`, and it stays disabled while `enable_external_access` is false.
+</Callout>
+
+```sql
+SET tera_allow_get_env = true;
+SELECT tera_render('{{ get_env(name="APP_ENV", default="dev") }}');
+-- 'dev' when APP_ENV is unset
+```
+
+Also new in the DuckDB 2.0 build:
+
+- **`template_path` respects DuckDB's sandbox.** Files are read through DuckDB's file system instead of directly from disk, so with `enable_external_access = false` they are refused unless `allowed_directories` or `allowed_paths` cover them. A plain file path (no glob characters) loads that one file. A glob that matches nothing is an error.
+- **Templates cannot crash DuckDB.** Templates that include or import themselves (directly or through other templates), recursive macros, and templates nested more than 64 tags or brackets deep (or with more than 256 operators in a single tag) are rejected with an error. Earlier builds overflowed the stack and took the whole process down. Inline templates can therefore no longer import themselves to use their own macros; put macros in a `template_path` file and `{% import %}` it.
+- **The context must be a JSON object.** Arrays, numbers, strings and JSON `null` raise an error instead of being silently ignored. Any value that casts to JSON works, so you can pass a struct or a whole row without `to_json`:
+
+```sql
+SELECT tera_render('{{ user.name }} has {{ tags | length }} tags',
+                   {'user': {'name': 'Alice'}, 'tags': ['a', 'b']});
+-- 'Alice has 2 tags'
+```
 
 ## What's in the box
 
