@@ -12,7 +12,7 @@
         "name": "schema",
         "type": "JSON",
         "paramType": "positional",
-        "description": "The [JSON Schema](https://json-schema.org/) document to validate against. The validator's primary target is [draft-07](https://json-schema.org/draft-07/json-schema-release-notes); newer drafts work for the keywords the underlying [pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator) supports."
+        "description": "The [JSON Schema](https://json-schema.org/) document to validate against. The DuckDB 2.0 build supports drafts 4, 6, 7, 2019-09 and 2020-12, selected by `$schema` (2020-12 when absent); an unknown `$schema` is an error. The Haybarn 1.5 build targets [draft-07](https://json-schema.org/draft-07/json-schema-release-notes) only."
       },
       {
         "name": "json_data",
@@ -22,7 +22,7 @@
       }
     ],
     "returns": "BOOLEAN — TRUE for conforming data; raises an error for nonconforming data or an invalid schema. SQL NULL inputs propagate NULL.",
-    "description": "Validate a JSON value against a JSON Schema. Validation failures raise an error; they do not return FALSE. For row filtering or valid/invalid counts, use COALESCE(TRY(json_schema_validate(schema, payload)), false). This treats SQL NULL as invalid too. Validate the schema separately first: TRY also catches malformed-schema errors. The function reports a textual exception, not a structured per-keyword report.",
+    "description": "Validate a JSON value against a JSON Schema. Validation failures raise an error; they do not return FALSE. In the DuckDB 2.0 build the error names up to five failing locations (as JSON Pointers) without echoing the document; use [`json_schema_is_valid`](#json_schema_is_valid) for a boolean result and [`json_schema_errors`](#json_schema_errors) for a structured report. On the Haybarn 1.5 build, use COALESCE(TRY(json_schema_validate(schema, payload)), false) for row filtering, after validating the schema separately (TRY also catches malformed-schema errors).",
     "examples": [
       {
         "description": "Validate a single document",
@@ -38,9 +38,97 @@
       }
     ],
     "relatedFunctions": [
+      "json_schema_is_valid",
+      "json_schema_errors",
       "json_schema_validate_schema",
       "json_schema_patch",
       "json_schema_update"
+    ]
+  },
+  {
+    "id": "json_schema_is_valid(JSON,JSON)",
+    "name": "json_schema_is_valid",
+    "type": "scalar",
+    "categories": [
+      "Validate"
+    ],
+    "returnType": "BOOLEAN",
+    "parameters": [
+      {
+        "name": "schema",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "The [JSON Schema](https://json-schema.org/) document. The DuckDB 2.0 build supports drafts 4, 6, 7, 2019-09 and 2020-12, selected by `$schema` (2020-12 when absent); an unknown `$schema` is an error. An invalid schema raises an error."
+      },
+      {
+        "name": "json_data",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "The JSON value to check. Pass a column of type `JSON`, a struct literal, or a string cast with `::JSON`."
+      }
+    ],
+    "returns": "BOOLEAN — TRUE for conforming data, FALSE otherwise; raises an error only for an invalid schema. SQL NULL inputs propagate NULL.",
+    "description": "Return whether a JSON value conforms to a JSON Schema. Unlike [`json_schema_validate`](#json_schema_validate) a nonconforming document returns FALSE instead of raising, so it can be used directly in `WHERE` and `FILTER` clauses without `TRY`; an invalid schema still raises an error, so a broken contract is never mistaken for bad data. New in the DuckDB 2.0 build.",
+    "examples": [
+      {
+        "description": "Check a value",
+        "code": "SELECT json_schema_is_valid('{\"type\": \"integer\", \"minimum\": 0}', '-1') AS ok;\n-- false"
+      },
+      {
+        "description": "2020-12 keywords such as prefixItems are enforced",
+        "code": "SELECT json_schema_is_valid('{\"prefixItems\": [{\"type\": \"string\"}, {\"type\": \"integer\"}]}', '[1, \"a\"]') AS ok;\n-- false"
+      },
+      {
+        "description": "Count valid and invalid rows",
+        "code": "SELECT\n  COUNT(*) FILTER (WHERE     json_schema_is_valid('{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"}},\"required\":[\"id\"]}', payload)) AS valid,\n  COUNT(*) FILTER (WHERE NOT json_schema_is_valid('{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"}},\"required\":[\"id\"]}', payload)) AS invalid\nFROM events;"
+      }
+    ],
+    "relatedFunctions": [
+      "json_schema_errors",
+      "json_schema_validate"
+    ]
+  },
+  {
+    "id": "json_schema_errors(JSON,JSON)",
+    "name": "json_schema_errors",
+    "type": "scalar",
+    "categories": [
+      "Validate"
+    ],
+    "returnType": "STRUCT(path VARCHAR, keyword VARCHAR, message VARCHAR)[]",
+    "parameters": [
+      {
+        "name": "schema",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "The [JSON Schema](https://json-schema.org/) document. The DuckDB 2.0 build supports drafts 4, 6, 7, 2019-09 and 2020-12, selected by `$schema` (2020-12 when absent); an unknown `$schema` is an error. An invalid schema raises an error."
+      },
+      {
+        "name": "json_data",
+        "type": "JSON",
+        "paramType": "positional",
+        "description": "The JSON value to check. Pass a column of type `JSON`, a struct literal, or a string cast with `::JSON`."
+      }
+    ],
+    "returns": "LIST(STRUCT(path VARCHAR, keyword VARCHAR, message VARCHAR)) — one entry per validation error, empty for a conforming document. `path` is a JSON Pointer into the document (empty string for the root). SQL NULL inputs propagate NULL.",
+    "description": "Return every validation error of a JSON value against a JSON Schema as a structured list: where in the document it failed (`path`), which schema keyword failed (`keyword`) and a readable `message`. Use it to build data-quality reports or quarantine tables that record why each row was rejected. An invalid schema raises an error. New in the DuckDB 2.0 build.",
+    "examples": [
+      {
+        "description": "List the errors of one document",
+        "code": "SELECT unnest(json_schema_errors('{\"type\": \"array\", \"items\": {\"type\": \"integer\"}}', '[1, \"two\", 3, true]'), recursive := true);"
+      },
+      {
+        "description": "Missing required properties",
+        "code": "SELECT json_schema_errors('{\"type\": \"object\", \"required\": [\"id\", \"name\"]}', '{\"id\": 1}') AS errors;"
+      },
+      {
+        "description": "Report why rows fail",
+        "code": "SELECT row_num, e.path, e.keyword, e.message\nFROM events,\n     unnest(json_schema_errors('{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"}},\"required\":[\"id\"]}', payload)) AS t(e)\nORDER BY row_num;"
+      }
+    ],
+    "relatedFunctions": [
+      "json_schema_is_valid",
+      "json_schema_validate"
     ]
   },
   {
@@ -56,11 +144,11 @@
         "name": "schema",
         "type": "JSON",
         "paramType": "positional",
-        "description": "Candidate JSON Schema. The function asks the validator to load it; this is not exhaustive validation against the JSON Schema meta-schema."
+        "description": "Candidate JSON Schema. The function compiles it, which catches malformed JSON, unsupported `$schema` drafts, invalid regular expressions and unresolvable `$ref`s; it is not exhaustive validation against the JSON Schema meta-schema."
       }
     ],
     "returns": "BOOLEAN — TRUE if the schema is accepted; raises an error if it is invalid. SQL NULL propagates NULL.",
-    "description": "Check that the validator can load a JSON Schema. An invalid schema raises an error, making this useful as a deployment gate. Use COALESCE(TRY(json_schema_validate_schema(definition)), false) when auditing a registry and you want invalid entries flagged instead of aborting the query. Successful loading is not exhaustive meta-schema validation; some unsupported or misspelled keyword values may be accepted.",
+    "description": "Check that a JSON Schema compiles. An invalid schema raises an error, making this useful as a deployment gate. Use COALESCE(TRY(json_schema_validate_schema(definition)), false) when auditing a registry and you want invalid entries flagged instead of aborting the query. Compiling is not exhaustive meta-schema validation; some misspelled keywords are simply ignored, as the JSON Schema specification requires.",
     "examples": [
       {
         "description": "Lint a schema before deploying",
@@ -72,7 +160,8 @@
       }
     ],
     "relatedFunctions": [
-      "json_schema_validate"
+      "json_schema_validate",
+      "json_schema_is_valid"
     ]
   },
   {
@@ -111,7 +200,8 @@
     ],
     "relatedFunctions": [
       "json_schema_update",
-      "json_schema_validate"
+      "json_schema_validate",
+      "json_schema_errors"
     ]
   },
   {
@@ -150,7 +240,8 @@
     ],
     "relatedFunctions": [
       "json_schema_patch",
-      "json_schema_validate"
+      "json_schema_validate",
+      "json_schema_errors"
     ]
   }
 ]

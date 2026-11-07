@@ -2,22 +2,23 @@ import Callout from '../../../components/docs/Callout.astro';
 
 ## Validation behavior
 
-`json_schema_validate` returns `TRUE` for a valid document and raises an error for an invalid one. It does not return a structured list of validation failures. When validating a batch, check the schema itself with [`json_schema_validate_schema`](#json_schema_validate_schema) before wrapping document validation in `TRY`.
+[`json_schema_validate`](#json_schema_validate) returns `TRUE` for a valid document and raises an error for an invalid one. In the DuckDB 2.0 build, [`json_schema_is_valid`](#json_schema_is_valid) returns `TRUE`/`FALSE` instead, and [`json_schema_errors`](#json_schema_errors) returns every failure as a `LIST(STRUCT(path, keyword, message))`, where `path` is a JSON Pointer into the document. All functions raise an error for an invalid schema, so a broken contract is never mistaken for bad data. On the Haybarn 1.5 build, check the schema itself with [`json_schema_validate_schema`](#json_schema_validate_schema) before wrapping document validation in `TRY`.
 
-The validator targets JSON Schema draft-07. Check the keywords your schema uses, particularly if it was authored for a newer draft. External files and HTTP references are not resolved; include referenced definitions in the schema document.
+The `$schema` keyword selects the draft. The DuckDB 2.0 build supports drafts 4, 6, 7, 2019-09 and 2020-12, uses 2020-12 when `$schema` is absent, and rejects an unknown `$schema`. The Haybarn 1.5 build targets draft-07 only: it ignores newer keywords such as `prefixItems` or `unevaluatedProperties`. External files and HTTP references are never resolved; include referenced definitions (for example under `$defs`) in the schema document.
 
 ## Architecture
 
-Internally this is a thin DuckDB scalar-function wrapper around two C++ libraries: [pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator) for the validation engine and [nlohmann/json](https://github.com/nlohmann/json) for parsing. Both schema and data are passed as DuckDB [`JSON`](https://duckdb.org/docs/data/json/overview) values (or struct literals, or strings cast with `::JSON`). There is no `ATTACH`, no secret type, no network call — the validator runs locally against the in-query schema.
+Internally this is a thin DuckDB scalar-function wrapper around a C++ JSON Schema library: [jsoncons](https://github.com/danielaparker/jsoncons) in the DuckDB 2.0 build, [pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator) with [nlohmann/json](https://github.com/nlohmann/json) in the Haybarn 1.5 build. Both schema and data are passed as DuckDB [`JSON`](https://duckdb.org/docs/data/json/overview) values (or struct literals, or strings cast with `::JSON`). There is no `ATTACH`, no secret type, no network call — the validator runs locally against the in-query schema.
 
-Four scalar functions cover the surface:
+Six scalar functions cover the surface (`json_schema_is_valid` and `json_schema_errors` are DuckDB 2.0 build only):
 
 | Group | Functions | Returns |
 |---|---|---|
-| Validate | [`json_schema_validate`](#json_schema_validate), [`json_schema_validate_schema`](#json_schema_validate_schema) | `BOOLEAN` |
+| Validate | [`json_schema_validate`](#json_schema_validate), [`json_schema_validate_schema`](#json_schema_validate_schema), [`json_schema_is_valid`](#json_schema_is_valid) | `BOOLEAN` |
+| Validate | [`json_schema_errors`](#json_schema_errors) | `LIST(STRUCT(path, keyword, message))` |
 | Enrich | [`json_schema_patch`](#json_schema_patch), [`json_schema_update`](#json_schema_update) | `JSON` |
 
-Schema features in scope match what [draft-07](https://json-schema.org/draft-07/json-schema-release-notes) covers: type validation (`string`, `number`, `integer`, `boolean`, `array`, `object`, `null`), `required`, `properties`, numeric `minimum` / `maximum` / `multipleOf`, string `minLength` / `maxLength` / `pattern` / `format`, array `minItems` / `maxItems` / `uniqueItems`, and the `default` keyword used by [`json_schema_patch`](#json_schema_patch) and [`json_schema_update`](#json_schema_update).
+Schema features include type validation (`string`, `number`, `integer`, `boolean`, `array`, `object`, `null`), `required`, `properties`, numeric `minimum` / `maximum` / `multipleOf`, string `minLength` / `maxLength` / `pattern` / `format`, array `minItems` / `maxItems` / `uniqueItems`, combinators and local `$ref`, plus (DuckDB 2.0 build) the 2019-09/2020-12 vocabulary such as `prefixItems`, `unevaluatedProperties`, `dependentRequired` and `$defs`, and the `default` keyword used by [`json_schema_patch`](#json_schema_patch) and [`json_schema_update`](#json_schema_update).
 
 ## Pairs with DuckDB's JSON support
 
@@ -26,9 +27,28 @@ Schema-side validation is one piece; the rest of the JSON pipeline is plain Duck
 ## Compared to alternatives
 
 - **[DuckDB `CHECK` constraints](https://duckdb.org/docs/sql/constraints)** — if your data has a fixed shape, modeling it as proper columns plus `CHECK` is faster, clearer, and gives you better error messages. Reach for JSON Schema when the payload is genuinely contract-defined JSON and the storage stays opaque.
-- **Application-layer validators ([ajv](https://ajv.js.org/) / [Pydantic](https://docs.pydantic.dev/latest/concepts/json_schema/) / [jsonschema](https://python-jsonschema.readthedocs.io/))** — these give detailed per-keyword failure reports and richer draft coverage. Pair them at the API boundary; use this extension as the SQL-side gate inside DuckDB so the database doesn't depend on a Python service to enforce its contracts.
+- **Application-layer validators ([ajv](https://ajv.js.org/) / [Pydantic](https://docs.pydantic.dev/latest/concepts/json_schema/) / [jsonschema](https://python-jsonschema.readthedocs.io/))** — these offer custom formats, remote `$ref` loading and ECMAScript regular expressions. Pair them at the API boundary; use this extension as the SQL-side gate inside DuckDB so the database doesn't depend on a Python service to enforce its contracts.
 - **Manual SQL predicates** — handcrafted `WHERE`s over `json_extract_*` get unwieldy fast for non-trivial schemas. Pointing [`json_schema_validate`](#json_schema_validate) at a versioned schema file keeps the contract in one place.
 
 ## Default-value enrichment
 
 Use the schema's declared `default` values to fill missing fields. [`json_schema_patch`](#json_schema_patch) returns a [JSON Patch (RFC 6902)](https://datatracker.ietf.org/doc/html/rfc6902) array of `add` operations; [`json_schema_update`](#json_schema_update) applies them inline. Together they let you go from "incoming partial payload" to "fully populated record" in one SQL expression — no per-field `COALESCE` cascade, no application-layer enrichment code.
+
+## Changes in the DuckDB 2.0 release
+
+<Callout type="warning" title="Behaviour changes in the DuckDB 2.0 build">
+The validator changed from pboettch/json-schema-validator (draft-07 only) to jsoncons. Some documents that earlier builds accepted are now rejected, and some schemas behave differently:
+
+- **`$schema` is honoured.** Drafts 4, 6, 7, 2019-09 and 2020-12 are supported. Earlier builds evaluated everything as draft-07 and silently ignored newer keywords (`prefixItems`, `unevaluatedProperties`, `dependentRequired`, `$defs` references, …), so non-conforming documents passed. An unknown `$schema` is now an error.
+- **Schemas without `$schema` use 2020-12** (earlier builds: draft-07). A draft-07 schema that uses array-form `items` for tuples should declare `"$schema": "http://json-schema.org/draft-07/schema#"`.
+- **`format` is validated.** Earlier builds raised "a format checker was not provided" for any schema using `format`.
+- **Regular expressions use [RE2](https://github.com/google/re2/wiki/Syntax).** `pattern` and `patternProperties` run in linear time, so a hostile pattern cannot hang or crash DuckDB, but lookaround (`(?=`, `(?!`) and backreferences are rejected as schema errors.
+- **Error messages** from `json_schema_validate`, `json_schema_patch` and `json_schema_update` list up to five failing locations (JSON Pointer + message) and no longer echo the whole document.
+</Callout>
+
+Also new in the DuckDB 2.0 build:
+
+- **New functions:** [`json_schema_is_valid`](#json_schema_is_valid) (`BOOLEAN`, no `TRY` needed) and [`json_schema_errors`](#json_schema_errors) (structured per-keyword report).
+- **Performance:** each schema is compiled once per thread and reused for every row, instead of being parsed and compiled for every row.
+- **Limits:** schemas and documents nested more than 256 levels are rejected, and deep recursion through `$ref` raises an error before it can exhaust the thread's stack.
+- **Remote `$ref`s** are still not loaded (no network or file access); the error now reads "Don't know how to load JSON Schema …".

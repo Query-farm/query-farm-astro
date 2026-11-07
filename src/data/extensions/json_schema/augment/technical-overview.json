@@ -1,20 +1,20 @@
 {
   "eyebrow": "Technical Overview",
   "title": "JSON contracts, made executable in SQL",
-  "description": "[JSON Schema](https://json-schema.org/) is the de facto contract language for JSON payloads — a declarative way to say what a document must look like. This extension makes those contracts *executable* from inside DuckDB, so a data-quality gate, an ETL contract check, or a default-value fill-in can live in SQL instead of a Pydantic / ajv / jsonschema sidecar. It is built on the [pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator) C++ library, whose primary target is [JSON Schema draft-07](https://json-schema.org/draft-07/json-schema-release-notes).",
+  "description": "[JSON Schema](https://json-schema.org/) is the de facto contract language for JSON payloads — a declarative way to say what a document must look like. This extension makes those contracts *executable* from inside DuckDB, so a data-quality gate, an ETL contract check, or a default-value fill-in can live in SQL instead of a Pydantic / ajv / jsonschema sidecar. The DuckDB 2.0 build is built on [jsoncons](https://github.com/danielaparker/jsoncons) and supports drafts 4, 6, 7, 2019-09 and 2020-12; the Haybarn 1.5 build uses [pboettch/json-schema-validator](https://github.com/pboettch/json-schema-validator), which targets [draft-07](https://json-schema.org/draft-07/json-schema-release-notes).",
   "sections": [
     {
       "icon": "📐",
       "title": "JSON Schema as an in-SQL contract",
-      "description": "Validate JSON contracts where the data lives. Successful validation returns TRUE; nonconforming data and invalid schemas raise errors. For a boolean filter, use COALESCE(TRY(json_schema_validate(schema, payload)), false) after checking the schema separately. Schema defaults can also enrich incomplete documents.",
+      "description": "Validate JSON contracts where the data lives. In the DuckDB 2.0 build, json_schema_is_valid returns TRUE/FALSE and json_schema_errors returns a structured list of failures; json_schema_validate returns TRUE or raises. Schema defaults can also enrich incomplete documents.",
       "bulletPoints": [
         {
-          "label": "Draft-07 is the target",
-          "description": "The underlying validator primarily targets [draft-07](https://json-schema.org/draft-07/json-schema-release-notes). The `$schema` keyword in your document is honored where the validator supports it; for newer drafts ([2019-09](https://json-schema.org/specification-links#2019-09), [2020-12](https://json-schema.org/draft/2020-12/schema)), test the specific keywords you use rather than assuming full coverage."
+          "label": "Drafts 4 through 2020-12 (DuckDB 2.0 build)",
+          "description": "The `$schema` keyword selects [draft 4, 6, 7](https://json-schema.org/specification-links), [2019-09](https://json-schema.org/specification-links#2019-09) or [2020-12](https://json-schema.org/draft/2020-12/schema) semantics; schemas without `$schema` use 2020-12, and an unknown `$schema` is an error rather than being silently mis-validated. Keywords such as `prefixItems`, `unevaluatedProperties`, `dependentRequired` and `$defs` are enforced. The Haybarn 1.5 build targets draft-07 only."
         },
         {
           "label": "What the validator covers",
-          "description": "Coverage matches what draft-07 specifies: type checks (`string`, `number`, `integer`, `boolean`, `array`, `object`, `null`), `required`, `properties`, numeric `minimum` / `maximum` / `multipleOf`, string `minLength` / `maxLength` / `pattern` / `format`, array `minItems` / `maxItems` / `uniqueItems`, and the `default` keyword that powers default-value enrichment."
+          "description": "Type checks, `required`, `properties` / `patternProperties` / `additionalProperties`, numeric and string bounds, `pattern`, array keywords, combinators (`allOf` / `anyOf` / `oneOf` / `not`, `if` / `then` / `else`), local `$ref`, and `format` assertions (`date-time`, `date`, `email`, `hostname`, `ipv4`, `ipv6`, `uri`, `regex`, …) — in the DuckDB 2.0 build, `format` is validated; the Haybarn 1.5 build raises an error for any schema that uses it."
         },
         {
           "label": "Schema and data are both JSON",
@@ -32,20 +32,24 @@
       "description": "The extension is small and focused; it doesn't try to be every JSON-Schema validator out there. Knowing its boundaries keeps it in the role it's good at — a coarse SQL-side gate — rather than where a richer tool belongs.",
       "bulletPoints": [
         {
-          "label": "Validation failures raise errors",
-          "description": "Both validation functions return TRUE on success and raise on failure. TRY converts errors to NULL, and COALESCE(..., false) gives a boolean predicate, also treating SQL NULL as invalid. Check schemas outside TRY first so a broken contract is not mistaken for bad data. Exceptions contain text; there is no structured per-keyword result."
+          "label": "Errors vs. booleans",
+          "description": "`json_schema_validate` returns TRUE on success and raises on failure. In the DuckDB 2.0 build, use `json_schema_is_valid` for a boolean and `json_schema_errors` for a per-keyword report (path, keyword, message); an invalid schema still raises, so a broken contract is never mistaken for bad data. On the Haybarn 1.5 build use COALESCE(TRY(...), false) after checking the schema outside TRY."
         },
         {
           "label": "No cross-file `$ref` resolution",
-          "description": "Each call takes a single `JSON` schema value — there is no filesystem or HTTP `$ref` resolver. Inline any `$ref` targets into the same schema document before validating."
+          "description": "Each call takes a single `JSON` schema value — there is no filesystem or HTTP `$ref` resolver, so a schema never causes I/O. Inline any `$ref` targets (for example under `$defs`) into the same schema document. References to the standard draft meta-schemas resolve offline."
+        },
+        {
+          "label": "Safe on untrusted schemas (DuckDB 2.0 build)",
+          "description": "`pattern` and `patternProperties` run on [RE2](https://github.com/google/re2/wiki/Syntax) — linear time, so a pathological pattern cannot hang or crash the query. RE2 has no lookaround or backreferences; such patterns are reported as schema errors. Schemas and documents nested more than 256 levels are rejected, and deep recursion through `$ref` is stopped with an error before it can exhaust the thread's stack."
         },
         {
           "label": "Prefer typed columns where you can",
           "description": "If the data has a fixed shape, modeling it as proper DuckDB columns plus [`CHECK` constraints](https://duckdb.org/docs/sql/constraints) is cheaper, clearer, and gives better error messages. JSON Schema validation is for the genuinely-JSON case where the shape is contract-defined but the storage stays opaque."
         },
         {
-          "label": "Per-row cost scales with schema complexity",
-          "description": "Deeply-nested schemas with many keywords run the full validator on every row. For very large tables, validate once on ingest into a staging table rather than re-running the check on every read."
+          "label": "Compiled once per query",
+          "description": "In the DuckDB 2.0 build a schema is compiled once per thread and reused for every row (a small cache also covers a schema column with a handful of distinct values), so the per-row cost is the validation itself. For very large tables, validate once on ingest into a staging table rather than re-running the check on every read."
         }
       ]
     }

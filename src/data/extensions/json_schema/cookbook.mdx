@@ -15,6 +15,49 @@ SELECT json_schema_validate('{
 
 The schema document follows the [JSON Schema specification](https://json-schema.org/specification). See [`json_schema_validate`](#json_schema_validate).
 
+## Filter with a boolean (DuckDB 2.0 build)
+
+[`json_schema_is_valid`](#json_schema_is_valid) returns `FALSE` for a nonconforming document instead of raising, so no `TRY` is needed — and an invalid schema still raises, so it can't hide as "invalid data":
+
+```sql
+SELECT row_num, payload
+FROM events
+WHERE json_schema_is_valid('{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]}', payload)
+ORDER BY row_num;
+```
+
+## Report why rows fail (DuckDB 2.0 build)
+
+[`json_schema_errors`](#json_schema_errors) returns one `{path, keyword, message}` struct per failure, with `path` as a JSON Pointer into the document:
+
+```sql
+SELECT row_num, e.path, e.keyword, e.message
+FROM events,
+     unnest(json_schema_errors('{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]}', payload)) AS t(e)
+ORDER BY row_num;
+```
+
+Store the list next to quarantined rows to keep the reason with the data:
+
+```sql
+INSERT INTO events_quarantine
+SELECT row_num, payload
+FROM events_raw
+WHERE len(json_schema_errors('{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]}', payload)) > 0;
+```
+
+## Use 2020-12 keywords (DuckDB 2.0 build)
+
+`$schema` picks the draft (2020-12 when omitted). Tuple validation with `prefixItems`, closed objects with `unevaluatedProperties`, and `format` assertions are all enforced:
+
+```sql
+SELECT
+  json_schema_is_valid('{"prefixItems": [{"type": "string"}, {"type": "integer"}]}', '["a", 1]') AS tuple_ok,
+  json_schema_is_valid('{"properties": {"a": {}}, "unevaluatedProperties": false}', '{"a": 1, "b": 2}') AS closed_ok,
+  json_schema_is_valid('{"format": "email"}', '"not an email"') AS email_ok;
+-- true, false, false
+```
+
 ## Validate a column
 
 Most real workloads point validation at a `JSON` column instead of a literal:
