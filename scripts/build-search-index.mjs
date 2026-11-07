@@ -117,11 +117,30 @@ async function main() {
     }
   }
 
+  // 3) Orchard workers: worker pages are crawled as HTML above; add one record
+  //    per catalog object (table / function / macro) so ⌘K finds, say,
+  //    `delta_e` and lands on its anchor in vgi-color's catalog explorer.
+  let workerObjects = 0;
+  const workerDocs = join(DIST, 'products', 'orchard', 'workers', 'search.json');
+  if (existsSync(workerDocs)) {
+    for (const d of JSON.parse(await readFile(workerDocs, 'utf8'))) {
+      if (d.type === 'worker') continue;
+      await index.addCustomRecord({
+        url: `/products/orchard/workers/${d.worker}#${d.anchor ?? ''}`,
+        content: [d.title, d.text, d.keywords].filter(Boolean).join(' — '),
+        language: 'en',
+        filters: { kind: ['function'] },
+        meta: { title: d.title, extension: `vgi-${d.worker}`, kind: d.type === 'table' || d.type === 'view' ? 'Table' : 'Function' },
+      });
+      workerObjects++;
+    }
+  }
+
   await indexHaybarnFunctions();
   await indexHaybarnExtensions(index);
   const result = await index.writeFiles({ outputPath: join(DIST, 'pagefind') });
   if (result.errors?.length) throw new Error(result.errors.join('\n'));
-  console.log(`[search] indexed dist/ + ${recordCount} function records across ${extSlugs.length} extensions`);
+  console.log(`[search] indexed dist/ + ${recordCount} function records across ${extSlugs.length} extensions + ${workerObjects} Orchard worker objects`);
 }
 
 try {

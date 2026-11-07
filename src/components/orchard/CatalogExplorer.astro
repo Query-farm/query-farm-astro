@@ -1,0 +1,194 @@
+---
+// Browse everything a worker's catalog exposes, before installing it: schemas →
+// tables/views (columns, types, constraints) and functions/table functions/
+// macros (signature, per-argument docs, examples). Every object has a stable
+// anchor (search results deep-link here) and a "Copy SQL" starter.
+import { marked } from 'marked';
+import { groupOverloads, type Worker } from '../../data/vgi-workers';
+import type { WorkerFunction, WorkerTable } from '../../data/vgi-workers/schema';
+
+interface Props {
+  worker: Worker;
+}
+const { worker: w } = Astro.props;
+
+const anchor = (schema: string, name: string) => `obj-${schema}-${name}`.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+const qualify = (schema: string, name: string) => (schema === 'main' ? `${w.catalog}.${name}` : `${w.catalog}.${schema}.${name}`);
+const ident = (s: string) => (/^[a-z_][a-z0-9_]*$/.test(s) ? s : `"${s.replace(/"/g, '""')}"`);
+
+const KIND: Record<string, { label: string; cls: string }> = {
+  table: { label: 'Table', cls: 'bg-cat-field text-cat-field-ink' },
+  view: { label: 'View', cls: 'bg-cat-moss text-cat-moss-ink' },
+  scalar: { label: 'Function', cls: 'bg-cat-slate text-cat-slate-ink' },
+  aggregate: { label: 'Aggregate', cls: 'bg-cat-slate text-cat-slate-ink' },
+  table_in_out: { label: 'Table function', cls: 'bg-cat-gold text-cat-gold-ink' },
+  macro: { label: 'Macro', cls: 'bg-cat-plum text-cat-plum-ink' },
+  table_macro: { label: 'Table macro', cls: 'bg-cat-plum text-cat-plum-ink' },
+  other: { label: 'Object', cls: 'bg-soil-100 text-soil-700' },
+};
+// "table" for functions means a table function; tables use the table/view kinds.
+const fnKind = (f: WorkerFunction) => (f.kind === 'table' ? { label: 'Table function', cls: 'bg-cat-gold text-cat-gold-ink' } : KIND[f.kind] ?? KIND.other);
+
+function tableSql(schema: string, t: WorkerTable) {
+  return `SELECT * FROM ${qualify(schema, t.name)} LIMIT 10;`;
+}
+function fnSql(schema: string, f: WorkerFunction) {
+  if (f.examples[0]) return f.examples[0].trim().replace(/;?$/, ';');
+  const positional = f.arguments.filter(a => !a.named).map(a => `<${a.name || a.type}>`);
+  const named = f.arguments.filter(a => a.named && a.default == null).map(a => `${a.name} := <${a.type}>`);
+  const call = `${qualify(schema, f.name)}(${[...positional, ...named].join(', ')})`;
+  return f.kind === 'table' || f.kind === 'table_in_out' || f.kind === 'table_macro' ? `SELECT * FROM ${call} LIMIT 10;` : `SELECT ${call};`;
+}
+const md = (s?: string | null) => (s ? (marked.parseInline(s) as string) : '');
+
+const schemas = w.schemas.filter(s => s.tables.length || s.functions.length);
+const total = schemas.reduce((n, s) => n + s.tables.length + s.functions.length, 0);
+---
+
+{total === 0 ? (
+  <div class="rounded-xl border border-dashed border-soil-300 bg-[#fffdf7] p-6 text-sm text-soil-700">
+    This worker's catalog hasn't been indexed yet{w.harvest?.error ? ` (${w.harvest.error})` : ''}. Attach it and run
+    <code class="font-mono">SELECT * FROM duckdb_functions() WHERE database_name = '{w.catalog}'</code> to explore it locally.
+  </div>
+) : (
+  <div class="cat-explorer lg:grid lg:grid-cols-[15rem_1fr] lg:gap-6" data-explorer>
+    <!-- Object index -->
+    <aside class="mb-5 lg:mb-0">
+      <div class="lg:sticky lg:top-28">
+        <input
+          type="search"
+          data-explorer-filter
+          placeholder={`Filter ${total} objects…`}
+          aria-label="Filter catalog objects"
+          class="w-full rounded-lg border border-soil-300 bg-white px-3 py-2 text-sm text-soil-900 placeholder:text-soil-500 focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link/20"
+        />
+        <nav class="mt-3 max-h-[60vh] overflow-y-auto pr-1 text-[13px]" aria-label="Catalog objects">
+          {schemas.map(s => (
+            <div class="mb-3">
+              <div class="mb-1 font-mono text-[12px] font-semibold text-soil-500">{w.catalog}.{s.name}</div>
+              <ul>
+                {[...s.tables.map(t => ({ name: t.name, k: KIND[t.kind] ?? KIND.table })), ...[...groupOverloads(s.functions)].map(([name, g]) => ({ name, k: fnKind(g[0]) }))].map(o => (
+                  <li data-obj-link={o.name.toLowerCase()}>
+                    <a href={`#${anchor(s.name, o.name)}`} class="flex items-center gap-2 rounded px-1.5 py-1 text-soil-700 no-underline hover:bg-soil-100 hover:text-link">
+                      <span class:list={['h-2 w-2 flex-none rounded-full', o.k.cls]} aria-hidden="true"></span>
+                      <span class="truncate font-mono">{o.name}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </nav>
+      </div>
+    </aside>
+
+    <!-- Objects -->
+    <div class="flex flex-col gap-3">
+      {schemas.map(s => (
+        <>
+          {schemas.length > 1 || s.comment ? (
+            <div class="mt-2 first:mt-0">
+              <h3 class="font-mono text-[15px] font-semibold text-soil-900">{w.catalog}.{s.name}</h3>
+              {s.comment && <p class="mt-1 text-sm text-soil-700" set:html={md(s.comment)} />}
+            </div>
+          ) : null}
+
+          {s.tables.map(t => (
+            <article id={anchor(s.name, t.name)} data-obj={`${t.name} ${t.comment ?? ''} ${t.columns.map(c => c.name).join(' ')}`.toLowerCase()} class="scroll-mt-32 rounded-xl border border-soil-300 bg-white p-4">
+              <header class="flex flex-wrap items-center gap-2">
+                <span class:list={['rounded-md px-2 py-0.5 text-[11.5px] font-semibold', (KIND[t.kind] ?? KIND.table).cls]}>{(KIND[t.kind] ?? KIND.table).label}</span>
+                <h4 class="font-mono text-[15px] font-semibold text-soil-900"><a href={`#${anchor(s.name, t.name)}`} class="text-inherit no-underline hover:text-link">{t.name}</a></h4>
+                <button type="button" class="ce-copy ml-auto rounded-md border border-soil-300 px-2 py-0.5 text-[12px] text-soil-700 hover:border-sun-400" data-sql={tableSql(s.name, t)}>Copy SQL</button>
+              </header>
+              {t.comment && <p class="mt-2 text-sm leading-relaxed text-soil-700" set:html={md(t.comment)} />}
+              {t.columns.length > 0 && (
+                <div class="mt-3 overflow-x-auto">
+                  <table class="w-full text-left text-[13px]">
+                    <thead class="text-[11.5px] text-soil-500">
+                      <tr><th class="py-1 pr-3 font-semibold">Column</th><th class="py-1 pr-3 font-semibold">Type</th><th class="py-1 font-semibold">Description</th></tr>
+                    </thead>
+                    <tbody class="divide-y divide-soil-200">
+                      {t.columns.map(c => (
+                        <tr>
+                          <td class="whitespace-nowrap py-1.5 pr-3 font-mono text-soil-900">{c.name}{c.nullable === false && <span class="ml-1 text-[10.5px] font-sans font-semibold text-sun-700" title="NOT NULL">NN</span>}</td>
+                          <td class="whitespace-nowrap py-1.5 pr-3 font-mono text-[12px] text-soil-600">{c.type}</td>
+                          <td class="py-1.5 text-soil-700" set:html={md(c.comment)} />
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {t.constraints.length > 0 && <p class="mt-2 font-mono text-[12px] text-soil-600">{t.constraints.join(' · ')}</p>}
+            </article>
+          ))}
+
+          {[...groupOverloads(s.functions)].map(([fname, group]) => {
+            // Argument docs come from the richest overload.
+            const f = group.reduce((a, b) => (b.arguments.length > a.arguments.length ? b : a));
+            const k = fnKind(f);
+            const comment = group.find(g => g.comment)?.comment;
+            return (
+              <article id={anchor(s.name, fname)} data-obj={`${fname} ${comment ?? ''} ${group.flatMap(g => g.arguments.map(a => a.name)).join(' ')}`.toLowerCase()} class="scroll-mt-32 rounded-xl border border-soil-300 bg-white p-4">
+                <header class="flex flex-wrap items-center gap-2">
+                  <span class:list={['rounded-md px-2 py-0.5 text-[11.5px] font-semibold', k.cls]}>{k.label}</span>
+                  <h4 class="font-mono text-[15px] font-semibold text-soil-900"><a href={`#${anchor(s.name, f.name)}`} class="text-inherit no-underline hover:text-link">{f.name}</a></h4>
+                  <button type="button" class="ce-copy ml-auto rounded-md border border-soil-300 px-2 py-0.5 text-[12px] text-soil-700 hover:border-sun-400" data-sql={fnSql(s.name, f)}>Copy SQL</button>
+                </header>
+                {group.map(f => (
+                <p class="mt-2 overflow-x-auto whitespace-nowrap font-mono text-[12.5px] text-soil-800">
+                  {f.name}(<>{f.arguments.map((a, i) => (<>{i > 0 && ', '}<span class="text-soil-900">{a.named ? `${ident(a.name ?? '')} := ` : a.name ? `${ident(a.name)} ` : ''}</span><span class="text-sun-700">{a.type}</span></>))}</>){f.return_type && <> <span class="text-soil-500">→</span> <span class="text-field-700">{f.return_type}</span></>}
+                </p>
+                ))}
+                {group.length > 1 && <p class="mt-1 text-[12px] text-soil-500">{group.length} overloads</p>}
+                {comment && <p class="mt-2 text-sm leading-relaxed text-soil-700" set:html={md(comment)} />}
+                {f.arguments.some(a => a.description || a.default != null) && (
+                  <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px]">
+                    {f.arguments.map(a => (
+                      <>
+                        <dt class="font-mono text-soil-900">{a.name}</dt>
+                        <dd class="text-soil-700"><span set:html={md(a.description)} />{a.default != null && <span class="ml-1 text-soil-500">(default <code class="font-mono">{String(a.default)}</code>)</span>}</dd>
+                      </>
+                    ))}
+                  </dl>
+                )}
+              </article>
+            );
+          })}
+        </>
+      ))}
+      <p data-explorer-empty class="hidden py-6 text-center text-sm text-soil-600">No objects match that filter.</p>
+    </div>
+  </div>
+)}
+
+<script>
+  function wireExplorer() {
+    document.querySelectorAll<HTMLElement>('[data-explorer]').forEach(root => {
+      if (root.dataset.wired) return;
+      root.dataset.wired = '1';
+      const input = root.querySelector<HTMLInputElement>('[data-explorer-filter]');
+      const objs = Array.from(root.querySelectorAll<HTMLElement>('[data-obj]'));
+      const links = Array.from(root.querySelectorAll<HTMLElement>('[data-obj-link]'));
+      const empty = root.querySelector<HTMLElement>('[data-explorer-empty]');
+      input?.addEventListener('input', () => {
+        const q = input.value.trim().toLowerCase();
+        let shown = 0;
+        objs.forEach(o => { const v = !q || o.dataset.obj!.includes(q); o.hidden = !v; if (v) shown++; });
+        links.forEach(l => { l.hidden = Boolean(q) && !l.dataset.objLink!.includes(q); });
+        empty?.classList.toggle('hidden', shown > 0);
+      });
+      root.querySelectorAll<HTMLButtonElement>('.ce-copy').forEach(btn =>
+        btn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(btn.dataset.sql ?? '');
+            btn.textContent = 'Copied';
+            setTimeout(() => (btn.textContent = 'Copy SQL'), 1500);
+          } catch { /* clipboard unavailable */ }
+        }),
+      );
+    });
+  }
+  wireExplorer();
+  document.addEventListener('astro:after-swap', wireExplorer);
+</script>
