@@ -116,11 +116,28 @@ DuckDB treats an `http://` or `https://` ATTACH path as a remote file and asks f
 
 Pass driver options as `ATTACH` options. VARCHAR and BOOLEAN values use the string option setter, integers the int64 setter, FLOAT/DOUBLE the double setter, and BLOBs the bytes setter. Nested option structures are rejected. Use numeric SQL values for options that require numeric setters, rather than quoted numbers. `ATTACH` option names are lowercased, so a driver option whose name needs uppercase letters has to come from a secret's `EXTRA_OPTIONS` or a connection profile.
 
-Use an ADBC secret to reuse connection details. `SCOPE` may be omitted when the secret has a non-empty `URI`; the URI then becomes its lookup scope, so `ATTACH '<that uri>' AS db (TYPE adbc)` finds it. An explicit `SCOPE` can match a different or broader prefix, and a secret with neither is rejected. Its `EXTRA_OPTIONS` map contains string values; supply options requiring numeric or binary setters directly as `ATTACH` options. Passwords and values from `EXTRA_OPTIONS` are redacted in DuckDB's secret display. Other fields, including `uri`, are not, so avoid embedding credentials there. Secret display redaction does not redact SQL text containing credentials from application logs or query history.
+Use an ADBC secret to reuse connection details. `SCOPE` may be omitted when the secret has a non-empty `URI`; the URI then becomes its lookup scope, so `ATTACH '<that uri>' AS db (TYPE adbc)` finds it. An explicit `SCOPE` can match a different or broader prefix, and a secret with neither is rejected. Its `EXTRA_OPTIONS` map contains string values; supply options requiring numeric or binary setters directly as `ATTACH` options. Passwords and values from `EXTRA_OPTIONS` are redacted in DuckDB's secret display. On the DuckDB 2.0 build, a `uri` that carries credentials (`postgresql://user:password@host/db`, or a `password=`/`token=` query parameter) is redacted too, and the secret's scope stores the URI with the password masked (`postgresql://user:***@host/db`); `ATTACH` with the full URI still finds the secret. On earlier builds `uri` is shown as written, so avoid embedding credentials there. Secret display redaction does not redact SQL text containing credentials from application logs or query history.
 
 `adbc_insert` accepts driver-specific statement options through `options := {...}` (a STRUCT or MAP), applied after the target table and mode. Keys `adbc_insert` sets itself are rejected; unknown keys surface the driver's error.
 
 Drivers load as native shared libraries into DuckDB. Install a driver manifest to resolve names such as `sqlite`, or provide the library path and, when needed, its entrypoint. Installing a Python driver package alone does not guarantee that a manifest is available to DuckDB. Load only libraries you trust.
+
+## Security, sandboxing and cancellation (DuckDB 2.0)
+
+Attaching an ADBC database loads a native driver library into the DuckDB process and connects to an external system. The DuckDB 2.0 build treats that as external access:
+
+- **`enable_external_access = false` refuses `ATTACH … (TYPE adbc)` and `adbc_profiles()`** with a Permission Error. Databases attached before the setting was turned off stay usable. Earlier builds load drivers regardless of this setting.
+- **`adbc_allowed_drivers`** limits which drivers `ATTACH` may load. It takes a comma-separated list of driver names or library paths, matched exactly against the `driver` option, including a driver that comes from a secret. The default, an empty string, allows any driver. While it is set, connection profiles (`profile` or `profile://…`) and the `search_paths` option are refused, because they can change which library is loaded. Set it before handing a connection to untrusted SQL, and use [`lock_configuration`](https://duckdb.org/docs/configuration/overview) so it cannot be changed back.
+
+```sql
+SET adbc_allowed_drivers = 'sqlite';
+ATTACH ':memory:' AS allowed_db (TYPE adbc, driver 'sqlite');
+DETACH allowed_db;
+RESET adbc_allowed_drivers;
+```
+
+- **Credentials are masked** wherever the extension shows a connection string: the attach path in `duckdb_databases()` and driver error messages show `user:***@host` and `password=***` instead of the password.
+- **Queries can be cancelled.** Interrupting a query (Ctrl-C in the CLI, or a client cancelling it) or exceeding [`max_execution_time`](https://duckdb.org/docs/configuration/overview) cancels the running remote statement through the driver's `AdbcStatementCancel`, for `adbc_scan`, `adbc_scan_table`, catalog queries, `CONNECT`, `adbc_execute` and inserts. Drivers that cannot cancel a running statement (SQLite, for example) stop at the next result batch instead.
 
 ## Arrow streaming and performance
 
