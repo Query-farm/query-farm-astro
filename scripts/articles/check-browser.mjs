@@ -25,7 +25,9 @@ try {
   if(activeExamples.length)await page.locator('.example-toolbar-run-button').first().waitFor({timeout:30000});
   else await expect(page.locator('[data-challenge-ready]')).toHaveAttribute('data-challenge-ready','true');
   await expect(page.locator('.example-toolbar-run-button')).toHaveCount(activeExamples.length,{timeout:30000});
-  assert.match(await page.locator('meta[name="robots"]').getAttribute('content'),/noindex/);
+  const source=await readFile(new URL('../../src/content/tutorials/'+slug+'.mdx',import.meta.url),'utf8');
+  const robots=await page.locator('meta[name=robots]').evaluateAll(nodes=>nodes.map(n=>n.content).join(' '));
+  assert.equal(/noindex/.test(robots),/^draft:\s*true\s*$/m.test(source));
   await page.screenshot({path:new URL(`${slug}-desktop.png`,output).pathname});
   const words=await page.locator('.qf-prose').evaluate(e=>{const content=e.cloneNode(true);content.querySelectorAll('script,style,noscript').forEach(node=>node.remove());return content.textContent.trim().split(/\s+/).length});
   assert.ok(words<1800,`${slug}: ${words} words; keep total prose + code under 9 minutes at 200 wpm`);

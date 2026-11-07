@@ -48,6 +48,7 @@ export const GET = () => new Response(`# Query.Farm
 - [Product map](${origin}/products/): How the Query.Farm products fit together.
 ${productLines}
 - [Blog](${origin}/blog/): Technical articles and release analysis.
+- [Tutorials](${origin}/tutorials/): Practical DuckDB and SQL walkthroughs with sample data, visible results, and browser exercises.
 
 ## Installation and usage guides
 

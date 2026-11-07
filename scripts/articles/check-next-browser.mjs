@@ -23,7 +23,9 @@ try{
   await expect(page.locator('[data-experiment-ready]')).toHaveCount(1);
   await expect(page.locator('[data-challenge-ready]')).toHaveCount(1);
   await expect(page.locator('.example-toolbar-run-button')).toHaveCount(data.examples.length,{timeout:30000});
-  assert.match(await page.locator('meta[name=robots]').getAttribute('content'),/noindex/);
+  const source=await readFile(new URL('../../src/content/tutorials/'+data.slug+'.mdx',import.meta.url),'utf8');
+  const robots=await page.locator('meta[name=robots]').evaluateAll(nodes=>nodes.map(n=>n.content).join(' '));
+  assert.equal(/noindex/.test(robots),/^draft:\s*true\s*$/m.test(source));
   const words=await page.locator('.qf-prose').evaluate(element=>{const clone=element.cloneNode(true);clone.querySelectorAll('script,style,noscript').forEach(node=>node.remove());return clone.textContent.trim().split(/\s+/).length});
   assert.ok(words<1800,`${data.slug}: ${words} words; shorten before review`);
   for(const sample of data.sampleTables){

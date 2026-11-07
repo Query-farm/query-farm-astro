@@ -158,13 +158,15 @@ async function prefetchExtensions(
   connId: number,
   extensions: ExtensionRef[],
 ): Promise<void> {
+  // Core SQL is a page label, not an extension to install or prefetch.
+  const loadable = extensions.filter(({ source }) => source !== 'builtin');
   try {
-    for (const { name, source } of extensions) {
+    for (const { name, source } of loadable) {
       // INSTALL downloads nothing in the browser, but its `FROM` sets the
       // repository the prefetch builds its URL from.
       if (source) await db.runQuery(connId, `INSTALL ${name} ${installFromClause(source)}`);
     }
-    await db.prefetchExtensions(namesToPrefetch(extensions));
+    await db.prefetchExtensions(namesToPrefetch(loadable));
   } catch (error) {
     console.warn(`[repl] prefetch failed; LOAD will download the extensions`, error);
   }

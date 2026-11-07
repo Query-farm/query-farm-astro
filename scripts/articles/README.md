@@ -1,11 +1,11 @@
-# Search tutorial drafts
+# Interactive SQL tutorials
 
-Branch: `content/search-tutorials-review`. The twenty-three MDX tutorials in `src/content/tutorials/` have `draft: true`.
+Branch: `content/search-tutorials-review`. The twenty-three MDX tutorials in `src/content/tutorials/` are published with `draft: false`.
 The landing page is `/tutorials/`; each tutorial lives at `/tutorials/<slug>/`.
 The development-only review route `/review/search-tutorials/` links to these new
 URLs. Normal builds exclude draft tutorials and the review route. An empty
-tutorial index is noindex. No publication or external GA setup
-is performed by these scripts.
+tutorial index is noindex; the populated published catalog is indexable. No
+external GA configuration is performed by these scripts.
 
 The tutorials use the shared article layout, shell, structured data, next-step
 cards, and production-only GA loader. `src/data/tutorials/*.json` is the source
@@ -100,8 +100,9 @@ engagement separate from accepted-enquiry/key-event reporting.
 - Confirm the tone and technical explanation on desktop and mobile.
 - Inspect the visible input tables, try each interactive diagram, then run and edit the examples. Full setup SQL is also available in a disclosure.
 - Review the numerical claims against the included fixtures/evidence.
-- When approving publication, set the actual publication date and clear
-  `draft: true`. The review page remains a preview-only route.
+- New drafts need the actual publication date and `draft: false` when approved.
+  The current 23 tutorials are dated November 7, 2026. Review pages remain
+  preview-only routes.
 
 Rendered prose plus displayed SQL (including collapsed setup) was checked at
 under 1,800 words per article, a conservative upper limit of nine minutes at
@@ -206,9 +207,10 @@ measure I/O. The two plan lessons distinguish estimated output from measured
 operator output. The profiling lesson's EXISTS rewrite repairs a wrong answer,
 so it is explicitly not presented as an equivalent-query speed benchmark.
 
-After a normal production build, `node scripts/articles/check-draft-build.mjs`
-checks that all twenty-three draft routes, all three review routes, and draft sitemap
-links are excluded, and that the empty production catalog is noindex.
+After a normal production build, `node scripts/articles/check-publication-build.mjs`
+checks published routes, canonical URLs, sitemap dates, indexability, and extension
+backlinks. It also verifies that review routes and any future drafts stay excluded.
+`check-draft-build.mjs` remains an alias for this check.
 
 
 ## Practical analytics and reshaping batch
@@ -242,3 +244,39 @@ The reading check includes rendered SQL, results, and expandable setup text.
 All ten practical lessons are below 1,800 words; exercise time is reader-paced.
 No performance claims are inferred from the 100-row quantile fixture. KLL output
 is approximate at scale even though this small example agrees with exact SQL.
+
+
+## Production release validation
+
+The 23 tutorials are published with an authored November 7, 2026 publication
+date. The merged code retains main's rc12 browser runtime, multi-extension
+prefetch, session-mode shells, blog art, contribution lists, and compact Pages
+Functions bundle. Core-SQL tutorial labels are excluded from extension prefetch.
+
+Build without `INCLUDE_DRAFTS`. The normal build includes published tutorials,
+canonicals, authored sitemap dates, site search records, and related-tutorial
+links on extension pages. Editorial review routes remain development-only.
+
+```sh
+npm run check
+npm run build
+node scripts/articles/check-publication-build.mjs
+npm run check:pages-functions
+PLAYWRIGHT_PORT=4439 node --import tsx scripts/haybarn-functions/preview-test.mjs
+# With the production preview running, in another terminal:
+ARTICLE_PREVIEW_URL=http://127.0.0.1:4439 node scripts/articles/check-release-browser.mjs --browser=chromium
+ARTICLE_PREVIEW_URL=http://127.0.0.1:4439 node scripts/articles/check-release-browser.mjs --browser=webkit
+```
+
+The release suite executes all 69 runnable examples and 23 challenge solutions
+per engine, checks expected result rows, rejects the supplied starter answers,
+checks the pinned runtime, and tests mobile layouts, analytics payloads, site
+search, the complete catalog, and regression routes from main's newer blog
+posts. The PostgreSQL tutorial's remote query remains native-only; its local
+challenge runs in both browser engines. WebKit is the automated Safari-engine
+check, not a claim to test every installed Safari version.
+
+Results and screenshots go to `/tmp/query-farm-articles-review/release-<engine>/`.
+Pass tutorial slugs to focus a rerun. `check-draft-build.mjs` now delegates to the
+publication check, which validates visibility according to each tutorial's
+frontmatter rather than expecting the whole collection to remain a draft.
