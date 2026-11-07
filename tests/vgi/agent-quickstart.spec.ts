@@ -157,7 +157,7 @@ test('integration ideas link directly to the relevant starting requests', async 
 });
 
 test('live integration proof distinguishes real API results from sample inventory', async ({ page }) => {
-  await page.goto('/vgi/build-with-an-agent/');
+  await page.goto('/blog/build-vgi-workers-with-coding-agents/');
   const result=page.getByRole('table', { name:'Live releases joined to sample project inventory' });
   await expect(result.locator('tbody tr')).toHaveCount(2);
   await expect(result).toContainText('Analytics demo');
