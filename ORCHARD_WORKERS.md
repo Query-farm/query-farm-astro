@@ -25,7 +25,43 @@ Shared edits:
 - The Orchard landing page gains an "Open workers" section.
 - `CodeTabs` now accepts a per-step `lang`, for a bash download step followed by a SQL attach step.
 
-## Problems the harvest found (fix these before launch)
+## Status as of 2026-11-07 (verified re-harvest)
+
+Data now comes from `vgi-lint fleet dump`. vgi-lint-check 2.1.0 attached each worker exactly as
+its README says (58 `github-auto://`, 35 uvx from GitHub, 7 jar, 1 `docker://`) and ran every
+executable example. **96 of 101 pass verification and are listed.** Unverified workers aren't
+listed (`unlistedWorkers` in `src/data/vgi-workers/index.ts`).
+
+Not listed:
+- **Upstream blocks server traffic.** vgi-etf-invesco gets HTTP 406 from Invesco's API;
+  vgi-etf-schwab gets 403 Access Denied, likely a datacenter-IP block. Either verify from a
+  non-datacenter host or treat these as "needs a browser-like egress".
+- **Examples assume a repo checkout.** vgi-explain (`test/fixtures/models.parquet`), vgi-mft
+  (`data/sample.mft`) and vgi-pdf (`test/sql/data/*.pdf`). Their examples need to reference hosted
+  sample files (or accept BLOBs/URLs) so they work for an installed worker.
+
+Resolved from the list below:
+1. **glibc:** vgi-actions `453ac73` builds Linux against glibc 2.28 and fails a release that needs
+   more. The affected workers were re-released at v0.2.1.
+2. **vgi-nlp:** pinned to 3.13 (v0.2.1). vgi-anomaly got the same cap.
+3. **vgi-libpostal:** Docker is the documented primary way to run it, and it now verifies via
+   `docker://`.
+4. **READMEs:** all 101 have a standard quick start using the verified transports.
+5. **ANY return types:** declared in 13 workers. Only vgi-fixedformat's two argument-dependent
+   functions remain ANY, by design.
+6. **Credentials:** 13 workers declare secret types. In 12 of them, credentials never reached the
+   worker before this; that's fixed. The underlying SDK bugs are fixed and covered by the new vgi
+   secret-lookup conformance suite in every SDK: vgi-python 0.49.2, vgi-go 0.40.2,
+   vgi-rust 0.49.4, vgi-csharp 0.24.1; Java and TypeScript in flight.
+7. **Lint:** scores come from the same dump run, so they're fresh.
+
+Still open:
+- `github-auto://` requires `@tag` (no `@latest`), so READMEs pin a release and go stale.
+  Proposal: `@latest` in the vgi extension.
+- The concurrency group in every worker's ci.yml (`ci-${{ github.ref }}`) makes tag-triggered
+  Release and Publish cancel each other.
+
+## Problems the first harvest found
 
 1. **13 Go/Rust Linux release binaries need glibc ≥ 2.35.** They won't start on RHEL 9 or
    Amazon Linux 2023, which have 2.34.

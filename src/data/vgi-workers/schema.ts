@@ -96,6 +96,7 @@ export const workerRecordSchema = z.object({
       /** Verified LOCATION strings, when the harvest checked them. */
       uvx: str,
       github_auto: str,
+      docker: str,
     })
     .nullable()
     .optional(),

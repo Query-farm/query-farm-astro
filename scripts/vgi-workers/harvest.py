@@ -705,7 +705,7 @@ def from_dump(d: dict[str, Any]) -> dict[str, Any]:
         "status": "ok" if d.get("status") in (None, "ok") and d.get("catalog") else d.get("status") or "attach_failed",
         "error": d.get("error"),
         "method": d.get("transport"),
-        "run_command": d.get("location"),
+        "location": d.get("location"),
         "catalog": d.get("catalog") or {},
         "secret_types": d.get("secret_types") or [],
         "lint": {"score": lint.get("score"), "level": lint.get("level")} if lint else None,
@@ -722,6 +722,25 @@ def from_dump(d: dict[str, Any]) -> dict[str, Any]:
             "checked_at": d.get("generated_at"),
         },
     }
+
+
+def run_block(method: Any, run_cmd: Any, loc_example: Any, verified_loc: Any,
+              prev: dict[str, Any] | None) -> dict[str, Any]:
+    """`command` is the local executable (for manual downloads); the verified
+    transport LOCATION goes in `github_auto` / `uvx` / `docker`."""
+    prev = prev or {}
+    run = {"method": method, "command": prev.get("command") or run_cmd,
+           "location_example": loc_example}
+    loc = verified_loc or ""
+    if loc.startswith("github-auto://"):
+        run["github_auto"] = loc
+    elif loc.startswith("uvx "):
+        run["uvx"] = loc
+        run["script"] = loc.rsplit(" ", 1)[-1]
+    elif loc.startswith(("docker://", "oci://")):
+        run["docker"] = loc
+        run["method"] = "docker"
+    return run
 
 
 def merge_worker(g: dict[str, Any], c: dict[str, Any] | None,
@@ -766,7 +785,7 @@ def merge_worker(g: dict[str, Any], c: dict[str, Any] | None,
         "source_url": cat.get("source_url"),
         "release": rel,
         "image": f"ghcr.io/{ORG.lower()}/{repo}" if has_docker else None,
-        "run": {"method": method, "command": run_cmd, "location_example": loc_example},
+        "run": run_block(method, run_cmd, loc_example, c.get("location"), plan.get("prev_run")),
         "readme_sql": readme_first_sql(readme),
         "attach_options": cat.get("attach_options") or [],
         "example_queries": cat.get("example_queries") or [],
@@ -793,6 +812,13 @@ def phase_merge(args: argparse.Namespace) -> None:
     catdir = Path(args.catalogs) if args.catalogs else work / "catalogs"
     dumps = Path(args.dumps) if getattr(args, "dumps", None) else None
     fleet = load_fleet(Path(args.fleet))
+    # Keep executable names found by earlier tarball harvests (the dump only
+    # records the transport LOCATION it attached with).
+    prev_out = Path(args.out)
+    if prev_out.exists():
+        for w in json.loads(prev_out.read_text()).get("workers", []):
+            if w.get("run", {}).get("method") == "binary" and w["repo"] in plan:
+                plan[w["repo"]]["prev_run"] = w["run"]
     workers = []
     for g in sorted(github, key=lambda x: x["repo"]):
         if dumps is not None:
