@@ -33,7 +33,7 @@
       "bulletPoints": [
         {
           "label": "Constant expressions are parsed once",
-          "description": "When the expression argument is a SQL constant — by far the common case — the parser runs a single time and the compiled program is reused for every row. Per-row cost is then just the JSON walk plus operator application, not a parse-and-compile on each row, so a static expression over a million rows still parses exactly once."
+          "description": "When the expression argument is a SQL constant — by far the common case — the parser runs once per worker thread and the compiled program is reused for every row. Per-row cost is then just the JSON walk plus operator application, not a parse-and-compile on each row. In the DuckDB 2.0 build an expression column is cached too (the 32 most recently used expressions per thread)."
         },
         {
           "label": "JSON in, JSON out",
@@ -51,8 +51,8 @@
       "description": "The extension wraps the JSONata language faithfully, but it lives inside SQL — the surrounding context is DuckDB, not Node.js. A few things are worth knowing up front.",
       "bulletPoints": [
         {
-          "label": "Single scalar function surface",
-          "description": "Everything is reached through one function — there are no helper UDFs for individual JSONata operators. The expression string carries the whole computation. (It is not a JSON loader either; use DuckDB's [`read_json`](https://duckdb.org/docs/data/json/loading_json.html) for that.)"
+          "label": "Small function surface",
+          "description": "Everything is reached through [`jsonata`](#jsonata) — there are no helper UDFs for individual JSONata operators; the expression string carries the whole computation. [`jsonata_validate`](#jsonata_validate) checks expression syntax without evaluating. (It is not a JSON loader either; use DuckDB's [`read_json`](https://duckdb.org/docs/data/json/loading_json.html) for that.)"
         },
         {
           "label": "Expressions are SQL strings",
@@ -65,6 +65,10 @@
         {
           "label": "Per-row cost scales with document and expression size",
           "description": "Deeply-nested documents and complex expressions both cost, and they scale linearly with the data they touch. For very wide rows, materialize the JSONata projection once into a column instead of re-evaluating it in every downstream query."
+        },
+        {
+          "label": "Bounded evaluation (DuckDB 2.0 build)",
+          "description": "Each row's evaluation is limited by `jsonata_timeout_ms` (10 seconds by default) and `jsonata_max_depth` (1,000), stops on query cancellation, and is protected by a native stack guard — runaway recursion fails the query instead of crashing DuckDB. Regular expressions use RE2, so they run in linear time but don't support lookaround or backreferences."
         }
       ]
     }
