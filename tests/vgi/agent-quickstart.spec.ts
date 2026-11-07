@@ -1,47 +1,75 @@
 import { test, expect } from '@playwright/test';
 
-test('language selection is explicit and every agent/language produces the right prompt', async ({ page }) => {
+test('requests are ready immediately and agent choice only changes installation', async ({ page }) => {
   await page.goto('/vgi/build-with-an-agent/');
-  const prompt = page.getByLabel('Your agent prompt · edit it to fit your project');
-  await expect(page.locator('input[name="vgi-language"]:checked')).toHaveCount(0);
-  await expect(prompt).toHaveValue('');
-  await expect(page.getByRole('button', { name: 'Copy prompt', exact: true })).toBeDisabled();
-  for (const name of ['C#', 'Go', 'Java', 'Python', 'Rust', 'TypeScript']) {
-    await page.getByRole('radio', { name, exact: true }).check();
-    await expect(prompt).toHaveValue(new RegExp(`Build a VGI worker in ${name.replace('#', '\\#')}\\.`));
-    await expect(prompt).toHaveValue(/Verify the actual SQL results/);
-    await expect(prompt).toHaveValue(/stock DuckDB 2.0.0 with VGI from query_farm/);
+  const quickstart = page.locator('[data-agent-quickstart]');
+  const requests = await quickstart.locator('[data-request-text]').allTextContents();
+  await expect(quickstart.locator('textarea, select, input[name="vgi-language"]')).toHaveCount(0);
+  await expect(quickstart.locator('.request-grid [data-copy-request]')).toHaveCount(3);
+  for (const button of await quickstart.locator('.request-grid [data-copy-request]').all()) await expect(button).toBeEnabled();
+  for (const prompt of requests) {
+    expect(prompt).toMatch(/which.*language/);
+    expect(prompt).toMatch(/test the worker/);
+    expect(prompt).toMatch(/ATTACH/);
   }
-  for (const [name, id] of [['Codex', 'codex'], ['Claude Code', 'claude-code'], ['Cursor', 'cursor'], ['GitHub Copilot', 'github-copilot'], ['OpenCode', 'opencode']]) {
-    await page.getByRole('radio', { name, exact: true }).check();
-    await expect(page.locator('[data-install-command]')).toContainText(`--agent ${id}`);
-    await expect(prompt).toHaveValue(/Build a VGI worker in TypeScript/);
+  await quickstart.getByText('Installation help & compatibility', {exact:true}).click();
+  for (const [name, id, directory] of [
+    ['Codex', 'codex', '.agents/skills/'], ['Claude Code', 'claude-code', '.claude/skills/'],
+    ['Cursor', 'cursor', '.cursor/skills/'], ['GitHub Copilot', 'github-copilot', '.github/skills/'],
+    ['OpenCode', 'opencode', '.opencode/skills/'],
+  ]) {
+    await page.getByRole('radio', {name, exact:true}).check();
+    await expect(quickstart.locator('[data-install-command]')).toContainText(`--agent ${id}`);
+    await expect(quickstart.locator('[data-skill-directory]')).toHaveText(directory);
+    expect(await quickstart.locator('[data-request-text]').allTextContents()).toEqual(requests);
   }
-  await page.getByLabel('3. What should it build?').selectOption('api');
-  await expect(prompt).toHaveValue(/Ask me for its URL or specification/);
+  await page.getByRole('radio', {name:'Other agents', exact:true}).check();
+  await expect(quickstart.locator('[data-install-command]')).not.toContainText('--agent');
+  await expect(quickstart.locator('[data-other-help]')).toBeVisible();
+  await expect(quickstart.locator('[data-manual-help]')).toBeHidden();
 });
 
-test('copy uses the edited prompt and reports success', async ({ page }) => {
+test('installation and each starting request copy the visible text', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (text: string) => { (window as typeof window & { copied: string }).copied = text; } }, configurable: true });
   });
   await page.goto('/vgi/build-with-an-agent/');
-  await page.getByRole('radio', { name: 'Go', exact: true }).check();
-  const prompt = page.getByLabel('Your agent prompt · edit it to fit your project');
-  await prompt.fill('Build my Go worker using the existing project conventions.');
-  await page.getByRole('button', { name: 'Copy prompt', exact: true }).click();
-  await expect(page.locator('[data-agent-quickstart]').getByRole('status')).toHaveText('Prompt copied. Paste it into your coding agent.');
-  expect(await page.evaluate(() => (window as typeof window & { copied: string }).copied)).toBe('Build my Go worker using the existing project conventions.');
+  const quickstart = page.locator('[data-agent-quickstart]');
+  await page.getByRole('radio', {name:'Claude Code', exact:true}).check();
+  await quickstart.getByRole('button', {name:'Copy skill installation command'}).click();
+  expect(await page.evaluate(() => (window as typeof window & {copied:string}).copied)).toBe(await quickstart.locator('[data-install-command]').textContent());
+  await expect(quickstart.locator('[data-install-status]')).toHaveText('Installation command copied.');
+  await quickstart.getByText('Describe your own integration', {exact:true}).click();
+  for (const card of await quickstart.locator('[data-request-card]').all()) {
+    await card.getByRole('button', {name:/Copy request:/}).click();
+    expect(await page.evaluate(() => (window as typeof window & {copied:string}).copied)).toBe(await card.locator('[data-request-text]').textContent());
+    await expect(card.getByRole('status')).toHaveText('Copied. Paste this into your coding agent.');
+  }
 });
 
-test('mobile layout and language guidance remain usable', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+test('blocked clipboard leaves readable text and explains manual copying', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {value:{writeText:async () => {throw new Error('Permission denied');}}, configurable:true});
+  });
+  await page.goto('/vgi/build-with-an-agent/');
+  const card = page.locator('#request-api');
+  await card.getByRole('button', {name:/Copy request:/}).click();
+  await expect(card.getByRole('status')).toContainText('Select the text above');
+  await expect(card.locator('[data-request-text]')).toBeVisible();
+});
+
+test('mobile layout keeps installation, language guidance, and requests usable', async ({ page }) => {
+  await page.setViewportSize({width:320,height:740});
   await page.goto('/vgi/build-with-an-agent/');
   await page.evaluate(() => document.fonts.ready);
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-  await page.getByRole('radio', { name: 'Java', exact: true }).check();
-  await expect(page.locator('[data-language-requirements]')).toContainText('Java 21+');
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const quickstart = page.locator('[data-agent-quickstart]');
+  await page.getByRole('radio', {name:'Claude Code',exact:true}).check();
+  await expect(quickstart.locator('[data-install-command]')).toContainText('--agent claude-code');
+  await expect(quickstart.getByRole('list', {name:'Worker languages'}).locator('li')).toHaveCount(6);
+  await expect(quickstart.getByText('Name your language, or let the agent ask before it writes code.', {exact:false})).toBeVisible();
+  await expect(quickstart.locator('.request-grid [data-copy-request]')).toHaveCount(3);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
 test('recorded build exposes real source and SQL evidence, including slower runs', async ({ page }) => {
@@ -129,19 +157,15 @@ test('VGI animation advances once, pauses, and replays without moving focus', as
   await expect(explanation).toHaveAttribute('data-playing', 'true');
 });
 
-test('integration ideas carry into the prompt without choosing a language', async ({ page }) => {
+test('integration ideas link directly to the relevant starting requests', async ({ page }) => {
   await page.goto('/vgi/build-with-an-agent/');
-  await expect(page.locator('[data-choose-recipe]')).toHaveCount(4);
-  await page.locator('[data-choose-recipe="files"]').click();
-  await expect(page.getByLabel('3. What should it build?')).toHaveValue('files');
-  await expect(page.locator('input[name="vgi-language"]:checked')).toHaveCount(0);
-  await expect(page.locator('#worker-prompt')).toHaveValue('');
-  await page.getByRole('radio', { name:'Rust', exact:true }).check();
-  await expect(page.locator('#worker-prompt')).toHaveValue(/local folder of photos/);
-  await expect(page.locator('#worker-prompt')).toHaveValue(/Build a VGI worker in Rust/);
-  await page.locator('[data-choose-recipe="api"]').click();
-  await expect(page.locator('#worker-prompt')).toHaveValue(/service API/);
-  await expect(page.locator('#worker-prompt')).toHaveValue(/Rust/);
+  await expect(page.locator('[data-integration-idea]')).toHaveCount(4);
+  for (const [idea, target] of [['files','files'], ['api','api'], ['github','api'], ['library','library']]) {
+    await page.locator(`[data-integration-idea="${idea}"]`).click();
+    await expect(page).toHaveURL(new RegExp(`#request-${target}$`));
+    await expect(page.locator(`#request-${target}`)).toBeInViewport();
+    await expect(page.locator(`#request-${target} [data-copy-request]`)).toBeEnabled();
+  }
   await expect(page.locator('[data-agent-quickstart] [data-brand]')).toHaveCount(11);
 });
 
