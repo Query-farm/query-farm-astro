@@ -18,7 +18,7 @@ FROM redis_hscan_over_scan(
 import Callout from '../../../components/docs/Callout.astro';
 
 <Callout type="note" title="Best fit, scoped honestly">
-This extension is for SQL-side workflows where data integration matters more than every Redis feature. It supports **strings, hashes, and lists**; no SET / ZSET / STREAM / PUB-SUB / TRANSACTIONS / SCRIPTING. Connections are **single-node** (no [Redis Cluster](https://redis.io/docs/latest/operate/oss_and_stack/management/scaling/)). Auth is currently **plaintext** — TLS isn't wired up yet. The status is **experimental**; the function surface may change.
+This extension is for SQL-side workflows where data integration matters more than every Redis feature. It has dedicated functions for **strings, hashes, and lists**; sets, sorted sets, streams and other commands go through [`redis_command`](#redis_command) (DuckDB 2.0 build). There is no PUB-SUB or MULTI/EXEC transaction support. Connections are **single-node** (no [Redis Cluster](https://redis.io/docs/latest/operate/oss_and_stack/management/scaling/)). Auth is currently **plaintext** — TLS isn't wired up yet. The status is **experimental**; the function surface may change.
 
 For application-grade Redis access, keep a real client. For one-off migrations, hot-cold joins, and operational queries from SQL, this is the right tool.
 </Callout>
@@ -61,20 +61,46 @@ Because `redis_keys` and `redis_hscan_over_scan` walk the whole matching keyspac
 
 - [`redis_get`](#redis_get) and [`redis_hget`](#redis_hget) return `NULL` for a missing key or field, so `coalesce(redis_get(k, 'redis'), 'default')` and `IS NULL` checks work as expected.
 - [`redis_hset`](#redis_hset) returns a `BIGINT` count of fields added (`1` for a new field, `0` when an existing one is overwritten); [`redis_lpush`](#redis_lpush) returns the list length after the push as a `BIGINT`.
-- [`redis_mget`](#redis_mget) returns values comma-joined in request order, with an empty entry for each missing key so positions line up with the keys you asked for. Empty key names (for example, from a trailing comma) are ignored.
+- [`redis_mget`](#redis_mget) returns values comma-joined in request order, with an empty entry for each missing key so positions line up with the keys you asked for. Empty key names (for example, from a trailing comma) are ignored. A value containing a comma, or an empty value, can't be told apart from that, so in the DuckDB 2.0 build prefer [`redis_mget_list`](#redis_mget_list), which takes a `VARCHAR[]` and returns a `VARCHAR[]` with `NULL` for missing keys.
+- The DuckDB 2.0 build adds typed variants of the other comma-joined functions: [`redis_lrange_list`](#redis_lrange_list) (`VARCHAR[]`), [`redis_scan_page`](#redis_scan_page) (`STRUCT(cursor VARCHAR, keys VARCHAR[])`), [`redis_hscan_page`](#redis_hscan_page) (`STRUCT(cursor VARCHAR, entries MAP(VARCHAR, VARCHAR))`) and [`redis_hgetall_map`](#redis_hgetall_map) (`MAP(VARCHAR, VARCHAR)`). The original functions keep their string results.
 - A `NULL` in any argument, including the secret name, gives a `NULL` result.
 
 Every argument is read per row, so the key, value, and even the secret can come from columns. The scalar functions are registered as volatile: DuckDB runs them for every row and never constant-folds or deduplicates a call, which matters because most of them change server state.
+
+In the DuckDB 2.0 build the commands for a vector of rows (up to 2,048) are **pipelined**: they are sent in one write and the replies read back in order, so a bulk `redis_set` or `redis_get` over a table costs one round trip per vector instead of one per row. If one row's command fails (for example, `WRONGTYPE`), the error is raised for the first failing row, but the other commands of that vector have already run on the server.
+
+## Timeouts, cancellation and sandboxing
+
+These apply to the DuckDB 2.0 build.
+
+- **Timeouts.** Connecting and every wait for reply data are bounded by the `redis_timeout_ms` setting (default `30000`); a secret's `timeout_ms` overrides it, and `0` waits forever. A server that stops answering fails the query with `timed out waiting for a reply after N ms` instead of hanging it. The timeout applies to each wait, not to the whole reply, so a large reply that keeps arriving is never cut off.
+- **Cancellation.** A query waiting on Redis can be interrupted (Ctrl-C in the CLI, `interrupt()` from a client API) at any time, including while connecting.
+- **Sandboxing.** Every `redis_*` function refuses with a Permission Error when [`enable_external_access`](https://duckdb.org/docs/current/configuration/overview) is `false`, so a locked-down DuckDB can't be used to reach Redis servers.
+- **Connection isolation.** Connections are pooled per database instance and keyed by host, port, user name, password and database index; a secret is never handed a connection that was authenticated (or `SELECT`ed) for another. Idle connections close after two minutes, and a pooled connection that the server closed in the meantime is replaced transparently. [`redis_command`](#redis_command) closes its connection afterwards rather than returning it to the pool.
+- **Malformed replies.** Replies are parsed with bounded sizes, element counts and nesting depth, so a misbehaving server produces an error, not a crash or runaway memory use.
+
+```sql
+SET redis_timeout_ms = 2000;  -- fail fast against an unresponsive server
+```
+
+## Changes in the DuckDB 2.0 build
+
+- **Security:** connections are no longer shared between secrets that point at the same host and port with different credentials or databases, nor between database instances in one process.
+- Every function refuses when `enable_external_access` is `false`.
+- New: `redis_timeout_ms` setting; secret options `username`, `db` and `timeout_ms`; functions [`redis_lrange_list`](#redis_lrange_list), [`redis_mget_list`](#redis_mget_list), [`redis_scan_page`](#redis_scan_page), [`redis_hscan_page`](#redis_hscan_page), [`redis_hgetall_map`](#redis_hgetall_map) and [`redis_command`](#redis_command).
+- [`redis_lrange_table`](#redis_lrange_table)'s `index` column is the element's position in the list; it used to start at 0 whatever `start` was.
+- Commands are pipelined per vector of rows (see above).
 
 ## What's in the box
 
 | Group | Functions | Redis commands |
 |---|---|---|
-| Strings | [`redis_get`](#redis_get), [`redis_set`](#redis_set), [`redis_mget`](#redis_mget) | [`GET`](https://redis.io/docs/latest/commands/get/), [`SET`](https://redis.io/docs/latest/commands/set/), [`MGET`](https://redis.io/docs/latest/commands/mget/) |
-| Hashes | [`redis_hget`](#redis_hget), [`redis_hset`](#redis_hset), [`redis_hgetall`](#redis_hgetall), [`redis_hscan`](#redis_hscan) | [`HGET`](https://redis.io/docs/latest/commands/hget/), [`HSET`](https://redis.io/docs/latest/commands/hset/), [`HGETALL`](https://redis.io/docs/latest/commands/hgetall/), [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) |
-| Lists | [`redis_lpush`](#redis_lpush), [`redis_lrange`](#redis_lrange), [`redis_lrange_table`](#redis_lrange_table) | [`LPUSH`](https://redis.io/docs/latest/commands/lpush/), [`LRANGE`](https://redis.io/docs/latest/commands/lrange/) |
-| Discovery | [`redis_keys`](#redis_keys), [`redis_scan`](#redis_scan), [`redis_hscan_over_scan`](#redis_hscan_over_scan) | [`SCAN`](https://redis.io/docs/latest/commands/scan/), [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) |
+| Strings | [`redis_get`](#redis_get), [`redis_set`](#redis_set), [`redis_mget`](#redis_mget), [`redis_mget_list`](#redis_mget_list) | [`GET`](https://redis.io/docs/latest/commands/get/), [`SET`](https://redis.io/docs/latest/commands/set/), [`MGET`](https://redis.io/docs/latest/commands/mget/) |
+| Hashes | [`redis_hget`](#redis_hget), [`redis_hset`](#redis_hset), [`redis_hgetall`](#redis_hgetall), [`redis_hgetall_map`](#redis_hgetall_map), [`redis_hscan`](#redis_hscan), [`redis_hscan_page`](#redis_hscan_page) | [`HGET`](https://redis.io/docs/latest/commands/hget/), [`HSET`](https://redis.io/docs/latest/commands/hset/), [`HGETALL`](https://redis.io/docs/latest/commands/hgetall/), [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) |
+| Lists | [`redis_lpush`](#redis_lpush), [`redis_lrange`](#redis_lrange), [`redis_lrange_list`](#redis_lrange_list), [`redis_lrange_table`](#redis_lrange_table) | [`LPUSH`](https://redis.io/docs/latest/commands/lpush/), [`LRANGE`](https://redis.io/docs/latest/commands/lrange/), [`LLEN`](https://redis.io/docs/latest/commands/llen/) |
+| Discovery | [`redis_keys`](#redis_keys), [`redis_scan`](#redis_scan), [`redis_scan_page`](#redis_scan_page), [`redis_hscan_over_scan`](#redis_hscan_over_scan) | [`SCAN`](https://redis.io/docs/latest/commands/scan/), [`HSCAN`](https://redis.io/docs/latest/commands/hscan/) |
 | Key management | [`redis_type`](#redis_type), [`redis_exists`](#redis_exists), [`redis_del`](#redis_del) | [`TYPE`](https://redis.io/docs/latest/commands/type/), [`EXISTS`](https://redis.io/docs/latest/commands/exists/), [`DEL`](https://redis.io/docs/latest/commands/del/) |
 | Expiry | [`redis_expire`](#redis_expire), [`redis_expireat`](#redis_expireat), [`redis_ttl`](#redis_ttl) | [`EXPIRE`](https://redis.io/docs/latest/commands/expire/), [`EXPIREAT`](https://redis.io/docs/latest/commands/expireat/), [`TTL`](https://redis.io/docs/latest/commands/ttl/) |
+| Anything else | [`redis_command`](#redis_command) | any command |
 
 The extension speaks the [Redis Serialization Protocol](https://redis.io/docs/latest/develop/reference/protocol-spec/) over plain TCP. Recipes for each group live in the [Cookbook](#cookbook).

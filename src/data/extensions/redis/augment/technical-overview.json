@@ -15,7 +15,7 @@
       "bulletPoints": [
         {
           "label": "Secret-based configuration",
-          "description": "A `redis` secret holds `host`, `port`, and an optional `password` (leave it out when the server has no AUTH). See [`CREATE SECRET`](https://duckdb.org/docs/sql/statements/create_secret); parameterize the password from the environment so it never lands in a cached query plan."
+          "description": "A `redis` secret holds `host`, `port`, and an optional `password` (leave it out when the server has no AUTH). The DuckDB 2.0 build adds `username` (Redis 6 ACL users), `db` (database index) and `timeout_ms`. See [`CREATE SECRET`](https://duckdb.org/docs/sql/statements/create_secret); parameterize the password from the environment so it never lands in a cached query plan."
         },
         {
           "label": "RESP over TCP",
@@ -23,7 +23,11 @@
         },
         {
           "label": "Connection reuse",
-          "description": "Connections to a given secret are pooled and reused across calls rather than reopened per row, so per-row lookups inside a `SELECT` and streaming table functions amortize the connection cost."
+          "description": "Connections are pooled and reused across calls rather than reopened per row. In the DuckDB 2.0 build the pool belongs to each database instance and is keyed by host, port, credentials and database index, so a secret never reuses a connection authenticated for another; each thread checks out its own connection, and the commands of a vector of rows are pipelined into one round trip."
+        },
+        {
+          "label": "Timeouts, cancellation, sandbox",
+          "description": "DuckDB 2.0 build: connecting and every wait for reply data are bounded by `redis_timeout_ms` (default 30 s) or the secret's `timeout_ms`, queries waiting on Redis can be interrupted, and every function refuses to run when `enable_external_access` is false."
         }
       ]
     },
@@ -37,8 +41,8 @@
           "description": "[`KEYS`](https://redis.io/docs/latest/commands/keys/) blocks the Redis server for the duration of the scan — fine in dev, dangerous on production keyspaces. No function here issues it: `redis_keys`, `redis_scan`, and `redis_hscan_over_scan` are all built on cursor-paginated [`SCAN`](https://redis.io/docs/latest/commands/scan/), which iterates without stalling traffic. `redis_keys` and `redis_hscan_over_scan` still walk the whole keyspace, so keep their patterns narrow on large instances."
         },
         {
-          "label": "Strings, hashes, and lists only",
-          "description": "No SET / ZSET / STREAM / PUB-SUB / TRANSACTIONS / SCRIPTING today. See [Redis data types](https://redis.io/docs/latest/develop/data-types/) for what's supported elsewhere."
+          "label": "Strings, hashes, and lists first",
+          "description": "Dedicated functions cover strings, hashes, lists, keys and expiry. Sets, sorted sets, streams and other commands go through `redis_command` (DuckDB 2.0 build), which returns text or JSON; there is no PUB-SUB or MULTI/EXEC transaction support. See [Redis data types](https://redis.io/docs/latest/develop/data-types/)."
         },
         {
           "label": "Single-node connections",

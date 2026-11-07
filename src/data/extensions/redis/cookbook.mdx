@@ -27,6 +27,21 @@ CREATE SECRET prod_redis (
 );
 ```
 
+In the DuckDB 2.0 build a secret can also name a Redis 6+ ACL user, a database index and a timeout:
+
+```sql
+CREATE SECRET reports_redis (
+  TYPE redis,
+  PROVIDER config,
+  host 'cache.prod.internal',
+  port '6379',
+  username 'reporting',
+  password :redis_password,
+  db 2,
+  timeout_ms 5000
+);
+```
+
 See [`CREATE SECRET`](https://duckdb.org/docs/sql/statements/create_secret) for the full secrets DSL and the [Secrets](#secrets) section on this page for the `redis` parameter table.
 
 ## String operations
@@ -60,7 +75,13 @@ SELECT redis_mget('user:1,user:2,user:3', 'redis');
 -- → "John Doe,,Jane Roe" when user:2 is missing
 ```
 
-`redis_mget` returns the values comma-joined in the order the keys were requested, with an empty entry for each missing key, so positions always line up with the key list. Split it with [`string_split`](https://duckdb.org/docs/current/sql/functions/text#string_splitstring-separator) when you need the values individually.
+`redis_mget` returns the values comma-joined in the order the keys were requested, with an empty entry for each missing key, so positions always line up with the key list. In the DuckDB 2.0 build, [`redis_mget_list`](#redis_mget_list) takes and returns lists instead, so values with commas and missing keys (`NULL`) stay unambiguous:
+
+```sql
+-- Typed multi-get (DuckDB 2.0 build)
+SELECT redis_mget_list(['user:1', 'user:2', 'user:3'], 'redis');
+-- → ['John Doe', NULL, 'Jane Roe']
+```
 
 Maps to [`GET`](https://redis.io/docs/latest/commands/get/), [`SET`](https://redis.io/docs/latest/commands/set/), [`MGET`](https://redis.io/docs/latest/commands/mget/). See [`redis_get`](#redis_get) / [`redis_set`](#redis_set) / [`redis_mget`](#redis_mget) for the function signatures.
 
@@ -82,6 +103,12 @@ SELECT redis_hget('profile:1', 'email', 'redis') AS email;
 SELECT * FROM redis_hgetall('profile:1', 'redis');
 ```
 
+```sql
+-- Or as a MAP, one per row (DuckDB 2.0 build)
+SELECT id, redis_hgetall_map('profile:' || id, 'redis')['email'] AS email
+FROM users;
+```
+
 Maps to [`HGET`](https://redis.io/docs/latest/commands/hget/), [`HSET`](https://redis.io/docs/latest/commands/hset/), [`HGETALL`](https://redis.io/docs/latest/commands/hgetall/). See [`redis_hget`](#redis_hget) / [`redis_hset`](#redis_hset) / [`redis_hgetall`](#redis_hgetall).
 
 ## List operations
@@ -98,7 +125,12 @@ SELECT redis_lrange('queue:jobs', 0, -1, 'redis');
 ```
 
 ```sql
--- Or as a table — one row per element
+-- As a VARCHAR[] (DuckDB 2.0 build)
+SELECT redis_lrange_list('queue:jobs', 0, -1, 'redis');
+```
+
+```sql
+-- Or as a table — one row per element, index = position in the list
 SELECT * FROM redis_lrange_table('queue:jobs', 0, -1, 'redis');
 ```
 
@@ -118,6 +150,12 @@ SELECT * FROM redis_keys('user:*', 'redis');
 SELECT redis_scan('0', 'user:*', 100, 'redis');
 -- → "1024:user:1,user:2,...,user:50"
 -- Pass the returned cursor (1024) back in to fetch the next page; cursor "0" means done.
+```
+
+```sql
+-- The same page as a STRUCT(cursor, keys) (DuckDB 2.0 build)
+SELECT page.cursor, unnest(page.keys) AS key
+FROM (SELECT redis_scan_page('0', 'user:*', 100, 'redis') AS page);
 ```
 
 `redis_keys` walks the whole keyspace in one query, so keep the pattern narrow on large instances.
@@ -194,3 +232,36 @@ WHERE redis_ttl(key, 'redis') = -1;
 ```
 
 Maps to [`EXPIRE`](https://redis.io/docs/latest/commands/expire/), [`EXPIREAT`](https://redis.io/docs/latest/commands/expireat/), [`TTL`](https://redis.io/docs/latest/commands/ttl/). See [`redis_expire`](#redis_expire) / [`redis_expireat`](#redis_expireat) / [`redis_ttl`](#redis_ttl).
+
+## Any other command (`redis_command`)
+
+In the DuckDB 2.0 build, [`redis_command`](#redis_command) runs any Redis command given as a `VARCHAR[]`. Strings and integers come back as text, nil as `NULL`, and array replies as JSON:
+
+```sql
+-- Sets
+SELECT redis_command(['SADD', 'tags', 'duckdb', 'redis'], 'redis');  -- '2'
+SELECT redis_command(['SMEMBERS', 'tags'], 'redis');                 -- '["duckdb","redis"]'
+```
+
+```sql
+-- Counters, cast to the type you need
+SELECT redis_command(['INCRBY', 'page:views', '5'], 'redis')::BIGINT AS views;
+```
+
+```sql
+-- Sorted set leaderboard, unpacked with the json extension
+SELECT unnest(json_transform(
+  redis_command(['ZREVRANGE', 'leaderboard', '0', '9'], 'redis'), '["VARCHAR"]')) AS player;
+```
+
+The connection used by `redis_command` is closed afterwards instead of being pooled, so commands that change connection state (`SELECT`, `CLIENT`, …) don't leak into other queries.
+
+## Timeouts
+
+Each connect and each wait for reply data is bounded by `redis_timeout_ms` (default 30 seconds) in the DuckDB 2.0 build. Lower it to fail fast, or set `timeout_ms` on a secret:
+
+```sql
+SET redis_timeout_ms = 2000;
+```
+
+A query waiting on Redis can always be interrupted, and every `redis_*` function refuses when `enable_external_access` is `false`.

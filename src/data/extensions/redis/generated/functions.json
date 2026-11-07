@@ -214,7 +214,7 @@
         "description": ""
       }
     ],
-    "description": "Incrementally iterate over keys in Redis matching a pattern. Returns 'cursor:key1,key2,...'. Use cursor '0' to start, and continue until cursor returns '0'.",
+    "description": "Incrementally iterate over keys in Redis matching a pattern. Returns 'cursor:key1,key2,...'. Use cursor '0' to start, and continue until cursor returns '0'. Prefer redis_scan_page (typed result) or redis_keys.",
     "examples": [
       {
         "description": "",
@@ -329,7 +329,7 @@
         "description": ""
       }
     ],
-    "description": "Get a range of elements from a Redis list as a table. Returns a table with 'index' and 'value' columns.",
+    "description": "Get a range of elements from a Redis list as a table. Returns a table with 'index' (the element's position in the list) and 'value' columns.",
     "examples": [
       {
         "description": "",
@@ -432,7 +432,7 @@
         "description": ""
       }
     ],
-    "description": "Get a range of elements from a Redis list. Returns elements as a comma-separated string. Use 0 for start and -1 for stop to get all elements.",
+    "description": "Get a range of elements from a Redis list. Returns elements as a comma-separated string, which is ambiguous when elements contain commas; prefer redis_lrange_list. Use 0 for start and -1 for stop to get all elements.",
     "examples": [
       {
         "description": "",
@@ -463,7 +463,7 @@
         "description": ""
       }
     ],
-    "description": "Get the values of multiple keys from Redis. Keys should be comma-separated. Returns values as a comma-separated string, with an empty entry for each key that does not exist.",
+    "description": "Get the values of multiple keys from Redis. Keys should be comma-separated. Returns values as a comma-separated string, with an empty entry for each key that does not exist; prefer redis_mget_list, which keeps commas and missing keys unambiguous.",
     "examples": [
       {
         "description": "",
@@ -508,7 +508,7 @@
         "description": ""
       }
     ],
-    "description": "Incrementally iterate over fields in a Redis hash matching a pattern. Returns 'cursor:field1=value1,field2=value2,...'.",
+    "description": "Incrementally iterate over fields in a Redis hash matching a pattern. Returns 'cursor:field1=value1,field2=value2,...'. Prefer redis_hscan_page (typed result).",
     "examples": [
       {
         "description": "",
@@ -645,6 +645,238 @@
       {
         "description": "",
         "code": "SELECT redis_expireat('event:' || id, EXTRACT(EPOCH FROM (event_time + INTERVAL '1 day'))::BIGINT, 'my_redis_secret') FROM events;"
+      }
+    ]
+  },
+  {
+    "id": "redis_command(VARCHAR[],VARCHAR)",
+    "name": "redis_command",
+    "type": "scalar",
+    "returnType": "VARCHAR",
+    "parameters": [
+      {
+        "name": "args",
+        "type": "VARCHAR[]",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "secret_name",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Run any Redis command, given as a VARCHAR[] of the command name and its arguments. Strings and integers are returned as text, nil as NULL, and array replies as JSON arrays. Error replies raise an error. The connection is not reused afterwards, since the command may change its state.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT redis_command(['SADD', 'myset', 'a'], 'my_redis_secret');"
+      },
+      {
+        "description": "",
+        "code": "SELECT redis_command(['SMEMBERS', 'myset'], 'my_redis_secret')::JSON;"
+      },
+      {
+        "description": "",
+        "code": "SELECT redis_command(['INCRBY', 'counter', '5'], 'my_redis_secret')::BIGINT;"
+      }
+    ]
+  },
+  {
+    "id": "redis_hgetall_map(VARCHAR,VARCHAR)",
+    "name": "redis_hgetall_map",
+    "type": "scalar",
+    "returnType": "MAP(VARCHAR, VARCHAR)",
+    "parameters": [
+      {
+        "name": "key",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "secret_name",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Get all fields and values of a Redis hash as a MAP(VARCHAR, VARCHAR). An empty map when the key does not exist.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT redis_hgetall_map('myhash', 'my_redis_secret');"
+      },
+      {
+        "description": "",
+        "code": "SELECT id, redis_hgetall_map('user:' || id, 'my_redis_secret')['name'] FROM users;"
+      }
+    ]
+  },
+  {
+    "id": "redis_hscan_page(VARCHAR,VARCHAR,VARCHAR,BIGINT,VARCHAR)",
+    "name": "redis_hscan_page",
+    "type": "scalar",
+    "returnType": "STRUCT(\"cursor\" VARCHAR, entries MAP(VARCHAR, VARCHAR))",
+    "parameters": [
+      {
+        "name": "key",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "cursor",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "pattern",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "count",
+        "type": "BIGINT",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "secret_name",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Run one HSCAN step over the fields of a Redis hash matching a pattern. Returns STRUCT(cursor VARCHAR, entries MAP(VARCHAR, VARCHAR)); continue with the returned cursor until it is '0'.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT redis_hscan_page('myhash', '0', '*', 100, 'my_redis_secret');"
+      },
+      {
+        "description": "",
+        "code": "SELECT redis_hscan_page('myhash', '0', '*', 100, 'my_redis_secret').entries['field1'];"
+      }
+    ]
+  },
+  {
+    "id": "redis_lrange_list(VARCHAR,BIGINT,BIGINT,VARCHAR)",
+    "name": "redis_lrange_list",
+    "type": "scalar",
+    "returnType": "VARCHAR[]",
+    "parameters": [
+      {
+        "name": "key",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "start",
+        "type": "BIGINT",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "stop",
+        "type": "BIGINT",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "secret_name",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Get a range of elements from a Redis list as a VARCHAR[]. start and stop are zero-based and inclusive; negative values count from the end (0, -1 is the whole list). An empty list when the key does not exist.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT redis_lrange_list('mylist', 0, -1, 'my_redis_secret');"
+      },
+      {
+        "description": "",
+        "code": "SELECT unnest(redis_lrange_list('mylist', 0, 9, 'my_redis_secret')) AS value;"
+      }
+    ]
+  },
+  {
+    "id": "redis_mget_list(VARCHAR[],VARCHAR)",
+    "name": "redis_mget_list",
+    "type": "scalar",
+    "returnType": "VARCHAR[]",
+    "parameters": [
+      {
+        "name": "keys",
+        "type": "VARCHAR[]",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "secret_name",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Get the values of multiple keys from Redis in one round trip. Takes the keys as a VARCHAR[] and returns a VARCHAR[] of the same length, with NULL for each key that does not exist.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT redis_mget_list(['key1', 'key2', 'key3'], 'my_redis_secret');"
+      },
+      {
+        "description": "",
+        "code": "SELECT redis_mget_list(list(key), 'my_redis_secret') FROM my_keys;"
+      }
+    ]
+  },
+  {
+    "id": "redis_scan_page(VARCHAR,VARCHAR,BIGINT,VARCHAR)",
+    "name": "redis_scan_page",
+    "type": "scalar",
+    "returnType": "STRUCT(\"cursor\" VARCHAR, keys VARCHAR[])",
+    "parameters": [
+      {
+        "name": "cursor",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "pattern",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "count",
+        "type": "BIGINT",
+        "paramType": "positional",
+        "description": ""
+      },
+      {
+        "name": "secret_name",
+        "type": "VARCHAR",
+        "paramType": "positional",
+        "description": ""
+      }
+    ],
+    "description": "Run one SCAN step over the keys matching a pattern. Returns STRUCT(cursor VARCHAR, keys VARCHAR[]); start with cursor '0' and continue with the returned cursor until it is '0' again. A key may be returned more than once. redis_keys does the whole iteration as a table function.",
+    "examples": [
+      {
+        "description": "",
+        "code": "SELECT redis_scan_page('0', 'user:*', 100, 'my_redis_secret');"
+      },
+      {
+        "description": "",
+        "code": "SELECT unnest(redis_scan_page('0', '*', 1000, 'my_redis_secret').keys) AS key;"
       }
     ]
   }
