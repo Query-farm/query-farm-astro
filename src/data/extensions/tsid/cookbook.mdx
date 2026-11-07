@@ -57,13 +57,39 @@ ORDER BY id DESC LIMIT 100;
 
 This is the same trick Twitter snowflake-style IDs enable — you avoid the offset cost on large tables.
 
+## Store IDs as native UUIDs
+
+**DuckDB 2.0 build.** [`tsid_uuid()`](#tsid_uuid) returns the same time-sorted ID as a 16-byte `UUID`, half the storage of the 32-character string:
+
+```sql
+CREATE OR REPLACE TABLE orders (
+  id     UUID DEFAULT tsid_uuid() PRIMARY KEY,
+  amount DECIMAL(10, 2)
+);
+
+INSERT INTO orders(amount) VALUES (9.99), (24.50);
+
+SELECT id, tsid_to_timestamp(id) AS created_at FROM orders ORDER BY id;
+```
+
+## Backfill IDs for historical rows
+
+**DuckDB 2.0 build.** Pass a `TIMESTAMP` to embed a past time instead of now:
+
+```sql
+SELECT tsid(ts) AS id, ts
+FROM (VALUES (TIMESTAMP '2023-01-15 08:00:00'), (TIMESTAMP '2023-03-02 17:30:00')) t(ts)
+ORDER BY id;
+```
+
 ## TSID vs UUID
 
-| | TSID | UUIDv4 | UUIDv7 |
+| | TSID | UUIDv4 (`uuid()`) | UUIDv7 (`uuidv7()`) |
 |---|---|---|---|
 | Time-sortable | ✅ | ❌ | ✅ |
-| Width on disk | 16 bytes hex (32 chars) | 16 bytes hex (32 chars) | 16 bytes hex (32 chars) |
-| Embeds creation time | ✅ | ❌ | ✅ |
+| Width | 32-char `VARCHAR`, or 16-byte `UUID` via `tsid_uuid()` | 16-byte `UUID` | 16-byte `UUID` |
+| Embeds creation time | ✅ (decode with `tsid_to_timestamp`) | ❌ | ✅ (decode with `uuid_extract_timestamp`) |
+| Time resolution | 4 ns field, decoded to µs | — | 1 ms |
 | Cross-system uniqueness | ✅ | ✅ | ✅ |
 
-UUIDv7 (also time-sortable) is the closest standard alternative. Pick TSID when you want the integration with DuckDB's hash type and bulk-generation throughput.
+UUIDv7, built into DuckDB as `uuidv7()`, is the closest standard alternative and the better choice when other systems must decode the time. Pick TSID for sub-millisecond resolution, IDs minted for a chosen timestamp, or compatibility with TSIDs you already store.

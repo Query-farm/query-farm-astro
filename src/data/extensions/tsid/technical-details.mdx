@@ -33,15 +33,16 @@ For internal-only IDs, use [`tsid()`](#tsid). For public-facing identifiers wher
 
 DuckDB ships [`uuid()`](https://duckdb.org/docs/stable/sql/functions/utility) — a [UUIDv4](https://datatracker.ietf.org/doc/html/rfc9562) generator. It's random and unsortable, which is the right call for opaque external IDs and the wrong call when insertion order matters. TSID, [UUIDv7](https://datatracker.ietf.org/doc/html/rfc9562), and [ULID](https://github.com/ulid/spec) are three renderings of the same idea: high-resolution time prefix plus random tail.
 
-| | DuckDB `uuid()` | `tsid()` | UUIDv7 | ULID |
+| | DuckDB `uuid()` | `tsid()` / `tsid_uuid()` | DuckDB `uuidv7()` | ULID |
 |---|---|---|---|---|
 | Time-sortable | No | Yes | Yes | Yes |
-| Embeds creation time | No | Yes | Yes | Yes |
-| Rendering | UUID hex (36 chars w/ dashes) | 32 hex chars | UUID hex (36 chars w/ dashes) | 26 chars Crockford base32 |
-| Standardized | [RFC 9562](https://datatracker.ietf.org/doc/html/rfc9562) | Library-specific | [RFC 9562](https://datatracker.ietf.org/doc/html/rfc9562) | [ulid/spec](https://github.com/ulid/spec) |
-| In-DuckDB built-in | Yes | This extension | No | No |
+| Embeds creation time | No | Yes (nanosecond field, 4 ns steps) | Yes (milliseconds) | Yes (milliseconds) |
+| Rendering | UUID hex (36 chars w/ dashes) | 32 hex chars, or a native `UUID` | UUID hex (36 chars w/ dashes) | 26 chars Crockford base32 |
+| Decode the time | — | `tsid_to_timestamp` | `uuid_extract_timestamp` | — |
+| Standardized | [RFC 9562](https://datatracker.ietf.org/doc/html/rfc9562) | Library-specific (UUID v4 bit layout) | [RFC 9562](https://datatracker.ietf.org/doc/html/rfc9562) | [ulid/spec](https://github.com/ulid/spec) |
+| In-DuckDB built-in | Yes | This extension | Yes | No |
 
-Pick [`tsid()`](#tsid) when you want UUIDv7-shaped behavior **inside SQL today** without wiring a v7 generator into your client. If you control both ends of a system that already produces UUIDv7s elsewhere, keep using those — interop wins. If your IDs only need to make sense within DuckDB, TSID stays self-contained.
+DuckDB's built-in [`uuidv7()`](https://duckdb.org/docs/stable/sql/functions/utility) and `uuid_extract_timestamp()` are the standards-based choice when another system needs to read the time back out of the ID: any RFC 9562 implementation can. Pick [`tsid()`](#tsid) when you want sub-millisecond time resolution in the ID, the ability to mint an ID for a chosen timestamp (`tsid(ts)`, DuckDB 2.0 build), or compatibility with TSIDs you already store. TSID values carry UUID **version 4** bits, so `uuid_extract_timestamp` does not decode them — use [`tsid_to_timestamp`](#tsid_to_timestamp).
 
 The reference TSID concept also lives in non-DuckDB form as [`f4b6a3/tsid-creator`](https://github.com/f4b6a3/tsid-creator) on the JVM and similar libraries in other ecosystems; the rendering produced by this extension is library-specific, so don't assume cross-ecosystem parsing without testing.
 
@@ -49,9 +50,46 @@ The reference TSID concept also lives in non-DuckDB form as [`f4b6a3/tsid-creato
 
 A timestamp prefix makes ID-based pagination possible with `ORDER BY id` and a last-seen-ID cursor. It does not physically cluster a DuckDB table or guarantee smaller indexes, compression, or faster inserts. Measure those properties on your data and storage layout.
 
+## Bit layout
+
+| Bytes | Content |
+|---|---|
+| 0–3 | Seconds since 1970-01-01 UTC, unsigned big-endian (valid until 2106-02-07) |
+| 4–7 | Nanoseconds in 4 ns steps, with the UUID version nibble (`4`) in byte 6 |
+| 8–15 | Random, with the RFC 4122 variant bits (`10`) in byte 8 |
+
+Because the time comes first and is big-endian, byte order, hex-string order and DuckDB `UUID` order all agree. [`tsid_to_timestamp`](#tsid_to_timestamp) returns microsecond precision.
+
+## Native UUID storage (DuckDB 2.0 build)
+
+[`tsid_uuid()`](#tsid_uuid) returns the same identifier as a native [`UUID`](https://duckdb.org/docs/stable/sql/data_types/numeric#universally-unique-identifiers-uuids) — 16 bytes per value instead of a 32-character string — and [`tsid_to_timestamp`](#tsid_to_timestamp) accepts `UUID` input. `tsid()` still returns `VARCHAR`, so existing tables keep working. Convert between the two forms with casts:
+
+```sql
+SELECT tsid_uuid()::VARCHAR                                     AS dashed,
+       replace(tsid_uuid()::VARCHAR, '-', '')                   AS like_tsid,
+       '65d4a2b6000000004000800000000000'::UUID                 AS as_uuid;
+```
+
+Both generators also accept a `TIMESTAMP`, which is useful for backfilling rows or building ID range bounds:
+
+```sql
+SELECT tsid(TIMESTAMP '2024-06-01 00:00:00')      AS lower_bound,
+       tsid_uuid(TIMESTAMP '2024-06-01 00:00:00') AS lower_bound_uuid;
+```
+
+The random tail still varies, so treat these as approximate bounds: compare on `tsid_to_timestamp(id)` when the boundary must be exact.
+
+## Changes in the DuckDB 2.0 release
+
+- **Strict parsing.** [`tsid_to_timestamp`](#tsid_to_timestamp) accepts exactly 32 hex digits or the dashed 8-4-4-4-12 form. Earlier builds could crash the DuckDB process on some malformed 36-character strings, and decoded strings such as `'------------------------------------'` as 1970-01-01; these now raise `Invalid TSID format`.
+- **Thread-safe randomness.** Earlier builds drew the random tail from a single clock-seeded generator shared by all threads. Each thread now has its own generator seeded from the operating system, so parallel queries and separate processes don't produce correlated tails.
+- **New:** [`tsid_uuid()`](#tsid_uuid), `tsid(ts)` / `tsid_uuid(ts)`, and `tsid_to_timestamp(UUID)`.
+
+The Haybarn 1.5 build has only `tsid()` and `tsid_to_timestamp(VARCHAR)`.
+
 ## Bulk generation and ordering
 
-`tsid()` takes no arguments; there is no seed overload. Parallel calls can be evaluated in a different order from the input rows. Sort the generated values explicitly when needed:
+There is no seed overload. Parallel calls can be evaluated in a different order from the input rows. Sort the generated values explicitly when needed:
 
 ```sql
 SELECT tsid() AS id
@@ -67,4 +105,4 @@ This sorts the output by ID. It does not make generation deterministic or guaran
 - **Cross-system identifiers** where a peer expects a canonical UUID format and you don't control the consumer.
 - **You don't care about insertion order** and the table is small enough that index locality is irrelevant.
 
-In every other case where `uuid()` was the reach-for default — internal primary keys, event logs, audit tables — [`tsid()`](#tsid) is the better fit.
+In every other case where `uuid()` was the reach-for default — internal primary keys, event logs, audit tables — a time-sorted ID ([`tsid()`](#tsid), [`tsid_uuid()`](#tsid_uuid) or DuckDB's `uuidv7()`) is the better fit.
