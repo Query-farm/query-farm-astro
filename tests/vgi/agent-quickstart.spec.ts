@@ -182,24 +182,11 @@ test('live integration proof distinguishes real API results from sample inventor
   await expect.poll(()=>page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
 
-test('article and full capture present the actual running agent', async ({ page }) => {
+test('article explains VGI and links to the generated worker and SQL evidence', async ({ page }) => {
   await page.goto('/blog/build-vgi-workers-with-coding-agents/');
   await expect(page.getByRole('heading',{level:1})).toContainText('bring the API into DuckDB');
   await expect(page.locator('main')).toContainText('Vector Gateway Interface');
-  await expect(page.locator('video track[kind="captions"]')).toHaveCount(1);
-  await expect(page.locator('video source')).toHaveAttribute('src','/vgi/agents/github-build.mp4');
-  const duration=await page.locator('video').evaluate(element=>{
-    const video=element as HTMLVideoElement;
-    return new Promise<number>((resolve,reject)=>{
-      video.preload='metadata';
-      video.addEventListener('loadedmetadata',()=>resolve(video.duration),{once:true});
-      video.addEventListener('error',()=>reject(new Error('Video failed to load')),{once:true});video.load();
-    });
-  });
-  expect(duration).toBeGreaterThan(30);expect(duration).toBeLessThan(240);
-  expect((await page.request.get('/vgi/agents/github-build.vtt')).status()).toBe(200);
-  await page.goto('/vgi/agent-build-recording/');
-  await expect(page.getByRole('heading',{level:1})).toContainText('actual agent session');
-  await expect(page.locator('video source')).toHaveAttribute('src','/vgi/agents/github-build-full.mp4');
-  await expect(page.locator('[data-session-replay]')).toHaveCount(0);
+  await expect(page.getByRole('table', {name:'Live releases joined to sample project inventory'}).locator('tbody tr')).toHaveCount(2);
+  await expect(page.getByRole('link', {name:'Get the generated worker and tests →'})).toHaveAttribute('href', /examples\/agent-github-releases\/README.md$/);
+  await expect(page.locator('video, a[href*="agent-build-recording"]')).toHaveCount(0);
 });
