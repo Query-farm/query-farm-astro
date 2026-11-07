@@ -1,0 +1,282 @@
+{
+  "slug": "fuzzy-matching-duckdb",
+  "extension": "rapidfuzz",
+  "setup": "CREATE OR REPLACE TABLE customers(id, name, country) AS VALUES\n  (1, 'North Star Tools', 'US'), (2, 'Acme Tools', 'US'),\n  (3, 'Acme Toolco', 'US'), (4, 'Bluebird Labs', 'GB'),\n  (5, 'Café Central', 'ES'), (6, 'North Star Tools', 'CA'),\n  (7, 'Cedar Works', 'US'), (8, 'Delta Supply', 'DE'),\n  (9, 'Cedar Works', 'US');\nCREATE OR REPLACE TABLE leads(id, name, country) AS VALUES\n  (101, 'tools ACME', 'US'), (102, 'Northstar Tools', 'US'),\n  (103, 'Blue Bird Labs', 'GB'), (104, 'North Star Tools', 'MX'),\n  (105, 'Cedar Works', 'US'), (106, 'Unknown Studio', 'US'),\n  (107, 'Acme Tools', 'US');\nCREATE OR REPLACE MACRO name_key(s) AS\n  lower(trim(regexp_replace(s, '\\s+', ' ', 'g')));\nCREATE OR REPLACE VIEW candidates AS\nSELECT l.id AS lead_id, c.id AS customer_id, c.name AS customer,\n       rapidfuzz_token_sort_ratio(name_key(l.name), name_key(c.name)) AS score\nFROM leads l JOIN customers c ON l.country = c.country\nWHERE nullif(name_key(l.name), '') IS NOT NULL\n  AND nullif(name_key(c.name), '') IS NOT NULL;\nCREATE OR REPLACE VIEW ranked AS\nSELECT *, row_number() OVER w AS rank,\n       lead(score) OVER w AS runner_up\nFROM candidates\nWINDOW w AS (PARTITION BY lead_id ORDER BY score DESC, customer_id);\nCREATE OR REPLACE TABLE labels(lead_id, customer_id) AS VALUES\n  (101, 2), (102, 1), (103, 4), (104, 6), (105, 7), (107, 2);\n",
+  "examples": [
+    {
+      "id": "score-names",
+      "title": "Compare spelling and word order",
+      "sql": "SELECT l.name AS incoming, c.name AS reference,\n       round(rapidfuzz_ratio(name_key(l.name), name_key(c.name)), 1) AS ratio,\n       round(rapidfuzz_token_sort_ratio(name_key(l.name), name_key(c.name)), 1) AS token_sort\nFROM leads l JOIN labels t ON l.id = t.lead_id\nJOIN customers c ON c.id = t.customer_id\nWHERE l.id IN (101, 102, 103)\nORDER BY l.id;",
+      "expectedRows": [
+        [
+          "tools ACME",
+          "Acme Tools",
+          50.0,
+          100.0
+        ],
+        [
+          "Northstar Tools",
+          "North Star Tools",
+          96.8,
+          96.8
+        ],
+        [
+          "Blue Bird Labs",
+          "Bluebird Labs",
+          96.3,
+          66.7
+        ]
+      ],
+      "expectedColumns": [
+        "incoming",
+        "reference",
+        "ratio",
+        "token_sort"
+      ]
+    },
+    {
+      "id": "candidate-budget",
+      "title": "Count comparisons before scoring",
+      "sql": "SELECT\n  (SELECT count(*) FROM leads CROSS JOIN customers) AS all_pairs,\n  (SELECT count(*) FROM leads l JOIN customers c\n     ON l.country = c.country) AS candidate_pairs;",
+      "expectedRows": [
+        [
+          63,
+          26
+        ]
+      ],
+      "expectedColumns": [
+        "all_pairs",
+        "candidate_pairs"
+      ]
+    },
+    {
+      "id": "review-matches",
+      "title": "Produce a review queue",
+      "sql": "SELECT l.id, l.name, r.customer,\n       round(r.score, 1) AS score,\n       round(r.score - r.runner_up, 1) AS gap,\n       CASE\n         WHEN r.customer_id IS NULL THEN 'no candidates'\n         WHEN r.score < 85 THEN 'below threshold'\n         WHEN r.runner_up IS NOT NULL AND r.score - r.runner_up < 10\n           THEN 'review: close scores'\n         ELSE 'suggested match'\n       END AS decision\nFROM leads l LEFT JOIN ranked r\n  ON l.id = r.lead_id AND r.rank = 1\nORDER BY l.id;",
+      "expectedRows": [
+        [
+          101,
+          "tools ACME",
+          "Acme Tools",
+          100.0,
+          14.3,
+          "suggested match"
+        ],
+        [
+          102,
+          "Northstar Tools",
+          "North Star Tools",
+          96.8,
+          40.8,
+          "suggested match"
+        ],
+        [
+          103,
+          "Blue Bird Labs",
+          "Bluebird Labs",
+          66.7,
+          null,
+          "below threshold"
+        ],
+        [
+          104,
+          "North Star Tools",
+          null,
+          null,
+          null,
+          "no candidates"
+        ],
+        [
+          105,
+          "Cedar Works",
+          "Cedar Works",
+          100.0,
+          0.0,
+          "review: close scores"
+        ],
+        [
+          106,
+          "Unknown Studio",
+          "North Star Tools",
+          26.7,
+          1.7,
+          "below threshold"
+        ],
+        [
+          107,
+          "Acme Tools",
+          "Acme Tools",
+          100.0,
+          14.3,
+          "suggested match"
+        ]
+      ],
+      "expectedColumns": [
+        "id",
+        "name",
+        "customer",
+        "score",
+        "gap",
+        "decision"
+      ]
+    },
+    {
+      "id": "check-blocking",
+      "title": "Find known matches the candidate rule excluded",
+      "sql": "SELECT t.lead_id, l.country AS recorded_country,\n       c.id AS true_customer_id, c.country AS true_country\nFROM labels t\nJOIN leads l ON l.id = t.lead_id\nJOIN customers c ON c.id = t.customer_id\nWHERE NOT EXISTS (\n  SELECT 1 FROM candidates p\n  WHERE p.lead_id = t.lead_id AND p.customer_id = t.customer_id\n);",
+      "expectedRows": [
+        [
+          104,
+          "MX",
+          6,
+          "CA"
+        ]
+      ],
+      "expectedColumns": [
+        "lead_id",
+        "recorded_country",
+        "true_customer_id",
+        "true_country"
+      ]
+    },
+    {
+      "id": "duplicate-names",
+      "title": "Find possible duplicates within the customer table",
+      "sql": "SELECT a.id AS first_id, b.id AS second_id,\n       a.name AS first_name, b.name AS second_name\nFROM customers a JOIN customers b\n  ON a.country = b.country AND a.id < b.id\nWHERE nullif(name_key(a.name), '') IS NOT NULL\n  AND nullif(name_key(b.name), '') IS NOT NULL\n  AND rapidfuzz_token_sort_ratio(\n    name_key(a.name), name_key(b.name)\n  ) >= 95;",
+      "expectedRows": [
+        [
+          7,
+          9,
+          "Cedar Works",
+          "Cedar Works"
+        ]
+      ],
+      "expectedColumns": [
+        "first_id",
+        "second_id",
+        "first_name",
+        "second_name"
+      ]
+    }
+  ],
+  "sampleTables": [
+    {
+      "table": "leads",
+      "title": "Incoming CRM export",
+      "description": "Seven records to match. IDs identify source records; country is the recorded country code.",
+      "columns": [
+        "id",
+        "name",
+        "country"
+      ],
+      "rows": [
+        [
+          101,
+          "tools ACME",
+          "US"
+        ],
+        [
+          102,
+          "Northstar Tools",
+          "US"
+        ],
+        [
+          103,
+          "Blue Bird Labs",
+          "GB"
+        ],
+        [
+          104,
+          "North Star Tools",
+          "MX"
+        ],
+        [
+          105,
+          "Cedar Works",
+          "US"
+        ],
+        [
+          106,
+          "Unknown Studio",
+          "US"
+        ],
+        [
+          107,
+          "Acme Tools",
+          "US"
+        ]
+      ],
+      "totalRows": 7,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "leads.csv"
+        }
+      ]
+    },
+    {
+      "table": "customers",
+      "title": "Customer reference",
+      "description": "Nine existing customers. Notice the two Cedar Works IDs and the two countries for North Star Tools.",
+      "columns": [
+        "id",
+        "name",
+        "country"
+      ],
+      "rows": [
+        [
+          1,
+          "North Star Tools",
+          "US"
+        ],
+        [
+          2,
+          "Acme Tools",
+          "US"
+        ],
+        [
+          3,
+          "Acme Toolco",
+          "US"
+        ],
+        [
+          4,
+          "Bluebird Labs",
+          "GB"
+        ],
+        [
+          5,
+          "Café Central",
+          "ES"
+        ],
+        [
+          6,
+          "North Star Tools",
+          "CA"
+        ],
+        [
+          7,
+          "Cedar Works",
+          "US"
+        ],
+        [
+          8,
+          "Delta Supply",
+          "DE"
+        ],
+        [
+          9,
+          "Cedar Works",
+          "US"
+        ]
+      ],
+      "totalRows": 9,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "customers.csv"
+        }
+      ]
+    }
+  ]
+}

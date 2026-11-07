@@ -1,0 +1,112 @@
+---
+title: "Fuzzy Matching in DuckDB: Match and Review Customer Names"
+description: "Match messy customer names with RapidFuzz in DuckDB. Run the SQL in your browser, compare scorers, reduce candidate pairs, and keep ambiguous matches for review."
+pubDate: "2026-11-07"
+author: "Query Farm Team"
+tags: ["DuckDB", "Fuzzy Matching", "Tutorials", "Extensions"]
+extensions: ["rapidfuzz"]
+draft: false
+outcome: "Build a customer matching queue that flags ties, weak matches, and missing candidates."
+prerequisites: ["Basic SQL SELECT and JOIN"]
+category: "clean-match"
+technologies: ["duckdb", "rapidfuzz"]
+estimatedMinutes: 9
+level: "Intermediate"
+runtime: "browser"
+order: 2
+showLeadVisual: false
+heroImage: "/media/posts/fuzzy-matching-duckdb/social.png"
+heroImageAlt: "A matching experiment: tools ACME scores 100 against Acme Tools and 85.7 against Acme Toolco."
+thumbnail: "/media/posts/fuzzy-matching-duckdb/workflow.png"
+nextStep:
+  title: "Build your matching workflow with RapidFuzz"
+  pitch: "Explore the scorers, installation instructions, and record-linkage recipes. Keep your business rules beside the similarity scores."
+  href: "/products/extensions/rapidfuzz/"
+  cta: "Explore RapidFuzz"
+  extension: "rapidfuzz"
+  repo: "https://github.com/Query-farm/rapidfuzz"
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialVisual from '../../components/tutorials/TutorialVisual.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import demo from '../../data/tutorials/fuzzy-matching-duckdb.json';
+
+**Which customer is “tools ACME”?** You can probably spot Acme Tools. Now try Cedar Works: two customer IDs share that exact name. Both earn a perfect similarity score. Which one gets the invoice?
+
+Let's build a matching queue that exposes those decisions. You'll run [RapidFuzz in DuckDB](/products/extensions/rapidfuzz/), rescue a match that an equality join misses, and catch a “perfect” match that needs a person. Try the three cases below, then reproduce the scores yourself.
+
+<TutorialVisual kind="matching" />
+
+## Meet your slightly messy CRM export
+
+These are **all the input records**, not a preview of a hidden dataset. `id` identifies a record; `country` is its recorded country code. Before running anything, find the reordered name, the split word, and the two Cedar Works customers.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+## Choose a score for the kind of mess you have
+
+The setup defines `name_key`: lowercase, trim, and collapse repeated whitespace. Accents and punctuation stay intact. Removing them or stripping legal suffixes needs a business rule; normalization can erase meaningful distinctions.
+
+Our hand-checked pairs are leads 101 → customer 2, 102 → 1, and 103 → 4. The first query compares their names. Predict which scorer handles “Blue Bird” better, then run it:
+
+<TutorialExample example={demo.examples[0]} />
+
+`rapidfuzz_token_sort_ratio` sorts words before comparing them. That fixes the first pair. It hurts the last pair: splitting “Bluebird” changes the tokens and their sorted order. The [RapidFuzz scorer documentation](https://rapidfuzz.github.io/RapidFuzz/Usage/fuzz.html) explains these different comparison rules.
+
+We will use token sort below to make its limitations visible. In your own workflow, evaluate scorers against labeled matches and nonmatches. A score of 96 is a similarity measure, **not a 96% probability of identity**.
+
+## Reduce the candidate set before scoring
+
+Comparing every incoming record with every customer creates a cross product. Here that is only 63 pairs. Two tables of 100,000 rows would produce ten billion.
+
+A *blocking rule* selects plausible pairs first. Our example requires equal country codes:
+
+<TutorialExample example={demo.examples[1]} />
+
+The result is **26 candidate pairs instead of 63**. This is a count of comparisons in a small fixture, not a runtime benchmark. The setup's `candidates` view applies that country join and scores each surviving pair. Its `ranked` view uses `row_number()` to choose an order and `lead(score)` to retain the runner-up.
+
+Empty or missing normalized names are excluded from scoring; their incoming records remain in the final queue. Two empty strings should never become a confident match.
+
+Blocking depends on reliable country codes. Normalize missing, stale, or inconsistent codes separately: otherwise the correct match can disappear before scoring.
+
+## Keep the runner-up and the unmatched rows
+
+Our demonstration rules require a score of at least 85 and a gap of at least 10 points from the next candidate. **These are teaching thresholds, not production recommendations.**
+
+<TutorialExample example={demo.examples[2]} />
+
+Lead 104 has no candidate, so its customer, score, and gap are all `NULL`. Lead 103 has a score but no runner-up; only its gap is `NULL`. Cedar Works has two perfect candidates, giving a gap of zero.
+
+The `LEFT JOIN` preserves records that have no candidates. Dropping them would make the output look cleaner while hiding failed matches.
+
+Ordering tied scores by ID is reproducible, but does not resolve identity. Cedar Works stays in review. A lone candidate still needs independent corroboration.
+
+<TutorialChallenge post={demo.slug} />
+
+## Test the blocking rule against known answers
+
+The `labels` table is our answer key: 101 → 2, 102 → 1, 103 → 4, 104 → 6, 105 → 7, and 107 → 2. Lead 106 has no match. One known pair never reaches scoring:
+
+<TutorialExample example={demo.examples[3]} />
+
+The result is lead 104: its recorded country is MX, but its labeled customer is in CA. Five of six known pairs survive blocking. Changing the score threshold cannot recover the excluded pair.
+
+For a real evaluation, label matches and nonmatches, measure candidate recall and suggestion accuracy, and inspect a held-out set. This tiny fixture demonstrates failure modes; it cannot estimate production accuracy.
+
+## Find possible duplicates within one table
+
+For duplicate review, compare the customer table with itself and keep only `a.id < b.id`. That removes self-comparisons and mirrored pairs:
+
+<TutorialExample example={demo.examples[4]} />
+
+Customer IDs **7 and 9** both say Cedar Works; review their independent identifiers before merging. Similarity is not transitive: A matching B and B matching C does not establish that A and C are the same customer.
+
+Keep original IDs, strings, and scoring rules so matching decisions stay reversible. Continue with the [RapidFuzz reference](/products/extensions/rapidfuzz/) or [Query.Farm consulting](/consulting/) for larger integrations.
+
+<TutorialTracking post={demo.slug} />

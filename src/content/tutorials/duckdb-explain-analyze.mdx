@@ -1,0 +1,97 @@
+---
+title: "DuckDB EXPLAIN ANALYZE: Measure the Rows Behind a Slow Query"
+description: "Use EXPLAIN ANALYZE to inspect actual row counts and operator timings. Diagnose a multiplying join, repair an eligibility query, and profile the result."
+pubDate: "2026-11-07"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: false
+outcome: "Find unexpected row growth in a measured plan and verify a corrected query on the same data."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "performance-operations"
+technologies: ["duckdb"]
+estimatedMinutes: 8
+level: "Intermediate"
+runtime: "browser"
+order: 13
+showLeadVisual: false
+nextStep:
+  title: "Keep exploring with your own data"
+  pitch: "Use these queries as a starting point in Haybarn, or download the complete walkthrough to run locally."
+  href: "/products/haybarn/"
+  cta: "Explore Haybarn"
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-explain-analyze.json';
+
+**The final result is one row. The join produced 16,000.** That is not necessarily a problem—aggregates are meant to reduce rows—but here it exposes a mistake: every eligible order was counted twice.
+
+`EXPLAIN ANALYZE` lets us follow the rows actually produced during execution. We will use that evidence to investigate a query, repair its meaning, and measure it again.
+
+<TutorialExperiment slug={demo.slug} />
+
+## The business question comes first
+
+We want the number of paid orders whose region has at least one promotional campaign. An order qualifies once, however many campaigns its region has.
+
+The fixture contains 10,000 orders, of which 8,000 are paid. Each of the four regions has two campaigns. The expected count is therefore 8,000.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+If you are new to plan operators, first read the short [EXPLAIN tutorial](/tutorials/duckdb-explain/). It explains scans, filters, and the difference between an estimate and an observation.
+
+## Execute the query with measurement
+
+[`EXPLAIN ANALYZE`](https://duckdb.org/docs/2.0/guides/meta/explain_analyze) executes the query and reports its plan with runtime information. Run this SELECT-only example and inspect its actual row counts:
+
+<TutorialExample example={demo.examples[0]} />
+
+The excerpt preserves selected operators and timings from one native DuckDB 2.0.0 run. Your browser's values will differ. The <a href="/media/posts/duckdb-explain-analyze/plans.json" download data-tutorial-download="captured_profiles">full captured JSON profiles</a> are available for inspection.
+
+Because the statement runs the query, its data access and computation really happen. On your own workload, choose a representative query you are ready to execute; do not treat ANALYZE as a free preview.
+
+## Follow the actual row counts
+
+The orders scan outputs 8,000 paid rows. The promotions scan outputs eight campaign rows. The inner join outputs 16,000 matching pairs because each order's region matches two campaigns. The final aggregate reduces those pairs to one count.
+
+These are **operator output counts**, not interchangeable measures of stored rows, rows inspected, or network bytes. The full profile separately records scan details. A scan that returns 8,000 filtered rows may have examined more input rows to find them.
+
+The captured join estimate is 10,000, but its actual output is 16,000. Comparing estimates with observations can identify where the planner's expectations diverge. Here, inspecting the join's meaning reveals the more urgent issue: we are counting order–campaign pairs.
+
+See the query's ordinary result:
+
+<TutorialExample example={demo.examples[1]} />
+
+The single output row conceals the multiplication that produced its value. The measured plan makes that expansion visible.
+
+## Express eligibility instead of returning every match
+
+We only need to know whether a campaign exists for the order's region. An `EXISTS` condition expresses that question:
+
+<TutorialExample example={demo.examples[2]} />
+
+Now the count is 8,000. Profile this version too:
+
+<TutorialExample example={demo.examples[3]} />
+
+In the captured build, DuckDB uses a semi join. It outputs each qualifying order once, leaving 8,000 rows for the aggregate. The exact plan may evolve, but the result and the intended one-count-per-order rule remain the checks that matter.
+
+The rewrite deliberately changes the wrong answer. This is a correctness repair, not an equivalent-query speed comparison. The [join multiplication tutorial](/tutorials/duckdb-join-double-counting/) explores the same mistake on five visible item rows.
+
+## Interpret timings with care
+
+Operator timings help locate expensive work, but adding them is not a reliable way to reconstruct total elapsed time. Parallel execution and the way operator work is recorded matter. Use the reported query total as its own measure, and inspect the execution environment before interpreting a timing difference.
+
+This tiny fixture is useful for row counts, not a performance benchmark. One cached run may differ from a cold run; profiling and browser startup have costs of their own. For a real optimization, keep input data and environment comparable, verify equivalent results, and repeat representative measurements. Record the engine and extension versions.
+
+<TutorialChallenge post={demo.slug} />
+
+When a query is slow, work outward from the evidence: an unexpectedly expanding join, a large intermediate sort, a scan with few useful filters, or work happening on the wrong side of a remote connection. Use [Parquet metadata](/tutorials/duckdb-parquet-metadata/) or [remote aggregate diagnostics](/tutorials/duckdb-postgresql-query-pushdown/) when those are the relevant next questions.
+
+<TutorialTracking post={demo.slug} />

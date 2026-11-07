@@ -1,0 +1,98 @@
+---
+title: "Validate Incoming JSON with DuckDB and JSON Schema"
+description: "Check required fields, value types, and constraints in JSON with Query.Farm’s JSON Schema extension. Keep valid and rejected records visible in a runnable SQL lesson."
+pubDate: "2026-11-07"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials", "json", "json-schema"]
+draft: false
+outcome: "Check a JSON contract and separate valid incoming records from records that need review."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "clean-match"
+technologies: ["duckdb", "json", "json-schema"]
+estimatedMinutes: 6
+level: "Beginner"
+runtime: "browser"
+order: 8
+showLeadVisual: false
+extensions: ["json_schema"]
+nextStep:
+  title: "Take JSON Schema to your own data"
+  pitch: "Explore the JSON Schema function reference and installation instructions for your DuckDB version."
+  href: "/products/extensions/json_schema/"
+  cta: "Explore JSON Schema"
+  extension: "json_schema"
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-json-schema-validation.json';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+
+**The payload still parses as JSON. The total is now a string.** Syntax validation will accept it, but the downstream report may no longer receive the number it expects.
+
+A JSON Schema makes the expected structure explicit. We will check one small order contract, classify six incoming records, and keep only the valid paid orders.
+
+<TutorialExperiment slug={demo.slug} />
+
+## A contract small enough to inspect
+
+Each order must contain an integer `order_id`, a nonnegative numeric `total`, and a `status` of `paid` or `cancelled`. Extra fields are allowed here: the schema does not set `additionalProperties` to false.
+
+<CodeBlock code={JSON.stringify(demo.contract, null, 2)} lang="json" title="The order contract" tryable={false} />
+
+<a href="/media/posts/duckdb-json-schema-validation/schema.json" download data-tutorial-download="json_schema_contract">Download this schema</a> to use the same contract locally.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+The full schema lives in the one-row `contract` table in the setup. Notice the separation between `properties`, which describes fields, and `required`, which says they must exist. A property declaration alone does not make a field mandatory.
+
+The browser loads Query.Farm's JSON Schema extension for you. The downloaded walkthrough includes installation instructions for native DuckDB 2.0. The [extension reference](/products/extensions/json_schema/) covers other supported versions and its draft-07 target.
+
+## Check the schema before checking the batch
+
+Run the schema check on its own, outside any error-catching wrapper:
+
+<TutorialExample example={demo.examples[0]} />
+
+This verifies that the validator can load our contract. Also test it with known passing and failing documents: an accepted schema can still describe the wrong business rule.
+
+This ordering matters because `TRY` catches errors in the schema as well as errors in a document. If you put a broken contract inside a blanket `TRY`, every incoming record could look like bad data when the real fault is the contract itself.
+
+## Turn document failures into a visible classification
+
+The extension returns true for a conforming document and raises an error when validation fails. For a batch classification, catch that failure and map it to false:
+
+<TutorialExample example={demo.examples[1]} />
+
+Records 1 and 2 pass. Record 3 has a string total, record 4 has a negative total, and record 5 lacks status. Our wrapper also treats record 6's SQL NULL as invalid.
+
+`TRY` does not repair any of these records. The original payload stays unchanged. This is a classification that lets a later query route or inspect records without abandoning the entire batch on the first failure.
+
+The extension does not return a structured list of failed keywords. The original payload and the schema remain the evidence for investigation; run validation on an individual failing record when you want its textual exception. For this small fixture, the mismatches are visible directly in the input table.
+
+## Make the quality gate countable
+
+A summary should account for the entire batch:
+
+<TutorialExample example={demo.examples[2]} />
+
+Six received, two accepted, four rejected. Persist a batch identifier and schema version alongside those outcomes in a recurring pipeline. That lets someone distinguish a changed source from a changed contract.
+
+Validation and business filtering are separate steps. A cancelled order can be structurally valid. Conversely, the presence of the text `paid` does not prove that the rest of the document is acceptable.
+
+<TutorialChallenge post={demo.slug} />
+
+## Where this check belongs
+
+This lesson starts with parsed JSON. Malformed JSON text fails earlier, before the contract can inspect its fields; retain parsing failures as a separate category in an import workflow.
+
+For fixed relational data, typed columns and SQL constraints may be a simpler way to express requirements. JSON Schema is useful when a JSON document is the thing whose structure you need to check. Validate it once at the boundary where the result becomes useful, rather than repeatedly on every dashboard query.
+
+Once the contract passes, [flatten the nested data](/tutorials/duckdb-nested-json/) using a deliberate rule for empty arrays. Keep the raw payload available until the resulting tables have been reconciled with the input.
+
+<TutorialTracking post={demo.slug} />

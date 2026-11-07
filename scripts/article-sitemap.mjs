@@ -1,10 +1,10 @@
-// Use the rendered pages as the source of truth for blog dates and indexing.
+// Use the rendered pages as the source of truth for article dates and indexing.
 // This keeps the sitemap aligned with content validation, draft previews, and
 // the tag archive's noindex rule without parsing frontmatter a second time.
 import { readFile, readdir } from 'node:fs/promises';
 import { parse } from 'parse5';
 
-export function blogSitemapMetadata() {
+export function articleSitemapMetadata() {
   /** @type {Map<string, { noindex: boolean, lastmod?: string }>} */
   const pages = new Map();
   /** @param {string} url */
@@ -12,14 +12,15 @@ export function blogSitemapMetadata() {
 
   /** @type {import('astro').AstroIntegration} */
   const integration = {
-    name: 'query-farm/blog-sitemap-metadata',
+    name: 'query-farm/article-sitemap-metadata',
     hooks: {
       'astro:build:generated': async ({ dir }) => {
         pages.clear();
-        const blogDir = new URL('blog/', dir);
-        for (const file of await readdir(blogDir, { recursive: true })) {
+        for (const section of ['blog', 'tutorials']) {
+        const sectionDir = new URL(section + '/', dir);
+        for (const file of await readdir(sectionDir, { recursive: true })) {
           if (!file.endsWith('.html')) continue;
-          const document = parse(await readFile(new URL(file, blogDir), 'utf8'));
+          const document = parse(await readFile(new URL(file, sectionDir), 'utf8'));
           const html = document.childNodes.find(node => 'tagName' in node && node.tagName === 'html');
           const head = html && 'childNodes' in html
             ? html.childNodes.find(node => 'tagName' in node && node.tagName === 'head')
@@ -36,17 +37,18 @@ export function blogSitemapMetadata() {
               canonical = attrs.get('href');
             }
           }
-          if (!canonical) throw new Error(`Blog page has no canonical URL: ${file}`);
+          if (!canonical) throw new Error(`Article page has no canonical URL: ${file}`);
           const noindex = /\b(noindex|none)\b/i.test(metadata.get('robots') ?? '');
           // Authored update dates take precedence; never use the build clock.
           const date = metadata.get('article:modified_time') ?? metadata.get('article:published_time');
           if (!noindex && metadata.get('og:type') === 'article' && !date) {
-            throw new Error(`Blog article has no publication date: ${file}`);
+            throw new Error(`Article has no publication date: ${file}`);
           }
           pages.set(pathname(canonical), {
             noindex,
             ...(date ? { lastmod: new Date(date).toISOString() } : {}),
           });
+        }
         }
       },
     },

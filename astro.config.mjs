@@ -1,10 +1,12 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import { searchDevPlugin } from './scripts/search-dev.mjs';
-import { blogSitemapMetadata } from './scripts/blog-sitemap.mjs';
+import { articleSitemapMetadata } from './scripts/article-sitemap.mjs';
 import { satteri } from '@astrojs/markdown-satteri';
 import { tableBars } from './scripts/table-bars.mjs';
 import { defaultSnapshotId } from './src/haybarn-functions/data/haybarn-release.mjs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { currentReferenceIds } from './scripts/haybarn-functions/canonicals.mjs';
 
 import tailwindcss from '@tailwindcss/vite';
 import icon from 'astro-icon';
@@ -18,7 +20,10 @@ import starlight from '@astrojs/starlight';
 // `astro dev` sets NODE_ENV=development, `astro build` sets production.
 const GA_MEASUREMENT_ID = 'G-EZ01WJETLF';
 const GA_ENABLED = process.env.NODE_ENV === 'production';
-const blogSitemap = blogSitemapMetadata();
+const articleSitemap = articleSitemapMetadata();
+const snapshotDirectory = new URL('./src/haybarn-functions/data/snapshots/', import.meta.url);
+const equivalentArchives = currentReferenceIds(readdirSync(snapshotDirectory).filter(name => name.endsWith('.json')).map(name => JSON.parse(readFileSync(new URL(name, snapshotDirectory), 'utf8'))), defaultSnapshotId);
+
 
 // Shiki theme, retuned for the Strata Sun palette (see DESIGN_BRIEF.md).
 // Ground is rock-900 (#1a1512) — the same surface every code block uses.
@@ -191,6 +196,7 @@ export default defineConfig({
             { label: 'Function lifecycle', slug: 'vgi/docs/concepts/lifecycle' },
             { label: 'Argument serialization', slug: 'vgi/docs/concepts/argument-serialization' },
             { label: 'Test a worker through SQL', slug: 'vgi/docs/concepts/testing' },
+            { label: 'Starter templates', slug: 'vgi/docs/concepts/starter-templates' },
           ],
         },
         {
@@ -529,23 +535,23 @@ export default defineConfig({
       ],
     }),
     mdx(),
-    blogSitemap.integration,
+    articleSitemap.integration,
     // Keep the sitemap to pages that are actually indexable. Submitting a
     // noindex or redirect-only URL is a Search Console error, and all of
     // these are reachable through on-page navigation anyway, so nothing
     // depends on them being listed here.
     sitemap({
-      serialize: blogSitemap.serialize,
+      serialize: articleSitemap.serialize,
       filter: page => {
         const { pathname } = new URL(page);
         // The report's original preview URL redirects to its published blog post.
         if (pathname === '/research/duckdb-2-release-activity/') return false;
-        // Current release archives resolve to the stable reference canonical;
-        // older release references keep their own indexable URLs.
-        const currentArchive = `/products/haybarn/functions/releases/${defaultSnapshotId}`;
-        if (pathname === currentArchive || pathname.startsWith(currentArchive + '/')) return false;
+        // Match the rendered canonical rules; materially different archives
+        // remain indexable, even when they share function names.
+        const archiveId = pathname.match(/^\/products\/haybarn\/functions\/releases\/([^/]+)(?:\/|$)/)?.[1];
+        if (archiveId && equivalentArchives.has(archiveId)) return false;
         if (pathname.startsWith('/products/haybarn/functions/compare/')) return false;
-        // Blog noindex rules and authored dates are applied by serialize,
+        // Article noindex rules and authored dates are applied by serialize,
         // using the same metadata as the rendered posts and tag archives.
         // Per-function pages under an extension are pure 301 redirects to
         // their category anchor (src/pages/products/extensions/[slug]/functions/[function].astro)

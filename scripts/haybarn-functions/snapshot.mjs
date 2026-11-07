@@ -5,7 +5,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { normalizeRows, groupFunctions } from './catalog.mjs';
-import { captureBindings } from './bindings.mjs';
+import { captureBindings, extensionDirectorySQL } from './bindings.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const { values } = parseArgs({ options: {
@@ -25,11 +25,15 @@ const extensionDirectory = resolve(root, '.cache/extensions', `${values.engine}-
 mkdirSync(extensionDirectory, { recursive: true });
 const initFile = resolve(root, '.cache/snapshot-init.sql');
 writeFileSync(initFile, '');
-const prelude = `SET extension_directory = '${extensionDirectory.replaceAll("'", "''")}';\n` +
+const cliArgs = ['-init', initFile, '-batch', '-bail', '-noheader', '-list', ':memory:', '-c'];
+const engineVersion = execFileSync(binary, [...cliArgs, 'SELECT version();'], { encoding: 'utf8', timeout: 30_000 }).trim();
+// The singular setting emits a deprecation warning into stdout in DuckDB 2.0,
+// corrupting the JSON capture. Use its supported list setting instead.
+const prelude = extensionDirectorySQL(extensionDirectory, engineVersion) + '\n' +
   extensions.map(n => `INSTALL ${n}; LOAD ${n};`).join('\n');
 // JSON serialization happens inside SQL: CLI -json renders LISTs as SQL in
 // some builds. An empty init file keeps personal startup macros out of docs.
-const output = execFileSync(binary, ['-init', initFile, '-batch', '-bail', '-noheader', '-list', ':memory:', '-c',
+const output = execFileSync(binary, [...cliArgs,
   `${prelude}\nSELECT to_json(struct_pack(
     version := (SELECT list(v) FROM pragma_version() v),
     functions := (SELECT list(f) FROM duckdb_functions() f),

@@ -20,6 +20,7 @@ export async function GET() {
     '## Build with a coding agent', '',
     'For a new worker, ask the developer to choose Python, TypeScript, Go, Rust, Java, or C# unless they already specified a language. Preserve the language of existing projects.', '',
     `- [Agent quickstart](${origin}/vgi/build-with-an-agent/): Install the portable skill, choose a language, and build and test a worker locally.`,
+    `- [Worked photo-catalog example](${origin}/vgi/photo-catalog-with-an-agent/): Follow a tested two-turn conversation, download the sample inputs or generated worker, and reproduce the SQL results.`,
     '- [VGI skills](https://github.com/Query-farm/vgi-skills): Versioned language recipes, SQL verification helpers, packaging, and fresh-session evaluations.',
     `- [Test a Python worker](${origin}/vgi/docs/python/how-to/testing/)`,
     `- [Test a TypeScript worker](${origin}/vgi/docs/typescript/how-to/testing/)`,
@@ -28,6 +29,10 @@ export async function GET() {
 
   for (const section of sections) {
     lines.push(`## ${section.name}`, '', section.blurb, '');
+    const starter = 'starter' in section && typeof section.starter === 'string' ? section.starter : '';
+    if (starter) {
+      lines.push(`- [${section.name} starter template](${starter}): GitHub template repository with a tested worker, CI, Docker, signed releases and AGENTS.md; create a project with \`gh repo create <name> --template ${starter.replace('https://github.com/', '')}\` then \`make init NAME=<name>\``);
+    }
     const prefix = `vgi/docs/${section.slug}`;
     const entries = docs
       .filter(entry => entry.id === prefix || entry.id.startsWith(`${prefix}/`))

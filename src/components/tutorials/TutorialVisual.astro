@@ -1,0 +1,116 @@
+---
+import fuzzy from '../../data/tutorials/fuzzy-matching-duckdb.json';
+interface Props { kind: 'matching' | 'snapshots' | 'pushdown' }
+const { kind } = Astro.props;
+const cases = [
+  { id: 'reordered', button: 'Reordered words', title: 'A name in the wrong order. A match in one query.', incoming: 'tools ACME', left: 'Acme Tools', right: 'Acme Toolco', leftId: 'Customer 2', rightId: 'Customer 3', leftScore: fuzzy.examples[2].expectedRows![0][3], rightScore: 85.7, note: 'Token sorting finds Acme Tools. The runner-up is 14.3 points behind.' },
+  { id: 'split', button: 'One extra space', title: 'One space turns the winning scorer into the wrong choice.', incoming: 'Blue Bird Labs', left: 'Bluebird Labs', right: 'Bluebird Labs', leftId: 'Ordinary ratio', rightId: 'Token sort ratio', leftScore: fuzzy.examples[0].expectedRows![2][2], rightScore: fuzzy.examples[0].expectedRows![2][3], note: 'Same two names, different comparison rules. Token sorting breaks this match.' },
+  { id: 'tie', button: 'Two perfect matches', title: '100 out of 100. Twice. Which customer is it?', incoming: 'Cedar Works', left: 'Cedar Works', right: 'Cedar Works', leftId: 'Customer 7', rightId: 'Customer 9', leftScore: 100, rightScore: 100, note: 'Two distinct IDs have the same name. A perfect score cannot choose between them.' },
+];
+const snapshotRows = [
+  {id:1,name:'Ada',old:'free',next:'pro',kind:'changed'},
+  {id:2,name:'Ben',old:'NULL',next:'free',kind:'changed'},
+  {id:3,name:'Cy',old:'pro',next:'—',kind:'deleted'},
+  {id:4,name:'Dee',old:'free',next:'free',kind:'same'},
+  {id:5,name:'Eli',old:'—',next:'free',kind:'added'},
+  {id:6,name:'Finn',old:'NULL',next:'NULL',kind:'same'},
+];
+---
+<figure class={`tutorial-visual visual-${kind}`} data-tutorial-visual={kind} data-state={kind === 'matching' ? 'reordered' : kind === 'snapshots' ? 'hidden' : 'local'}>
+  {kind === 'matching' && <>
+    <div class="visual-kicker">A tiny matching experiment</div>
+    <div class="visual-controls" role="group" aria-label="Choose a matching case">
+      {cases.map((item,index) => <button type="button" data-visual-choice={item.id} aria-pressed={index === 0 ? 'true' : 'false'}>{item.button}</button>)}
+    </div>
+    {cases.map((item,index) => <div class="match-scene" data-visual-scene={item.id} hidden={index !== 0}>
+      <h3>{item.title}</h3>
+      <div class="match-board">
+        <div class="incoming-ticket"><span>Incoming record</span><strong>{item.incoming}</strong><i aria-hidden="true">?</i></div>
+        <svg class="match-threads" viewBox="0 0 120 260" aria-hidden="true"><path d="M0 130 C65 130 45 60 118 60 M0 130 C65 130 45 200 118 200" /></svg>
+        <div class="candidate-stack">
+          {[{name:item.left,label:item.leftId,score:item.leftScore},{name:item.right,label:item.rightId,score:item.rightScore}].map((candidate,i) => <div class={`candidate-ticket candidate-${i}`}>
+            <div><span>{candidate.label}</span><strong>{candidate.name}</strong></div>
+            <div class="score-stamp"><b>{candidate.score}</b><small>/ 100</small></div>
+          </div>)}
+        </div>
+      </div>
+      <p class="visual-outcome">{item.note}</p>
+    </div>)}
+    <a class="visual-next" href="#score-names">Make the comparison in SQL ↓</a>
+  </>}
+  {kind === 'snapshots' && <>
+    <div class="snapshot-heading"><div><span class="visual-kicker">The row-count trap</span><h3>Five yesterday.<br/>Five today.</h3></div><div class="same-count" aria-hidden="true">5<span>=</span>5</div></div>
+    <p class="visual-prompt">Looks unchanged. Look closer.</p>
+    <div class="export-papers">
+      {['Yesterday','Today'].map((label,index) => <div class={`export-paper paper-${index}`}>
+        <div class="file-heading"><span class="file-icon" aria-hidden="true">▤</span><strong>{label}</strong><small>.parquet</small></div>
+        <div class="paper-columns"><span>ID</span><span>Customer</span><span>Plan</span></div>
+        {snapshotRows.map(row => <div class={`paper-row change-${row.kind} ${(!index && row.kind === 'added') || (index && row.kind === 'deleted') ? 'missing-row' : ''}`}>
+          <span>{row.id}</span><strong>{row.name}</strong><span>{index ? row.next : row.old}</span>
+        </div>)}
+        <div class="paper-torn" aria-hidden="true"></div>
+      </div>)}
+    </div>
+    <button type="button" class="reveal-button" data-visual-choice="revealed" aria-pressed="false">Reveal what changed <span aria-hidden="true">↗</span></button>
+    <div class="snapshot-findings" data-visual-scene="revealed" hidden><b>4 records changed.</b><span>2 updated · 1 deleted · 1 added</span></div>
+    <p class="visual-outcome">Aligned by ID. A dash means the record is absent; NULL means its plan is unknown.</p>
+    <a class="visual-next" href="#diff-snapshots">Find all four changes with a join ↓</a>
+  </>}
+  {kind === 'pushdown' && <>
+    <div class="visual-kicker">Same question. Very different journey.</div>
+    <h3>Send the rows.<br/>Or send the answer.</h3>
+    <div class="visual-controls" role="group" aria-label="Choose where the aggregation runs">
+      <button type="button" data-visual-choice="local" aria-pressed="true">Aggregate in DuckDB</button>
+      <button type="button" data-visual-choice="remote" aria-pressed="false">Move it to PostgreSQL →</button>
+    </div>
+    <div class="query-journey">
+      <div class="database-station"><div class="database-icon" aria-hidden="true"><i></i><i></i><i></i></div><strong>PostgreSQL</strong><span>10,000 orders</span><small>WHERE status = 'paid'</small><b class="group-chip remote-chip">GROUP BY region</b></div>
+      <div class="transfer-lane"><div class="transfer-label"><b data-transfer-count>8,000</b><span>rows cross the connector</span></div><div class="row-stream" aria-hidden="true">{Array.from({length:40},(_,index)=><i class={index < 4 ? 'answer-row' : 'source-row'}></i>)}</div><span class="lane-arrow" aria-hidden="true">⟶</span></div>
+      <div class="database-station duck-station"><div class="result-icon" aria-hidden="true">{[1,2,3,4].map(()=> <i></i>)}</div><strong>DuckDB</strong><b class="group-chip local-chip">GROUP BY region</b><span>4 region totals</span></div>
+    </div>
+    <p class="visual-outcome" data-transfer-outcome>PostgreSQL filters to 8,000 paid orders. DuckDB groups them into four totals.</p>
+    <div class="same-answer"><span>East</span><b>102,000</b><span>North</span><b>102,000</b><span>South</span><b>102,000</b><span>West</span><b>102,000</b></div>
+    <p class="visual-footnote">Both paths return the same result. Labels are measured row counts; tiles illustrate the flow, not scale or speed.</p>
+  </>}
+  <span class="sr-only" aria-live="polite" data-visual-announcement></span>
+</figure>
+
+<script>
+  for (const figure of document.querySelectorAll<HTMLElement>('[data-tutorial-visual]')) {
+    for (const button of figure.querySelectorAll<HTMLButtonElement>('[data-visual-choice]')) {
+      button.addEventListener('click', () => {
+        const kind = figure.dataset.tutorialVisual;
+        const choice = button.dataset.visualChoice!;
+        const state = kind === 'snapshots' && figure.dataset.state === 'revealed' ? 'hidden' : choice;
+        figure.dataset.state = state;
+        for (const control of figure.querySelectorAll<HTMLButtonElement>('[data-visual-choice]')) control.setAttribute('aria-pressed',String(control.dataset.visualChoice === state));
+        for (const scene of figure.querySelectorAll<HTMLElement>('[data-visual-scene]')) scene.hidden = scene.dataset.visualScene !== state;
+        let message = '';
+        if (kind === 'matching') message = figure.querySelector<HTMLElement>(`[data-visual-scene="${state}"] .visual-outcome`)?.textContent ?? '';
+        if (kind === 'snapshots') {
+          button.innerHTML = state === 'revealed' ? 'Hide the changes <span aria-hidden="true">↙</span>' : 'Reveal what changed <span aria-hidden="true">↗</span>';
+          message = state === 'revealed' ? 'Four records changed: two updated, one deleted, one added.' : 'Both snapshots have five rows.';
+        }
+        if (kind === 'pushdown') {
+          figure.querySelector('[data-transfer-count]')!.textContent = state === 'remote' ? '4' : '8,000';
+          message = state === 'remote' ? 'PostgreSQL filters and groups the orders. Only the four final totals cross the connector.' : 'PostgreSQL filters to 8,000 paid orders. DuckDB groups them into four totals.';
+          figure.querySelector('[data-transfer-outcome]')!.textContent = message;
+        }
+        figure.querySelector('[data-visual-announcement]')!.textContent = message;
+        const post = figure.closest('article')?.querySelector<HTMLElement>('[data-tutorial-post]')?.dataset.tutorialPost;
+        (window as Window & {gtag?: (...args: unknown[])=>void}).gtag?.('event','tutorial_visual_interaction',{post,content_type:'tutorial',visual:kind,choice:state});
+      });
+    }
+  }
+</script>
+
+<style>
+  .tutorial-visual{margin:2.1rem 0;padding:28px;border:1px solid #d4c7b3;border-radius:18px;overflow:hidden;position:relative;font-family:var(--font-sans,'Noto Sans',sans-serif);background:#f1e9d8;color:#28221b}
+  .tutorial-visual [hidden]{display:none!important}.tutorial-visual h3{margin:14px 0 24px;font-size:clamp(25px,3.6vw,36px);line-height:1.12;letter-spacing:-.025em;max-width:23ch}.tutorial-visual p{font-size:14px;line-height:1.55;margin:14px 0}.visual-kicker{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#805b1c}.visual-controls{display:flex;flex-wrap:wrap;gap:7px;margin:15px 0 24px}.visual-controls button{font-family:inherit;font-weight:600;font-size:12px;line-height:1.3;padding:9px 12px;border:1px solid #b8a991;border-radius:99px;background:#fffdf7;color:#554630;cursor:pointer;transition:background .18s,color .18s}.visual-controls button[aria-pressed=true]{background:#28221b;border-color:#28221b;color:#fff7e8}.visual-controls button:focus-visible,.reveal-button:focus-visible{outline:3px solid #45632f;outline-offset:3px}.visual-next{display:inline-block;font-size:12px;font-weight:600;color:#45632f}.visual-outcome{border-top:1px solid #c9bca5;padding-top:16px}
+  .visual-matching{background:radial-gradient(ellipse at 85% 20%,#eedbb6 0,transparent 55%),#f4ecdd}.match-board{display:grid;grid-template-columns:minmax(0,1fr) 64px minmax(0,1.45fr);align-items:center;min-height:230px}.incoming-ticket{position:relative;padding:23px 18px;background:#fffdf7;border:1px solid #bfad8e;box-shadow:3px 7px 0 #dfd0b6;transform:rotate(-3deg);z-index:1}.incoming-ticket span,.candidate-ticket span{display:block;font-size:11px;line-height:1.3;font-weight:600;color:#7a674b}.incoming-ticket strong{display:block;margin-top:13px;font-family:Georgia,serif;font-size:25px;line-height:1.12;overflow-wrap:anywhere}.incoming-ticket i{position:absolute;right:7px;top:-25px;width:42px;height:42px;line-height:42px;text-align:center;border:2px solid #805b1c;border-radius:50%;font-family:Georgia,serif;font-size:29px;font-style:normal;background:#f4e2b7;transform:rotate(12deg)}.match-threads{width:100%;height:210px;overflow:visible;fill:none;stroke:#8d754e;stroke-width:2;stroke-dasharray:5 4}.candidate-stack{display:grid;gap:17px}.candidate-ticket{padding:16px 13px;display:flex;gap:8px;align-items:center;justify-content:space-between;background:#fffdf7;border-bottom:2px solid #b0bd94;box-shadow:2px 4px 0 #d9deca;transform:rotate(1deg)}.candidate-ticket strong{display:block;margin-top:5px;font-size:16px;line-height:1.2}.candidate-1{transform:rotate(-1deg);border-color:#c49a64;box-shadow:2px 4px 0 #dfd0b6}.score-stamp{flex-shrink:0;display:grid;place-items:center;width:74px;height:74px;border:2px solid #45632f;border-radius:50%;color:#45632f;transform:rotate(-8deg)}.score-stamp b{font-size:27px;font-variant-numeric:tabular-nums;line-height:1.2}.score-stamp small{font-size:10px;line-height:1;margin-top:-12px}.candidate-1 .score-stamp{color:#805b1c;border-color:#a5762f;transform:rotate(8deg)}.match-scene{animation:figure-arrive .2s ease-out}
+  .visual-snapshots{background:repeating-linear-gradient(0deg,transparent,transparent 23px,#d7c7aa33 24px),#eee4d1}.snapshot-heading{display:flex;justify-content:space-between;align-items:center;gap:15px}.snapshot-heading h3{margin-bottom:0}.same-count{font-size:86px;font-weight:600;letter-spacing:-.07em;line-height:1;font-variant-numeric:tabular-nums;color:#8b7656}.same-count span{font-size:42px;vertical-align:middle;margin:0 8px;color:#a7977d}.visual-prompt{font-family:Georgia,serif;font-style:italic;font-size:19px!important}.export-papers{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px;margin:30px 5px}.export-paper{position:relative;min-width:0;padding:14px 12px 18px;background:#fffdf7;box-shadow:2px 8px 14px #44301819;transform:rotate(-2deg)}.paper-1{transform:rotate(2deg)}.file-heading{display:flex;align-items:center;gap:7px;margin-bottom:18px}.file-heading strong{font-family:Georgia,serif;font-size:20px}.file-heading small{margin-left:auto;font-size:10px;color:#86775f}.file-icon{color:#45632f;font-size:22px}.paper-columns,.paper-row{display:grid;grid-template-columns:26px 1fr 50px;gap:5px;padding:8px 6px;font-size:12px;line-height:1.2}.paper-columns{font-size:10px;color:#877558;border-bottom:1px solid #c9bca5}.paper-row{border-bottom:1px solid #ede7dc;transition:background .25s,opacity .25s}.paper-row strong{font-weight:500}.paper-row span:last-child{text-align:right;font-variant-numeric:tabular-nums}.missing-row{color:#a89a85;font-style:italic}.missing-row strong{visibility:hidden}.paper-torn{position:absolute;bottom:-8px;left:0;right:0;height:9px;background:#fffdf7;clip-path:polygon(0 0,100% 0,100% 100%,95% 20%,90% 100%,85% 20%,80% 100%,75% 20%,70% 100%,65% 20%,60% 100%,55% 20%,50% 100%,45% 20%,40% 100%,35% 20%,30% 100%,25% 20%,20% 100%,15% 20%,10% 100%,5% 20%,0 100%)}[data-state=revealed] .change-changed{background:#fae2ac}[data-state=revealed] .change-deleted{background:#f3d5cc}[data-state=revealed] .change-added{background:#dfeacb}[data-state=revealed] .change-same{opacity:.45}.reveal-button{padding:12px 18px;border:0;border-radius:6px;background:#45632f;color:white;font-size:14px;font-weight:600;cursor:pointer}.reveal-button span{margin-left:16px}.snapshot-findings{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 16px;margin:20px 0;color:#805b1c;animation:figure-arrive .2s ease-out}.snapshot-findings b{font-family:Georgia,serif;font-size:30px}.snapshot-findings span{font-size:13px}
+  .visual-pushdown{background:radial-gradient(ellipse at 45% 30%,#383321,transparent 65%),#1a1915;color:#f5edde;border-color:#403b30}.visual-pushdown .visual-kicker{color:#c4bba6}.visual-pushdown h3{max-width:none;font-size:clamp(30px,4.5vw,45px);color:#fff8e9}.visual-pushdown .visual-controls button{background:transparent;color:#efe6d4;border-color:#7b725f}.visual-pushdown .visual-controls button[aria-pressed=true]{background:#f4e3bd;color:#302a20;border-color:#f4e3bd}.query-journey{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr) minmax(0,1fr);align-items:center;gap:12px;margin:38px 0}.database-station{display:flex;flex-direction:column;align-items:center;text-align:center;gap:9px;min-height:190px}.database-station>strong{font-size:17px}.database-station>span{font-size:12px;color:#c7beab}.database-station>small{font:10px ui-monospace,monospace;color:#c7beab}.database-icon{position:relative;width:58px;height:58px;margin:6px 0}.database-icon i{position:absolute;left:0;width:58px;height:25px;border:1.5px solid #b3c69d;border-radius:50%;background:#303f28}.database-icon i:nth-child(1){top:30px}.database-icon i:nth-child(2){top:15px}.database-icon i:nth-child(3){top:0}.result-icon{width:53px;display:grid;gap:4px;margin:7px 0}.result-icon i{height:10px;border:1px solid #b3c69d;background:#303f28;border-radius:2px}.group-chip{padding:6px 7px;border-radius:4px;font:10px ui-monospace,monospace;color:#2f361e;background:#c8d9ad;white-space:nowrap}.remote-chip{visibility:hidden}[data-state=remote] .remote-chip{visibility:visible}[data-state=remote] .local-chip{visibility:hidden}.transfer-label{text-align:center}.transfer-label b{font-size:49px;line-height:1;font-weight:600;letter-spacing:-.04em;display:block;color:#e9c47a;font-variant-numeric:tabular-nums}.transfer-label span{display:block;font-size:10px;color:#c7beab;margin-top:8px}.row-stream{display:grid;grid-template-columns:repeat(10,1fr);gap:4px;margin:17px 0 0}.row-stream i{height:9px;border-radius:1px;background:#c59a51;transition:opacity .3s,transform .3s,background .3s}.lane-arrow{display:block;font-size:52px;line-height:.6;color:#8a806b;text-align:center}.transfer-lane{min-height:190px}[data-state=remote] .source-row{opacity:0;transform:scale(.15)}[data-state=remote] .answer-row{background:#b3ce8f}[data-state=remote] [data-transfer-count]{color:#b3ce8f}.visual-pushdown .visual-outcome{border-color:#514939;color:#e8dfcc}.same-answer{display:grid;grid-template-columns:repeat(8,auto);gap:5px 8px;padding:12px 0;font-size:11px}.same-answer span{color:#c4bba6}.same-answer b{font-weight:500;color:#f6eedc;font-variant-numeric:tabular-nums}.visual-pushdown .visual-footnote{font-size:11px;color:#b9af9b;margin:4px 0 0}
+  @keyframes figure-arrive{from{opacity:.5;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+  @media(max-width:600px){.tutorial-visual{padding:19px 16px}.tutorial-visual h3{font-size:27px}.visual-controls{gap:6px}.visual-controls button{padding:8px 10px;font-size:11px}.match-board{grid-template-columns:minmax(0,1fr);gap:25px;padding:8px 2px}.incoming-ticket{width:75%;margin:0 auto;padding:17px 18px}.incoming-ticket strong{font-size:23px}.match-threads{display:none}.candidate-stack{gap:13px}.candidate-ticket{padding:12px 13px}.candidate-ticket strong{font-size:17px}.score-stamp{height:63px;width:63px}.score-stamp b{font-size:25px}.same-count{font-size:60px}.same-count span{font-size:29px;margin:0 3px}.snapshot-heading h3{font-size:25px}.export-papers{gap:12px;margin:26px 0}.export-paper{padding:11px 6px 14px}.file-heading{gap:3px}.file-heading strong{font-size:16px}.file-heading small{display:none}.paper-columns,.paper-row{grid-template-columns:16px 1fr 37px;padding:8px 3px;gap:3px;font-size:11px}.paper-columns{font-size:9px}.query-journey{grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) minmax(0,1fr);gap:5px;margin:28px 0 0}.database-station{gap:8px}.database-station>strong{font-size:12px}.database-station>span{font-size:10px}.database-station>small{font-size:8px;max-width:85px}.group-chip{font-size:8px;white-space:normal}.transfer-label b{font-size:clamp(26px,8vw,38px);white-space:nowrap}.transfer-label span{font-size:9px}.row-stream{gap:2px}.row-stream i{height:7px}.same-answer{grid-template-columns:1fr 1fr 1fr 1fr;font-size:11px}.visual-pushdown h3{font-size:33px}.visual-pushdown .visual-controls button{font-size:11px}}
+  @media(prefers-reduced-motion:reduce){.match-scene,.snapshot-findings{animation:none}.tutorial-visual *{transition:none!important}}
+</style>

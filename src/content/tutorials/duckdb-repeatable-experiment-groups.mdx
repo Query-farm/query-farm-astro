@@ -1,0 +1,82 @@
+---
+title: "Assign Users to Repeatable Experiment Groups with DuckDB"
+description: "Use a named hash algorithm and fixed seed to assign stable experiment buckets in DuckDB. Explore rollout thresholds and add users without renumbering everyone."
+pubDate: "2026-11-07"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: false
+outcome: "Map stable user IDs to repeatable buckets and distinguish a rollout threshold from a hash contract."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "analyze-data"
+technologies: ["duckdb", "hashfuncs"]
+estimatedMinutes: 7
+level: "Intermediate"
+runtime: "browser"
+order: 22
+showLeadVisual: false
+extensions: ["hashfuncs"]
+nextStep: {"title": "Make hash calculations reproducible", "pitch": "Explore named hash algorithms and matching hash conventions across systems.", "href": "/products/extensions/hashfuncs/", "cta": "Explore Hashfuncs", "extension": "hashfuncs"}
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-repeatable-experiment-groups.json';
+
+**You rerun an experiment report, and half the users switch groups.** A fresh random draw is useful for some tasks, but it is a poor assignment rule when the same person should keep seeing the same experience.
+
+We will turn a stable user ID into a repeatable bucket with [Hashfuncs](/products/extensions/hashfuncs/). Then we will change the rollout size without changing the bucket calculation.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Write down the assignment contract
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+Our contract is specific: concatenate `onboarding-v1:` with the exact user ID text, hash it with `xxh3_64` and seed 42, then take the remainder modulo 100. The result is an integer from 0 through 99.
+
+The prefix identifies the experiment. The algorithm, seed, text representation, and bucket count all participate in assignment. Changing any of them can move users, so keep the contract versioned and test known input/output pairs across implementation upgrades.
+
+## Calculate buckets independently
+
+<TutorialExample example={demo.examples[0]} />
+
+Ben lands in bucket 4, Hao in 10, and Cy in 45. Ada and Fay both land in 83. Sharing a bucket is expected: we deliberately map many possible IDs into just 100 buckets. A bucket is not a unique identifier.
+
+Each calculation depends only on that user’s input and the fixed contract. It does not depend on how many other rows are present or on their order. A row-number-based allocation would have a different property: inserting a user could move everybody after them.
+
+Use a non-NULL, stable identifier for the assignment unit you intend. If the experiment is per account, hash the account ID. If it is per person, a rotating session ID would make the experience change between visits.
+
+## Separate assignment from rollout size
+
+<TutorialExample example={demo.examples[1]} />
+
+At a threshold of 20, buckets 0–19 receive treatment. At 50, buckets 0–49 receive it. Ben and Hao remain treated; Cy joins them. The actual bucket values stay fixed.
+
+“20% rollout” describes the portion of the bucket space allocated to treatment. It does not guarantee exactly 20% of a small sample. Here two of eight users are treated at the smaller threshold, and three of eight at the larger one. Do not reshuffle users just to make a tiny sample look perfectly balanced.
+
+The [Hashfuncs reference](/products/extensions/hashfuncs/#functions) exposes named algorithms and seed parameters. Reproducibility requires using the same input bytes and algorithm semantics wherever the assignment is computed.
+
+## Add a new user
+
+<TutorialExample example={demo.examples[2]} />
+
+Ivy lands in bucket 11. The original eight users keep their values. This is why deterministic assignment is useful for an audience that grows over time.
+
+The experiment name is part of the input so another experiment can use a different assignment. That is a reproducibility convention, not a proof of statistical independence. Evaluate allocation quality and sample balance for the experiment you actually run.
+
+<TutorialChallenge post={demo.slug} />
+
+## Be precise about what stays stable
+
+The bucket is stable under this fixed contract. The treatment group is stable only while its threshold and eligibility rules are stable too. Increasing the threshold intentionally changes some people’s experience; decreasing it can move them back. For a fixed A/B test, persist enrollment and keep the protocol fixed instead of treating a rollout slider as an analysis strategy.
+
+These hashes are non-cryptographic and do not anonymize user IDs. They are also not an access-control mechanism: a caller who chooses their own ID can search for a preferred bucket.
+
+The useful promise is narrower and practical: the same agreed input produces the same assignment calculation, making a report and a product implementation easier to reconcile.
+
+<TutorialTracking post={demo.slug} />

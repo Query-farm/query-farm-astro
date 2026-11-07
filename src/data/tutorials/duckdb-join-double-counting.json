@@ -1,0 +1,223 @@
+{
+  "slug": "duckdb-join-double-counting",
+  "extension": "DuckDB",
+  "setup": "CREATE OR REPLACE TABLE orders(id INTEGER, customer VARCHAR, order_total INTEGER);\nINSERT INTO orders VALUES (101,'Ada',100),(102,'Ben',60),(103,'Cy',80);\nCREATE OR REPLACE TABLE items(id INTEGER, order_id INTEGER, sku VARCHAR, line_total INTEGER);\nINSERT INTO items VALUES\n  (1,101,'MUG',60),(2,101,'TEA',40),(3,102,'TEA',60),\n  (4,103,'BOWL',50),(5,103,'SPOON',30);\n",
+  "examples": [
+    {
+      "id": "expanded-join",
+      "title": "See the repeated order totals",
+      "sql": "SELECT o.id, i.sku, o.order_total\nFROM orders o JOIN items i ON i.order_id = o.id\nORDER BY o.id, i.id;",
+      "expectedColumns": [
+        "id",
+        "sku",
+        "order_total"
+      ],
+      "expectedRows": [
+        [
+          101,
+          "MUG",
+          100
+        ],
+        [
+          101,
+          "TEA",
+          100
+        ],
+        [
+          102,
+          "TEA",
+          60
+        ],
+        [
+          103,
+          "BOWL",
+          80
+        ],
+        [
+          103,
+          "SPOON",
+          80
+        ]
+      ]
+    },
+    {
+      "id": "inflated-total",
+      "title": "Sum the expanded result",
+      "sql": "SELECT sum(o.order_total) AS revenue\nFROM orders o JOIN items i ON i.order_id = o.id;",
+      "expectedColumns": [
+        "revenue"
+      ],
+      "expectedRows": [
+        [
+          420
+        ]
+      ]
+    },
+    {
+      "id": "one-row-per-order",
+      "title": "Aggregate items before joining",
+      "sql": "WITH item_totals AS (\n  SELECT order_id, count(*) AS item_count, sum(line_total) AS item_total\n  FROM items GROUP BY order_id\n)\nSELECT o.id, o.customer, o.order_total, i.item_count, i.item_total\nFROM orders o LEFT JOIN item_totals i ON i.order_id = o.id\nORDER BY o.id;",
+      "expectedColumns": [
+        "id",
+        "customer",
+        "order_total",
+        "item_count",
+        "item_total"
+      ],
+      "expectedRows": [
+        [
+          101,
+          "Ada",
+          100,
+          2,
+          100
+        ],
+        [
+          102,
+          "Ben",
+          60,
+          1,
+          60
+        ],
+        [
+          103,
+          "Cy",
+          80,
+          2,
+          80
+        ]
+      ]
+    },
+    {
+      "id": "correct-total",
+      "title": "Count each order once",
+      "sql": "SELECT sum(order_total) AS revenue FROM orders;",
+      "expectedColumns": [
+        "revenue"
+      ],
+      "expectedRows": [
+        [
+          240
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "orders",
+      "title": "Orders: one row per purchase",
+      "description": "The three order totals add up to 240. Amounts are whole currency units in this fictional example.",
+      "previewLimit": null
+    },
+    {
+      "table": "items",
+      "title": "Items: several rows per purchase",
+      "description": "An order total belongs to the order. A line total belongs to one item row.",
+      "previewLimit": null
+    }
+  ],
+  "challenge": {
+    "id": "orders-with-many-items",
+    "title": "Total the orders with at least two items",
+    "prompt": "Return one column, revenue, summing order_total once for each order that has at least two item rows.",
+    "hint": "Find qualifying order IDs first, then filter orders with IN or EXISTS. Do not sum the expanded item join.",
+    "starter": "SELECT sum(o.order_total) AS revenue\nFROM orders o JOIN items i ON i.order_id = o.id\nWHERE o.id IN (SELECT order_id FROM items GROUP BY order_id HAVING count(*) >= 2);",
+    "solution": "SELECT sum(order_total) AS revenue\nFROM orders\nWHERE id IN (\n  SELECT order_id FROM items\n  GROUP BY order_id HAVING count(*) >= 2\n);",
+    "success": "Ada and Cy qualify. Their order totals contribute once each: 180.",
+    "columns": [
+      "revenue"
+    ],
+    "rows": [
+      [
+        180
+      ]
+    ]
+  },
+  "batch": "next-ten",
+  "sampleTables": [
+    {
+      "table": "orders",
+      "title": "Orders: one row per purchase",
+      "description": "The three order totals add up to 240. Amounts are whole currency units in this fictional example.",
+      "columns": [
+        "id",
+        "customer",
+        "order_total"
+      ],
+      "rows": [
+        [
+          101,
+          "Ada",
+          100
+        ],
+        [
+          102,
+          "Ben",
+          60
+        ],
+        [
+          103,
+          "Cy",
+          80
+        ]
+      ],
+      "totalRows": 3,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "orders.csv"
+        }
+      ]
+    },
+    {
+      "table": "items",
+      "title": "Items: several rows per purchase",
+      "description": "An order total belongs to the order. A line total belongs to one item row.",
+      "columns": [
+        "id",
+        "order_id",
+        "sku",
+        "line_total"
+      ],
+      "rows": [
+        [
+          1,
+          101,
+          "MUG",
+          60
+        ],
+        [
+          2,
+          101,
+          "TEA",
+          40
+        ],
+        [
+          3,
+          102,
+          "TEA",
+          60
+        ],
+        [
+          4,
+          103,
+          "BOWL",
+          50
+        ],
+        [
+          5,
+          103,
+          "SPOON",
+          30
+        ]
+      ],
+      "totalRows": 5,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "items.csv"
+        }
+      ]
+    }
+  ]
+}

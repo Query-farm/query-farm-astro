@@ -1,0 +1,85 @@
+---
+title: "PIVOT and UNPIVOT in DuckDB: From Spreadsheet to Analysis"
+description: "Reshape an included monthly sales spreadsheet with DuckDB PIVOT and UNPIVOT. Preserve unknown values and inspect the output at every step."
+pubDate: "2026-11-07"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: false
+outcome: "Convert month columns to long-form rows and rebuild a report without confusing unknown values with zeros."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "sql-fundamentals"
+technologies: ["duckdb", "csv"]
+estimatedMinutes: 7
+level: "Intermediate"
+runtime: "browser"
+order: 18
+showLeadVisual: false
+nextStep: {"title": "Take the next question to your data", "pitch": "Keep exploring with these SQL patterns in Haybarn.", "href": "/products/haybarn/", "cta": "Explore Haybarn"}
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-pivot-unpivot.json';
+
+**A spreadsheet is easy to read when every month gets a column. It is harder to analyze when your SQL has to change each time another month arrives.** Turning months into values gives you one column to filter, group, and compare.
+
+We will move six spreadsheet cells into rows, preserve the unknown one, and turn the result back into a report. Watch what happens to February before copying a query.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Read the cells, including the blank
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+North has no recorded February amount. South has a recorded March amount of zero. Those facts are different: one is unknown; the other says nothing was sold.
+
+Each region has exactly one source row, and each month column contains the same kind of measurement. Mixing dates, prices, and counts into one unpivoted value column would need a different model.
+
+## Stack the month columns
+
+DuckDB’s simplified [`UNPIVOT`](https://duckdb.org/docs/2.0/sql/statements/unpivot) names the source columns and the two destination columns:
+
+<TutorialExample example={demo.examples[0]} />
+
+`month` contains the source column name, and `amount` contains its value. The unchanged `id` and `region` columns accompany each resulting row.
+
+Count the result: five rows, not six. The default unpivot behavior omits NULL values, so North’s unknown February cell disappears. That may be appropriate for a sparse list of known measurements. It is wrong if you need to audit missing measurements.
+
+The alphabetical output order is deliberate for this inspection: `feb`, `jan`, `mar`. Month names are text, not dates. Store an actual month date or a numeric month index when chronological calculations matter.
+
+## Preserve unknown values explicitly
+
+Use the SQL-standard form with `INCLUDE NULLS`:
+
+<TutorialExample example={demo.examples[1]} />
+
+All six cells now have rows. North February remains NULL, while South March remains zero. The setup saves this result as `long_sales`, ready for ordinary SQL filters and aggregates.
+
+This format makes questions such as “which region-month measurements are missing?” straightforward. It also lets a new month arrive as more rows rather than a new query expression.
+
+For a changing wide input, DuckDB also supports selecting unpivot columns with a `COLUMNS` expression. Use that when the naming convention is dependable; blindly selecting every non-key column can sweep unrelated metadata into your measurements.
+
+## Build a report with a stable shape
+
+<TutorialExample example={demo.examples[2]} />
+
+`PIVOT` turns the month values into columns. The explicit `IN` list fixes their order as January, February, March. `GROUP BY region` fixes the row grain, while `sum(amount)` decides how multiple contributing rows would combine.
+
+The report still has NULL for North February and zero for South March. Because this fixture has one measurement per region-month, the sums reproduce the known values. With multiple source rows, pivoting aggregates them; it is not a lossless undo button.
+
+<TutorialChallenge post={demo.slug} />
+
+## Keep analysis and presentation separate
+
+Long-form rows are convenient for filtering and joining. A wide report is convenient for scanning. You can use both without forcing every downstream calculation to work with a growing list of month columns.
+
+Before adding a “total” column, decide what to do when one month is unknown. `sum` ignores NULL, so a partial sum can look like a complete quarter. Pair it with an observed-month count, or withhold the quarterly result until every required measurement is present.
+
+The [moving-average tutorial](/tutorials/duckdb-seven-day-average/) carries this distinction into a daily time series, where absent rows and unknown values can change the denominator.
+
+<TutorialTracking post={demo.slug} />

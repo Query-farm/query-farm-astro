@@ -1,0 +1,166 @@
+{
+  "slug": "duckdb-json-schema-validation",
+  "extension": "json_schema",
+  "setup": "CREATE OR REPLACE TABLE contract(definition JSON);\nINSERT INTO contract VALUES ('{\n  \"type\":\"object\", \"required\":[\"order_id\",\"total\",\"status\"],\n  \"properties\":{\n    \"order_id\":{\"type\":\"integer\"},\n    \"total\":{\"type\":\"number\",\"minimum\":0},\n    \"status\":{\"type\":\"string\",\"enum\":[\"paid\",\"cancelled\"]}\n  }\n}');\nCREATE OR REPLACE TABLE incoming(id INTEGER, payload JSON);\nINSERT INTO incoming VALUES\n  (1,'{\"order_id\":101,\"total\":40,\"status\":\"paid\"}'),\n  (2,'{\"order_id\":102,\"total\":15,\"status\":\"cancelled\"}'),\n  (3,'{\"order_id\":103,\"total\":\"40\",\"status\":\"paid\"}'),\n  (4,'{\"order_id\":104,\"total\":-5,\"status\":\"paid\"}'),\n  (5,'{\"order_id\":105,\"total\":10}'), (6,NULL);\n",
+  "examples": [
+    {
+      "id": "check-contract",
+      "title": "Check the contract separately",
+      "sql": "SELECT json_schema_validate_schema(definition) AS schema_ok FROM contract;",
+      "expectedColumns": [
+        "schema_ok"
+      ],
+      "expectedRows": [
+        [
+          true
+        ]
+      ]
+    },
+    {
+      "id": "validate-payloads",
+      "title": "Classify every incoming record",
+      "sql": "SELECT id, COALESCE(TRY(json_schema_validate(definition, payload)), false) AS valid\nFROM incoming CROSS JOIN contract ORDER BY id;",
+      "expectedColumns": [
+        "id",
+        "valid"
+      ],
+      "expectedRows": [
+        [
+          1,
+          true
+        ],
+        [
+          2,
+          true
+        ],
+        [
+          3,
+          false
+        ],
+        [
+          4,
+          false
+        ],
+        [
+          5,
+          false
+        ],
+        [
+          6,
+          false
+        ]
+      ]
+    },
+    {
+      "id": "count-valid-records",
+      "title": "Summarize the quality gate",
+      "sql": "WITH checked AS (\n  SELECT COALESCE(TRY(json_schema_validate(definition, payload)), false) AS valid\n  FROM incoming CROSS JOIN contract\n)\nSELECT count(*) AS received, count(*) FILTER (WHERE valid) AS accepted,\n       count(*) FILTER (WHERE NOT valid) AS rejected\nFROM checked;",
+      "expectedColumns": [
+        "received",
+        "accepted",
+        "rejected"
+      ],
+      "expectedRows": [
+        [
+          6,
+          2,
+          4
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "incoming",
+      "title": "Six incoming API records",
+      "description": "The input is valid JSON or SQL NULL. The contract checks structure and values after JSON parsing.",
+      "previewLimit": null
+    }
+  ],
+  "challenge": {
+    "id": "valid-paid-orders",
+    "title": "Keep only valid paid orders",
+    "prompt": "Return id for records that satisfy the contract and have status paid. A paid label alone is not enough.",
+    "hint": "Combine the validation predicate with the status predicate. Check the contract separately before using TRY on records.",
+    "starter": "SELECT id FROM incoming\nWHERE payload ->> '$.status' = 'paid'\nORDER BY id;",
+    "solution": "SELECT id FROM incoming CROSS JOIN contract\nWHERE COALESCE(TRY(json_schema_validate(definition, payload)), false)\n  AND payload ->> '$.status' = 'paid'\nORDER BY id;",
+    "success": "Only record 1 passes both checks. The other paid records have invalid totals.",
+    "columns": [
+      "id"
+    ],
+    "rows": [
+      [
+        1
+      ]
+    ]
+  },
+  "batch": "next-ten",
+  "sampleTables": [
+    {
+      "table": "incoming",
+      "title": "Six incoming API records",
+      "description": "The input is valid JSON or SQL NULL. The contract checks structure and values after JSON parsing.",
+      "columns": [
+        "id",
+        "payload"
+      ],
+      "rows": [
+        [
+          1,
+          "{\"order_id\":101,\"total\":40,\"status\":\"paid\"}"
+        ],
+        [
+          2,
+          "{\"order_id\":102,\"total\":15,\"status\":\"cancelled\"}"
+        ],
+        [
+          3,
+          "{\"order_id\":103,\"total\":\"40\",\"status\":\"paid\"}"
+        ],
+        [
+          4,
+          "{\"order_id\":104,\"total\":-5,\"status\":\"paid\"}"
+        ],
+        [
+          5,
+          "{\"order_id\":105,\"total\":10}"
+        ],
+        [
+          6,
+          null
+        ]
+      ],
+      "totalRows": 6,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "incoming.csv"
+        }
+      ]
+    }
+  ],
+  "contract": {
+    "type": "object",
+    "required": [
+      "order_id",
+      "total",
+      "status"
+    ],
+    "properties": {
+      "order_id": {
+        "type": "integer"
+      },
+      "total": {
+        "type": "number",
+        "minimum": 0
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "paid",
+          "cancelled"
+        ]
+      }
+    }
+  }
+}

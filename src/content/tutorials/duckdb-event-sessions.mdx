@@ -1,0 +1,79 @@
+---
+title: "Turn Clickstream Events into Sessions with DuckDB"
+description: "Use LAG and a cumulative sum to turn an included website event log into sessions. Explore inactivity boundaries and run the SQL in your browser."
+pubDate: "2026-11-07"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: false
+outcome: "Assign sessions with an explicit inactivity rule, then measure observed duration and engagement."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "analyze-data"
+technologies: ["duckdb"]
+estimatedMinutes: 7
+level: "Intermediate"
+runtime: "browser"
+order: 14
+showLeadVisual: false
+nextStep: {"title": "Take the next question to your data", "pitch": "Keep exploring with these SQL patterns in Haybarn.", "href": "/products/haybarn/", "cta": "Explore Haybarn"}
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-event-sessions.json';
+
+**Ada reads a tutorial, runs the example twice, and sends an enquiry. Forty-five minutes after her first click, she opens another page. Is that still one visit?** The answer depends on the gaps between events, not simply the time since arrival.
+
+We will turn a tiny event log into sessions, then calculate something useful about each one. Change the threshold in the illustration before running the queries.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Start with events you can inspect
+
+Our fictional website records `view`, `run`, and `enquiry` events. `user_id` is a stable identifier; `id` uniquely identifies an event. Timestamps share one UTC clock, stored here as timezone-free `TIMESTAMP` values for a self-contained exercise.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+The rules are deliberate: the first event starts a session; a gap **greater than 30 minutes** starts another; a gap of exactly 30 minutes stays in the current session. Sessions may cross midnight. This is our analytical definition, not a reproduction of Google Analytics session rules.
+
+## Look backward one event
+
+[`lag`](https://duckdb.org/docs/2.0/sql/functions/window_functions) reads the preceding row in a window. First, examine Ada’s January 5 events:
+
+<TutorialExample example={demo.examples[0]} />
+
+The first gap is NULL because there is no earlier event. The 09:45 click is 30 minutes after the enquiry, so it stays. The 10:20 click is 35 minutes after that, so it starts a new session. Comparing every event to 09:00 would answer a different question.
+
+## Mark starts, then count them
+
+We calculate the previous timestamp separately for each user. Each session start contributes a one; all other events contribute a zero. A running sum turns those markers into session numbers.
+
+<TutorialExample example={demo.examples[1]} />
+
+The two CTEs keep each step inspectable. `PARTITION BY user_id` prevents one person’s events from affecting another’s. Ordering by timestamp and unique event ID makes ties deterministic. Equal timestamps have a zero gap under this policy.
+
+The explicit `ROWS` frame accumulates through the current event. The identifier is the **pair** `(user_id, session_no)`: session 1 for Ada is different from session 1 for Ben. The setup also saves this query as the `session_events` view so later examples can use it independently.
+
+## Give the sessions meaning
+
+Now summarize Ada’s first day:
+
+<TutorialExample example={demo.examples[2]} />
+
+Her first session has five events and 45 minutes between its first and last recorded events. The second has one event and zero observed minutes. Zero means we have no later timestamp to measure against; it does not mean she left instantly.
+
+Our engagement flag means “at least one run or enquiry.” Repeated runs remain events but do not multiply engaged sessions. Different products may need a different engagement definition.
+
+<TutorialChallenge post={demo.slug} />
+
+## Keep the definition reproducible
+
+Late-arriving events can bridge an apparent gap and change historical session numbers. If these identifiers leave your analysis, choose a stable assignment and backfill policy instead of treating a recalculated row number as a permanent business key. Deduplicate retransmitted event IDs before sessionizing; they otherwise inflate event counts.
+
+A useful next step is [building an ordered conversion funnel](/tutorials/duckdb-conversion-funnel/) from these same sessions. That lesson distinguishes “all three events happened” from “the visitor followed the intended sequence.”
+
+<TutorialTracking post={demo.slug} />

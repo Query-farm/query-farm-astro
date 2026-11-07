@@ -88,7 +88,7 @@ for (const target of wasmPages().sort((a, b) => a.path.localeCompare(b.path))) {
             await waitForPrompt(page);
             assert.deepEqual(downloads.slice(downloadStart), [], 'Published extension artifacts must download successfully');
             if (!checkedLoad) {
-              await requireLoadedExtension(page, target.extension);
+              if (target.source !== 'builtin') await requireLoadedExtension(page, target.extension);
               checkedLoad = true;
             }
           } catch (error) {

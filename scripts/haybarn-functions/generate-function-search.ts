@@ -1,4 +1,6 @@
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { FUNCTION_DATA_PUBLIC_DIR, FUNCTION_DATA_ROOT, SEARCH_ASSET_PATH } from '../../src/haybarn-functions/data/function-data-paths.mjs';
 import { snapshots, defaultSnapshot, getFunctions, functionUrl } from '../../src/haybarn-functions/lib/catalog';
 import { exportFunction } from '../../src/haybarn-functions/lib/agent-docs';
 
@@ -36,11 +38,17 @@ const records = snapshots.flatMap(snapshot => getFunctions(snapshot).map(fn => {
     snapshotId: snapshot.id,
     release: snapshot.label,
     name: fn.name,
-    description: fn.description,
+    description: fn.description || doc.editorial.usage?.summary || '',
     url: functionUrl(snapshot, fn, snapshot.id !== defaultSnapshot.id),
     content: [...strings].join('\n').toLocaleLowerCase('en-US'),
   };
 }));
 
-await writeFile('src/haybarn-functions/data/search.generated.json', `${JSON.stringify(records)}\n`);
+const json = `${JSON.stringify(records)}\n`;
+await writeFile('src/haybarn-functions/data/search.generated.json', json);
+// The Pages Function fetches this static copy instead of bundling 12 MB of
+// records. See src/haybarn-functions/data/function-data-paths.mjs.
+const staticCopy = `${FUNCTION_DATA_PUBLIC_DIR}${SEARCH_ASSET_PATH.slice(FUNCTION_DATA_ROOT.length - 1)}`;
+await mkdir(dirname(staticCopy), { recursive: true });
+await writeFile(staticCopy, json);
 console.log(`[search] Generated ${records.length} compact Pages Function records.`);

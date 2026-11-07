@@ -56,7 +56,9 @@ test('search, category filters, empty state and release navigation work', async 
   await page.getByRole('searchbox').fill('this_function_does_not_exist');
   await expect(page.getByRole('heading', { name: 'No functions found.' })).toBeVisible();
   await page.getByRole('button', { name: 'Clear filters' }).click();
-  await page.locator('.category-nav[href$="?category=json"]').click();
+  await page.locator('.category-nav[data-category="json"]').click();
+  await expect(page).toHaveURL(/\/category\/json\/$/);
+  await page.locator('[data-category-catalog]').click();
   await expect(page.locator('#result-count')).toContainText('functions');
   // The count reads "N functions" before and after filtering, so it can't tell
   // us the filter has applied; poll the rows themselves.

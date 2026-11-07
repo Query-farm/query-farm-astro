@@ -1,0 +1,93 @@
+---
+title: "Read a DuckDB EXPLAIN Plan: Follow the Rows Before You Run"
+description: "Learn to read DuckDB EXPLAIN operators, filters, aggregates, and estimated cardinalities. Includes real captured plans, a small dataset, and runnable SQL."
+pubDate: "2026-11-07"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: false
+outcome: "Trace a query from its scan through aggregation to ordering, and distinguish estimates from measured rows."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "performance-operations"
+technologies: ["duckdb"]
+estimatedMinutes: 6
+level: "Beginner"
+runtime: "browser"
+order: 12
+showLeadVisual: false
+nextStep:
+  title: "Keep exploring with your own data"
+  pitch: "Use these queries as a starting point in Haybarn, or download the complete walkthrough to run locally."
+  href: "/products/haybarn/"
+  cta: "Explore Haybarn"
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-explain.json';
+
+**Your SQL says what answer you want. `EXPLAIN` shows how DuckDB plans to produce it.** The two descriptions need not appear in the same order, and some SQL clauses may be absorbed into other operations.
+
+We will follow a small regional-sales query from the table scan to its final ordering. By the end, the plan should read like a flow of records rather than a wall of operator names.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Start with a question you can check
+
+The question is: “What is the total amount of paid orders in each region?” Cancelled orders must contribute nothing. We sort the resulting totals from largest to smallest, using the region name to break ties.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+There are eight input records and six paid orders. Because the dataset is small, you can calculate the answer before worrying about the plan.
+
+## Put EXPLAIN before the SELECT
+
+Run the example to see your browser engine's plan. The excerpt underneath is captured from native DuckDB 2.0.0 on the same input, with projection and internal operators omitted for readability.
+
+<TutorialExample example={demo.examples[0]} />
+
+The ordinary [`EXPLAIN` statement](https://duckdb.org/docs/2.0/guides/meta/explain) shows the physical plan without executing this SELECT. Planning still requires binding the query and obtaining information about its inputs, so it is not a promise of zero metadata or file access.
+
+Operator labels and formatting can change between engine versions. Follow the operations and their relationships instead of relying on exact typography.
+
+## Begin at the scan
+
+The `SEQ_SCAN` reads orders and carries the filter `status = 'paid'`. There is no separate filter box in this excerpt because the condition has been pushed into the scan.
+
+Its estimated cardinality is 4. That means the planner estimates four output rows from this filtered scan. It does not mean there are four rows stored in the table, and it is not a measurement of how many rows were inspected.
+
+In this fixture, we know six orders are paid. A different estimate is not itself a query correctness problem: the estimate helps plan the work, while execution still evaluates the predicate against the data.
+
+## Follow aggregation, then ordering
+
+The `HASH_GROUP_BY` groups the scan's output by region and computes a sum. The excerpt refers to internal column positions such as `#0` and `#1`; these are the values passed between operators, not your table's permanent column names.
+
+The final `ORDER_BY` sorts the regional results by total and region. This is the smaller, aggregated result, not a sort of every raw order.
+
+Read the displayed tree from its input scans upward toward its output. This is a way to trace dependencies; it does not mean DuckDB must fully materialize each intermediate result before doing the next operation. Execution can pipeline work between operators.
+
+## Run the actual query separately
+
+Remove `EXPLAIN` when you want the rows:
+
+<TutorialExample example={demo.examples[1]} />
+
+North and South each total 100, West totals 20, and East totals 10. There are four groups, even though the captured plan estimated two. Again, estimates describe expectations, not the answer.
+
+`EXPLAIN` does not tell us the measured time, actual operator output counts, or whether this tiny query feels fast on someone else's machine. Those are questions for [EXPLAIN ANALYZE](/tutorials/duckdb-explain-analyze/).
+
+<TutorialChallenge post={demo.slug} />
+
+## Use the plan to ask a specific question
+
+For a query you are investigating, start with three checks: which tables or files are scanned, which filters are available at those scans, and where joins or aggregates change the number of rows. Then look for work such as a large sort that may deserve measurement.
+
+A sequential scan is not automatically a bad plan. Analytical queries often need substantial portions of a table, and the operator name alone does not identify a bottleneck. Likewise, a large estimate is a reason to investigate, not proof of wasted work.
+
+For remote data, check [where the aggregate runs](/tutorials/duckdb-postgresql-query-pushdown/). For a Parquet date filter, inspect [row-group metadata](/tutorials/duckdb-parquet-metadata/). Both are applications of the same habit: connect each part of the plan to the data it receives and the result it produces.
+
+<TutorialTracking post={demo.slug} />

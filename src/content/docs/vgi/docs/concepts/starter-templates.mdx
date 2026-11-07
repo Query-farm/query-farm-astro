@@ -1,0 +1,109 @@
+---
+title: Starter templates
+description: "GitHub template repositories for starting a VGI worker in Python, TypeScript, Go, Rust, Java or C#: tested examples, CI, Docker, signed releases and agent instructions, ready to rename."
+---
+
+import Callout from '../../../../../components/docs/Callout.astro';
+import CodeBlock from '../../../../../components/ui/CodeBlock.astro';
+
+The fastest way to start a VGI worker is from a **starter template**: a GitHub template
+repository with a complete, tested worker you rename and rewrite. There is one per SDK, and
+they all contain the same thing, so moving between languages is easy.
+
+<table>
+<thead>
+<tr><th>Language</th><th>Template</th><th>SDK docs</th></tr>
+</thead>
+<tbody>
+<tr><td>Python</td><td><a href="https://github.com/Query-farm/vgi-starter-python">vgi-starter-python</a></td><td><a href="/vgi/docs/python/">Python</a></td></tr>
+<tr><td>TypeScript</td><td><a href="https://github.com/Query-farm/vgi-starter-typescript">vgi-starter-typescript</a></td><td><a href="/vgi/docs/typescript/">TypeScript</a></td></tr>
+<tr><td>Go</td><td><a href="https://github.com/Query-farm/vgi-starter-go">vgi-starter-go</a></td><td><a href="/vgi/docs/go/">Go</a></td></tr>
+<tr><td>Rust</td><td><a href="https://github.com/Query-farm/vgi-starter-rust">vgi-starter-rust</a></td><td><a href="/vgi/docs/rust/">Rust</a></td></tr>
+<tr><td>Java</td><td><a href="https://github.com/Query-farm/vgi-starter-java">vgi-starter-java</a></td><td><a href="/vgi/docs/java/">Java</a></td></tr>
+<tr><td>C#</td><td><a href="https://github.com/Query-farm/vgi-starter-csharp">vgi-starter-csharp</a></td><td><a href="/vgi/docs/csharp/">C#</a></td></tr>
+</tbody>
+</table>
+
+## Create a worker
+
+Click **Use this template** on the repository page, or use the GitHub CLI. Then rename the
+worker and run the checks:
+
+<CodeBlock code={`gh repo create my-org/weather-worker --template Query-farm/vgi-starter-python --private --clone
+cd weather-worker
+make init NAME=weather    # renames the catalog, package, binary, env vars and secret type
+make check                # lint, unit tests, SQL tests over every transport, metadata score`} lang="bash" tryable={false} />
+
+`make check` is the definition of done. It is what CI runs, and it passes on a fresh copy.
+
+## What's inside
+
+Every starter implements the same worker:
+
+<table>
+<thead>
+<tr><th>Function</th><th>Kind</th><th>Teaches</th></tr>
+</thead>
+<tbody>
+<tr><td><code>greet(name)</code> / <code>greet(name, style)</code></td><td>scalar</td><td>vectorized compute, overloads, a constant argument restricted to a set of choices</td></tr>
+<tr><td><code>sequence_table(count, step := 1)</code></td><td>table</td><td>streaming batches, named arguments with defaults, argument constraints</td></tr>
+<tr><td><code>fetch_items(base_url, page_size := 100)</code></td><td>table</td><td>paginating a REST API, timeouts and retries, a bearer token from a DuckDB secret or the environment</td></tr>
+</tbody>
+</table>
+
+Around it, each starter has:
+
+- **Recipes** for table in-out functions, aggregates, filter and projection pushdown into a
+  database, result caching, catalog tables with primary keys, and `COPY … TO` formats.
+- **One SQL test suite** (sqllogictest) that runs through DuckDB over the stdio, launch and
+  HTTP transports. The REST examples run against a bundled mock API, so tests are offline and
+  deterministic.
+- **Complete metadata**, scoring 100/100 on
+  [vgi-lint](https://github.com/Query-farm/vgi-lint-check), so agents and documentation tools
+  can discover every function.
+- **`AGENTS.md`** for coding agents (Claude Code, Codex, Cursor): commands, the recipe for
+  adding a function, a metadata checklist, and the sharp edges.
+- **A Dockerfile** serving HTTP with a health check, plus a stdio mode.
+- **Release workflows** that build signed artifacts with SLSA provenance when you push a tag.
+- **Nightly CI** against the newest compatible dependencies.
+
+## Attach it
+
+<CodeBlock code={`-- DuckDB 2.0
+SET allow_extension_repositories = 'allowed';
+CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm WITH PREFIX 'https://duckdb-extensions.query.farm';
+INSTALL vgi FROM query_farm;
+LOAD vgi FROM query_farm;
+
+-- Haybarn: INSTALL vgi FROM community; LOAD vgi;
+
+ATTACH 'weather' (TYPE vgi, LOCATION '/abs/path/to/your/worker');
+SELECT weather.main.greet('Ada', 'formal');
+SELECT * FROM weather.main.sequence_table(5, step := 2) ORDER BY n;`} lang="sql" tryable={false} />
+
+Each starter's README gives the exact `LOCATION` for its language.
+
+## Build it with an agent
+
+The starters are designed to be handed to a coding agent. Rename first, then point the agent
+at `AGENTS.md` and give it a goal with a clear finish line:
+
+<CodeBlock code={`Read AGENTS.md. Replace fetch_items with forecast(lat DOUBLE, lon DOUBLE) that calls the
+Open-Meteo API. Include full metadata, a mock-server test and a live test gated on
+WEATHER_LIVE. You're done when \`make check\` passes.`} lang="text" tryable={false} />
+
+## Stay current
+
+GitHub template copies don't track their source. Each starter records the template version it
+came from in `.vgi-starter.json`, and `make template-diff` shows what changed upstream (CI
+fixes, docs, examples, tested version bumps) so you can apply what you want.
+
+<Callout type="note" title="Why the SDK version is pinned">
+A VGI SDK's minor release can change the wire protocol, which must match the DuckDB `vgi`
+extension exactly. The starters pin the SDK to a minor version and move it only after the
+matching extension is published. Take SDK upgrades through template updates rather than
+bumping by hand.
+</Callout>
+
+The six templates are generated from one shared source, so they stay identical. Report issues
+on the template repository for your language.

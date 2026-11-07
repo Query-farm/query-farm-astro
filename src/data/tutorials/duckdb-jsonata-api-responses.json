@@ -1,0 +1,144 @@
+{
+  "slug": "duckdb-jsonata-api-responses",
+  "extension": "jsonata",
+  "batch": "practical-ten",
+  "setup": "CREATE OR REPLACE TABLE api_orders(id INTEGER, payload JSON);\nINSERT INTO api_orders VALUES\n (101,'{\"id\":101,\"buyer\":{\"name\":\"Ada\"},\"currency\":\"USD\",\"items\":[{\"sku\":\"MUG\",\"qty\":2,\"unit_price\":12.5},{\"sku\":\"TEA\",\"qty\":1,\"unit_price\":8}]}'),\n (102,'{\"id\":102,\"buyer\":{\"name\":\"Ben\"},\"currency\":\"USD\",\"items\":[]}'),\n (103,'{\"id\":103,\"buyer\":{\"name\":\"Cy\"},\"currency\":\"USD\",\"items\":[{\"sku\":\"MUG\",\"qty\":1,\"unit_price\":12.5}]}');\n",
+  "examples": [
+    {
+      "id": "rename-json-fields",
+      "title": "Build a small document with the field names you need",
+      "sql": "SELECT id, jsonata('{\n  \"order_id\": id,\n  \"customer\": buyer.name\n}', payload)::VARCHAR AS summary\nFROM api_orders ORDER BY id;\n",
+      "expectedColumns": [
+        "id",
+        "summary"
+      ],
+      "expectedRows": [
+        [
+          101,
+          "{\"customer\":\"Ada\",\"order_id\":101}"
+        ],
+        [
+          102,
+          "{\"customer\":\"Ben\",\"order_id\":102}"
+        ],
+        [
+          103,
+          "{\"customer\":\"Cy\",\"order_id\":103}"
+        ]
+      ]
+    },
+    {
+      "id": "consistent-json-arrays",
+      "title": "Keep an array shape for zero, one, or many matches",
+      "sql": "SELECT id, jsonata('[items.sku]', payload)::VARCHAR AS skus,\n  jsonata('$count(items)', payload)::INTEGER AS line_count\nFROM api_orders ORDER BY id;\n",
+      "expectedColumns": [
+        "id",
+        "skus",
+        "line_count"
+      ],
+      "expectedRows": [
+        [
+          101,
+          "[\"MUG\",\"TEA\"]",
+          2
+        ],
+        [
+          102,
+          "[]",
+          0
+        ],
+        [
+          103,
+          "[\"MUG\"]",
+          1
+        ]
+      ]
+    },
+    {
+      "id": "transform-json-document",
+      "title": "Compute an order summary inside each JSON document",
+      "sql": "SELECT id, jsonata('{\n  \"order_id\": id,\n  \"customer\": buyer.name,\n  \"currency\": currency,\n  \"total\": $count(items) = 0 ? 0 : $sum(items.(qty * unit_price)),\n  \"skus\": [items.sku]\n}', payload)::VARCHAR AS transformed\nFROM api_orders ORDER BY id;\n",
+      "expectedColumns": [
+        "id",
+        "transformed"
+      ],
+      "expectedRows": [
+        [
+          101,
+          "{\"currency\":\"USD\",\"customer\":\"Ada\",\"order_id\":101,\"skus\":[\"MUG\",\"TEA\"],\"total\":33}"
+        ],
+        [
+          102,
+          "{\"currency\":\"USD\",\"customer\":\"Ben\",\"order_id\":102,\"skus\":[],\"total\":0}"
+        ],
+        [
+          103,
+          "{\"currency\":\"USD\",\"customer\":\"Cy\",\"order_id\":103,\"skus\":[\"MUG\"],\"total\":12.5}"
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "api_orders",
+      "title": "Three supplied API payloads",
+      "description": "Two items, no items, and one item: the cases that expose unstable output shapes.",
+      "previewLimit": null
+    }
+  ],
+  "challenge": {
+    "id": "nonempty-orders",
+    "title": "Keep only orders with at least one item",
+    "prompt": "Return id and skus (a VARCHAR containing a JSON array) for orders with one or more items. Keep the array wrapper even for Cy’s single SKU.",
+    "hint": "Use $count(items) to filter and [items.sku] to construct an array.",
+    "starter": "SELECT id, jsonata('[items.sku]', payload)::VARCHAR AS skus FROM api_orders ORDER BY id;\n",
+    "solution": "SELECT id, jsonata('[items.sku]', payload)::VARCHAR AS skus FROM api_orders WHERE jsonata('$count(items)', payload)::INTEGER > 0 ORDER BY id;\n",
+    "success": "Ada and Cy remain. Cy still has an array with one element, so the receiving application does not need a special scalar case.",
+    "columns": [
+      "id",
+      "skus"
+    ],
+    "rows": [
+      [
+        101,
+        "[\"MUG\",\"TEA\"]"
+      ],
+      [
+        103,
+        "[\"MUG\"]"
+      ]
+    ]
+  },
+  "sampleTables": [
+    {
+      "table": "api_orders",
+      "title": "Three supplied API payloads",
+      "description": "Two items, no items, and one item: the cases that expose unstable output shapes.",
+      "columns": [
+        "id",
+        "payload"
+      ],
+      "rows": [
+        [
+          101,
+          "{\"id\":101,\"buyer\":{\"name\":\"Ada\"},\"currency\":\"USD\",\"items\":[{\"sku\":\"MUG\",\"qty\":2,\"unit_price\":12.5},{\"sku\":\"TEA\",\"qty\":1,\"unit_price\":8}]}"
+        ],
+        [
+          102,
+          "{\"id\":102,\"buyer\":{\"name\":\"Ben\"},\"currency\":\"USD\",\"items\":[]}"
+        ],
+        [
+          103,
+          "{\"id\":103,\"buyer\":{\"name\":\"Cy\"},\"currency\":\"USD\",\"items\":[{\"sku\":\"MUG\",\"qty\":1,\"unit_price\":12.5}]}"
+        ]
+      ],
+      "totalRows": 3,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "api_orders.csv"
+        }
+      ]
+    }
+  ]
+}

@@ -13,6 +13,7 @@ source revision and are not presented as execution-verified equivalents.
 | --- | --- |
 | Find and try functions | `/products/haybarn/functions/` |
 | Full current catalog | `/products/haybarn/functions/catalog/` |
+| Category guide | `/products/haybarn/functions/category/json/` |
 | Current function | `/products/haybarn/functions/strftime/` |
 | Explicit release catalog | `/products/haybarn/functions/releases/<release>/` |
 | Explicit release function | `/products/haybarn/functions/releases/<release>/strftime/` |
@@ -27,10 +28,26 @@ The current function and catalog URLs follow the package pin. Explicit release
 URLs remain available for every committed snapshot, including the current one.
 JSON and Markdown links retain explicit releases so agent requests are
 reproducible. The root `/llms.txt` points to the guide's discovery document.
-The current release archive uses the stable page as its canonical and stays
-out of the sitemap; older releases retain their own canonical URLs.
+The current release archive and provably equivalent archives use the stable
+page as their canonical and stay out of the sitemap. The shared comparison in
+`scripts/haybarn-functions/canonicals.mjs` requires identical binaries, catalog
+rows, engine identity, runtime bundle, and extension profiles. Materially
+different releases retain their own canonical URLs. This currently consolidates
+rc11 and rc12, without removing either version's HTML or machine exports.
 Open Graph metadata and favicons come from the shared site layout; function
 pages supply their own titles, descriptions, and Haybarn sharing image.
+
+Ten category guides provide task-oriented choices, examples, and ordinary HTML
+links to function references. Query-string catalog filters remain available.
+`data/usage-guides.ts` contains 24 authored function explanations, including
+NULL/edge behavior, common mistakes, runnable SQL, and static expected results.
+This guidance applies to the current WASM catalog and its proven equivalents;
+it does not overwrite captured descriptions or make claims about older native
+snapshots. Machine exports expose it separately as `editorial.usage`.
+
+The smoke suite checks all 24 examples twice using a single browser engine
+startup, plus category navigation and rendering without JavaScript. Export
+checks validate the built canonical tags, category links, and sitemap together.
 
 ## Search
 
@@ -44,7 +61,8 @@ Pagefind and the Pages Function search endpoint serve separate concerns:
   the page's release selected by default. Readers can explicitly include other
   releases. Compact search records contain overloads, arguments, examples,
   macro bodies, aliases, and dialect translations. They are generated once
-  into the Function bundle rather than multiplied into Pagefind fragments.
+  into a single static file the Function fetches, rather than multiplied into
+  Pagefind fragments.
 - Haybarn guide prose remains in Pagefind under `scope:haybarn` and
   `snapshot:guide`. Browser search combines those guide and function results.
 
@@ -63,13 +81,33 @@ renderer. Ordinary HTML and asset requests stay on Pages' free static path.
 The build intentionally omits the per-function JSON and Markdown files, so
 adding a snapshot does not add thousands of deployable assets.
 
+Cloudflare rejects a Functions bundle over 25 MiB uncompressed, and bundling
+the snapshots and search records reached 31 MiB. The Functions therefore get
+snapshot metadata only. `package.json` `imports` resolves `#haybarn-snapshots`
+and `#haybarn-search` to metadata plus loaders under the `workerd` condition,
+and to the full data everywhere else (Astro, tests, the preview server). On its
+first request an isolate fetches the snapshots' function lists, or the search
+records, from minified static copies under `/haybarn-function-data/` through
+`env.ASSETS`. `npm run prepare:function-data` writes those copies to
+`public/haybarn-function-data/`, which is gitignored. Paths are in
+`src/haybarn-functions/data/function-data-paths.mjs`. Adding a snapshot now
+adds a static file, not bundle size.
+
 `npm run check:pages-functions` compiles the Pages Functions without deploying
-them. The custom `public/_routes.json` limits invocations to machine resources.
+them and fails when the bundle exceeds a 20 MiB budget. The custom
+`public/_routes.json` limits invocations to machine resources.
 `npm run preview` runs Pages with its Functions locally; the browser suite uses
 a lightweight equivalent server so it does not have to hash the full static
 tree before every test run.
 
 ## Updating the browser release
+
+The Haybarn 2.0 guide currently captures the published WASM `2.0.0-rc12`
+package, whose underlying engine reports `v2.0.0`. The rc12 function catalog
+and base WASM binary are identical to rc11; the package update changes browser
+startup. Both release snapshots remain available. The comparison catalog also
+includes native DuckDB `2.0.0`, captured from its published CLI, with native/WASM
+scope differences shown by the comparison pages.
 
 The exact `@haybarn/haybarn-wasm` version in `package.json` is the single pin
 for both the function guide and Query Farm's existing browser examples.
@@ -104,6 +142,13 @@ To capture a published native engine, use `npm run snapshot:haybarn-functions
 "DuckDB VERSION" --source https://...`. The convenience command
 `npm run snapshot:duckdb-functions` captures the release list maintained in
 `scripts/haybarn-functions/capture-releases.mjs`.
+
+To capture only a new upstream release, pass it explicitly, for example
+`npm run snapshot:duckdb-functions -- 2.0.0`. The capture tools support both
+the older ZIP assets and the 2.0 CLI tarballs, use the engine's supported
+extension-directory setting, and verify 2.0 argument layouts against its full
+binder signatures. Run `npm run prepare:function-data` after a native capture
+to update the shared snapshot imports and search records.
 
 ## WASM delivery
 

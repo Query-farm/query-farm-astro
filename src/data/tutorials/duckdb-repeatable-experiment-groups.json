@@ -1,0 +1,238 @@
+{
+  "slug": "duckdb-repeatable-experiment-groups",
+  "extension": "hashfuncs",
+  "batch": "practical-ten",
+  "setup": "CREATE OR REPLACE TABLE experiment_users(id INTEGER, user_id VARCHAR);\nINSERT INTO experiment_users VALUES (1,'Ada'),(2,'Ben'),(3,'Cy'),(4,'Dee'),\n (5,'Eli'),(6,'Fay'),(7,'Gus'),(8,'Hao');\nCREATE OR REPLACE VIEW assignments AS\nSELECT user_id, (xxh3_64('onboarding-v1:' || user_id, 42) % 100)::INTEGER AS bucket\nFROM experiment_users;\n",
+  "examples": [
+    {
+      "id": "stable-buckets",
+      "title": "Use an explicit input, algorithm, seed, and bucket count",
+      "sql": "SELECT user_id,\n  (xxh3_64('onboarding-v1:' || user_id, 42) % 100)::INTEGER AS bucket\nFROM experiment_users ORDER BY user_id;\n",
+      "expectedColumns": [
+        "user_id",
+        "bucket"
+      ],
+      "expectedRows": [
+        [
+          "Ada",
+          83
+        ],
+        [
+          "Ben",
+          4
+        ],
+        [
+          "Cy",
+          45
+        ],
+        [
+          "Dee",
+          65
+        ],
+        [
+          "Eli",
+          73
+        ],
+        [
+          "Fay",
+          83
+        ],
+        [
+          "Gus",
+          77
+        ],
+        [
+          "Hao",
+          10
+        ]
+      ]
+    },
+    {
+      "id": "change-allocation",
+      "title": "Grow the treatment group without changing the hash contract",
+      "sql": "SELECT user_id, bucket,\n  CASE WHEN bucket < 20 THEN 'treatment' ELSE 'control' END AS rollout_20,\n  CASE WHEN bucket < 50 THEN 'treatment' ELSE 'control' END AS rollout_50\nFROM assignments ORDER BY user_id;\n",
+      "expectedColumns": [
+        "user_id",
+        "bucket",
+        "rollout_20",
+        "rollout_50"
+      ],
+      "expectedRows": [
+        [
+          "Ada",
+          83,
+          "control",
+          "control"
+        ],
+        [
+          "Ben",
+          4,
+          "treatment",
+          "treatment"
+        ],
+        [
+          "Cy",
+          45,
+          "control",
+          "treatment"
+        ],
+        [
+          "Dee",
+          65,
+          "control",
+          "control"
+        ],
+        [
+          "Eli",
+          73,
+          "control",
+          "control"
+        ],
+        [
+          "Fay",
+          83,
+          "control",
+          "control"
+        ],
+        [
+          "Gus",
+          77,
+          "control",
+          "control"
+        ],
+        [
+          "Hao",
+          10,
+          "treatment",
+          "treatment"
+        ]
+      ]
+    },
+    {
+      "id": "add-a-user",
+      "title": "Add Ivy without renumbering the existing users",
+      "sql": "WITH expanded AS (\n SELECT user_id FROM experiment_users UNION ALL SELECT 'Ivy'\n)\nSELECT user_id,\n  (xxh3_64('onboarding-v1:' || user_id, 42) % 100)::INTEGER AS bucket\nFROM expanded ORDER BY user_id;\n",
+      "expectedColumns": [
+        "user_id",
+        "bucket"
+      ],
+      "expectedRows": [
+        [
+          "Ada",
+          83
+        ],
+        [
+          "Ben",
+          4
+        ],
+        [
+          "Cy",
+          45
+        ],
+        [
+          "Dee",
+          65
+        ],
+        [
+          "Eli",
+          73
+        ],
+        [
+          "Fay",
+          83
+        ],
+        [
+          "Gus",
+          77
+        ],
+        [
+          "Hao",
+          10
+        ],
+        [
+          "Ivy",
+          11
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "experiment_users",
+      "title": "Eight stable experiment IDs",
+      "description": "The text and capitalization are intentional parts of the hash input.",
+      "previewLimit": null
+    }
+  ],
+  "challenge": {
+    "id": "new-treatment",
+    "title": "Find users newly included by the larger rollout",
+    "prompt": "Return user_id and bucket for users who move from control at 20% to treatment at 50%.",
+    "hint": "Their bucket must be at least 20 and less than 50. Already-treated users should not be counted again.",
+    "starter": "SELECT user_id, bucket FROM assignments WHERE bucket < 50 ORDER BY user_id;\n",
+    "solution": "SELECT user_id, bucket FROM assignments WHERE bucket >= 20 AND bucket < 50 ORDER BY user_id;\n",
+    "success": "Only the newly covered interval changes groups. Existing treatment users remain in treatment when this threshold grows.",
+    "columns": [
+      "user_id",
+      "bucket"
+    ],
+    "rows": [
+      [
+        "Cy",
+        45
+      ]
+    ]
+  },
+  "sampleTables": [
+    {
+      "table": "experiment_users",
+      "title": "Eight stable experiment IDs",
+      "description": "The text and capitalization are intentional parts of the hash input.",
+      "columns": [
+        "id",
+        "user_id"
+      ],
+      "rows": [
+        [
+          1,
+          "Ada"
+        ],
+        [
+          2,
+          "Ben"
+        ],
+        [
+          3,
+          "Cy"
+        ],
+        [
+          4,
+          "Dee"
+        ],
+        [
+          5,
+          "Eli"
+        ],
+        [
+          6,
+          "Fay"
+        ],
+        [
+          7,
+          "Gus"
+        ],
+        [
+          8,
+          "Hao"
+        ]
+      ],
+      "totalRows": 8,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "experiment_users.csv"
+        }
+      ]
+    }
+  ]
+}

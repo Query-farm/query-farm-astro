@@ -325,6 +325,7 @@ interface OpenShell {
   id: number;
   container: HTMLElement;
   sql: string;
+  exampleId?: string;
   onClose: () => void;
 }
 
@@ -489,7 +490,10 @@ export default function ExampleShellMounter({
             btn.title = "Hide browser shell";
           }
           setShells((prev) =>
-            prev.some((s) => s.id === id) ? prev : [...prev, { id, container, sql: mode === "session" ? "" : sql, onClose: close }],
+            prev.some((s) => s.id === id) ? prev : [...prev, {
+              id, container, sql: mode === "session" ? "" : sql, onClose: close,
+              exampleId: pre.closest<HTMLElement>('[data-article-example]')?.dataset.articleExample,
+            }],
           );
           reveal();
         };
@@ -560,6 +564,7 @@ export default function ExampleShellMounter({
             fixtures={fixtures}
             mode={mode}
             sql={s.sql}
+            exampleId={s.exampleId}
             onClose={s.onClose}
           />,
           s.container,

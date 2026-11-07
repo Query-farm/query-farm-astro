@@ -1,0 +1,220 @@
+{
+  "slug": "compare-parquet-duckdb",
+  "extension": "DuckDB",
+  "setup": "CREATE OR REPLACE TABLE previous_snapshot(id INTEGER, name VARCHAR, plan VARCHAR);\nINSERT INTO previous_snapshot VALUES\n  (1, 'Ada', 'free'), (2, 'Ben', NULL), (3, 'Cy', 'pro'),\n  (4, 'Dee', 'free'), (6, 'Finn', NULL);\nCREATE OR REPLACE TABLE current_snapshot(id INTEGER, name VARCHAR, plan VARCHAR);\nINSERT INTO current_snapshot VALUES\n  (1, 'Ada', 'pro'), (2, 'Ben', 'free'), (4, 'Dee', 'free'),\n  (5, 'Eli', 'free'), (6, 'Finn', NULL);\nSET VARIABLE snapshot_prefix = 'qf_' || uuid()::VARCHAR;\nCOPY previous_snapshot TO (getvariable('snapshot_prefix') || '_previous.parquet')\n  (FORMAT PARQUET);\nCOPY current_snapshot TO (getvariable('snapshot_prefix') || '_current.parquet')\n  (FORMAT PARQUET);\nCREATE OR REPLACE VIEW previous AS\nSELECT * FROM read_parquet(getvariable('snapshot_prefix') || '_previous.parquet');\nCREATE OR REPLACE VIEW current AS\nSELECT * FROM read_parquet(getvariable('snapshot_prefix') || '_current.parquet');\n",
+  "examples": [
+    {
+      "id": "check-keys",
+      "title": "Check both snapshots for invalid keys",
+      "sql": "SELECT 'previous' AS snapshot, id, count(*) AS occurrences\nFROM previous GROUP BY id HAVING id IS NULL OR count(*) > 1\nUNION ALL\nSELECT 'current', id, count(*)\nFROM current GROUP BY id HAVING id IS NULL OR count(*) > 1;",
+      "expectedRows": [],
+      "expectedColumns": [
+        "snapshot",
+        "id",
+        "occurrences"
+      ]
+    },
+    {
+      "id": "diff-snapshots",
+      "title": "Find additions, deletions, and changes",
+      "sql": "SELECT coalesce(p.id, c.id) AS id,\n       CASE WHEN p.id IS NULL THEN 'added'\n            WHEN c.id IS NULL THEN 'deleted'\n            ELSE 'changed' END AS change,\n       p.name AS old_name, c.name AS new_name,\n       p.plan AS old_plan, c.plan AS new_plan\nFROM previous p FULL OUTER JOIN current c ON p.id = c.id\nWHERE p.id IS NULL OR c.id IS NULL\n   OR p.name IS DISTINCT FROM c.name\n   OR p.plan IS DISTINCT FROM c.plan\nORDER BY id;",
+      "expectedRows": [
+        [
+          1,
+          "changed",
+          "Ada",
+          "Ada",
+          "free",
+          "pro"
+        ],
+        [
+          2,
+          "changed",
+          "Ben",
+          "Ben",
+          null,
+          "free"
+        ],
+        [
+          3,
+          "deleted",
+          "Cy",
+          null,
+          "pro",
+          null
+        ],
+        [
+          5,
+          "added",
+          null,
+          "Eli",
+          null,
+          "free"
+        ]
+      ],
+      "expectedColumns": [
+        "id",
+        "change",
+        "old_name",
+        "new_name",
+        "old_plan",
+        "new_plan"
+      ]
+    },
+    {
+      "id": "null-comparison",
+      "title": "See why ordinary inequality loses changes",
+      "sql": "SELECT p.id, p.plan AS old_plan, c.plan AS new_plan,\n       p.plan <> c.plan AS ordinary_inequality,\n       p.plan IS DISTINCT FROM c.plan AS changed\nFROM previous p JOIN current c ON p.id = c.id\nORDER BY p.id;",
+      "expectedRows": [
+        [
+          1,
+          "free",
+          "pro",
+          true,
+          true
+        ],
+        [
+          2,
+          null,
+          "free",
+          null,
+          true
+        ],
+        [
+          4,
+          "free",
+          "free",
+          false,
+          false
+        ],
+        [
+          6,
+          null,
+          null,
+          null,
+          false
+        ]
+      ],
+      "expectedColumns": [
+        "id",
+        "old_plan",
+        "new_plan",
+        "ordinary_inequality",
+        "changed"
+      ]
+    },
+    {
+      "id": "duplicate-key",
+      "title": "Introduce a duplicate and rerun the key check",
+      "sql": "WITH example(id, name) AS (\n  VALUES (1, 'Ada'), (1, 'Ada duplicate'), (2, 'Ben')\n)\nSELECT id, count(*) AS occurrences\nFROM example GROUP BY id\nHAVING id IS NULL OR count(*) > 1;",
+      "expectedRows": [
+        [
+          1,
+          2
+        ]
+      ],
+      "expectedColumns": [
+        "id",
+        "occurrences"
+      ]
+    }
+  ],
+  "sampleTables": [
+    {
+      "table": "previous_snapshot",
+      "title": "Yesterday · previous",
+      "description": "All five rows. NULL means the customer exists, but their plan is unknown.",
+      "columns": [
+        "id",
+        "name",
+        "plan"
+      ],
+      "rows": [
+        [
+          1,
+          "Ada",
+          "free"
+        ],
+        [
+          2,
+          "Ben",
+          null
+        ],
+        [
+          3,
+          "Cy",
+          "pro"
+        ],
+        [
+          4,
+          "Dee",
+          "free"
+        ],
+        [
+          6,
+          "Finn",
+          null
+        ]
+      ],
+      "totalRows": 5,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "previous_snapshot.csv"
+        },
+        {
+          "label": "Parquet",
+          "file": "previous_snapshot.parquet"
+        }
+      ]
+    },
+    {
+      "table": "current_snapshot",
+      "title": "Today · current",
+      "description": "All five rows. The row count stayed the same; the customers did not.",
+      "columns": [
+        "id",
+        "name",
+        "plan"
+      ],
+      "rows": [
+        [
+          1,
+          "Ada",
+          "pro"
+        ],
+        [
+          2,
+          "Ben",
+          "free"
+        ],
+        [
+          4,
+          "Dee",
+          "free"
+        ],
+        [
+          5,
+          "Eli",
+          "free"
+        ],
+        [
+          6,
+          "Finn",
+          null
+        ]
+      ],
+      "totalRows": 5,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "current_snapshot.csv"
+        },
+        {
+          "label": "Parquet",
+          "file": "current_snapshot.parquet"
+        }
+      ]
+    }
+  ]
+}

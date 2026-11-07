@@ -56,6 +56,11 @@ export const functionSchema = {
       },
     } },
     editorial: { type: 'object', required: ['argumentNotes', 'recipes'], properties: {
+      usage: { anyOf: [{ type: 'null' }, { type: 'object', required: ['purpose', 'summary', 'behavior', 'pitfall', 'sql', 'columns', 'rows', 'source', 'intendedRuntime'], properties: {
+        purpose: text, summary: text, behavior: text, pitfall: text, sql: text, columns: texts,
+        rows: { type: 'array', items: { type: 'array', items: { type: ['string', 'null'] } } },
+        source: { const: 'guide-editorial' }, intendedRuntime: { type: 'object', required: ['engine', 'packageVersion'], properties: { engine: { const: 'haybarn-wasm' }, packageVersion: text } },
+      } }] },
       argumentNotes: { type: 'array', items: { type: 'object', required: ['name', 'note', 'overloadIds'], properties: { name: text, note: text, overloadIds: texts } } },
       recipes: { type: 'array', items: { type: 'object', required: ['id', 'title', 'description', 'sql', 'source', 'verification', 'intendedRuntime'], properties: {
         id: text, title: text, description: text, sql: text, source: { const: 'guide-recipe' }, verification: { type: 'null' },

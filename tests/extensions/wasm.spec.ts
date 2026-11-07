@@ -14,7 +14,7 @@ const runners = [...new Map(pages.map(({ extension, source }) => [`${extension}:
 function examplePage(extension: string, source: string): WasmPage {
   const example = examples[extension];
   assert.ok(example, `Add a real SQL/result example for ${extension} in tests/extensions/wasm-examples.ts. It offers a browser runner.`);
-  const candidates = pages.filter(page => page.extension === extension && page.source === source && page.sql.some(sql => example.sql.test(sql)));
+  const candidates = pages.filter(page => page.extension === extension && page.source === source && (!example.path || page.path === example.path) && page.sql.some(sql => example.sql.test(sql)));
   candidates.sort((a, b) => Number(!a.path.startsWith('/products/extensions/')) - Number(!b.path.startsWith('/products/extensions/')) || a.path.localeCompare(b.path));
   assert.ok(candidates.length, `The documented ${extension} smoke query is missing from the built pages. Update its test alongside the documentation.`);
   return candidates[0];
@@ -71,7 +71,7 @@ for (const { extension, source } of runners) {
       const output = await terminalText(page);
       assert.doesNotMatch(output, /may\s+not\s+have\s+a\s+WebAssembly\s+build|(?:Error|Exception):/, [output, ...engineErrors].join('\n'));
       assert.match(output, examples[extension].result, `${extension}: the real documentation query must return the expected result:\n${output}`);
-      await requireLoadedExtension(page, extension);
+      if (source !== 'builtin') await requireLoadedExtension(page, extension);
     } finally {
       await info.attach('terminal', { body: await terminalText(page).catch(() => ''), contentType: 'text/plain' });
       await info.attach('artifact-failures', { body: failedDownloads.join('\n'), contentType: 'text/plain' });

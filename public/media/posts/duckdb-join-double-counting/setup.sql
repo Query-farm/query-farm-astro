@@ -1,0 +1,6 @@
+CREATE OR REPLACE TABLE orders(id INTEGER, customer VARCHAR, order_total INTEGER);
+INSERT INTO orders VALUES (101,'Ada',100),(102,'Ben',60),(103,'Cy',80);
+CREATE OR REPLACE TABLE items(id INTEGER, order_id INTEGER, sku VARCHAR, line_total INTEGER);
+INSERT INTO items VALUES
+  (1,101,'MUG',60),(2,101,'TEA',40),(3,102,'TEA',60),
+  (4,103,'BOWL',50),(5,103,'SPOON',30);

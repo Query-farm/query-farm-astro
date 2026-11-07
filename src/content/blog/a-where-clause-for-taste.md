@@ -2,6 +2,7 @@
 title: "A SQL WHERE Clause for Taste"
 description: "I pointed DuckDB at Hacker News and at Jev, TypeSafe's decision model, and asked it to score 500 stories against one sentence about what I like. It took 17 seconds and cost less than a penny."
 pubDate: 2026-09-18
+updatedDate: 2026-11-06
 author: "Query Farm Team"
 tags: ["DuckDB", "VGI", "SQL", "TypeSafe", "Jev"]
 heroImage: "/media/posts/a-where-clause-for-taste/social.png"
@@ -98,11 +99,14 @@ This is why a two-worker query is worth typing at all. No service to stand up, n
 
 Let's be honest about "nothing installed", though, because it isn't quite true. You never run an install command, but uv keeps everything it builds — `uv cache dir` will tell you where, and if you have been using uv for a while that directory is not nothing. What you get for it is a warm start of under a second. `uv cache clean` is the uninstaller.
 
-I ran this in [`haybarn-cli`](/products/haybarn/) (`uvx haybarn-cli`), which autoloads the `vgi` extension when you `ATTACH`. In the DuckDB CLI, install it yourself first:
+I ran this in [`haybarn-cli`](/products/haybarn/) (`uvx haybarn-cli`), which autoloads the `vgi` extension when you `ATTACH`. In DuckDB 2.0, install it from the Query.Farm repository first:
 
 ```sql
-INSTALL vgi FROM community;
-LOAD vgi;
+SET allow_extension_repositories = 'allowed';
+CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm
+  WITH PREFIX 'https://duckdb-extensions.query.farm';
+INSTALL vgi FROM query_farm;
+LOAD vgi FROM query_farm;
 ```
 
 ## Hang on, what's Jev?

@@ -1,0 +1,83 @@
+---
+title: "Why Your Seven-Day Moving Average Isn’t Seven Days"
+description: "Compare ROWS and RANGE windows in DuckDB, build a calendar spine, and distinguish missing dates from real zeros using runnable examples."
+pubDate: "2026-11-07"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: false
+outcome: "Choose a calendar-aware moving average and make the missing-data assumption explicit."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "analyze-data"
+technologies: ["duckdb"]
+estimatedMinutes: 7
+level: "Intermediate"
+runtime: "browser"
+order: 16
+showLeadVisual: false
+nextStep: {"title": "Take the next question to your data", "pitch": "Keep exploring with these SQL patterns in Haybarn.", "href": "/products/haybarn/", "cta": "Explore Haybarn"}
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-seven-day-average.json';
+
+**The dashboard says “seven-day average.” The query says “last seven rows.” Those are only equivalent when every day has exactly one row.** A missing weekend can quietly turn your weekly metric into something else.
+
+Here is a small dataset where three reasonable-looking queries produce **42, 56, and 40**. Each number has a different denominator. The goal is to choose the one that answers your question.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Notice what is absent
+
+We have eight daily order counts spanning January 1–11. January 2 is a recorded zero. January 3, 6, and 7 have no row at all.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+Assume this table should contain at most one row per day. If the source contains multiple regions or products, aggregate to one row per day first, or partition the window by the entity you want to measure. Duplicate dates otherwise change the calculation.
+
+## Rows measure observations; ranges measure distance
+
+Compare the two frames at January 11:
+
+<TutorialExample example={demo.examples[0]} />
+
+`ROWS BETWEEN 6 PRECEDING AND CURRENT ROW` includes the current row and six preceding observations, reaching back to January 2. Those values sum to 294, so the result is **42**.
+
+`RANGE BETWEEN INTERVAL 6 DAY PRECEDING AND CURRENT ROW` covers January 5–11. The five recorded counts sum to 280, giving **56**. The interval is seven calendar dates, but `avg` still divides by five observed, non-NULL values. A range frame does not create missing rows. [DuckDB documents both frame types here](https://duckdb.org/docs/2.0/sql/functions/window_functions).
+
+The date filter is outside the CTE intentionally. Filtering to January 11 before calculating the windows would remove their history.
+
+## Build the calendar, then decide what a gap means
+
+`generate_series` provides every date in the desired interval. Joining it to the source exposes the gaps:
+
+<TutorialExample example={demo.examples[1]} />
+
+The setup creates `calendar_days` for January 1–11. The result above keeps the original NULL alongside a possible zero-filled interpretation.
+
+**Zero-fill is justified only when you know the event source is complete and an absent date means no orders.** If a collector failed, that date is unknown. Turning an outage into zero orders creates a false business decline.
+
+Our next query adopts the complete-source assumption. The `complete_days` view coalesces absent counts to zero; it is a policy choice you can change, not a repair that SQL can infer.
+
+## Require a full window
+
+<TutorialExample example={demo.examples[2]} />
+
+January 5–11 now has seven rows, totaling 280 orders, so the daily average is **40**. Requiring seven dates prevents the first few days of a dataset from appearing as full weekly windows.
+
+If missing counts must remain unknown, leave them NULL and require both seven calendar rows and seven non-NULL observations before reporting an average. `count(*)` alone checks calendar coverage, not measurement completeness.
+
+<TutorialChallenge post={demo.slug} />
+
+## Name the metric honestly
+
+“Average per observed day” and “average per calendar day” are both useful. They are not interchangeable. Keep a count of observed days beside the metric when missingness matters, and document which time zone defines a day before aggregating timestamped events.
+
+Try changing January 2’s recorded zero to NULL, then rerun the first example. You will see that `avg` ignores an unknown value but includes a known zero. That small distinction is often the explanation for an unexpectedly optimistic chart.
+
+<TutorialTracking post={demo.slug} />

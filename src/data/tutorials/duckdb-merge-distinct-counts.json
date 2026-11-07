@@ -1,0 +1,150 @@
+{
+  "slug": "duckdb-merge-distinct-counts",
+  "extension": "datasketches",
+  "setup": "CREATE OR REPLACE TABLE events(id INTEGER, day DATE, visitor_id VARCHAR);\nINSERT INTO events VALUES\n  (1,'2026-01-01','Ada'),(2,'2026-01-01','Ben'),(3,'2026-01-01','Cy'),(4,'2026-01-01','Ada'),\n  (5,'2026-01-02','Ben'),(6,'2026-01-02','Cy'),(7,'2026-01-02','Dee'),\n  (8,'2026-01-03','Ada'),(9,'2026-01-03','Eli');\nCREATE OR REPLACE TABLE daily_sketches AS\nSELECT day, datasketch_hll(12, visitor_id) AS sketch\nFROM events GROUP BY day;\n",
+  "examples": [
+    {
+      "id": "daily-visitors",
+      "title": "Count distinct IDs within each day",
+      "sql": "SELECT day::VARCHAR AS day, count(DISTINCT visitor_id) AS unique_visitors\nFROM events GROUP BY day ORDER BY day;",
+      "expectedColumns": [
+        "day",
+        "unique_visitors"
+      ],
+      "expectedRows": [
+        [
+          "2026-01-01",
+          3
+        ],
+        [
+          "2026-01-02",
+          3
+        ],
+        [
+          "2026-01-03",
+          2
+        ]
+      ]
+    },
+    {
+      "id": "sum-versus-union",
+      "title": "Compare adding counts with counting the union",
+      "sql": "WITH daily AS (SELECT day, count(DISTINCT visitor_id) AS n FROM events GROUP BY day)\nSELECT (SELECT sum(n) FROM daily) AS sum_of_daily_counts,\n       (SELECT count(DISTINCT visitor_id) FROM events) AS period_unique_visitors;",
+      "expectedColumns": [
+        "sum_of_daily_counts",
+        "period_unique_visitors"
+      ],
+      "expectedRows": [
+        [
+          8,
+          5
+        ]
+      ]
+    },
+    {
+      "id": "merge-daily-sketches",
+      "title": "Estimate the union from saved daily sketches",
+      "sql": "SELECT round(datasketch_hll_estimate(\n  datasketch_hll_union(12, sketch)\n), 2) AS estimated_visitors\nFROM daily_sketches;",
+      "expectedColumns": [
+        "estimated_visitors"
+      ],
+      "expectedRows": [
+        [
+          5.0
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "events",
+      "title": "Three days of repeat visitors",
+      "description": "Names are fictional stable visitor IDs. There are nine events, eight daily memberships, and five distinct IDs.",
+      "previewLimit": null
+    }
+  ],
+  "challenge": {
+    "id": "two-day-union",
+    "title": "Combine just the first two days",
+    "prompt": "Return estimated_visitors for January 1–2 using the stored daily sketches. Round the estimate to two decimal places.",
+    "hint": "Filter the daily sketch rows before merging them. Adding daily counts counts Ben and Cy twice.",
+    "starter": "SELECT sum(n) AS estimated_visitors\nFROM (SELECT day, count(DISTINCT visitor_id) AS n\n      FROM events WHERE day <= DATE '2026-01-02' GROUP BY day);",
+    "solution": "SELECT round(datasketch_hll_estimate(\n  datasketch_hll_union(12, sketch)\n), 2) AS estimated_visitors\nFROM daily_sketches\nWHERE day <= DATE '2026-01-02';",
+    "success": "The first two days contain four distinct IDs. This tiny fixture rounds to the exact answer; sketches remain approximate.",
+    "columns": [
+      "estimated_visitors"
+    ],
+    "rows": [
+      [
+        4.0
+      ]
+    ]
+  },
+  "batch": "next-ten",
+  "sampleTables": [
+    {
+      "table": "events",
+      "title": "Three days of repeat visitors",
+      "description": "Names are fictional stable visitor IDs. There are nine events, eight daily memberships, and five distinct IDs.",
+      "columns": [
+        "id",
+        "day",
+        "visitor_id"
+      ],
+      "rows": [
+        [
+          1,
+          "2026-01-01",
+          "Ada"
+        ],
+        [
+          2,
+          "2026-01-01",
+          "Ben"
+        ],
+        [
+          3,
+          "2026-01-01",
+          "Cy"
+        ],
+        [
+          4,
+          "2026-01-01",
+          "Ada"
+        ],
+        [
+          5,
+          "2026-01-02",
+          "Ben"
+        ],
+        [
+          6,
+          "2026-01-02",
+          "Cy"
+        ],
+        [
+          7,
+          "2026-01-02",
+          "Dee"
+        ],
+        [
+          8,
+          "2026-01-03",
+          "Ada"
+        ],
+        [
+          9,
+          "2026-01-03",
+          "Eli"
+        ]
+      ],
+      "totalRows": 9,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "events.csv"
+        }
+      ]
+    }
+  ]
+}

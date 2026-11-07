@@ -1,0 +1,187 @@
+{
+  "slug": "duckdb-parquet-metadata",
+  "extension": "DuckDB",
+  "setup": "CREATE OR REPLACE TABLE events AS\nSELECT i::INTEGER AS id,\n       DATE '2026-01-01' + (i // 2048)::INTEGER AS event_day,\n       (i % 100)::INTEGER AS value\nFROM range(8192) AS r(i);\nSET VARIABLE sorted_file = 'sorted_' || uuid()::VARCHAR || '.parquet';\nSET VARIABLE mixed_file = 'mixed_' || uuid()::VARCHAR || '.parquet';\nCOPY (SELECT * FROM events ORDER BY event_day, id)\nTO (getvariable('sorted_file')) (FORMAT PARQUET, ROW_GROUP_SIZE 2048);\nCOPY (SELECT * FROM events ORDER BY id % 2048, event_day)\nTO (getvariable('mixed_file')) (FORMAT PARQUET, ROW_GROUP_SIZE 2048);\n",
+  "examples": [
+    {
+      "id": "sorted-metadata",
+      "title": "Inspect the date column in the sorted file",
+      "sql": "SELECT row_group_id, row_group_num_rows AS rows,\n       stats_min_value AS first_day, stats_max_value AS last_day\nFROM parquet_metadata(getvariable('sorted_file'))\nWHERE path_in_schema = 'event_day' ORDER BY row_group_id;",
+      "expectedColumns": [
+        "row_group_id",
+        "rows",
+        "first_day",
+        "last_day"
+      ],
+      "expectedRows": [
+        [
+          0,
+          2048,
+          "2026-01-01",
+          "2026-01-01"
+        ],
+        [
+          1,
+          2048,
+          "2026-01-02",
+          "2026-01-02"
+        ],
+        [
+          2,
+          2048,
+          "2026-01-03",
+          "2026-01-03"
+        ],
+        [
+          3,
+          2048,
+          "2026-01-04",
+          "2026-01-04"
+        ]
+      ]
+    },
+    {
+      "id": "mixed-metadata",
+      "title": "Inspect the same records interleaved across row groups",
+      "sql": "SELECT row_group_id, row_group_num_rows AS rows,\n       stats_min_value AS first_day, stats_max_value AS last_day\nFROM parquet_metadata(getvariable('mixed_file'))\nWHERE path_in_schema = 'event_day' ORDER BY row_group_id;",
+      "expectedColumns": [
+        "row_group_id",
+        "rows",
+        "first_day",
+        "last_day"
+      ],
+      "expectedRows": [
+        [
+          0,
+          2048,
+          "2026-01-01",
+          "2026-01-04"
+        ],
+        [
+          1,
+          2048,
+          "2026-01-01",
+          "2026-01-04"
+        ],
+        [
+          2,
+          2048,
+          "2026-01-01",
+          "2026-01-04"
+        ],
+        [
+          3,
+          2048,
+          "2026-01-01",
+          "2026-01-04"
+        ]
+      ]
+    },
+    {
+      "id": "same-answer",
+      "title": "Both layouts answer the same filter",
+      "sql": "SELECT 'sorted' AS layout, count(*) AS matching_rows\nFROM read_parquet(getvariable('sorted_file')) WHERE event_day = DATE '2026-01-02'\nUNION ALL\nSELECT 'mixed', count(*)\nFROM read_parquet(getvariable('mixed_file')) WHERE event_day = DATE '2026-01-02';",
+      "expectedColumns": [
+        "layout",
+        "matching_rows"
+      ],
+      "expectedRows": [
+        [
+          "sorted",
+          2048
+        ],
+        [
+          "mixed",
+          2048
+        ]
+      ]
+    }
+  ],
+  "sampleSpecs": [
+    {
+      "table": "events",
+      "title": "One dataset, two physical layouts",
+      "description": "First eight of 8,192 rows. Each of the four days has exactly 2,048 events. The downloads contain the complete data.",
+      "previewLimit": 8
+    }
+  ],
+  "challenge": {
+    "id": "candidate-row-groups",
+    "title": "Find groups that could contain January 3",
+    "prompt": "Return row_group_id for groups in sorted_file whose event_day statistics do not rule out January 3. Retain groups with missing or unparseable bounds.",
+    "hint": "Keep a group when its minimum is on/before the date and its maximum is on/after it. A missing bound cannot prove exclusion.",
+    "starter": "SELECT row_group_id\nFROM parquet_metadata(getvariable('sorted_file'))\nWHERE path_in_schema = 'event_day'\nORDER BY row_group_id;",
+    "solution": "SELECT row_group_id\nFROM parquet_metadata(getvariable('sorted_file'))\nWHERE path_in_schema = 'event_day'\n  AND (TRY_CAST(stats_min_value AS DATE) IS NULL\n       OR TRY_CAST(stats_min_value AS DATE) <= DATE '2026-01-03')\n  AND (TRY_CAST(stats_max_value AS DATE) IS NULL\n       OR TRY_CAST(stats_max_value AS DATE) >= DATE '2026-01-03')\nORDER BY row_group_id;",
+    "success": "Only group 2 can contain January 3 in this sorted fixture. The metadata describes skip opportunities, not measured bytes saved.",
+    "columns": [
+      "row_group_id"
+    ],
+    "rows": [
+      [
+        2
+      ]
+    ]
+  },
+  "batch": "next-ten",
+  "sampleTables": [
+    {
+      "table": "events",
+      "title": "One dataset, two physical layouts",
+      "description": "First eight of 8,192 rows. Each of the four days has exactly 2,048 events. The downloads contain the complete data.",
+      "columns": [
+        "id",
+        "event_day",
+        "value"
+      ],
+      "rows": [
+        [
+          0,
+          "2026-01-01",
+          0
+        ],
+        [
+          1,
+          "2026-01-01",
+          1
+        ],
+        [
+          2,
+          "2026-01-01",
+          2
+        ],
+        [
+          3,
+          "2026-01-01",
+          3
+        ],
+        [
+          4,
+          "2026-01-01",
+          4
+        ],
+        [
+          5,
+          "2026-01-01",
+          5
+        ],
+        [
+          6,
+          "2026-01-01",
+          6
+        ],
+        [
+          7,
+          "2026-01-01",
+          7
+        ]
+      ],
+      "totalRows": 8192,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "events.csv"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+---
+title: "Build a Retention Cohort Table in DuckDB"
+description: "Turn signup dates and supplied website events into a weekly retention table. Keep cohort denominators fixed and distinguish future periods from zero activity."
+pubDate: "2026-11-07"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials"]
+draft: false
+outcome: "Measure weekly return activity by signup cohort while preserving unknown future periods."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "analyze-data"
+technologies: ["duckdb"]
+estimatedMinutes: 8
+level: "Intermediate"
+runtime: "browser"
+order: 19
+showLeadVisual: false
+nextStep: {"title": "Take the next question to your data", "pitch": "Keep exploring with these SQL patterns in Haybarn.", "href": "/products/haybarn/", "cta": "Explore Haybarn"}
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-retention-cohorts.json';
+
+**Two people joined in the same week. One came back the following week. Both appeared the week after that.** A weekly active-user total hides this story; a cohort table makes it visible.
+
+We will group people by signup week, count who returns at each age, and build a small retention heatmap. The blank cells are as important as the colored ones.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Give every person a starting point
+
+This is the same fictional site used in the [sessions](/tutorials/duckdb-event-sessions/) and [funnel](/tutorials/duckdb-conversion-funnel/) lessons. All required data is included here.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+A cohort begins on Monday. “Active” means at least one recorded event of any type in that calendar week. Our observation cutoff is **January 26 at 00:00 UTC, exclusive**: the week beginning January 19 is complete; January 26 and later are not observed.
+
+This is calendar-week retention, not rolling seven-day retention. A Sunday signup and a Monday signup can have very different elapsed times at their first week boundary. Choose the definition that fits the decision.
+
+## Collapse repeat events before counting people
+
+The setup creates `cohort_members` from signup dates and `active_weeks` from distinct user-week pairs. Inspect their relationship:
+
+<TutorialExample example={demo.examples[0]} />
+
+Ada’s many events in signup week contribute one active user-week. Her January 14 visit is week 1; her January 20 visit is week 2. Ben skips week 1 and returns in week 2.
+
+`date_trunc('week', ...)` anchors the dates to Mondays. Calculating the week difference between these aligned boundaries produces the age of each cohort. Activity before a user’s signup cohort is excluded from the retention calculation.
+
+## Build the cells that have no activity too
+
+If we group only observed events, a week with no returns disappears. Instead, cross each cohort with the week numbers we want, then left join the observed counts:
+
+<TutorialExample example={demo.examples[1]} />
+
+The denominator comes from **all signups in the cohort**, not the people who happen to return. The January 5 cohort has two members at every age. One returning person in week 1 therefore means 50%, even though that week’s activity table contains only Ada.
+
+`coalesce` supplies zero for an observed period with no activity. The outer `CASE` leaves unobserved future periods NULL. Here the cutoff is a Monday, so every included week is complete. For an arbitrary midweek cutoff, require the period’s end to be at or before the cutoff before treating it as a completed week.
+
+The fixture assumes event collection is complete through the cutoff. A missing export is not evidence of zero retention.
+
+## Turn the grid into a report
+
+<TutorialExample example={demo.examples[2]} />
+
+The January 5 cohort reads **100%, 50%, 100%**. Retention can rise again because this metric asks who was active in each particular week. It does not require uninterrupted weekly activity.
+
+The January 12 cohort has 0% in week 1: that week was observed, and neither member returned. Its week 2 cell is NULL because it lies beyond the observation cutoff. Displaying both as zero would make newer cohorts look artificially worse.
+
+<TutorialChallenge post={demo.slug} />
+
+## Make the cell inspectable
+
+This tiny dataset is useful because we can name every person behind a percentage. Keep the same ability in a real analysis: a denominator, an observation window, and a query that explains membership.
+
+Week 0 is not automatically 100% under this definition. It is 100% here because every signup also has a recorded event in that week. A signup with no event would remain in the denominator without contributing to activity. Decide whether that is the behavior your product team wants before interpreting the heatmap.
+
+<TutorialTracking post={demo.slug} />

@@ -1,0 +1,207 @@
+{
+  "slug": "duckdb-postgresql-query-pushdown",
+  "extension": "DuckDB",
+  "setup": "CREATE OR REPLACE TABLE orders AS\nSELECT i AS id,\n       CASE i % 4 WHEN 0 THEN 'East' WHEN 1 THEN 'West'\n         WHEN 2 THEN 'North' ELSE 'South' END AS region,\n       (i % 100 + 1)::INTEGER AS amount,\n       CASE WHEN i % 5 = 0 THEN 'cancelled' ELSE 'paid' END AS status\nFROM generate_series(1, 10000) AS s(i);\n",
+  "examples": [
+    {
+      "id": "local-aggregate",
+      "title": "Run the same calculation on local browser data",
+      "sql": "SELECT region, sum(amount) AS total\nFROM orders\nWHERE status = 'paid'\nGROUP BY region\nORDER BY region;",
+      "expectedRows": [
+        [
+          "East",
+          102000
+        ],
+        [
+          "North",
+          102000
+        ],
+        [
+          "South",
+          102000
+        ],
+        [
+          "West",
+          102000
+        ]
+      ],
+      "expectedColumns": [
+        "region",
+        "total"
+      ],
+      "browser": false
+    }
+  ],
+  "sampleTables": [
+    {
+      "table": "orders",
+      "title": "The orders table",
+      "description": "First eight of 10,000 generated orders. Amount is an integer in this fixture, with no currency implied.",
+      "columns": [
+        "id",
+        "region",
+        "amount",
+        "status"
+      ],
+      "rows": [
+        [
+          1,
+          "West",
+          2,
+          "paid"
+        ],
+        [
+          2,
+          "North",
+          3,
+          "paid"
+        ],
+        [
+          3,
+          "South",
+          4,
+          "paid"
+        ],
+        [
+          4,
+          "East",
+          5,
+          "paid"
+        ],
+        [
+          5,
+          "West",
+          6,
+          "cancelled"
+        ],
+        [
+          6,
+          "North",
+          7,
+          "paid"
+        ],
+        [
+          7,
+          "South",
+          8,
+          "paid"
+        ],
+        [
+          8,
+          "East",
+          9,
+          "paid"
+        ]
+      ],
+      "totalRows": 10000,
+      "downloads": [
+        {
+          "label": "CSV",
+          "file": "orders.csv"
+        }
+      ]
+    }
+  ],
+  "nativeResults": {
+    "aggregate": {
+      "columns": [
+        "region",
+        "total"
+      ],
+      "rows": [
+        [
+          "East",
+          102000
+        ],
+        [
+          "North",
+          102000
+        ],
+        [
+          "South",
+          102000
+        ],
+        [
+          "West",
+          102000
+        ]
+      ],
+      "planExcerpt": "Table Scan\n  Remote SQL:\n  SELECT region, sum(amount) AS total FROM public.orders WHERE (status = 'paid') GROUP BY region ORDER BY region\n  Database: pg\n  4 rows"
+    },
+    "filter": {
+      "columns": [
+        "id",
+        "amount"
+      ],
+      "rows": [
+        [
+          1,
+          2
+        ],
+        [
+          2,
+          3
+        ],
+        [
+          3,
+          4
+        ],
+        [
+          4,
+          5
+        ]
+      ],
+      "planExcerpt": "Table Scan\n  Remote SQL:\n  SELECT id, amount FROM public.orders WHERE ((status = 'paid') AND (id <= 5)) ORDER BY id\n  Database: pg\n  4 rows"
+    },
+    "function": {
+      "columns": [
+        "region",
+        "label_chars"
+      ],
+      "rows": [
+        [
+          "East",
+          12500
+        ],
+        [
+          "North",
+          12500
+        ],
+        [
+          "South",
+          12500
+        ],
+        [
+          "West",
+          12500
+        ]
+      ],
+      "planExcerpt": "Order By\n  Order By: region ASC\n  4 rows\n\nHash Group By\n  Groups: #0\n  Aggregates: sum(#1)\n  4 rows\n\nProjection\n  Projections: region,\n  length(status)\n  10,000 rows\n\nTable Scan\n  Table: orders\n  Database: pg\n  Projections: region, status\n  10,000 rows"
+    },
+    "local_control": {
+      "columns": [
+        "region",
+        "total"
+      ],
+      "rows": [
+        [
+          "East",
+          102000
+        ],
+        [
+          "North",
+          102000
+        ],
+        [
+          "South",
+          102000
+        ],
+        [
+          "West",
+          102000
+        ]
+      ],
+      "planExcerpt": "Order By\n  Order By: region ASC\n  4 rows\n\nHash Group By\n  Groups: #0\n  Aggregates: sum(#1)\n  4 rows\n\nProjection\n  Projections: region,\n  amount\n  8,000 rows\n\nTable Scan\n  Table: orders\n  Database: pg_local\n  Projections: status,\n  region,\n  amount\n  Filters: status = 'paid'\n  8,000 rows"
+    }
+  }
+}

@@ -1,8 +1,11 @@
 import { groupFunctions, compareSnapshots, signatureKey } from '../../../scripts/haybarn-functions/catalog.mjs';
 import { defaultSnapshotId } from '../data/settings';
-import { snapshotModules } from '../data/snapshots.generated';
+// Full snapshots in Astro and Node; metadata plus a loader in the Pages
+// Functions build (package.json "imports"). See ../data/function-data-paths.mjs.
+import { snapshotModules } from '#haybarn-snapshots';
 import { signatureParts } from './arguments';
 import { operatorNotation } from '../../../scripts/haybarn-functions/notation.mjs';
+import { currentReferenceIds } from '../../../scripts/haybarn-functions/canonicals.mjs';
 
 export interface Overload {
   schema_name: string;
@@ -54,6 +57,13 @@ export const snapshots: Snapshot[] = (snapshotModules as Snapshot[]).sort((a, b)
   a.engine === b.engine ? b.engineVersion.localeCompare(a.engineVersion, undefined, { numeric: true }) : a.engine === 'haybarn' ? -1 : 1);
 export const defaultSnapshot = snapshots.find(s => s.id === defaultSnapshotId)!;
 if (!defaultSnapshot) throw new Error(`Missing ${defaultSnapshotId}. Run npm run refresh:haybarn to capture the installed release before building.`);
+// Computed on first use: it can compare whole function catalogs, which the
+// Pages Functions build only has after loadSnapshotData().
+let equivalentCurrentIds: Set<string> | undefined;
+export function canonicalSnapshot(snapshot: Snapshot) {
+  equivalentCurrentIds ??= currentReferenceIds(snapshots, defaultSnapshotId);
+  return equivalentCurrentIds.has(snapshot.id) ? defaultSnapshot : snapshot;
+}
 
 export const categories = [
   { id: 'text', name: 'Text & patterns', icon: 'Aa', short: 'Clean, split, match, and reshape strings.', intent: 'Make messy text useful', color: 'clay' },
@@ -104,7 +114,7 @@ export function getFunctions(snapshot: Snapshot): FunctionDoc[] {
 export function getFunction(snapshot: Snapshot, name: string) { return getFunctions(snapshot).find(f => f.name === name); }
 export function functionUrl(snapshot: Snapshot, fn: { slug: string }, pinned = false) { return snapshot.id === defaultSnapshotId && !pinned ? `/products/haybarn/functions/${fn.slug}/` : `/products/haybarn/functions/releases/${snapshot.id}/${fn.slug}/`; }
 export function catalogUrl(snapshot = defaultSnapshot) { return snapshot.id === defaultSnapshotId ? `/products/haybarn/functions/catalog/` : `/products/haybarn/functions/releases/${snapshot.id}/`; }
-export function categoryUrl(id: string, snapshot = defaultSnapshot) { return `${catalogUrl(snapshot)}?category=${id}`; }
+export function categoryUrl(id: string, snapshot = defaultSnapshot) { return canonicalSnapshot(snapshot) === defaultSnapshot ? `/products/haybarn/functions/category/${id}/` : `${catalogUrl(snapshot)}?category=${id}`; }
 export function categoryInfo(id: string) { return categories.find(c => c.id === id)!; }
 export function formatSignature(row: Overload, snapshot?: Snapshot): string {
   const args = signatureParts(row, snapshot);

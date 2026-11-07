@@ -7,8 +7,9 @@ export function supportsBrowserSession(availability, runtimeVersion = wasmVersio
   return availability.some(artifact => artifact.platform === 'wasm_eh' && artifact.version === engineVersion);
 }
 
-// Reproduced by the real browser LOAD checks on 2026-11-06. Scope these to
-// the tested engine and artifact ETag so a refreshed build is checked again.
+// Reproduced by real browser LOAD checks with rc11 and rc12 on 2026-11-06.
+// Scope these to the tested engines and artifact ETag so refreshed builds
+// are checked again. Both packages contain the same base WASM binary.
 // anofox_similarity fails during telemetry initialization; sitemap fails
 // dynamic linking; stats_duck imports a function with an incompatible type.
 const failedBuilds = {
@@ -18,7 +19,7 @@ const failedBuilds = {
 };
 
 export function browserSessionIssue(extension, runtimeVersion = wasmVersion) {
-  if (runtimeVersion !== '2.0.0-rc11') return undefined;
+  if (!['2.0.0-rc11', '2.0.0-rc12'].includes(runtimeVersion)) return undefined;
   const etag = failedBuilds[extension.name];
   // The CDN uses a weak validator for compressed responses and a strong one
   // for HEAD, retaining the same content identifier.

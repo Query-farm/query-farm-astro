@@ -1,0 +1,89 @@
+---
+title: "Clean a Messy CSV in DuckDB and Account for Every Row"
+description: "Parse dates and amounts from a CSV, keep rejected rows with reasons, and reconcile accepted plus rejected counts. Includes a real downloadable CSV and browser SQL."
+pubDate: "2026-11-07"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials", "csv"]
+draft: false
+outcome: "Produce clean invoice values and a review table that accounts for every input record."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "clean-match"
+technologies: ["duckdb", "csv"]
+estimatedMinutes: 7
+level: "Beginner"
+runtime: "browser"
+order: 7
+showLeadVisual: false
+nextStep:
+  title: "Keep exploring with your own data"
+  pitch: "Use these queries as a starting point in Haybarn, or download the complete walkthrough to run locally."
+  href: "/products/haybarn/"
+  cta: "Explore Haybarn"
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-clean-messy-csv.json';
+
+**A CSV can load successfully and still contain unusable invoices.** “Pending” is not an amount, February 30 is not a date, and a negative number may violate the rules even though it parses perfectly.
+
+We will keep the original text, convert it deliberately, and split the results into accepted records and a review queue. The goal is a useful clean result with an explanation for everything excluded.
+
+<TutorialExperiment slug={demo.slug} />
+
+## Start with the export's conventions
+
+Our fictional invoice export uses ISO calendar dates, a period for decimal fractions, and optional commas as thousands separators. Amounts must be nonnegative. These are invoice rules; refunds would need a different policy.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+The setup writes a real CSV, then reads it with `all_varchar = true`. That preserves troublesome values as text instead of asking type inference to decide what they mean. The downloaded CSV contains the same seven records. Its `1,200.00` field is quoted so the comma belongs to the amount, not the column separator.
+
+## Separate parsing from acceptance
+
+Trim whitespace, remove the thousands separators permitted by this export, and try the conversions:
+
+<TutorialExample example={demo.examples[0]} />
+
+`TRY_CAST` returns NULL for an amount it cannot convert. [`try_strptime`](https://duckdb.org/docs/2.0/sql/functions/dateformat) does the same for a date that does not match the chosen format or calendar. We use `DECIMAL(12,2)` for the invoice amount so the representation has a declared precision and scale.
+
+The original strings remain in `raw_invoices`; `parsed_invoices` adds the converted columns. This matters because a NULL conversion result could mean a missing value or an invalid value. If you overwrite the raw text, you lose that distinction.
+
+Removing commas is appropriate only because the export convention is known. In a decimal-comma locale, `19,95` could mean 19.95. Blindly removing punctuation would turn it into 1995. Likewise, values with more than two fractional digits need an explicit rounding or rejection rule before this pattern is used for them.
+
+## Give excluded rows a reason
+
+The `reviewed_invoices` view in the setup assigns the first applicable issue: invalid date, missing amount, invalid amount, or negative invoice. A row with no issue is accepted.
+
+<TutorialExample example={demo.examples[1]} />
+
+Record 5 has a perfectly parseable amount but an impossible date. Record 6 has a valid negative decimal but breaks our nonnegative-invoice contract. Merely filtering out NULL amounts would admit both.
+
+A first-issue label keeps this example readable. In a fuller quality report, use separate boolean checks or a list of issues when one row can fail several independent rules. Keep the raw ID and fields so someone can investigate or correct it.
+
+## Reconcile the counts
+
+A cleaning query should explain its exclusions:
+
+<TutorialExample example={demo.examples[2]} />
+
+Seven input records become three accepted and four rejected records. Every row belongs to exactly one branch because acceptance is defined by whether `issue` is NULL.
+
+Now use that complete acceptance rule in an aggregate:
+
+<TutorialChallenge post={demo.slug} />
+
+The accepted values are 42.50, 19.95, and 1200.00. The review rows remain available; they have not silently disappeared from the import history.
+
+## Distinguish malformed CSV from invalid values
+
+Our file has valid CSV structure. A broken quote or an unexpected number of columns is a different failure, encountered while reading the file. DuckDB's [CSV reject tables](https://duckdb.org/docs/2.0/data/csv/reading_faulty_csv_files) can retain information about rejected lines when `store_rejects` is enabled. Inspect those separately rather than assuming the value-validation view received every physical line.
+
+For a recurring import, record the source filename and batch identifier alongside both accepted and review rows. Count parser rejects as well as value rejects. The next useful step is [choosing the latest record per key](/tutorials/duckdb-latest-row-per-group/) when a later export contains corrected invoices or repeated customer updates.
+
+<TutorialTracking post={demo.slug} />

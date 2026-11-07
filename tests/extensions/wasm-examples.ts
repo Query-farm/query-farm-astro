@@ -1,7 +1,13 @@
 // Match real, rendered documentation examples. Do not replace their SQL with
 // a constant SELECT: the expected result must exercise the extension itself.
 // Rows include terminal table borders so echoed SQL cannot satisfy the check.
-export const examples: Record<string, { sql: RegExp; result: RegExp }> = {
+export const examples: Record<string, { path?: string; sql: RegExp; result: RegExp }> = {
+  // Pin the core-SQL fixture: other tutorials can use similar aggregation SQL.
+  duckdb: {
+    path: '/tutorials/duckdb-explain/',
+    sql: /^SELECT region, sum\(amount\) AS total\s+FROM orders\s+WHERE status = 'paid'\s+GROUP BY region\s+ORDER BY total DESC, region;$/,
+    result: /│\s*North\s*│\s*100\s*│\s*│\s*South\s*│\s*100\s*│\s*│\s*West\s*│\s*20\s*│\s*│\s*East\s*│\s*10\s*│/,
+  },
   a5: { sql: /^SELECT a5_get_resolution\(a5_lonlat_to_cell\(-122\.4, 37\.8, 10\)\);$/, result: /│\s*10\s*│/ },
   bitfilters: { sql: /^SELECT bitfilters_duckdb_hash\('v2\.0', 42\);$/, result: /│\s*\d+\s*│/ },
   datasketches: { sql: /datasketch_hll\(12, user_id\) AS sketch/, result: /│\s*3(?:\.0\d*)?\s*│/ },

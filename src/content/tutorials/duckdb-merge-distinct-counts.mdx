@@ -1,0 +1,93 @@
+---
+title: "Count Weekly Unique Visitors: Why Daily Counts Don’t Add Up"
+description: "Compare exact distinct counts with mergeable HLL sketches in DuckDB. See why daily unique counts overcount a longer period, with runnable DataSketches examples."
+pubDate: "2026-11-07"
+author: "Query Farm Team"
+tags: ["DuckDB", "SQL", "Tutorials", "datasketches"]
+draft: false
+outcome: "Combine daily visitor summaries into a period estimate while understanding overlap and approximation."
+prerequisites: ["Basic SELECT, WHERE, and GROUP BY", "No installation needed for the browser exercises"]
+category: "analyze-data"
+technologies: ["duckdb", "datasketches"]
+estimatedMinutes: 7
+level: "Intermediate"
+runtime: "browser"
+order: 9
+showLeadVisual: false
+extensions: ["datasketches"]
+nextStep:
+  title: "Take DataSketches to your own data"
+  pitch: "Explore the DataSketches function reference and installation instructions for your DuckDB version."
+  href: "/products/extensions/datasketches/"
+  cta: "Explore DataSketches"
+  extension: "datasketches"
+---
+
+import TutorialExample from '../../components/tutorials/TutorialExample.astro';
+import TutorialData from '../../components/tutorials/TutorialData.astro';
+import TutorialSetup from '../../components/tutorials/TutorialSetup.astro';
+import TutorialChallenge from '../../components/tutorials/TutorialChallenge.astro';
+import TutorialTracking from '../../components/tutorials/TutorialTracking.astro';
+import TutorialExperiment from '../../components/tutorials/TutorialExperiment.astro';
+import demo from '../../data/tutorials/duckdb-merge-distinct-counts.json';
+
+**Three visitors on the first day, three on the second, two on the third. Eight people?** Only if nobody returned. In our sample, several did: the three days contain five distinct visitor IDs.
+
+We will calculate the exact answer first, then build daily sketches that can be combined later. The key idea is preserving enough information about overlap to estimate a union, instead of adding incompatible counts.
+
+<TutorialExperiment slug={demo.slug} />
+
+## The events, including repeat visits
+
+Names stand in for stable, fictional visitor IDs. We are counting distinct IDs, not proving how many individual humans visited. Identity changes and shared IDs are separate tracking problems.
+
+<TutorialData tables={demo.sampleTables} slug={demo.slug} />
+<TutorialSetup setup={demo.setup} slug={demo.slug} />
+
+Ada appears twice on the first day. A distinct count within that day handles the repeated event correctly:
+
+<TutorialExample example={demo.examples[0]} />
+
+But the daily counts have discarded which IDs overlapped. Ben and Cy appear on both January 1 and 2; Ada returns on January 3.
+
+## Establish the exact answer
+
+Compare the sum of daily counts with an exact distinct count over the entire period:
+
+<TutorialExample example={demo.examples[1]} />
+
+Eight daily memberships belong to five distinct IDs. `SUM` is appropriate for additive measures such as event counts. A distinct count is not additive across overlapping groups.
+
+If your raw data is available and an exact `COUNT(DISTINCT visitor_id)` meets your needs, use it. This tiny example does not need approximation. It exists to make the overlap visible before we introduce a technique for storing compact, mergeable summaries.
+
+## Store a daily sketch, then merge it
+
+Query.Farm's [DataSketches extension](/products/extensions/datasketches/) can build an HLL sketch from IDs and estimate the distinct count represented by it. The setup creates `daily_sketches` with one `datasketch_hll(12, visitor_id)` value per day. The `12` controls sketch size and accuracy; it is not a requested number of visitors.
+
+Merge those saved sketches, then ask for an estimate:
+
+<TutorialExample example={demo.examples[2]} />
+
+The merge operates on sketch state, not on the displayed daily estimates. An estimate alone has lost the information needed for a union. That is the useful distinction between saving a count and saving a mergeable sketch.
+
+Our result rounds to 5.00, matching the exact answer. **That agreement on five IDs is not an accuracy guarantee.** Sketches are approximate; larger inputs can produce estimates above or below the exact count. Rounding improves presentation, not accuracy.
+
+Keep the sketch family, ID representation, and configuration consistent across partitions. Test the chosen settings against exact counts on representative samples before deciding the error is acceptable.
+
+## Choose a smaller reporting window
+
+Because each daily sketch is stored separately, we can select the days we need and combine only those summaries. The first two days contain four distinct IDs even though their daily counts sum to six.
+
+<TutorialChallenge post={demo.slug} />
+
+For a real week, define its date boundary and time zone before assigning events to days. These fixtures already contain dates, so no time-zone conversion is hidden inside the example.
+
+## What this technique saves—and what it does not
+
+Building a sketch still requires reading its input records. The reuse happens afterward: a rolling-period estimate can read the saved daily summaries instead of all the original events. Measure that tradeoff on the size and update pattern you actually have.
+
+Ordinary HLL union does not provide subtraction. If an older partition is corrected, rebuild or replace that partition's sketch and recompute the requested union; do not subtract its previous estimate from a total. Preserve raw data according to the accuracy and correction requirements of your system.
+
+Use exact aggregates when the result must be exact, including reconciliation of charges. Use mergeable sketches when compact reusable summaries and an understood approximation fit the question. For another common source of inflated metrics, try [fixing totals after a join](/tutorials/duckdb-join-double-counting/).
+
+<TutorialTracking post={demo.slug} />
