@@ -38,8 +38,7 @@ The [v1.5 source fix `8628623`](https://github.com/Query-farm/inflector/commit/8
 A handful of edge cases inside English are also worth knowing:
 
 - **Modern uncountables** — `data`, `species`, `series` — round-trip irregularly.
-- **Mechanical case tokenization** — [`inflector_to_snake_case('XMLHttpRequest')`](#inflector_to_snake_case) yields `xml_http_request`. Right for column work; tune in app code if you need different acronym rules.
-- **Single-character tokens are skipped.** The tokenizer requires a 2-character minimum, so `aB` ⇒ `b`-prefixed tokens are dropped.
+- **Mechanical case tokenization** — [`inflector_to_snake_case('XMLHttpRequest')`](#inflector_to_snake_case) yields `xml_http_request`. Right for column work; to keep specific acronyms uppercase in PascalCase, camelCase, Title, Train and Sentence output, use the [`inflector_acronyms`](#acronyms) setting.
 </Callout>
 
 ## Case formats supported
@@ -69,7 +68,36 @@ Beyond pure case work:
 - **Foreign keys** — [`inflector_to_foreign_key`](#inflector_to_foreign_key) (`Message` → `message_id`).
 - **Module paths** — [`inflector_demodulize`](#inflector_demodulize) (`ActiveRecord::CoreExtensions::String` → `String`), [`inflector_deconstantize`](#inflector_deconstantize) (`Net::HTTP` → `Net`).
 
+- **Labels, slugs and class names** (DuckDB 2.0 build) — [`inflector_humanize`](#inflector_humanize) (`author_id` → `Author`), [`inflector_parameterize`](#inflector_parameterize) (`Crème Brûlée: A Recipe!` → `creme-brulee-a-recipe`), [`inflector_classify`](#inflector_classify) (`egg_and_hams` → `EggAndHam`).
+
 These are direct ports of the corresponding [ActiveSupport::Inflector](https://api.rubyonrails.org/classes/ActiveSupport/Inflector.html) methods.
+
+## Acronyms
+
+The `inflector_acronyms` setting lists words that stay uppercase in PascalCase, camelCase (except the first word), Title Case, Train-Case and Sentence case output, and in the matching `inflector_is_*` predicates. Tokens are trimmed and uppercased; one-character tokens are ignored. snake_case, kebab-case and SCREAMING_SNAKE_CASE output are unaffected.
+
+```sql
+SET inflector_acronyms = ['HTML', 'API'];
+SELECT inflector_to_pascal_case('html_api_parser') AS pascal,
+       inflector_to_camel_case('parse_html') AS camel;
+-- HTMLAPIParser, parseHTML
+RESET inflector_acronyms;
+```
+
+In the DuckDB 2.0 build the setting is **session scoped**, like other DuckDB settings: `SET` affects only the current connection and `SET GLOBAL` sets the default for new ones. Value transforms read it when the query runs, so a prepared statement uses the value in effect when it is executed. Struct field names and `inflect(fmt, TABLE)` column names are part of the result type, so they use the value in effect when the query is planned. Earlier builds kept the list in a process-wide variable, so a `SET` in one connection changed results in every connection and every database in the process.
+
+## Changes in the DuckDB 2.0 build
+
+- **`inflector_acronyms` is per connection** (see [Acronyms](#acronyms)).
+- **Colliding names are made unique.** When [`inflect`](#inflect) renames struct fields or query columns and two names become the same (`fooBar` and `foo_bar` both become `foo_bar`), later ones get `_1`, `_2`, … in column order, compared case-insensitively like DuckDB identifiers. Earlier builds returned duplicate column names, and the struct form could not build the struct. A name that inflects to an empty string (for example `___`) keeps its original name.
+- **NULL options.** `inflect(fmt, TABLE, strip_accents := NULL)` and a NULL format in the table form now raise a clear error. The scalar forms return NULL for NULL arguments, as before.
+- **Errors instead of crashes.** Input that is not valid UTF-8 or an internal failure in the Rust layer now raises an error, and strings containing NUL bytes are handled correctly.
+- **New functions:** [`inflector_humanize`](#inflector_humanize), [`inflector_parameterize`](#inflector_parameterize), [`inflector_classify`](#inflector_classify).
+
+```sql
+SELECT * FROM inflect('snake', (SELECT 1 AS fooBar, 2 AS foo_bar));
+-- columns: foo_bar, foo_bar_1
+```
 
 ## Inflector vs RapidFuzz
 
