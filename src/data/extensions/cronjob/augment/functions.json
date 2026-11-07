@@ -4,7 +4,7 @@
     "categories": [
       "Scheduling"
     ],
-    "description": "Register a SQL query to run on a six-field cron expression (`second minute hour day-of-month month day-of-week`). Returns a `job_id` (e.g. `task_0`) you can later pass to `cron_delete` or look up in `cron_jobs`. The schedule fires only while this DuckDB process is alive — when the process exits, the registration is gone. Use crontab.guru to sanity-check expressions before registering.",
+    "description": "Register a SQL query to run on a six-field cron expression (`second minute hour day-of-month month day-of-week`, evaluated in UTC). Returns a `job_id` (e.g. `task_0`) you can later pass to `cron_delete` or look up in `cron_jobs`. The schedule fires only while this database is open — when the process exits or the database closes, the registration is gone.\n\n**DuckDB 2.0 build:** `cron` is `VOLATILE`, so every row schedules its own job — `SELECT cron(q, s) FROM jobs_to_schedule` reads each row's query and schedule, and `EXPLAIN`/`PREPARE` never schedule anything. A `NULL` query or schedule returns `NULL` and schedules nothing. The query is checked for syntax errors and the schedule must match at least one real date: `'0 0 0 30 2 *'` (February 30th) is an error instead of a job that runs continuously. The Haybarn 1.5 build takes the schedule from the first row only and accepts these inputs.",
     "examples": [
       {
         "description": "Every 15 seconds during hours 1–4",
@@ -16,12 +16,13 @@
       },
       {
         "description": "Top of every hour — refresh a materialized table",
-        "code": "SELECT cron('CREATE OR REPLACE TABLE hourly_rollup AS SELECT ...', '0 0 * * * *');"
+        "code": "SELECT cron('CREATE OR REPLACE TABLE hourly_rollup AS SELECT date_trunc(''hour'', ts) AS hour, count(*) AS n FROM events GROUP BY 1', '0 0 * * * *');"
       }
     ],
     "relatedFunctions": [
       "cron_jobs",
-      "cron_delete"
+      "cron_delete",
+      "cron_job_history"
     ]
   },
   {
@@ -29,7 +30,7 @@
     "categories": [
       "Scheduling"
     ],
-    "description": "Table function listing every scheduled job in this process — `job_id`, `query`, `schedule`, `next_run`, `status`, `last_run`, and `last_result`. The introspection primitive: filter by status to find failing jobs, or join `last_result` against expected output to assert that recent runs succeeded.",
+    "description": "Table function listing every scheduled job in this database — `job_id`, `query`, `schedule`, `next_run`, `status` (`Active`/`Inactive`), `last_run`, and `last_result` (`Success` or `Error: <message>`). Filter on `last_result` to find failing jobs.\n\n**DuckDB 2.0 build:** `next_run` and `last_run` are `TIMESTAMPTZ` (previously `VARCHAR` text in the server's local time), `last_run` is when the last run started, and three columns are added: `run_count`, `error_count` and `created_at`. Jobs are listed in creation order and listings of any size are returned. The Haybarn 1.5 build returns `next_run`/`last_run` as `VARCHAR`.",
     "examples": [
       {
         "description": "List all scheduled jobs",
@@ -38,11 +39,16 @@
       {
         "description": "Find jobs that have never run",
         "code": "SELECT job_id, schedule FROM cron_jobs() WHERE last_run IS NULL;"
+      },
+      {
+        "description": "Jobs whose last run failed",
+        "code": "SELECT job_id, last_run, last_result FROM cron_jobs() WHERE last_result LIKE 'Error:%';"
       }
     ],
     "relatedFunctions": [
       "cron",
-      "cron_delete"
+      "cron_delete",
+      "cron_job_history"
     ]
   },
   {
@@ -50,16 +56,47 @@
     "categories": [
       "Scheduling"
     ],
-    "description": "Cancel a scheduled job by `job_id` (the value returned from `cron` or visible in `cron_jobs`). Returns `TRUE` if a matching job was found and removed. Process restarts also cancel jobs — `cron_delete` is for un-registering while DuckDB is still running.",
+    "description": "Cancel a scheduled job by `job_id` (the value returned from `cron` or visible in `cron_jobs`). Returns `TRUE` when the job is removed and raises an error if no job has that id. A run that is already in progress finishes; no further runs start. Closing the database also cancels every job.\n\n**DuckDB 2.0 build:** `cron_delete(NULL)` returns `NULL`, and the function is `VOLATILE`.",
     "examples": [
       {
-        "description": "Cancel a specific job",
-        "code": "SELECT cron_delete('task_0');"
+        "description": "Schedule a job, keep its id, then cancel it",
+        "code": "SET VARIABLE job = (SELECT cron('ANALYZE', '0 30 1 * * *'));\nSELECT cron_delete(getvariable('job'));"
+      },
+      {
+        "description": "Cancel every job in this database",
+        "code": "SELECT cron_delete(job_id) FROM cron_jobs();"
       }
     ],
     "relatedFunctions": [
       "cron",
-      "cron_jobs"
+      "cron_jobs",
+      "cron_job_history"
+    ]
+  },
+  {
+    "name": "cron_job_history",
+    "categories": [
+      "Scheduling"
+    ],
+    "description": "**DuckDB 2.0 build only.** Table function listing the most recent runs of every scheduled job — up to 100 per job — with `job_id`, `started_at` and `finished_at` (`TIMESTAMPTZ`), `success` (`BOOLEAN`) and `result` (`Success` or `Error: <message>`). History is kept in memory and disappears when the job is deleted or the database closes.",
+    "examples": [
+      {
+        "description": "Recent runs of every job",
+        "code": "SELECT * FROM cron_job_history() ORDER BY started_at DESC;"
+      },
+      {
+        "description": "Failed runs with their error messages",
+        "code": "SELECT job_id, started_at, result FROM cron_job_history() WHERE NOT success;"
+      },
+      {
+        "description": "Run duration per job",
+        "code": "SELECT job_id, max(finished_at - started_at) AS slowest FROM cron_job_history() GROUP BY job_id;"
+      }
+    ],
+    "relatedFunctions": [
+      "cron",
+      "cron_jobs",
+      "cron_delete"
     ]
   }
 ]

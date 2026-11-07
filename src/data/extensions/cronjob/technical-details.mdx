@@ -16,7 +16,7 @@ SELECT cron(
 -- → 'task_0'
 ```
 
-[`cron`](#cron) registers the query against a six-field cron expression and returns a `job_id`. A background thread in this DuckDB process wakes on each tick, runs the query, and writes the outcome into [`cron_jobs`](#cron_jobs). No external scheduler, no shell wrapper.
+[`cron`](#cron) registers the query against a six-field cron expression and returns a `job_id`. A background thread owned by the database wakes when the job is due, runs the query, and writes the outcome into [`cron_jobs`](#cron_jobs). No external scheduler, no shell wrapper.
 
 <Callout type="warning" title="Schedules die when the DuckDB process exits">
 Cronjob lives entirely **inside the running DuckDB process**. A graceful shutdown, a `kill`, a crash, an OOM, a deploy — any of these wipe every registered job. There is no on-disk registry, no WAL entry, no resume after restart.
@@ -38,7 +38,7 @@ Cronjob uses **six fields**, with `seconds` as the leading field — one more th
 * * * * * *
 ```
 
-Operators: `*` (any), `?` (no specific value, used in day-of-month / day-of-week), `,` (list), `-` (range), `/` (step). [crontab.guru](https://crontab.guru/) is the standard sanity-check tool — note that crontab.guru parses the five-field POSIX form, so prepend a `0 ` (or `*/N `) to translate.
+Schedules are evaluated in **UTC**. Operators: `*` (any), `?` (no specific value, used in day-of-month / day-of-week), `,` (list), `-` (range), `/` (step). [crontab.guru](https://crontab.guru/) is the standard sanity-check tool — note that crontab.guru parses the five-field POSIX form, so prepend a `0 ` (or `*/N `) to translate.
 
 A few common patterns:
 
@@ -53,12 +53,12 @@ A few common patterns:
 
 ## What runs, where
 
-[`cron`](#cron) registers the query against the **same database connection** the scheduler was loaded into. That has two consequences:
+Each run of a job opens a **fresh connection to the same database** the extension was loaded into. That has two consequences:
 
-- The scheduled query inherits the same access rights, attached databases, and secrets as the registering session.
+- The scheduled query sees the same tables, attached databases, persistent secrets and database-wide settings (such as `enable_external_access`) as the registering session. Session state — `SET` variables, temporary tables, temporary secrets — does not carry over.
 - Each database instance has its own scheduler. Closing the database stops its scheduler and drops its jobs, even before process exit — so if you load Cronjob in a session that targets an in-memory database, the schedule disappears with the database. [`cron_jobs`](#cron_jobs) lists only the jobs registered in that database instance (attached databases share it).
 
-Each job runs single-threaded against itself: if a tick's query takes longer than the schedule interval, the next tick waits its turn. No overlap, no parallel runs of the same registration.
+Each database has one scheduler thread, and it runs due jobs one after another. A job never overlaps itself; fire times missed while a run was in progress are skipped rather than replayed. A slow job also delays the other jobs in the same database until it finishes.
 
 ## Inspect and cancel
 
@@ -70,11 +70,26 @@ FROM cron_jobs()
 ORDER BY next_run;
 ```
 
-[`cron_delete`](#cron_delete) un-registers a job by `job_id`. It returns `TRUE` if a matching job existed; restart wipes everything anyway, so this is for un-registration during a live process:
+[`cron_delete`](#cron_delete) un-registers a job by `job_id`. It returns `TRUE`, or raises an error if no job has that id; a run already in progress finishes. Restart wipes everything anyway, so this is for un-registration during a live process:
 
 ```sql
-SELECT cron_delete('task_0');
+SET VARIABLE job = (SELECT cron('ANALYZE', '0 30 1 * * *'));
+SELECT cron_delete(getvariable('job'));
 ```
+
+## Changes in the DuckDB 2.0 build
+
+The DuckDB 2.0 build reworked the scheduler. The Haybarn 1.5 build keeps the earlier behaviour.
+
+- **Timestamps are `TIMESTAMPTZ`.** `cron_jobs().next_run` and `last_run` used to be `VARCHAR` text in the server's local time; they are now `TIMESTAMPTZ` values. `last_run` is the start of the last run. New columns `run_count`, `error_count` and `created_at` follow the existing ones.
+- **Run history.** [`cron_job_history`](#cron_job_history) lists the last 100 runs of each job with start and finish times, success and the result or error message.
+- **Every row schedules its own job.** `cron` and `cron_delete` are `VOLATILE`. `SELECT cron(query, schedule) FROM t` uses each row's query and schedule, and `EXPLAIN` or `PREPARE` never schedule a job. A `NULL` argument returns `NULL` and schedules nothing.
+- **Bad input is rejected up front.** A query with a syntax error, an empty query, or a schedule that never matches a real date (`'0 0 0 30 2 *'`) is an error from `cron`, instead of a job that fails on every run or runs continuously.
+- **Jobs can inspect jobs.** A scheduled query may call `cron_jobs()`, `cron()` or `cron_delete()` itself, and a slow job no longer blocks `cron_jobs()` from other sessions.
+
+<Callout type="warning" title="Jobs run with the database's full access">
+A scheduled query runs with the same rights as any other connection to the database, in the background, until it is deleted or the database closes. Only schedule SQL you would run yourself, and check `cron_jobs()` when you share a long-running database with others.
+</Callout>
 
 ## Pairing with other extensions
 
