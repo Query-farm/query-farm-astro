@@ -4,9 +4,11 @@ import binding0 from './bindings/duckdb-1.3.2.json';
 import binding1 from './bindings/duckdb-1.4.4.json';
 import binding2 from './bindings/duckdb-1.5.5.json';
 import binding3 from './bindings/duckdb-1.5.6.json';
-import binding4 from './bindings/haybarn-1.5.5-rc3.json';
-import binding5 from './bindings/haybarn-1.5.6-rc6.json';
-import binding6 from './bindings/haybarn-2.0.0-rc11.json';
-import binding7 from './bindings/haybarn-2.0.0-rc8.json';
+import binding4 from './bindings/duckdb-2.0.0.json';
+import binding5 from './bindings/haybarn-1.5.5-rc3.json';
+import binding6 from './bindings/haybarn-1.5.6-rc6.json';
+import binding7 from './bindings/haybarn-2.0.0-rc11.json';
+import binding8 from './bindings/haybarn-2.0.0-rc12.json';
+import binding9 from './bindings/haybarn-2.0.0-rc8.json';
 
-export const bindingModules = [binding0, binding1, binding2, binding3, binding4, binding5, binding6, binding7];
+export const bindingModules = [binding0, binding1, binding2, binding3, binding4, binding5, binding6, binding7, binding8, binding9];

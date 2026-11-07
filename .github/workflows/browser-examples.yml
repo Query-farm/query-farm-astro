@@ -1,0 +1,75 @@
+name: Exhaustive browser examples
+
+on:
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/browser-examples.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'astro.config.mjs'
+      - 'playwright*.config.ts'
+      - 'src/lib/repl/**'
+      - 'src/components/repl/**'
+      - 'src/components/vgi/OvertureMapExample.tsx'
+      - 'src/haybarn-functions/data/haybarn-release.mjs'
+      - 'tests/extensions/**'
+      - 'tests/haybarn-functions/browser/fixtures.ts'
+  pull_request:
+    paths:
+      - '.github/workflows/browser-examples.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'astro.config.mjs'
+      - 'playwright*.config.ts'
+      - 'src/lib/repl/**'
+      - 'src/components/repl/**'
+      - 'src/components/vgi/OvertureMapExample.tsx'
+      - 'src/haybarn-functions/data/haybarn-release.mjs'
+      - 'tests/extensions/**'
+      - 'tests/haybarn-functions/browser/fixtures.ts'
+
+permissions:
+  contents: read
+
+# This workflow reports failures independently and never holds up deployment.
+concurrency:
+  group: browser-examples-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exhaustive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      - run: npm run build
+
+      - name: Run every browser example
+        id: browser_tests
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/browser-results.json
+        run: npm run test:browser:exhaustive -- --workers=4 --reporter=line,json
+
+      - name: Upload browser test results and timings
+        if: ${{ !cancelled() && (steps.browser_tests.outcome == 'success' || steps.browser_tests.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-example-results
+          path: test-results/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

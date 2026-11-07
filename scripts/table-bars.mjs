@@ -4,6 +4,8 @@
 //   <!-- bars: row -->    each row is scaled on its own (compare across columns)
 //   <!-- bars: table -->  one scale for the whole table (compare across rows too);
 //                         a row whose first cell is "Total" is scaled on its own
+//   <!-- bars: stack -->  each row becomes a group with one labeled bar per column,
+//                         all on one scale, the value at the bar's tip
 //
 // Bars in a column whose header mentions "prefetch" get the highlight fill.
 //
@@ -20,7 +22,7 @@ const children = (node, tag) => (node.children || []).filter(c => c.type === 'el
 
 const marker = node => {
   const value = node.type === 'comment' ? node.value : node.type === 'raw' ? node.value.replace(/^<!--|-->$/g, '') : null;
-  const m = value && value.match(/^\s*bars:\s*(row|table)\s*$/);
+  const m = value && value.match(/^\s*bars:\s*(row|table|stack)\s*$/);
   return m ? m[1] : null;
 };
 
@@ -70,6 +72,43 @@ const decorate = (table, mode) => {
   table.properties = { ...table.properties, className: [...(table.properties?.className || []), 'has-bars'] };
 };
 
+const el = (tagName, properties, children = []) => ({ type: 'element', tagName, properties, children });
+
+// Turns each body row into a group: its first cell becomes a heading, and each
+// other column becomes a row labeled with that column's header. Still a table, so
+// it reads in order without the bars. A cell without a time keeps its text, no bar.
+const stack = table => {
+  const head = children(table, 'thead')[0];
+  const body = children(table, 'tbody')[0];
+  if (!head || !body) return;
+  const headCells = children(children(head, 'tr')[0] || {}, 'th');
+  const rows = children(body, 'tr').map(tr => children(tr, 'td'));
+  const max = Math.max(0, ...rows.flatMap(cells => cells.slice(1).map(millis).filter(v => v != null)));
+  const out = [];
+  for (const cells of rows) {
+    out.push(el('tr', { className: ['tb-stack-group'] }, [
+      el('th', { colSpan: 2, scope: 'colgroup' }, cells[0].children),
+    ]));
+    cells.slice(1).forEach((cell, i) => {
+      const value = millis(cell);
+      out.push(el('tr', { className: ['tb-stack-row', `tb-series-${i + 1}`] }, [
+        el('th', { scope: 'row' }, headCells[i + 1].children),
+        el('td', {}, value == null
+          ? [el('span', { className: ['tb-stack-note'] }, cell.children)]
+          : [el('span', { className: ['tb-stack-track'] }, [
+              el('span', { className: ['tb-stack-bar'], ariaHidden: 'true', style: `width:calc((100% - 3.5em) * ${(value / max).toFixed(3)})` }),
+              el('span', { className: ['tb-stack-value'] }, cell.children),
+            ])]),
+      ]));
+    });
+  }
+  table.properties = { ...table.properties, className: [...(table.properties?.className || []), 'tb-stack'] };
+  table.children = [
+    el('colgroup', {}, [el('col', { className: ['tb-stack-label'] }), el('col', {})]),
+    el('tbody', {}, out),
+  ];
+};
+
 // Plain copy of a visited node: Sätteri's nodes carry lazy-resolver fields that
 // shouldn't be handed back as replacement content.
 const clone = node => {
@@ -94,7 +133,8 @@ export const tableBars = () => ({
       }
       if (!mode) return;
       const table = clone(node);
-      decorate(table, mode);
+      if (mode === 'stack') stack(table);
+      else decorate(table, mode);
       return table;
     },
   },

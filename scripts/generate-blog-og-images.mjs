@@ -6,9 +6,11 @@ import { renderToPng, wordmark, COLORS, WIDTH, HEIGHT } from './og-images/render
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const articles = [
+  { slug: 'duckdb-2-extension-availability', topic: 'DuckDB · Extensions · Distribution' },
   { slug: 'duckdb-community-extensions-distribution', topic: 'DuckDB · Distribution · Haybarn' },
   { slug: 'duckdb-variant-arrow-support-tracker', topic: 'DuckDB · Arrow · Interoperability' },
   { slug: 'duckdb-wasm-startup-time', topic: 'DuckDB-Wasm · WebAssembly · Haybarn' },
+  { slug: 'duckdb-2-upstream-contributions', topic: 'DuckDB · Extensions · Engineering' },
   { slug: 'bitfilters-filter-research', topic: 'DuckDB · Filters · Performance', extension: 'mdx' },
 ];
 // Pass slugs to regenerate only those cards.

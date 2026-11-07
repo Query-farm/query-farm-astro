@@ -19,13 +19,15 @@ function buildIndex(): Promise<Map<string, RelatedArticle[]>> {
     const known = new Set(extensions.map(e => e.id));
     const bySlug = new Map<string, RelatedArticle[]>();
     for (const post of posts) {
-      for (const slug of post.data.extensions) {
+      // The frontmatter field is optional. Dev content records can omit the
+      // schema's default, so normalize it before validating or indexing links.
+      const slugs = new Set(post.data.extensions ?? []);
+      for (const slug of slugs) {
         if (!known.has(slug)) {
           throw new Error(`Article "${post.id}" names unknown extension "${slug}"`);
         }
       }
       const fromNextStep = post.data.nextStep?.extension;
-      const slugs = new Set(post.data.extensions);
       if (fromNextStep && known.has(fromNextStep)) slugs.add(fromNextStep);
       for (const slug of slugs) {
         (bySlug.get(slug) ?? bySlug.set(slug, []).get(slug)!).push(post);

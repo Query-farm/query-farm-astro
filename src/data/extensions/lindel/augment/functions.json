@@ -4,15 +4,113 @@
     "categories": [
       "Hilbert"
     ],
-    "description": "Encode a fixed-size numeric array into an unsigned integer using the Hilbert curve. Accepts 8–64-bit signed and unsigned integers, FLOAT, and DOUBLE, with at most 128 combined input bits. Signed and floating-point values are encoded by their bit patterns; shift and quantize coordinates first when numeric locality matters.",
+    "description": "Encode coordinates into one unsigned integer using the Hilbert curve. Pass a fixed-size array, or two or more separate arguments cast to their common type. Accepts 8–64-bit integers, FLOAT and DOUBLE, BOOLEAN, DATE, TIME, TIMESTAMP, DECIMAL (up to 18 digits) and ENUM, with at most 128 combined bits. Keys sort like the coordinates, including negative and floating-point values.",
     "examples": [
       {
-        "description": "Order nonnegative integer coordinates by their Hilbert key",
-        "code": "SELECT x, y, hilbert_encode([x, y]::UINTEGER[2]) AS hilbert\nFROM (VALUES (1, 1), (1, 2), (2, 1), (6, 7), (7, 6)) AS t(x, y)\nORDER BY hilbert;"
+        "description": "Order nonnegative integer coordinates by their Hilbert curve key",
+        "code": "SELECT x, y, hilbert_encode([x, y]::UINTEGER[2]) AS hilbert\nFROM (VALUES (1, 1), (1, 2), (2, 1), (6, 7), (7, 6)) AS t(x, y)\nORDER BY hilbert;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "x",
+              "align": "left"
+            },
+            {
+              "name": "y",
+              "align": "left"
+            },
+            {
+              "name": "hilbert",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "1",
+              "1",
+              "2"
+            ],
+            [
+              "1",
+              "2",
+              "7"
+            ],
+            [
+              "2",
+              "1",
+              "13"
+            ],
+            [
+              "7",
+              "6",
+              "41"
+            ],
+            [
+              "6",
+              "7",
+              "43"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Pass coordinates as separate arguments, including negative values",
+        "code": "SELECT x, y, hilbert_encode(x, y) AS key\nFROM (VALUES (-3, 2), (0, 0), (4, -1)) AS t(x, y)\nORDER BY key;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "x",
+              "align": "left"
+            },
+            {
+              "name": "y",
+              "align": "left"
+            },
+            {
+              "name": "key",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "-3",
+              "2",
+              "9223372036854775799"
+            ],
+            [
+              "0",
+              "0",
+              "9223372036854775808"
+            ],
+            [
+              "4",
+              "-1",
+              "15372286728091293007"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Encode two dates",
+        "code": "SELECT hilbert_encode(DATE '2024-03-01', DATE '1965-07-04') AS key;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "key",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "15372286727988370219"
+            ]
+          ]
+        }
       }
     ],
     "relatedFunctions": [
       "hilbert_decode",
+      "hilbert_encode_bounded",
       "morton_encode"
     ]
   },
@@ -21,23 +119,374 @@
     "categories": [
       "Hilbert"
     ],
-    "description": "Recover component values from a Hilbert-encoded key. Supply the original dimension count; use (return_float, return_unsigned) = (false, true) for unsigned integers, (false, false) for signed integers, or (true, false) for floats. Preserve the encoded key’s SQL type. Community build 6435106 rejects one-dimensional signed-integer decoding; v1.5 source commit a92ec61 (extension version 2026100701) fixes it, and the DuckDB 2.0 builds in the Query.Farm repository include the fix. Older community binaries may still be affected. Decoding a UINTEGER key as floating point requires num_elements = 1; other counts raise an error.",
+    "description": "Recover coordinates from a Hilbert curve key. Name the encoded type: hilbert_decode(key, 'DOUBLE[2]'), 'DATE[2]', or a scalar type for one dimension. The original form takes the dimension count and (return_float, return_unsigned): (false, true) for unsigned integers, (false, false) for signed integers, (true, false) for floats. Signedness must match the encoded values. Preserve the key's SQL type.",
     "examples": [
       {
-        "description": "Round-trip an encoded integer back to its components (num_elements, return_float, return_unsigned)",
-        "code": "SELECT hilbert_decode(hilbert_encode([10, 20]::UINTEGER[2]), 2, false, true) AS roundtrip;"
+        "description": "Decode into a named type",
+        "code": "SELECT hilbert_decode(hilbert_encode([-1.5, 2.25]::DOUBLE[2]), 'DOUBLE[2]') AS roundtrip;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "roundtrip",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "[-1.5, 2.25]"
+            ]
+          ]
+        }
       },
       {
-        "description": "Round-trip signed integer coordinates with return_unsigned = false",
-        "code": "SELECT hilbert_decode(hilbert_encode([-10, 20]::INTEGER[2]), 2, false, false) AS roundtrip;"
+        "description": "Decode dates",
+        "code": "SELECT d[1] AS first_date, d[2] AS second_date\nFROM (SELECT hilbert_decode(hilbert_encode(DATE '2024-03-01', DATE '1965-07-04'), 'DATE[2]') AS d);",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "first_date",
+              "align": "left"
+            },
+            {
+              "name": "second_date",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "2024-03-01",
+              "1965-07-04"
+            ]
+          ]
+        }
       },
       {
-        "description": "Round-trip floating-point values with return_float = true",
-        "code": "SELECT hilbert_decode(hilbert_encode([-1.5, 2.25]::DOUBLE[2]), 2, true, false) AS roundtrip;"
+        "description": "Original form: num_elements, return_float, return_unsigned",
+        "code": "SELECT hilbert_decode(hilbert_encode([10, 20]::UINTEGER[2]), 2, false, true) AS roundtrip;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "roundtrip",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "[10, 20]"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Signed integers need return_unsigned = false",
+        "code": "SELECT hilbert_decode(hilbert_encode([-10, 20]::INTEGER[2]), 2, false, false) AS roundtrip;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "roundtrip",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "[-10, 20]"
+            ]
+          ]
+        }
       }
     ],
     "relatedFunctions": [
-      "hilbert_encode"
+      "hilbert_encode",
+      "hilbert_decode_bounded"
+    ]
+  },
+  {
+    "name": "hilbert_encode_bounded",
+    "categories": [
+      "Hilbert"
+    ],
+    "description": "Scale each DOUBLE coordinate from [min, max] onto a grid of 2^bits cells and encode the cell with the Hilbert curve. Returns the narrowest unsigned integer that holds dimensions × bits; every cell gets a distinct key from 0 to 2^(dimensions × bits) − 1. Values outside the bounds are clamped to the edge cells; NaN is an error. Up to 64 bits for 1–2 dimensions, 32 for 3–4, 16 for 5–8 and 8 for 9–16. A GEOMETRY value with 2-D bounds is encoded by the centre of its bounding box; empty geometries give NULL.",
+    "examples": [
+      {
+        "description": "Quantize a point in a 100 × 100 area to 16 bits per axis",
+        "code": "SELECT hilbert_encode_bounded([12.5, 40.25]::DOUBLE[2], [0, 0], [100, 100], 16) AS key;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "key",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "848669286"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Encode the centre of a geometry's bounding box",
+        "code": "SELECT hilbert_encode_bounded('POLYGON ((10 10, 20 10, 20 30, 10 30, 10 10))'::GEOMETRY, [0, 0], [100, 100], 16) AS key;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "key",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "152801721"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "hilbert_decode_bounded",
+      "hilbert_ranges_bounded",
+      "hilbert_encode_latlon"
+    ]
+  },
+  {
+    "name": "hilbert_decode_bounded",
+    "categories": [
+      "Hilbert"
+    ],
+    "description": "Decode a key from hilbert_encode_bounded with the same bounds and bits into the centre of its grid cell, as a DOUBLE array. The result is within half a cell of the encoded value.",
+    "examples": [
+      {
+        "description": "Recover the cell centre",
+        "code": "SELECT hilbert_decode_bounded(hilbert_encode_bounded([12.5, 40.25]::DOUBLE[2], [0, 0], [100, 100], 16), [0, 0]::DOUBLE[2], [100, 100]::DOUBLE[2], 16) AS cell_centre;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "cell_centre",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "[12.500762939453125, 40.250396728515625]"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "hilbert_encode_bounded"
+    ]
+  },
+  {
+    "name": "hilbert_encode_latlon",
+    "categories": [
+      "Hilbert"
+    ],
+    "description": "Encode a latitude/longitude pair with the Hilbert curve over a grid of 2^bits cells per axis. The default of 32 bits gives a UBIGINT key; 16 bits gives a UINTEGER. Latitude must be within [-90, 90] and longitude within [-180, 180]. Equivalent to hilbert_encode_bounded([lat, lon], [-90, -180], [90, 180], bits).",
+    "examples": [
+      {
+        "description": "Encode a location with the default 32 bits per axis",
+        "code": "SELECT hilbert_encode_latlon(52.52, 13.405) AS key;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "key",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "13413847537087438956"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Use 16 bits per axis for a smaller key",
+        "code": "SELECT hilbert_encode_latlon(52.52, 13.405, 16) AS key;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "key",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "3123154755"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "hilbert_decode_latlon",
+      "hilbert_encode_bounded"
+    ]
+  },
+  {
+    "name": "hilbert_decode_latlon",
+    "categories": [
+      "Hilbert"
+    ],
+    "description": "Decode a key from hilbert_encode_latlon with the same bits (default 32) into the centre of its grid cell, as STRUCT(lat DOUBLE, lon DOUBLE).",
+    "examples": [
+      {
+        "description": "Round-trip a location",
+        "code": "SELECT hilbert_decode_latlon(hilbert_encode_latlon(52.52, 13.405)) AS decoded;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "decoded",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "{'lat': 52.520000010263175, 'lon': 13.40500000398606}"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "hilbert_encode_latlon"
+    ]
+  },
+  {
+    "name": "hilbert_ranges",
+    "categories": [
+      "Hilbert"
+    ],
+    "description": "Table function returning the sorted, disjoint key ranges (lo, hi) of hilbert_encode that cover the box between min_point and max_point. The points are arrays of the encoded type. The cover is exact until max_ranges (default 64) is reached, then a superset that never misses a key in the box. Intended for systems that store or index only the key; inside DuckDB, a coordinate filter on key-sorted data is faster.",
+    "examples": [
+      {
+        "description": "Ranges covering a small box",
+        "code": "SELECT * FROM hilbert_ranges([2, 3]::UTINYINT[2], [5, 6]::UTINYINT[2]);",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "lo",
+              "align": "left"
+            },
+            {
+              "name": "hi",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "9",
+              "10"
+            ],
+            [
+              "28",
+              "28"
+            ],
+            [
+              "31",
+              "35"
+            ],
+            [
+              "45",
+              "46"
+            ],
+            [
+              "50",
+              "55"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Cap the number of ranges; the cover then includes some keys outside the box",
+        "code": "SELECT count(*) AS ranges, sum(hi - lo + 1) AS keys FROM hilbert_ranges([2, 3]::UTINYINT[2], [100, 120]::UTINYINT[2], 4);",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "ranges",
+              "align": "left"
+            },
+            {
+              "name": "keys",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "4",
+              "13999"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "hilbert_encode",
+      "hilbert_ranges_bounded"
+    ]
+  },
+  {
+    "name": "hilbert_ranges_bounded",
+    "categories": [
+      "Hilbert"
+    ],
+    "description": "Table function returning the key ranges (lo, hi) of hilbert_encode_bounded, with the given bounds and bits, that cover the box between min_point and max_point. Exact at grid-cell resolution until max_ranges (default 64) is reached, then a superset; filter fetched rows on their coordinates.",
+    "examples": [
+      {
+        "description": "At most 8 ranges for a box on a 256 × 256 grid",
+        "code": "SELECT * FROM hilbert_ranges_bounded([10, 10], [20, 30], [0, 0], [100, 100], 8, 8);",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "lo",
+              "align": "left"
+            },
+            {
+              "name": "hi",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "642",
+              "702"
+            ],
+            [
+              "1666",
+              "1853"
+            ],
+            [
+              "1986",
+              "2655"
+            ],
+            [
+              "2896",
+              "2991"
+            ],
+            [
+              "3266",
+              "3453"
+            ],
+            [
+              "13728",
+              "13775"
+            ],
+            [
+              "13813",
+              "14074"
+            ],
+            [
+              "14597",
+              "14717"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "hilbert_encode_bounded",
+      "hilbert_ranges"
     ]
   },
   {
@@ -45,15 +494,113 @@
     "categories": [
       "Morton (Z-order)"
     ],
-    "description": "Encode a fixed-size numeric array into an unsigned integer by interleaving its coordinate bits (Morton / Z-order). Accepts the same types and dimensions as hilbert_encode. Signed and floating-point values are encoded by their bit patterns without normalizing numeric distance.",
+    "description": "Encode coordinates into one unsigned integer by interleaving their bits (Morton / Z-order). Accepts the same types, dimensions and argument forms as hilbert_encode. Keys sort like the coordinates, including negative and floating-point values.",
     "examples": [
       {
-        "description": "Order points by the Morton (Z-order) curve",
-        "code": "SELECT x, y, morton_encode([x, y]::UINTEGER[2]) AS morton\nFROM (VALUES (1, 1), (1, 2), (2, 1), (6, 7), (7, 6)) AS t(x, y)\nORDER BY morton;"
+        "description": "Order nonnegative integer coordinates by their Morton (Z-order) curve key",
+        "code": "SELECT x, y, morton_encode([x, y]::UINTEGER[2]) AS morton\nFROM (VALUES (1, 1), (1, 2), (2, 1), (6, 7), (7, 6)) AS t(x, y)\nORDER BY morton;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "x",
+              "align": "left"
+            },
+            {
+              "name": "y",
+              "align": "left"
+            },
+            {
+              "name": "morton",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "1",
+              "1",
+              "3"
+            ],
+            [
+              "1",
+              "2",
+              "6"
+            ],
+            [
+              "2",
+              "1",
+              "9"
+            ],
+            [
+              "6",
+              "7",
+              "61"
+            ],
+            [
+              "7",
+              "6",
+              "62"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Pass coordinates as separate arguments, including negative values",
+        "code": "SELECT x, y, morton_encode(x, y) AS key\nFROM (VALUES (-3, 2), (0, 0), (4, -1)) AS t(x, y)\nORDER BY key;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "x",
+              "align": "left"
+            },
+            {
+              "name": "y",
+              "align": "left"
+            },
+            {
+              "name": "key",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "-3",
+              "2",
+              "7686143364045646502"
+            ],
+            [
+              "4",
+              "-1",
+              "10760600709663905141"
+            ],
+            [
+              "0",
+              "0",
+              "13835058055282163712"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Encode two dates",
+        "code": "SELECT morton_encode(DATE '2024-03-01', DATE '1965-07-04') AS key;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "key",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "10760600710210085182"
+            ]
+          ]
+        }
       }
     ],
     "relatedFunctions": [
       "morton_decode",
+      "morton_encode_bounded",
       "hilbert_encode"
     ]
   },
@@ -62,23 +609,386 @@
     "categories": [
       "Morton (Z-order)"
     ],
-    "description": "Recover component values from a Morton-encoded key. Supply the original dimension count; use (return_float, return_unsigned) = (false, true) for unsigned integers, (false, false) for signed integers, or (true, false) for floats. Preserve the encoded key’s SQL type. Community build 6435106 rejects one-dimensional signed-integer decoding; v1.5 source commit a92ec61 (extension version 2026100701) fixes it, and the DuckDB 2.0 builds in the Query.Farm repository include the fix. Older community binaries may still be affected. Decoding a UINTEGER key as floating point requires num_elements = 1; other counts raise an error.",
+    "description": "Recover coordinates from a Morton (Z-order) curve key. Name the encoded type: morton_decode(key, 'DOUBLE[2]'), 'DATE[2]', or a scalar type for one dimension. The original form takes the dimension count and (return_float, return_unsigned): (false, true) for unsigned integers, (false, false) for signed integers, (true, false) for floats. Signedness must match the encoded values. Preserve the key's SQL type.",
     "examples": [
       {
-        "description": "Round-trip an encoded integer back to its components (num_elements, return_float, return_unsigned)",
-        "code": "SELECT morton_decode(morton_encode([10, 20]::UINTEGER[2]), 2, false, true) AS roundtrip;"
+        "description": "Decode into a named type",
+        "code": "SELECT morton_decode(morton_encode([-1.5, 2.25]::DOUBLE[2]), 'DOUBLE[2]') AS roundtrip;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "roundtrip",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "[-1.5, 2.25]"
+            ]
+          ]
+        }
       },
       {
-        "description": "Round-trip signed integer coordinates with return_unsigned = false",
-        "code": "SELECT morton_decode(morton_encode([-10, 20]::INTEGER[2]), 2, false, false) AS roundtrip;"
+        "description": "Decode dates",
+        "code": "SELECT d[1] AS first_date, d[2] AS second_date\nFROM (SELECT morton_decode(morton_encode(DATE '2024-03-01', DATE '1965-07-04'), 'DATE[2]') AS d);",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "first_date",
+              "align": "left"
+            },
+            {
+              "name": "second_date",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "2024-03-01",
+              "1965-07-04"
+            ]
+          ]
+        }
       },
       {
-        "description": "Round-trip floating-point values with return_float = true",
-        "code": "SELECT morton_decode(morton_encode([-1.5, 2.25]::DOUBLE[2]), 2, true, false) AS roundtrip;"
+        "description": "Original form: num_elements, return_float, return_unsigned",
+        "code": "SELECT morton_decode(morton_encode([10, 20]::UINTEGER[2]), 2, false, true) AS roundtrip;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "roundtrip",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "[10, 20]"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Signed integers need return_unsigned = false",
+        "code": "SELECT morton_decode(morton_encode([-10, 20]::INTEGER[2]), 2, false, false) AS roundtrip;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "roundtrip",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "[-10, 20]"
+            ]
+          ]
+        }
       }
     ],
     "relatedFunctions": [
-      "morton_encode"
+      "morton_encode",
+      "morton_decode_bounded"
+    ]
+  },
+  {
+    "name": "morton_encode_bounded",
+    "categories": [
+      "Morton (Z-order)"
+    ],
+    "description": "Scale each DOUBLE coordinate from [min, max] onto a grid of 2^bits cells and encode the cell with the Morton (Z-order) curve. Returns the narrowest unsigned integer that holds dimensions × bits; every cell gets a distinct key from 0 to 2^(dimensions × bits) − 1. Values outside the bounds are clamped to the edge cells; NaN is an error. Up to 64 bits for 1–2 dimensions, 32 for 3–4, 16 for 5–8 and 8 for 9–16. A GEOMETRY value with 2-D bounds is encoded by the centre of its bounding box; empty geometries give NULL.",
+    "examples": [
+      {
+        "description": "Quantize a point in a 100 × 100 area to 16 bits per axis",
+        "code": "SELECT morton_encode_bounded([12.5, 40.25]::DOUBLE[2], [0, 0], [100, 100], 16) AS key;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "key",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "471138372"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Encode the centre of a geometry's bounding box",
+        "code": "SELECT morton_encode_bounded('POLYGON ((10 10, 20 10, 20 30, 10 30, 10 10))'::GEOMETRY, [0, 0], [100, 100], 16) AS key;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "key",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "221064493"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "morton_decode_bounded",
+      "morton_ranges_bounded",
+      "morton_encode_latlon"
+    ]
+  },
+  {
+    "name": "morton_decode_bounded",
+    "categories": [
+      "Morton (Z-order)"
+    ],
+    "description": "Decode a key from morton_encode_bounded with the same bounds and bits into the centre of its grid cell, as a DOUBLE array. The result is within half a cell of the encoded value.",
+    "examples": [
+      {
+        "description": "Recover the cell centre",
+        "code": "SELECT morton_decode_bounded(morton_encode_bounded([12.5, 40.25]::DOUBLE[2], [0, 0], [100, 100], 16), [0, 0]::DOUBLE[2], [100, 100]::DOUBLE[2], 16) AS cell_centre;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "cell_centre",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "[12.500762939453125, 40.250396728515625]"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "morton_encode_bounded"
+    ]
+  },
+  {
+    "name": "morton_encode_latlon",
+    "categories": [
+      "Morton (Z-order)"
+    ],
+    "description": "Encode a latitude/longitude pair with the Morton (Z-order) curve over a grid of 2^bits cells per axis. The default of 32 bits gives a UBIGINT key; 16 bits gives a UINTEGER. Latitude must be within [-90, 90] and longitude within [-180, 180]. Equivalent to morton_encode_bounded([lat, lon], [-90, -180], [90, 180], bits).",
+    "examples": [
+      {
+        "description": "Encode a location with the default 32 bits per axis",
+        "code": "SELECT morton_encode_latlon(52.52, 13.405) AS key;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "key",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "16197699922757988535"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Use 16 bits per axis for a smaller key",
+        "code": "SELECT morton_encode_latlon(52.52, 13.405, 16) AS key;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "key",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "3771320898"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "morton_decode_latlon",
+      "morton_encode_bounded"
+    ]
+  },
+  {
+    "name": "morton_decode_latlon",
+    "categories": [
+      "Morton (Z-order)"
+    ],
+    "description": "Decode a key from morton_encode_latlon with the same bits (default 32) into the centre of its grid cell, as STRUCT(lat DOUBLE, lon DOUBLE).",
+    "examples": [
+      {
+        "description": "Round-trip a location",
+        "code": "SELECT morton_decode_latlon(morton_encode_latlon(52.52, 13.405)) AS decoded;",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "decoded",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "{'lat': 52.520000010263175, 'lon': 13.40500000398606}"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "morton_encode_latlon"
+    ]
+  },
+  {
+    "name": "morton_ranges",
+    "categories": [
+      "Morton (Z-order)"
+    ],
+    "description": "Table function returning the sorted, disjoint key ranges (lo, hi) of morton_encode that cover the box between min_point and max_point. The points are arrays of the encoded type. The cover is exact until max_ranges (default 64) is reached, then a superset that never misses a key in the box. Intended for systems that store or index only the key; inside DuckDB, a coordinate filter on key-sorted data is faster.",
+    "examples": [
+      {
+        "description": "Ranges covering a small box",
+        "code": "SELECT * FROM morton_ranges([2, 3]::UTINYINT[2], [5, 6]::UTINYINT[2]);",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "lo",
+              "align": "left"
+            },
+            {
+              "name": "hi",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "13",
+              "13"
+            ],
+            [
+              "15",
+              "15"
+            ],
+            [
+              "24",
+              "28"
+            ],
+            [
+              "30",
+              "30"
+            ],
+            [
+              "37",
+              "37"
+            ],
+            [
+              "39",
+              "39"
+            ],
+            [
+              "48",
+              "52"
+            ],
+            [
+              "54",
+              "54"
+            ]
+          ]
+        }
+      },
+      {
+        "description": "Cap the number of ranges; the cover then includes some keys outside the box",
+        "code": "SELECT count(*) AS ranges, sum(hi - lo + 1) AS keys FROM morton_ranges([2, 3]::UTINYINT[2], [100, 120]::UTINYINT[2], 4);",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "ranges",
+              "align": "left"
+            },
+            {
+              "name": "keys",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "4",
+              "13750"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "morton_encode",
+      "morton_ranges_bounded"
+    ]
+  },
+  {
+    "name": "morton_ranges_bounded",
+    "categories": [
+      "Morton (Z-order)"
+    ],
+    "description": "Table function returning the key ranges (lo, hi) of morton_encode_bounded, with the given bounds and bits, that cover the box between min_point and max_point. Exact at grid-cell resolution until max_ranges (default 64) is reached, then a superset; filter fetched rows on their coordinates.",
+    "examples": [
+      {
+        "description": "At most 8 ranges for a box on a 256 × 256 grid",
+        "code": "SELECT * FROM morton_ranges_bounded([10, 10], [20, 30], [0, 0], [100, 100], 8, 8);",
+        "outputTable": {
+          "columns": [
+            {
+              "name": "lo",
+              "align": "left"
+            },
+            {
+              "name": "hi",
+              "align": "left"
+            }
+          ],
+          "rows": [
+            [
+              "963",
+              "1023"
+            ],
+            [
+              "1666",
+              "2047"
+            ],
+            [
+              "2369",
+              "2559"
+            ],
+            [
+              "2881",
+              "3679"
+            ],
+            [
+              "3840",
+              "3935"
+            ],
+            [
+              "4738",
+              "4858"
+            ],
+            [
+              "6144",
+              "6394"
+            ],
+            [
+              "6656",
+              "6746"
+            ]
+          ]
+        }
+      }
+    ],
+    "relatedFunctions": [
+      "morton_encode_bounded",
+      "morton_ranges"
     ]
   }
 ]

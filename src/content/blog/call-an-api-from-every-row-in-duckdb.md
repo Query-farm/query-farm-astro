@@ -2,6 +2,7 @@
 title: "Call an API From Every Row in DuckDB, Without the Loop"
 description: "A table function turns an API call into rows in your database. A LATERAL join lets every row on the left call it — and VGI makes those calls in batches."
 pubDate: 2026-09-23
+updatedDate: 2026-11-06
 author: "Query Farm Team"
 tags: ["DuckDB", "VGI", "SQL", "Performance"]
 draft: false
@@ -49,6 +50,8 @@ That is the easy half. The hard half is making it fast when the function on the 
 </figure>
 
 Every SQL example below has a **Try it in your browser** button. It runs the query in a WebAssembly build of DuckDB ([Haybarn](/products/haybarn/)) against a hosted [Open-Meteo](https://open-meteo.com/) VGI service, the same one used in [VGI's live tour](/vgi/#tour). The first run downloads the engine, so it may take a few seconds.
+
+To run them natively, use Haybarn or DuckDB 2.0 with VGI [installed from the Query.Farm repository](/vgi/getting-started/#install-vgi); the batching described below works in both. One difference: most of these examples pass named arguments (`count := 3`) to a function whose other argument comes from the row on the left. DuckDB 2.0.0 can't bind that yet ([duckdb/duckdb#27833](https://github.com/duckdb/duckdb/pull/27833) fixes it after 2.0.0), so in DuckDB leave the named arguments out, as in `LATERAL m.main.geocoding(p.city)`, or run the example in Haybarn.
 
 ## A table function returns a table
 

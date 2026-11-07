@@ -24,6 +24,7 @@
 import * as duckdb from "@haybarn/haybarn-wasm";
 import { haybarnBundles } from './haybarn-bundles';
 import { createHaybarnWorker } from './haybarn-worker';
+import { namesToPrefetch, type ExtensionRef } from './extension-scan';
 
 export interface QueryResult {
   ok: boolean;
@@ -49,10 +50,12 @@ export function installFromClause(source: string): string {
 let enginePromise: Promise<Engine> | null = null;
 
 /** Idempotent engine boot. Resolves once AsyncDuckDB is instantiated and the
- *  control connection is open. Safe to await from many shells on one page. */
-export function ensureEngine(): Promise<Engine> {
+ *  control connection is open. Safe to await from many shells on one page.
+ *  The first caller can name the extensions it's about to load, so they're
+ *  downloaded in parallel with the one the boot itself needs. */
+export function ensureEngine(extensions: ExtensionRef[] = []): Promise<Engine> {
   if (!enginePromise) {
-    enginePromise = boot().catch((e) => {
+    enginePromise = boot(extensions).catch((e) => {
       enginePromise = null; // allow retry after a failed boot
       throw e;
     });
@@ -60,7 +63,7 @@ export function ensureEngine(): Promise<Engine> {
   return enginePromise;
 }
 
-async function boot(): Promise<Engine> {
+async function boot(extensions: ExtensionRef[]): Promise<Engine> {
   const bundle = await duckdb.selectBundle(haybarnBundles);
   const worker = await createHaybarnWorker(bundle.mainWorker!);
   const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
@@ -76,6 +79,8 @@ async function boot(): Promise<Engine> {
 
   const conn = await db.connect();
   const controlConnId = conn.useUnsafe((_db: unknown, id: number) => id);
+
+  await prefetchExtensions(db, controlConnId, [{ name: "json" }, ...extensions]);
 
   // Eagerly load `json`: many extensions return JSON-typed columns, whose
   // Arrow serialization needs the json extension registered.
@@ -98,12 +103,20 @@ const extensionLoads = new Map<string, Promise<{ ok: boolean; error?: string }>>
 // and a second prefetch sent while they wait can run them out of order.
 let extensionQueue: Promise<unknown> = Promise.resolve();
 
+function enqueue<T>(task: () => Promise<T>): Promise<T> {
+  const run = extensionQueue.then(task);
+  extensionQueue = run;
+  return run;
+}
+
 /** Install + load an extension once, engine-wide. Subsequent calls for the same
  *  name return the cached result. Extension functions become visible to every
- *  session (connection) on the engine. */
+ *  session (connection) on the engine. `alsoNeeded` names extensions the caller
+ *  will load itself afterward; they're only prefetched here. */
 export function ensureExtension(
   name: string,
   source: string,
+  alsoNeeded: ExtensionRef[] = [],
 ): Promise<{ ok: boolean; error?: string }> {
   // Core-SQL tutorials need the engine, without installing a pretend extension.
   if (name === 'DuckDB' && source === 'builtin') {
@@ -111,13 +124,13 @@ export function ensureExtension(
   }
   let pending = extensionLoads.get(name);
   if (!pending) {
-    pending = extensionQueue.then(async () => {
+    pending = enqueue(async () => {
       const { db, controlConnId } = await ensureEngine();
       try {
         // INSTALL downloads nothing in the browser, but its `FROM` sets the
         // repository LOAD's URL is built from, so it must precede the prefetch.
         await db.runQuery(controlConnId, `INSTALL ${name} ${installFromClause(source)}`);
-        await prefetchExtension(db, name);
+        await prefetchExtensions(db, controlConnId, [{ name }, ...alsoNeeded]);
         await db.runQuery(controlConnId, `LOAD ${name}`);
         return { ok: true };
       } catch (e: unknown) {
@@ -125,20 +138,35 @@ export function ensureExtension(
         return { ok: false, error };
       }
     });
-    extensionQueue = pending;
     extensionLoads.set(name, pending);
+  } else if (alsoNeeded.length) {
+    // An earlier shell loaded this one, but this example needs more.
+    const loaded = pending;
+    return enqueue(async () => {
+      const { db, controlConnId } = await ensureEngine();
+      await prefetchExtensions(db, controlConnId, alsoNeeded);
+    }).then(() => loaded);
   }
   return pending;
 }
 
-/** Download, hash (WebCrypto) and compile the extension in the worker, so LOAD
- *  only checks the signature and links. A failed prefetch leaves the download
- *  to LOAD, which reports any real error. */
-async function prefetchExtension(db: duckdb.AsyncDuckDB, name: string): Promise<void> {
+/** Download, hash (WebCrypto) and compile extensions in parallel in the worker,
+ *  so each LOAD only checks the signature and links. A failed prefetch leaves
+ *  the download to LOAD, which reports any real error. */
+async function prefetchExtensions(
+  db: duckdb.AsyncDuckDB,
+  connId: number,
+  extensions: ExtensionRef[],
+): Promise<void> {
   try {
-    await db.prefetchExtensions([name]);
+    for (const { name, source } of extensions) {
+      // INSTALL downloads nothing in the browser, but its `FROM` sets the
+      // repository the prefetch builds its URL from.
+      if (source) await db.runQuery(connId, `INSTALL ${name} ${installFromClause(source)}`);
+    }
+    await db.prefetchExtensions(namesToPrefetch(extensions));
   } catch (error) {
-    console.warn(`[repl] prefetch of ${name} failed; LOAD will download it`, error);
+    console.warn(`[repl] prefetch failed; LOAD will download the extensions`, error);
   }
 }
 

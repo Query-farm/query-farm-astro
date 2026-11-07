@@ -16,6 +16,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
 
@@ -50,37 +51,26 @@ jobs:
 
       - run: npm run test:haybarn-exports
 
-      - name: Run browser tests
+      - name: Run browser smoke tests
         id: browser_tests
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/browser-results.json
-        run: npm run test:haybarn-browser -- --workers=4 --reporter=line,json
+        run: npm run test:browser:smoke -- --workers=4 --reporter=line,json
 
-      - name: Upload failed browser test results
-        if: ${{ !cancelled() && steps.browser_tests.outcome == 'failure' }}
+      - name: Upload browser test results and timings
+        if: ${{ !cancelled() && (steps.browser_tests.outcome == 'success' || steps.browser_tests.outcome == 'failure') }}
         uses: actions/upload-artifact@v7
         with:
           name: browser-test-results
           path: test-results/
+          include-hidden-files: true
+          if-no-files-found: warn
           retention-days: 7
 
       - run: npm run check:pages-functions
 
-  deploy:
-    needs: validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci
-
-      - run: npm run build
-
+      # Reuse the validated dist/ and installed dependencies on this runner.
+      # A separate job would rebuild or transfer nearly 1 GB of site assets.
       - name: Deploy to Cloudflare Pages
         id: deploy
         uses: cloudflare/wrangler-action@v4

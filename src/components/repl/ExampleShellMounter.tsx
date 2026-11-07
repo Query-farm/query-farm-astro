@@ -24,6 +24,7 @@ const TRY_LABEL = `<span class="example-try-icon">${PLAY_ICON}</span><span>Try i
 const HIDE_LABEL = `<span class="example-try-icon">${HIDE_ICON}</span><span>Hide</span>`;
 const RUN_ICON_LABEL = `<span class="example-toolbar-icon">${PLAY_ICON}</span><span>Run example</span>`;
 const CLOSE_ICON_LABEL = `<span class="example-toolbar-icon">${HIDE_ICON}</span><span>Hide</span>`;
+const SESSION_LABEL = `<span class="example-toolbar-icon">${PLAY_ICON}</span><span>Try in browser</span>`;
 
 const STYLE = `
 /* The Try button used to live as a small pill inside the code block's top
@@ -331,6 +332,9 @@ interface OpenShell {
 interface Props {
   extensionName: string;
   installSource: string;
+  /** Open an interactive session with the extension loaded, without executing
+   *  contributor examples that may depend on files, services, or credentials. */
+  mode?: "example" | "session";
   /** Put a compact run icon beside Copy instead of a repeated CTA below each
    *  block. The below-block control remains the default for narrative pages
    *  whose bespoke examples portal additional actions into that row. */
@@ -340,19 +344,26 @@ interface Props {
   fixtures?: string | null;
   /** Restrict runnable controls when an article also contains illustrative SQL. */
   codeBlockSelector?: string;
+  /** Additional page actions open the first selected block's shell. Their
+   *  anchor href remains usable before hydration or without JavaScript. */
+  launchSelector?: string;
 }
 
 export default function ExampleShellMounter({
   extensionName,
   installSource,
   fixtures,
+  mode = "example",
   controls = "below",
   codeBlockSelector = 'pre[data-language="sql"]',
+  launchSelector,
 }: Props) {
   const [shells, setShells] = useState<OpenShell[]>([]);
 
   useEffect(() => {
     ensureStyle();
+    const runLabel = mode === "session" ? SESSION_LABEL : RUN_ICON_LABEL;
+    const runName = mode === "session" ? `Try ${extensionName} in your browser` : "Run example in your browser";
     const cleanupByBlock = new Map<HTMLElement, () => void>();
     let counter = 0;
 
@@ -420,9 +431,9 @@ export default function ExampleShellMounter({
         let runBar: HTMLElement | null = null;
         if (controls === "toolbar") {
           btn.className = "code-toolbar-button example-toolbar-run-button";
-          btn.setAttribute("aria-label", "Run example in your browser");
-          btn.title = "Run example";
-          btn.innerHTML = RUN_ICON_LABEL;
+          btn.setAttribute("aria-label", runName);
+          btn.title = mode === "session" ? "Try in browser" : "Run example";
+          btn.innerHTML = runLabel;
           bar.appendChild(btn);
         } else {
           // Narrative pages keep the larger CTA row: bespoke examples such as
@@ -431,7 +442,7 @@ export default function ExampleShellMounter({
           runBar.className = "example-run-bar";
           btn.className = "example-try-button";
           if (isOnDarkGround(blockRoot.parentElement ?? blockRoot)) btn.classList.add("is-on-dark");
-          btn.setAttribute("aria-label", "Run this example in an in-browser shell");
+          btn.setAttribute("aria-label", mode === "session" ? runName : "Run this example in an in-browser shell");
           btn.innerHTML = TRY_LABEL;
           runBar.appendChild(btn);
           blockRoot.insertAdjacentElement("afterend", runBar);
@@ -439,36 +450,59 @@ export default function ExampleShellMounter({
 
         // One reusable shell container per block, appended/removed on toggle.
         const container = document.createElement("div");
+        const launchers = launchSelector && id === 1
+          ? [...document.querySelectorAll<HTMLAnchorElement>(launchSelector)] : [];
+        if (launchers.length) {
+          container.id = `browser-shell-${extensionName}-${id}`;
+          launchers.forEach(link => {
+            link.setAttribute('aria-controls', container.id);
+            link.setAttribute('aria-expanded', 'false');
+          });
+        }
+        const reveal = () => requestAnimationFrame(() => {
+          if (container.isConnected) container.scrollIntoView({
+            behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'nearest',
+          });
+        });
 
         const close = () => {
           if (staticResult) staticResult.hidden = staticResultWasHidden;
-          btn.innerHTML = controls === "toolbar" ? RUN_ICON_LABEL : TRY_LABEL;
+          btn.innerHTML = controls === "toolbar" ? runLabel : TRY_LABEL;
           btn.setAttribute("aria-expanded", "false");
+          launchers.forEach(link => link.setAttribute('aria-expanded', 'false'));
           if (controls === "toolbar") {
-            btn.setAttribute("aria-label", "Run example in your browser");
-            btn.title = "Run example";
+            btn.setAttribute("aria-label", runName);
+            btn.title = mode === "session" ? "Try in browser" : "Run example";
           }
           setShells((prev) => prev.filter((s) => s.id !== id));
           container.remove();
         };
         const open = () => {
+          if (container.parentElement) { reveal(); return; }
           if (staticResult) staticResult.hidden = true;
           const shellAnchor = controls === "toolbar" ? blockRoot : runBar;
           shellAnchor?.insertAdjacentElement("afterend", container);
           btn.innerHTML = controls === "toolbar" ? CLOSE_ICON_LABEL : HIDE_LABEL;
           btn.setAttribute("aria-expanded", "true");
+          launchers.forEach(link => link.setAttribute('aria-expanded', 'true'));
           if (controls === "toolbar") {
             btn.setAttribute("aria-label", "Hide the in-browser shell");
             btn.title = "Hide browser shell";
           }
           setShells((prev) =>
             prev.some((s) => s.id === id) ? prev : [...prev, {
-              id, container, sql, onClose: close,
+              id, container, sql: mode === "session" ? "" : sql, onClose: close,
               exampleId: pre.closest<HTMLElement>('[data-article-example]')?.dataset.articleExample,
             }],
           );
-          container.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          reveal();
         };
+
+        const launch = (event: Event) => { event.preventDefault(); open(); };
+        launchers.forEach(link => link.addEventListener('click', launch));
+        // A click before React has hydrated follows the anchor. Honor it once
+        // the runner is ready, so the reader does not have to click twice.
+        if (launchers.some(link => link.hash && link.hash === location.hash)) open();
 
         btn.addEventListener("click", () => {
           if (container.parentElement) close();
@@ -477,6 +511,11 @@ export default function ExampleShellMounter({
 
         cleanupByBlock.set(pre, () => {
           close();
+          launchers.forEach(link => {
+            link.removeEventListener('click', launch);
+            link.removeAttribute('aria-controls');
+            link.removeAttribute('aria-expanded');
+          });
           runBar?.remove();
           btn.remove();
           stopAdopting();
@@ -513,7 +552,7 @@ export default function ExampleShellMounter({
       cleanupByBlock.forEach(cleanup => cleanup());
       cleanupByBlock.clear();
     };
-  }, [extensionName, installSource, fixtures, controls, codeBlockSelector]);
+  }, [extensionName, installSource, fixtures, mode, controls, codeBlockSelector, launchSelector]);
 
   return (
     <>
@@ -523,6 +562,7 @@ export default function ExampleShellMounter({
             extensionName={extensionName}
             installSource={installSource}
             fixtures={fixtures}
+            mode={mode}
             sql={s.sql}
             exampleId={s.exampleId}
             onClose={s.onClose}

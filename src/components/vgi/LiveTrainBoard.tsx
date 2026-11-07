@@ -261,7 +261,7 @@ export default function LiveTrainBoard({ sql }: Props) {
       const { tableFromIPC } = arrowModule as any;
       tableFromIPCRef.current = tableFromIPC;
 
-      await ensureEngine();
+      await ensureEngine([{ name: "VGI", source: "community" }]);
       const [ext, session] = await Promise.all([
         ensureExtension("VGI", "community"),
         createSession(),

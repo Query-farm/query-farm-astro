@@ -2,7 +2,7 @@ import Callout from '../../../components/docs/Callout.astro';
 
 ## What you can do with one query
 
-Replace a multi-column `ORDER BY` with one space-filling-curve sort key. For nonnegative integer coordinates, compute the key and order by it:
+Replace a multi-column `ORDER BY` with one space-filling-curve sort key:
 
 ```sql
 SELECT x, y, z, hilbert_encode([x, y, z]::UINTEGER[3]) AS hilbert
@@ -10,50 +10,103 @@ FROM points
 ORDER BY hilbert;
 ```
 
-Use that ordering when writing Parquet to group nearby coordinates. This can improve row-group pruning for queries that filter several dimensions. It does not guarantee that every nearby pair becomes adjacent or that every row group has tight bounds on every column.
+Use that ordering when writing Parquet or loading a table so that nearby coordinates end up in the same row groups. Queries that filter several dimensions can then skip more data using min/max statistics. Sorting does not guarantee that every nearby pair becomes adjacent, or that every row group has tight bounds on every column.
 
-<Callout type="note" title="Prepare coordinates for numeric locality">
-Lindel accepts signed integers, unsigned integers, and floating-point values, but encodes their **bit patterns directly**. It does not normalize signed or floating-point numeric distance. For spatial sorting, choose a coordinate range and resolution, then shift and quantize values to nonnegative integers before encoding.
-
-For latitude in `[-90, 90]` and longitude in `[-180, 180]`, for example, use `round((lat + 90) * 1e6)::UINTEGER` and `round((lon + 180) * 1e6)::UINTEGER`. The offsets make negative coordinates safe to cast; the scale retains six decimal places in degrees. This is an angular grid, not a uniform distance grid on the Earth.
+<Callout type="note" title="Keys sort like the values">
+Signed integers, floating-point numbers, dates, timestamps and decimals are mapped to order-preserving bits before encoding. A box that crosses zero stays a box on the curve, and the key of a one-dimensional input sorts exactly like the input. Decoding a signed key needs the matching signedness: use `return_unsigned = false`, or the typed form `hilbert_decode(key, 'INTEGER[2]')`.
 </Callout>
 
 ## Hilbert vs Morton
 
-Both [`hilbert_encode`](#hilbert_encode) and [`morton_encode`](#morton_encode) take a fixed-size numeric array and return one unsigned integer.
+Both [`hilbert_encode`](#hilbert_encode) and [`morton_encode`](#morton_encode) take coordinates and return one unsigned integer.
 
-- **Hilbert** follows a space-filling curve with no long jumps between consecutive positions on its integer grid. It is a useful starting point for locality-oriented sorting.
+- **Hilbert** follows a space-filling curve with no long jumps between consecutive positions on its grid. It is a useful starting point for locality-oriented sorting.
 - **Morton / Z-order** interleaves the coordinate bits. Its simpler mapping has jumps at quadrant boundaries.
 
 Compare the resulting file layout and encoding cost on your own data. Neither curve guarantees better pruning for every distribution or query.
 
 ## Type coverage and output width
 
-Both encoders support these element types and array sizes:
+Coordinates can be passed as a fixed-size array, `hilbert_encode([x, y]::INTEGER[2])`, or as two or more separate arguments, `hilbert_encode(x, y)`. Separate arguments are cast to their common type, and a `NULL` argument gives a `NULL` key. Array elements cannot be `NULL`.
 
-| Element type | Dimensions |
-|---|---|
-| `TINYINT`, `UTINYINT` | 1–16 |
-| `SMALLINT`, `USMALLINT` | 1–8 |
-| `INTEGER`, `UINTEGER`, `FLOAT` | 1–4 |
-| `BIGINT`, `UBIGINT`, `DOUBLE` | 1–2 |
+| Coordinate width | Types | Dimensions |
+|---|---|---|
+| 8 bits | `TINYINT`, `UTINYINT`, `BOOLEAN`, `ENUM` with up to 256 values | 1–16 |
+| 16 bits | `SMALLINT`, `USMALLINT`, `DECIMAL(1–4, s)`, `ENUM` with up to 65,536 values | 1–8 |
+| 32 bits | `INTEGER`, `UINTEGER`, `FLOAT`, `DATE`, `DECIMAL(5–9, s)`, larger `ENUM` types | 1–4 |
+| 64 bits | `BIGINT`, `UBIGINT`, `DOUBLE`, `TIME`, `TIMESTAMP` (all precisions and `WITH TIME ZONE`), `DECIMAL(10–18, s)` | 1–2 |
 
-`HUGEINT` and `UHUGEINT` are not supported as input array element types. The result uses the smallest unsigned integer type that fits *element bit width × number of dimensions*, up to 128 bits:
+`HUGEINT`, `UHUGEINT` and `DECIMAL` with more than 18 digits are not supported. The result is the smallest unsigned integer type that fits *coordinate width × number of dimensions*, up to 128 bits:
 
-| Input array | Total bits | Output type |
+| Input | Total bits | Output type |
 |---|---|---|
 | `UTINYINT[2]` | 16 | `USMALLINT` |
 | `UINTEGER[2]` | 64 | `UBIGINT` |
 | `UINTEGER[3]` | 96 | `UHUGEINT` |
 | `DOUBLE[2]` | 128 | `UHUGEINT` |
+| `DATE, DATE` | 64 | `UBIGINT` |
 
-Cast arrays explicitly: `[10, 20]` is a `LIST`; `[10, 20]::UINTEGER[2]` is a fixed-size `ARRAY`. Array elements cannot be `NULL`.
+Cast arrays explicitly: `[10, 20]` is a `LIST`; `[10, 20]::UINTEGER[2]` is a fixed-size `ARRAY`.
 
-Choose coordinate units and precision deliberately. A degree of latitude, a meter of altitude, and a second of time are different measures; Lindel does not decide their relative importance for you. Keep the same transform when writing subsequent batches.
+Choose coordinate units and precision deliberately. A degree of latitude, a meter of altitude and a second of time are different measures, and Lindel does not decide their relative importance for you. Wide types also spread keys thinly: two `DOUBLE` coordinates use a 128-bit key even when the data covers a small area. For known value ranges, the bounded functions below give denser keys.
+
+## Bounded grids and latitude/longitude
+
+[`hilbert_encode_bounded`](#hilbert_encode_bounded) quantizes `DOUBLE` coordinates onto a grid of `2^bits` cells per dimension between per-dimension minimum and maximum values, then encodes the cell:
+
+```sql
+SELECT hilbert_encode_bounded([12.5, 40.25]::DOUBLE[2], [0, 0], [100, 100], 16) AS key;
+-- 848669286
+```
+
+The key is the smallest unsigned type that holds *dimensions × bits*. Every cell of the grid gets a distinct key from `0` to `2^(dimensions × bits) − 1`. Values outside the bounds are clamped to the edge cells, and `NaN` is an error. [`hilbert_decode_bounded`](#hilbert_decode_bounded) returns the centre of the key's cell, which is within half a cell of the original value.
+
+[`hilbert_encode_latlon`](#hilbert_encode_latlon) is the same encoding with latitude and longitude bounds and 32 bits per axis by default (a `UBIGINT` key, roughly a centimetre of resolution). Out-of-range coordinates are an error rather than being clamped:
+
+```sql
+SELECT hilbert_encode_latlon(52.52, 13.405) AS berlin,
+       hilbert_decode_latlon(hilbert_encode_latlon(52.52, 13.405)) AS decoded;
+-- 13413847537087438956, {'lat': 52.520000010263175, 'lon': 13.40500000398606}
+```
+
+The bounded encoders also accept a `GEOMETRY` value with two-dimensional bounds and encode the centre of its bounding box. A point encodes as itself, and an empty geometry gives `NULL`.
+
+Because grid keys of different resolutions nest, a key's ancestor `k` levels up is `key >> (dimensions × k)`. The keys inside a cell form the contiguous range from `key << (dimensions × k)` to `((key + 1) << (dimensions × k)) − 1`.
+
+## Box queries as key ranges
+
+[`hilbert_ranges`](#hilbert_ranges) is a table function that turns a box into the sorted, disjoint key ranges covering it:
+
+```sql
+SELECT * FROM hilbert_ranges([2, 3]::UTINYINT[2], [5, 6]::UTINYINT[2]);
+```
+
+| lo | hi |
+|---:|---:|
+| 9 | 10 |
+| 28 | 28 |
+| 31 | 35 |
+| 45 | 46 |
+| 50 | 55 |
+
+The ranges are exact when the `max_ranges` budget (64 by default) allows it. With a smaller budget, the function merges the closest ranges. The result then covers some keys outside the box, but never misses one inside it. [`hilbert_ranges_bounded`](#hilbert_ranges_bounded) does the same for keys from `hilbert_encode_bounded`.
+
+<Callout type="note" title="In DuckDB, filter on the coordinates instead">
+These ranges are for systems that store or index only the key: key-value stores, other engines, or files partitioned by key. Inside DuckDB, sort by the key and filter on the original columns. In our benchmark, joining against `hilbert_ranges` was never faster than a plain coordinate filter on curve-sorted data, and up to 8× slower on large boxes.
+</Callout>
 
 ## Decoding
 
-[`hilbert_decode`](#hilbert_decode) and [`morton_decode`](#morton_decode) recover the component values using the matching curve. Three trailing arguments specify the number of dimensions, whether to return floats, and whether to return unsigned integers:
+Decode straight into a named type with [`hilbert_decode(key, 'TYPE[n]')`](#hilbert_decode). The target type sets the coordinate width and the order-preserving transform, so it works for every type the encoders accept:
+
+```sql
+SELECT hilbert_decode(hilbert_encode(DATE '2024-03-01', DATE '1965-07-04'), 'DATE[2]');
+-- [2024-03-01, 1965-07-04]
+```
+
+A bare type such as `'INTEGER'` means one dimension. Keys that are too large for the target type, or that decode to an invalid `BOOLEAN` or `ENUM` value, are errors.
+
+The original form takes three trailing arguments: the number of dimensions, whether to return floats, and whether to return unsigned integers:
 
 ```sql
 SELECT hilbert_decode(
@@ -65,20 +118,19 @@ SELECT hilbert_decode(
 -- [5, 8]
 ```
 
-For signed integers, use `false, false`; for floating-point values, use `true, false`. Preserve the encoded key's original SQL type: the decoder uses its width together with the dimension count to determine the component width. If you shifted or quantized coordinates before encoding, decoding returns those transformed coordinates.
+For signed integers, use `false, false`. For floating-point values, use `true, false`. Preserve the encoded key's original SQL type, because the decoder uses its width together with the dimension count to determine the coordinate width. If you shifted or quantized coordinates before encoding, decoding returns those transformed coordinates.
 
-Community build `6435106` rejects one-dimensional signed-integer decoding. The [v1.5 source fix `a92ec61`](https://github.com/Query-farm/lindel/commit/a92ec61) (extension version `2026100701`) supports signed round-trips in one dimension and restores four-dimensional 8-bit decoding. Older installed community binaries may still have these limitations. Signed two-dimensional, unsigned one-dimensional, and floating-point one-dimensional round-trips work in the older build too.
 
 ## Why ordering can help Parquet
 
-Parquet stores per-row-group min/max statistics. For a query such as `WHERE lat BETWEEN 40 AND 41 AND lon BETWEEN -74 AND -73`, a reader can skip a row group if its statistics rule out either condition. Grouping points by a Hilbert or Morton key can make those ranges more selective across multiple columns.
+Parquet stores per-row-group min/max statistics, and DuckDB keeps the same zone maps for its own tables. For a query such as `WHERE lat BETWEEN 40 AND 41 AND lon BETWEEN -74 AND -73`, a reader can skip a row group if its statistics rule out either condition. Grouping points by a Hilbert or Morton key makes those ranges more selective across multiple columns.
 
-The improvement depends on coordinate preparation, data distribution, row-group size, and query predicates. Measure scanned rows or bytes, query time, and file size against the existing layout. Sorting does not guarantee smaller files or a particular speedup.
+In our benchmark of 20 million uniformly random points in 100,000-row groups, a small box query overlapped 2 of 200 row groups after Hilbert sorting, compared with all 200 in random order. Query time on Parquet dropped from 20 ms to 8 ms. The improvement depends on coordinate preparation, data distribution, row-group size and query predicates. Measure scanned rows or bytes, query time and file size against your existing layout.
 
-This is a **write-time ordering**, not a runtime index. Use `ORDER BY` inside the query passed to `COPY`; for changing data, sort each rewritten file or batch. Queries still filter on the original columns.
+This is a **write-time ordering**, not a runtime index. Use `ORDER BY` inside the query passed to `COPY`. For changing data, sort each rewritten file or batch. Queries still filter on the original columns.
 
 ## Compared to alternatives
 
-- **`ORDER BY a, b`** prioritizes `a`, then `b` within equal values of `a`. It can be a better fit when queries mostly filter the leading column. A curve order balances multiple coordinates in a different way.
+- **`ORDER BY a, b`** prioritizes `a`, then `b` within equal values of `a`. It can be a better fit when queries mostly filter the leading column. A curve order balances multiple coordinates.
 - **Partitioning by year or region** separates data into files or directories. Curve sorting can complement partitioning by organizing rows inside each partition.
-- **A spatial index** supports a different access pattern. Lindel computes keys; it does not create an index or automatically translate spatial predicates into encoded-key ranges.
+- **A spatial index** supports a different access pattern. Lindel computes keys and key ranges; it does not create an index.

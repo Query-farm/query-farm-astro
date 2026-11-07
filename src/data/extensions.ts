@@ -18,6 +18,7 @@ export interface Extension {
   docsUrl?: string;
   features?: string[];
   searchTerms?: string[];
+  browserRunDisabledReason?: string;
   /** Usage count from generated/usage.json (Cloudflare AE snapshot). */
   usageCount?: number;
   /** Human label for the usageCount window, e.g. "last 90 days". */
@@ -59,6 +60,7 @@ function toListingEntry(slug: string, m: ExtensionMetadata): Extension {
     docsUrl: m.docsUrl,
     features: m.features,
     searchTerms: [...(m.searchTerms ?? []), ...(m.entryPage?.tasks.map(task => task.title) ?? [])],
+    browserRunDisabledReason: m.browserRunDisabledReason,
     usageCount: m.usageStats?.count ?? usageBySlug[slug]?.count,
     usagePeriod: m.usageStats?.period ?? usageBySlug[slug]?.period,
   };

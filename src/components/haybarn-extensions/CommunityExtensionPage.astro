@@ -1,0 +1,319 @@
+---
+import { Icon } from 'astro-icon/components';
+import PageLayout from '../../layouts/PageLayout.astro';
+import PageHead from '../ui/PageHead.astro';
+import Button from '../ui/Button.astro';
+import CodeBlock from '../ui/CodeBlock.astro';
+import ExtensionPlatforms from '../products/ExtensionPlatforms.astro';
+import ExampleShellMounter from '../repl/ExampleShellMounter';
+import HaybarnSubNav from '../sections/HaybarnSubNav.astro';
+import { catalog, categories, categoryPath, directoryPath, extensions, platformLabel, type CommunityExtension } from '../../data/haybarn-extensions';
+import { communityPage } from '../../data/haybarn-extensions/sharing.mjs';
+import { artifactURL, installationSQL, maintainerExample, overviewParagraphs, platformSupport, documentationLinks, exampleContext } from '../../data/haybarn-extensions/details.mjs';
+import { supportsBrowserSession, browserSessionIssue } from '../../data/haybarn-extensions/browser.mjs';
+import { getExtensionById } from '../../data/extensions';
+
+interface Props { extension: CommunityExtension; }
+const { extension } = Astro.props;
+const { name, displayName, description, availability } = extension;
+const topics = categories.filter(category => extension.categories.includes(category.id));
+const metadata = communityPage(extension, topics[0]);
+const paragraphs = overviewParagraphs(extension.docs.extended_description).filter(text => text !== description);
+const example = maintainerExample(name, extension.docs.hello_world);
+const context = exampleContext(example?.code);
+const sourceURL = `${catalog.source.repository}/blob/${catalog.source.commit}/extensions/${name}/description.yml`;
+const repo: { github: string; ref: string; haybarn_fork?: string; haybarn_ref?: string } = extension.repo;
+const owner = repo.github.split('/')[0];
+const buildRepository = repo.haybarn_fork || repo.github;
+const buildRef = repo.haybarn_ref || repo.ref;
+const buildSource = `https://github.com/${buildRepository}/tree/${buildRef}`;
+const native = availability.some(artifact => !artifact.platform.startsWith('wasm_'));
+const wasm = availability.some(artifact => artifact.platform.startsWith('wasm_'));
+const browserDisabledReason = getExtensionById(name)?.browserRunDisabledReason || browserSessionIssue(extension);
+const browserSupported = !browserDisabledReason && supportsBrowserSession(availability);
+const platforms = platformSupport(availability);
+const checkedDate = new Date(catalog.fetchedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+const resources = [...new Map([
+  ...documentationLinks(extension.docs.extended_description).map(link => ({
+    href: link.href,
+    title: /\bfunctions?\b/i.test(link.label) ? 'Function reference' : link.label.charAt(0).toUpperCase() + link.label.slice(1),
+    description: 'Reference linked by the extension’s contributor.',
+    icon: 'book-open',
+  })),
+  { href: extension.docsUrl, title: 'Project documentation', description: 'Setup instructions and usage from the maintainer.', icon: 'book-open' },
+  ...(extension.docsUrl !== extension.repository ? [{ href: extension.repository, title: 'Source code', description: repo.github, icon: 'github-logo' }] : []),
+].map(resource => [resource.href, resource])).values()];
+const related = extensions.filter(item => item.name !== name && item.categories.some(id => extension.categories.includes(id)))
+  .sort((a, b) => b.categories.filter(id => extension.categories.includes(id)).length - a.categories.filter(id => extension.categories.includes(id)).length || a.name.localeCompare(b.name))
+  .slice(0, 4);
+const pageURL = new URL(`${extension.href}/`, Astro.site).href;
+const jsonLd = {
+  '@context': 'https://schema.org', '@type': 'TechArticle',
+  headline: metadata.title, description: metadata.description, url: pageURL,
+  mainEntityOfPage: pageURL, dateModified: catalog.fetchedAt,
+  image: new URL(metadata.ogImage, Astro.site).href,
+  about: {
+    '@type': 'SoftwareSourceCode', name: displayName, description,
+    codeRepository: extension.repository, license: extension.license,
+    programmingLanguage: extension.language, runtimePlatform: `Haybarn ${catalog.latestVersion}`,
+  },
+};
+const container = 'mx-auto w-full max-w-[1200px] px-4 sm:px-6 lg:px-8';
+---
+
+<PageLayout title={metadata.title} description={metadata.description} ogImage={metadata.ogImage} jsonLd={jsonLd}>
+  <HaybarnSubNav />
+  <PageHead variant="section" eyebrow="DuckDB community extension" title={displayName} lede={description} container={container} class="!py-7" titleClass="mt-2 text-4xl md:text-5xl text-soil-900 [overflow-wrap:anywhere]">
+    <div class="guide-meta">
+      <span>By <a href={`https://github.com/${owner}`}>{extension.publisher}</a></span>
+      <a class="release-badge" href="#availability"><span class="release-dot" aria-hidden="true"></span>Haybarn <span class="font-sans tabular-nums">{catalog.latestVersion}</span></a>
+    </div>
+    {topics.length > 0 && <nav class="category-navigation" aria-label="Extension categories">
+      <span class="category-label">{topics.length === 1 ? 'Category' : 'Categories'}</span>
+      <ul class="category-links">{topics.map(topic => <li>
+        <Button href={categoryPath(topic.id)} variant="secondary" size="sm" class="category-link">
+          <Icon name={`ph:${topic.icon}`} class="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>{topic.name}</span>
+          <Icon name="ph:arrow-right" class="h-4 w-4 shrink-0" aria-hidden="true" />
+        </Button>
+      </li>)}</ul>
+    </nav>}
+    <div class="guide-actions">
+      {browserSupported && <Button href="#browser-session" size="sm" class="browser-launch"><Icon name="ph:play-fill" class="h-4 w-4" />Try in browser</Button>}
+      <Button href="#install" size="sm" variant={browserSupported ? 'ghost' : 'primary'}>Install extension <Icon name="ph:arrow-down" class="h-4 w-4" /></Button>
+      {example && <Button href="#example" variant="ghost" size="sm">View SQL example</Button>}
+      <a class="documentation-link" href={extension.docsUrl}>Documentation <Icon name="ph:arrow-up-right" /></a>
+    </div>
+  </PageHead>
+
+  <div class:list={['community-guide', container]} data-community-guide={name}>
+    <article class="guide-body" aria-label={`${displayName} SQL guide`}>
+      <section id="install">
+        <div class="section-heading"><span class="step-label">01 / SETUP</span><h2>Install and load</h2></div>
+        <p>{native ? <>Run these commands in a <a href="/products/haybarn/install">Haybarn SQL session</a>.</> : <>Run these commands in a compatible <a href="https://shell.haybarn.query.farm">Haybarn browser session</a>.</>} The extension is available from the community repository.</p>
+        <div id={browserSupported ? 'browser-session' : undefined} class="session-anchor">
+          <CodeBlock code={installationSQL(name)} title={`Haybarn ${catalog.latestVersion} · SQL`} tryable={browserSupported} />
+        </div>
+        {browserSupported && <p class="browser-note">Try it in a temporary SQL session with <strong>{displayName}</strong> already loaded. Queries run in this tab; examples using files or services need their own setup.</p>}
+        {browserSupported && <noscript><p class="browser-note">Enable JavaScript to open the browser SQL session.</p></noscript>}
+        {wasm && browserDisabledReason && <p class="browser-note">{browserDisabledReason}</p>}
+        <p class="source-note">Using upstream DuckDB? Follow the <a href={extension.docsUrl}>maintainer’s installation instructions</a>.</p>
+      </section>
+
+      <section id="example">
+        <div class="section-heading"><span class="step-label">02 / QUERY</span><h2>Usage example</h2></div>
+        {example ? <>
+          {context.purpose && <p class="example-purpose">{context.purpose}</p>}
+          <CodeBlock code={example.code} lang={example.lang} tryable={false} title={example.lang === 'sql' ? 'SQL' : 'SQL session and output'} />
+          {context.result && <div class="example-result">
+            <div><span>Reported result</span><p>From the publisher’s example</p></div>
+            <code>{context.result}</code>
+          </div>}
+          <div class="example-source">
+            <p>Provided by <a href={sourceURL}>{extension.publisher}</a>. Not yet verified on Haybarn <span class="font-sans tabular-nums">{catalog.latestVersion}</span>.</p>
+            <a href={extension.docsUrl}>Sample data & setup <Icon name="ph:arrow-up-right" /></a>
+          </div>
+        </> : <div class="example-empty">
+          <Icon name="ph:book-open" aria-hidden="true" />
+          <div><h3>Start with the project’s examples</h3><p>The maintainer’s documentation is the starting point for usage and sample data.</p><a href={extension.docsUrl}>Open usage documentation →</a></div>
+        </div>}
+      </section>
+
+      {paragraphs.length > 0 && <section id="overview" class="secondary-section">
+        <h2>About this extension</h2>
+        {paragraphs.map(paragraph => <p>{paragraph}</p>)}
+        <p class="source-note">Project overview from the <a href={sourceURL}>community descriptor</a>.</p>
+      </section>}
+
+      <section id="sources" class="secondary-section">
+        <h2>Documentation and resources</h2>
+        <div class="resource-list">{resources.map(resource => <a href={resource.href} class="resource-link">
+          <Icon name={`ph:${resource.icon}`} class="resource-icon" aria-hidden="true" />
+          <span><strong>{resource.title}</strong><span>{resource.description}</span></span>
+          <Icon name="ph:arrow-up-right" class="resource-arrow" aria-hidden="true" />
+        </a>)}</div>
+        <details class="source-details">
+          <summary>Project and build details</summary>
+          <dl class="project-details">
+            <dt>Repository</dt><dd><a href={extension.repository}>{repo.github}</a></dd>
+            <dt>License</dt><dd>{extension.license || 'See the source repository'}</dd>
+            {extension.maintainers.length > 0 && <><dt>Maintainers</dt><dd>{extension.maintainers.join(', ')}</dd></>}
+            {extension.language && <><dt>Written in</dt><dd>{extension.language}</dd></>}
+            <dt>Build source</dt><dd><a href={buildSource}><code>{buildRef.slice(0, 12)}</code></a></dd>
+            <dt>Build definition</dt><dd><a href={sourceURL}>Community descriptor</a></dd>
+          </dl>
+        </details>
+      </section>
+    </article>
+
+    <aside class="guide-sidebar" aria-label="Extension navigation and compatibility">
+      <div class="sidebar-content">
+        <a class="back-link" href={directoryPath}><Icon name="ph:arrow-left" />Extension directory</a>
+        <nav class="page-nav" aria-label="On this page" data-pagefind-ignore>
+          <span class="nav-label">ON THIS PAGE</span>
+          <a href="#install">Install and load</a>
+          <a href="#example">Usage example</a>
+          {paragraphs.length > 0 && <a href="#overview">About this extension</a>}
+          <a href="#sources">Documentation and resources</a>
+          <a href="#availability">Platform support</a>
+        </nav>
+
+        <section id="availability" class="platform-panel">
+          <div class="platform-heading"><Icon name="ph:cpu" aria-hidden="true" /><h2>Platform support</h2></div>
+          <p class="platform-release">Haybarn <span class="font-sans tabular-nums">{catalog.latestVersion}</span></p>
+          <ExtensionPlatforms platforms={platforms} />
+          <p class="checked-date">Checked <time datetime={catalog.fetchedAt}>{checkedDate}</time></p>
+          {wasm && <p class="platform-note">Browser features may depend on native drivers or credentials. Check the project’s requirements.</p>}
+          <details class="download-details">
+            <summary>Downloads and sizes</summary>
+            <div class="platform-table" tabindex="0" role="region" aria-label="Published extension builds">
+              <table>
+                <caption>{displayName} builds for Haybarn {catalog.latestVersion}</caption>
+                <thead><tr><th scope="col">Platform</th><th scope="col">Download</th></tr></thead>
+                <tbody>{availability.map(artifact => <tr>
+                  <th scope="row">{platformLabel(artifact.platform)}</th>
+                  <td data-numeric><a href={artifactURL(name, artifact)} aria-label={`Download ${name} for ${platformLabel(artifact.platform)}`}>{(artifact.bytes / (1024 * 1024)).toLocaleString('en-US', { maximumFractionDigits: 2 })} MiB <span aria-hidden="true">↓</span></a></td>
+                </tr>)}</tbody>
+              </table>
+            </div>
+            <p class="platform-note">Compressed native downloads; Wasm modules for browsers.</p>
+          </details>
+          <a class="build-status" href={`/products/haybarn/status/v${catalog.latestVersion}`}>View build status <Icon name="ph:arrow-right" /></a>
+        </section>
+        <p class="distribution-note">Community maintained. Built and signed for Haybarn by Query Farm. <a href={`${directoryPath}/install`}>How installation works →</a></p>
+      </div>
+    </aside>
+
+    {related.length > 0 && <section id="related" class="related-section">
+      <div class="related-heading"><h2>Explore related extensions</h2><a href={topics[0] ? categoryPath(topics[0].id) : directoryPath}>Browse {topics[0]?.name.toLowerCase() ?? 'all extensions'} →</a></div>
+      <ul class="related-extensions">{related.map(item => <li>
+        <Icon name={`ph:${item.icon || 'puzzle-piece'}`} aria-hidden="true" />
+        <div><a href={item.href}>{item.displayName}</a><p>{item.description}</p></div>
+      </li>)}</ul>
+    </section>}
+  </div>
+  {browserSupported && <ExampleShellMounter
+    extensionName={name}
+    installSource="community"
+    mode="session"
+    controls="toolbar"
+    launchSelector=".browser-launch"
+    codeBlockSelector='#install pre[data-language="sql"]'
+    client:load
+  />}
+</PageLayout>
+
+<style>
+  .guide-meta { display:flex; align-items:center; flex-wrap:wrap; gap:10px 18px; margin-top:18px; font-size:13px; color:var(--color-soil-600); }
+  .guide-meta a:not(.release-badge), .documentation-link { color:var(--color-link); text-decoration:underline; text-underline-offset:3px; }
+  .release-badge { display:inline-flex; align-items:center; gap:6px; padding:4px 9px; border:1px solid var(--color-cat-field-ink); border-radius:5px; background:var(--color-cat-field); color:var(--color-cat-field-ink); text-decoration:none; }
+  .release-dot { width:5px; height:5px; border-radius:50%; background:currentColor; }
+  .category-navigation { display:flex; align-items:center; flex-wrap:wrap; gap:10px 14px; margin-top:18px; }
+  .category-label { font-size:13px; font-weight:600; color:var(--color-soil-700); }
+  .category-links { display:flex; flex-wrap:wrap; gap:8px; min-width:0; }
+  .category-links li { max-width:100%; }
+  .category-navigation :global(.category-link) { max-width:100%; min-height:38px; font-size:14px; white-space:normal; text-align:left; }
+  .guide-actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:22px; }
+  .documentation-link { display:inline-flex; align-items:center; gap:6px; font-size:13px; padding:7px 0; }
+  .documentation-link svg { width:15px; height:15px; }
+  .community-guide { display:grid; grid-template-columns:minmax(0,1fr) 310px; gap:48px; padding-block:38px 64px; }
+  .guide-body, .guide-sidebar { min-width:0; }
+  .guide-body > section { margin-bottom:38px; scroll-margin-top:135px; }
+  .guide-body > section:last-child { margin-bottom:0; }
+  .section-heading { margin-bottom:14px; }
+  .step-label { display:block; margin-bottom:5px; color:var(--color-sun-700); font-size:11px; font-weight:600; letter-spacing:.08em; font-variant-numeric:tabular-nums; }
+  h2 { font-size:28px; line-height:1.25; color:var(--color-soil-900); overflow-wrap:anywhere; }
+  .guide-body p { font-size:16px; line-height:1.7; color:var(--color-soil-700); margin-bottom:16px; overflow-wrap:anywhere; }
+  .guide-body a:not(.resource-link), .guide-sidebar a { color:var(--color-link); text-decoration:underline; text-underline-offset:3px; }
+  .guide-body :global(.code-block-wrapper) { margin-bottom:13px; }
+  .guide-body .source-note { font-size:12px; line-height:1.6; color:var(--color-soil-600); }
+  .guide-body .browser-note { font-size:13px; line-height:1.65; }
+  .session-anchor { scroll-margin-top:135px; }
+  .guide-body :global(.code-block-wrapper > div:first-child) { flex-wrap:wrap; gap:8px; }
+  .example-result { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:15px 18px; margin:16px 0; border:1px solid var(--color-soil-300); border-radius:8px; background:white; }
+  .example-result span { font-size:13px; font-weight:600; color:var(--color-soil-900); }
+  .example-result p { font-size:12px; margin:2px 0 0; color:var(--color-soil-600); }
+  .example-result code { font-size:17px; color:var(--color-cat-field-ink); text-align:right; overflow-wrap:anywhere; min-width:0; }
+  .example-source { display:flex; align-items:baseline; flex-wrap:wrap; gap:8px 18px; }
+  .example-source p { margin:0; font-size:12px; color:var(--color-soil-600); }
+  .example-source > a { display:inline-flex; gap:5px; align-items:center; font-size:12px; }
+  .example-source svg { width:14px; height:14px; }
+  .example-empty { display:flex; gap:16px; padding:22px; border:1px solid var(--color-soil-300); border-radius:8px; background:white; }
+  .example-empty > svg { width:24px; height:24px; flex:none; color:var(--color-sun-700); }
+  .example-empty h3 { font-size:20px; margin-bottom:8px; }
+  .example-empty p { font-size:14px; margin-bottom:12px; }
+  .example-empty a { font-size:14px; }
+  .secondary-section { border-top:1px solid var(--color-soil-300); padding-top:28px; }
+  .secondary-section h2 { font-size:25px; margin-bottom:17px; }
+  .resource-list { display:grid; border-top:1px solid var(--color-soil-300); }
+  .resource-link { display:grid; grid-template-columns:22px minmax(0,1fr) 16px; gap:13px; padding:16px 0; border-bottom:1px solid var(--color-soil-300); text-decoration:none; }
+  .resource-link:hover strong { text-decoration:underline; text-underline-offset:3px; }
+  .resource-link strong { display:block; color:var(--color-link); font-size:15px; font-weight:500; overflow-wrap:anywhere; }
+  .resource-link span span { display:block; margin-top:4px; font-size:13px; line-height:1.6; color:var(--color-soil-600); }
+  .resource-icon { width:21px; height:21px; color:var(--color-sun-700); margin-top:2px; }
+  .resource-arrow { width:16px; height:16px; color:var(--color-link); margin-top:4px; }
+  .source-details { margin-top:20px; }
+  summary { cursor:pointer; color:var(--color-soil-700); font-size:13px; }
+  summary:hover { color:var(--color-link); }
+  .project-details { display:grid; grid-template-columns:120px minmax(0,1fr); gap:11px 18px; margin-top:18px; font-size:13px; line-height:1.6; }
+  .project-details dt { color:var(--color-soil-600); }
+  .project-details dd { color:var(--color-soil-900); overflow-wrap:anywhere; }
+  .project-details code { font-size:12px; }
+  .sidebar-content { position:sticky; top:130px; }
+  .back-link { display:flex; align-items:center; gap:7px; font-size:13px; margin-bottom:23px; }
+  .back-link svg { width:15px; height:15px; }
+  .page-nav { display:grid; gap:11px; margin-bottom:26px; font-size:13px; }
+  .nav-label { font-size:10px; letter-spacing:.08em; font-weight:600; color:var(--color-soil-600); margin-bottom:2px; }
+  .page-nav a { text-decoration:none; color:var(--color-soil-700); }
+  .page-nav a:hover { color:var(--color-link); text-decoration:underline; }
+  .platform-panel { padding:17px; border:1px solid var(--color-soil-300); border-radius:10px; background:white; scroll-margin-top:135px; }
+  .platform-heading { display:flex; align-items:center; gap:9px; }
+  .platform-heading svg { width:21px; height:21px; color:var(--color-sun-700); }
+  .platform-heading h2 { font-size:22px; }
+  .platform-release { margin:6px 0 17px 30px; font-size:12px; color:var(--color-soil-600); }
+  .checked-date { margin-top:13px; font-size:11px; color:var(--color-soil-600); font-variant-numeric:tabular-nums; }
+  .platform-note { margin:12px 0; font-size:12px; line-height:1.6; color:var(--color-soil-600); }
+  .download-details { margin-top:15px; }
+  .platform-table { overflow-x:auto; max-width:100%; margin:12px 0; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  caption { text-align:left; padding-bottom:10px; font-size:11px; line-height:1.6; color:var(--color-soil-600); }
+  th, td { padding:9px 8px; text-align:left; border-bottom:1px solid var(--color-soil-300); }
+  th { font-weight:500; }
+  thead th { font-size:11px; color:var(--color-soil-600); }
+  td { white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .build-status { display:flex; align-items:center; gap:6px; font-size:12px; margin-top:17px; }
+  .build-status svg { width:14px; height:14px; }
+  .distribution-note { margin:15px 3px 0; font-size:12px; line-height:1.7; color:var(--color-soil-600); }
+  .distribution-note a { display:block; margin-top:5px; }
+  .related-section { grid-column:1 / -1; border-top:1px solid var(--color-soil-300); padding-top:30px; }
+  .related-heading { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:12px; }
+  .related-heading h2 { font-size:25px; }
+  .related-heading > a { font-size:13px; color:var(--color-link); text-decoration:underline; text-underline-offset:3px; }
+  .related-extensions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:35px; margin-top:20px; }
+  .related-extensions li { display:flex; gap:13px; border-top:1px solid var(--color-soil-300); padding:20px 0; min-width:0; }
+  .related-extensions li > svg { width:23px; height:23px; flex:none; color:var(--color-sun-700); margin-top:2px; }
+  .related-extensions a { color:var(--color-link); font-size:18px; font-family:var(--font-display); font-weight:600; overflow-wrap:anywhere; }
+  .related-extensions p { margin-top:7px; font-size:14px; line-height:1.65; color:var(--color-soil-700); overflow-wrap:anywhere; }
+  @media(max-width:1000px) { .community-guide { grid-template-columns:minmax(0,1fr) 280px; gap:28px; } .platform-panel { padding:13px; } }
+  @media(max-width:800px) {
+    .community-guide { grid-template-columns:minmax(0,1fr); padding-top:28px; gap:32px; }
+    .sidebar-content { position:static; }
+    .guide-sidebar { grid-row:2; }
+    .page-nav, .back-link { display:none; }
+    .platform-panel { padding:18px; }
+    .related-section { grid-row:3; }
+    .guide-body > section, .platform-panel, .session-anchor { scroll-margin-top:210px; }
+    .guide-body > section { margin-bottom:30px; }
+    h2 { font-size:25px; }
+  }
+  @media(max-width:480px) {
+    .guide-meta { gap:10px 14px; }
+    .guide-actions { gap:10px; }
+    .documentation-link { width:100%; padding:0; }
+    .related-extensions { grid-template-columns:minmax(0,1fr); }
+    .project-details { grid-template-columns:90px minmax(0,1fr); gap:10px; }
+    .example-result { align-items:flex-start; flex-wrap:wrap; }
+    .example-empty { padding:16px; gap:12px; }
+    .platform-panel { padding:14px; }
+  }
+</style>

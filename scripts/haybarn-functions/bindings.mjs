@@ -101,26 +101,27 @@ export function bindingQuery(row) {
   return `EXPLAIN SELECT * FROM "${row.function_name.replaceAll('"', '""')}"(${args.join(', ')});`;
 }
 
+export function extensionDirectorySQL(directory, engineVersion) {
+  const quoted = `'${directory.replaceAll("'", "''")}'`;
+  return Number(engineVersion.replace(/^v/, '').split('.')[0]) >= 2
+    ? `SET extension_directories = [${quoted}];`
+    : `SET extension_directory = ${quoted};`;
+}
+
 export function captureBindings({ binary, snapshot, root }) {
   const hash = createHash('sha256').update(readFileSync(binary)).digest('hex');
   if (hash !== snapshot.binarySha256) throw new Error('Binding capture must use the exact catalog binary.');
-  const quote = text => `'${text.replaceAll("'", "''")}'`;
   const extensionDirectory = resolve(root, '.cache/extensions', `${snapshot.engine}-${hash.slice(0, 16)}`);
-  const prelude = `SET extension_directory = ${quote(extensionDirectory)};\n` + snapshot.requestedExtensions.map(name => `LOAD "${name.replaceAll('"', '""')}";`).join('\n');
+  const prelude = extensionDirectorySQL(extensionDirectory, snapshot.engineVersion) + '\n' + snapshot.requestedExtensions.map(name => `LOAD "${name.replaceAll('"', '""')}";`).join('\n');
   const overloads = {};
   const unresolved = [];
-  for (const row of snapshot.functions.filter(row => row.function_type === 'table')) {
+  const tableFunctions = snapshot.functions.filter(row => row.function_type === 'table');
+  const fullSignatures = Number(snapshot.engineVersion.replace(/^v/, '').split('.')[0]) >= 2;
+  for (const row of tableFunctions) {
     const id = overloadId(row);
-    const positional = row.parameters.map((name, i) => ({ name, type: row.parameter_types[i] }))
-      .filter(arg => /^col\d+$/.test(arg.name)).sort((a, b) => Number(a.name.slice(3)) - Number(b.name.slice(3)));
-    // Only emit type syntax we can safely represent in a NULL cast. Catalog
-    // names with descriptions may override colN, so leave those unresolved.
-    if (row.description || positional.some((arg, i) => arg.name !== `col${i}` || !arg.type || !/^[\w\s[\](),]+$/.test(arg.type))) {
-      unresolved.push(id); continue;
-    }
-    const args = positional.map(arg => ['ANY', 'TABLE', 'POINTER'].includes(arg.type) ? 'NULL' : `NULL::${arg.type}`);
-    args.push('__guide_invalid_named_parameter__ := NULL');
-    const query = `EXPLAIN SELECT * FROM "${row.function_name.replaceAll('"', '""')}"(${args.join(', ')});`;
+    // Use the same version-specific binder evidence as the WASM capture.
+    const query = fullSignatures ? signatureBindingQuery(row, tableFunctions) : bindingQuery(row);
+    if (!query) { unresolved.push(id); continue; }
     const result = spawnSync(binary, ['-init', '/dev/null', '-batch', '-bail', '-noheader', '-list', ':memory:', '-c', `${prelude}\n${query}`],
       { encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024 });
     const diagnostic = (result.stderr ?? '').trim();

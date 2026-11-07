@@ -133,12 +133,31 @@ search behavior, and verification.
 `.github/workflows/deploy.yml` validates the site before deploying static Astro
 assets and the machine-readable Haybarn routes to Cloudflare Pages. Pushes to
 `main` publish production; pull requests receive Pages preview deployments.
+Validation and deployment share a runner, so Pages receives the exact `dist/`
+that passed the checks without a second build or dependency installation.
 The workflow requires the `CLOUDFLARE_API_TOKEN` and
 `CLOUDFLARE_ACCOUNT_ID` repository secrets.
 
 CI checks Astro types, the function catalogs, the combined build, exported
 references, and browser behavior before deployment. Browser tests execute the
 real pinned WASM package and serve its artifacts locally for deterministic CI.
+The deployment gate runs `npm run test:browser:smoke`: all browser tests except
+the exhaustive `extensions/all-examples.spec.ts` sweep. It retains one real
+documented query and expected result per runnable extension/source, contributor
+session checks, error handling, repository installation, the VGI map, and site
+navigation/search coverage. New browser test files join this gate by default.
+The browser run stops after three failed tests or eight minutes; the complete
+validation/deployment job has a twenty-minute limit.
+
+`.github/workflows/browser-examples.yml` runs the exhaustive sweep independently
+at 07:23 UTC daily and through Actions' **Run workflow** button. Engine dependency,
+shared runner, and browser harness changes also trigger it on pull requests and
+pushes to `main`. It does not gate deployment. Failures remain visible in its
+own workflow, so regressions in other examples may be found after deployment.
+The sweep has a forty-five-minute limit and continues collecting failures within
+that budget. Keep this workflow optional in branch protection to preserve the
+separate deployment gate.
+
 CI also runs `npm run test:extension-install` against the built extension
 catalog and documentation, including pages without a browser runner. It checks
 the complete repository setup, qualified INSTALL/LOAD commands, later-session
@@ -156,7 +175,7 @@ Run it locally after `npm run build` with
 `DUCKDB_TEST_PYTHON` to that environment's Python executable.
 `EXTENSION_DOCS_DIST` can point at an existing build snapshot.
 
-The extension browser checks discover every built page offering a WASM runner
+The exhaustive extension checks discover every built page offering a WASM runner
 and click every Run control, including cookbook, article, and tabbed examples.
 The VGI map's separate Run control also executes its real query and must render
 result markers; the live train board shares a query covered by the shell tests.
@@ -182,10 +201,14 @@ For a snippet that requires native facilities, add
 that reason instead of Run, and the browser test checks the explanation and
 absence of a Run control. Do not use this to hide a missing promised WASM build.
 
-CI retains failed browser reports and traces as the `browser-test-results`
-artifact for seven days.
+Both workflows retain JSON reports, including successful test timings, for seven
+days. Failed tests also retain traces. The deployment workflow uploads
+`browser-test-results`; the exhaustive workflow uploads `browser-example-results`.
 
-Run this subset with `npm run build` followed by `npm run test:extension-wasm`.
+After `npm run build`, use `npm run test:browser:smoke` for the deployment suite
+or `npm run test:browser:exhaustive` for every Run control. The existing
+`npm run test:haybarn-browser` command still runs both suites together, and
+`npm run test:extension-wasm` still runs all extension browser tests.
 Use `-- --workers=4` to distribute independent pages across four browser
 workers. To test an existing build snapshot while another build is running,
 set `PLAYWRIGHT_DIST_DIR` to its directory and `PLAYWRIGHT_PORT` to a free port.
