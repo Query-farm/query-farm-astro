@@ -60,7 +60,7 @@ export interface Worker extends WorkerRecord {
   facets: {
     surfaces: string[];
     needsCredentials: boolean;
-    network: boolean;
+    secretTypes: string[];
     indexed: boolean;
   };
 }
@@ -271,11 +271,9 @@ function enrich(w: WorkerRecord): Worker {
     functions && 'scalar functions',
     macros && 'macros',
   ].filter(Boolean) as string[];
-  const text = [w.summary, w.tagline, w.doc_md, ...w.keywords].join(' ').toLowerCase();
-  const needsCredentials =
-    w.attach_options.some(o => /token|key|secret|password|credential|tenant|client/i.test(o.name)) ||
-    /api key|credential|service account|tenant|entra/.test(text);
-  const network = needsCredentials || /\b(api|http|live|online|fetch|rest|feed|scrape)\b/.test(text);
+  // Declared, not guessed: a secret type or a required/secret ATTACH option.
+  const secretTypes = (w as unknown as { secret_types?: { name: string }[] }).secret_types ?? [];
+  const needsCredentials = secretTypes.length > 0 || w.attach_options.some(o => o.required || (o as { secret?: boolean }).secret);
   const platforms = Array.from(
     new Set((w.release?.assets ?? []).map(a => a.platform).filter(p => p in PLATFORM_LABEL)),
   ) as Platform[];
@@ -296,7 +294,7 @@ function enrich(w: WorkerRecord): Worker {
     attachSql: preferred?.steps.at(-1)?.code ?? attachSql(w, uvxLocation(w)),
     objects,
     totals: { tables, functions, tableFunctions, macros },
-    facets: { surfaces, needsCredentials, network, indexed: w.harvest?.status === 'ok' },
+    facets: { surfaces, needsCredentials, secretTypes: secretTypes.map(t => t.name), indexed: w.harvest?.status === 'ok' },
   };
 }
 

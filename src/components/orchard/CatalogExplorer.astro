@@ -1,48 +1,72 @@
 ---
-// Browse everything a worker's catalog exposes, before installing it: schemas →
-// tables/views (columns, types, constraints) and functions/table functions/
-// macros (signature, per-argument docs, examples). Every object has a stable
-// anchor (search results deep-link here) and a "Copy SQL" starter.
+// Everything a worker's catalog exposes, as the tree the VGI SDK's own worker
+// landing page draws (vgi-python vgi/http/landing.html): catalog → schema →
+// kind group (Tables, Views, Scalar functions, Table functions, Aggregates,
+// Table in-out, Macros) → object rows that expand to columns or arguments.
+// Same Phosphor duotone icons and per-kind colours, so a worker's page here and
+// the page the worker serves itself read as one system.
+//
+// Supports several catalogs and several schemas per catalog; a single-schema
+// worker opens its schema by default. Every object keeps a stable anchor —
+// search results deep-link here and the row (and its schema) opens on arrival.
 import { marked } from 'marked';
+import { Icon } from 'astro-icon/components';
 import { groupOverloads, type Worker } from '../../data/vgi-workers';
-import type { WorkerFunction, WorkerTable } from '../../data/vgi-workers/schema';
+import type { WorkerFunction, WorkerSchema, WorkerTable } from '../../data/vgi-workers/schema';
 
 interface Props {
   worker: Worker;
 }
 const { worker: w } = Astro.props;
 
-const anchor = (schema: string, name: string) => `obj-${schema}-${name}`.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
-const qualify = (schema: string, name: string) => (schema === 'main' ? `${w.catalog}.${name}` : `${w.catalog}.${schema}.${name}`);
-const ident = (s: string) => (/^[a-z_][a-z0-9_]*$/.test(s) ? s : `"${s.replace(/"/g, '""')}"`);
-
-const KIND: Record<string, { label: string; cls: string }> = {
-  table: { label: 'Table', cls: 'bg-cat-field text-cat-field-ink' },
-  view: { label: 'View', cls: 'bg-cat-moss text-cat-moss-ink' },
-  scalar: { label: 'Function', cls: 'bg-cat-slate text-cat-slate-ink' },
-  aggregate: { label: 'Aggregate', cls: 'bg-cat-slate text-cat-slate-ink' },
-  table_in_out: { label: 'Table function', cls: 'bg-cat-gold text-cat-gold-ink' },
-  macro: { label: 'Macro', cls: 'bg-cat-plum text-cat-plum-ink' },
-  table_macro: { label: 'Table macro', cls: 'bg-cat-plum text-cat-plum-ink' },
-  other: { label: 'Object', cls: 'bg-soil-100 text-soil-700' },
-};
-// "table" for functions means a table function; tables use the table/view kinds.
-const fnKind = (f: WorkerFunction) => (f.kind === 'table' ? { label: 'Table function', cls: 'bg-cat-gold text-cat-gold-ink' } : KIND[f.kind] ?? KIND.other);
-
-function tableSql(schema: string, t: WorkerTable) {
-  return `SELECT * FROM ${qualify(schema, t.name)} LIMIT 10;`;
+interface CatalogView {
+  name: string;
+  comment?: string | null;
+  schemas: WorkerSchema[];
 }
-function fnSql(schema: string, f: WorkerFunction) {
+// One catalog today; a worker that attaches several (attach_catalogs) can pass
+// `catalogs` in its record and this renders each as its own root.
+const catalogs: CatalogView[] = ((w as unknown as { catalogs?: CatalogView[] }).catalogs ?? [
+  { name: w.catalog, comment: null, schemas: w.schemas },
+]).map(c => ({ ...c, schemas: c.schemas.filter(s => s.tables.length || s.functions.length) }));
+
+const anchor = (schema: string, name: string) => `obj-${schema}-${name}`.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+const qualify = (cat: string, schema: string, name: string) => (schema === 'main' ? `${cat}.${name}` : `${cat}.${schema}.${name}`);
+const md = (s?: string | null) => (s ? (marked.parse(s) as string) : '');
+
+// Kind groups in the landing page's order, with its icon and colour class.
+const FN_GROUPS: { kinds: string[]; label: string; icon: string; cls: string }[] = [
+  { kinds: ['scalar'], label: 'Scalar functions', icon: 'ph:function-duotone', cls: 'k-scalar' },
+  { kinds: ['table'], label: 'Table functions', icon: 'ph:function-duotone', cls: 'k-tablefn' },
+  { kinds: ['aggregate'], label: 'Aggregate functions', icon: 'ph:sigma-duotone', cls: 'k-agg' },
+  { kinds: ['table_in_out'], label: 'Table in-out functions', icon: 'ph:funnel-duotone', cls: 'k-tio' },
+  { kinds: ['macro'], label: 'Scalar macros', icon: 'ph:brackets-curly-duotone', cls: 'k-macro' },
+  { kinds: ['table_macro'], label: 'Table macros', icon: 'ph:brackets-curly-duotone', cls: 'k-macro' },
+  { kinds: ['other'], label: 'Other functions', icon: 'ph:function-duotone', cls: 'k-scalar' },
+];
+
+function tableSql(cat: string, schema: string, t: WorkerTable) {
+  return `SELECT * FROM ${qualify(cat, schema, t.name)} LIMIT 10;`;
+}
+function fnSql(cat: string, schema: string, f: WorkerFunction) {
   if (f.examples[0]) return f.examples[0].trim().replace(/;?$/, ';');
   const positional = f.arguments.filter(a => !a.named).map(a => `<${a.name || a.type}>`);
   const named = f.arguments.filter(a => a.named && a.default == null).map(a => `${a.name} := <${a.type}>`);
-  const call = `${qualify(schema, f.name)}(${[...positional, ...named].join(', ')})`;
-  return f.kind === 'table' || f.kind === 'table_in_out' || f.kind === 'table_macro' ? `SELECT * FROM ${call} LIMIT 10;` : `SELECT ${call};`;
+  const call = `${qualify(cat, schema, f.name)}(${[...positional, ...named].join(', ')})`;
+  return ['table', 'table_in_out', 'table_macro'].includes(f.kind) ? `SELECT * FROM ${call} LIMIT 10;` : `SELECT ${call};`;
 }
-const md = (s?: string | null) => (s ? (marked.parseInline(s) as string) : '');
-
-const schemas = w.schemas.filter(s => s.tables.length || s.functions.length);
-const total = schemas.reduce((n, s) => n + s.tables.length + s.functions.length, 0);
+const plural = (n: number, s: string) => `${n} ${s}${n === 1 ? '' : 's'}`;
+function schemaSummary(s: WorkerSchema) {
+  const tables = s.tables.filter(t => t.kind !== 'view').length;
+  const views = s.tables.length - tables;
+  const groups = [...groupOverloads(s.functions).values()];
+  const macros = groups.filter(g => g[0].kind === 'macro' || g[0].kind === 'table_macro').length;
+  return [tables && plural(tables, 'table'), views && plural(views, 'view'), groups.length - macros && plural(groups.length - macros, 'function'), macros && plural(macros, 'macro')]
+    .filter(Boolean)
+    .join(' · ');
+}
+const total = catalogs.reduce((n, c) => n + c.schemas.reduce((m, s) => m + s.tables.length + groupOverloads(s.functions).size, 0), 0);
+const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
 ---
 
 {total === 0 ? (
@@ -51,134 +75,284 @@ const total = schemas.reduce((n, s) => n + s.tables.length + s.functions.length,
     <code class="font-mono">SELECT * FROM duckdb_functions() WHERE database_name = '{w.catalog}'</code> to explore it locally.
   </div>
 ) : (
-  <div class="cat-explorer lg:grid lg:grid-cols-[15rem_1fr] lg:gap-6" data-explorer>
-    <!-- Object index -->
-    <aside class="mb-5 lg:mb-0">
-      <div class="lg:sticky lg:top-28">
-        <input
-          type="search"
-          data-explorer-filter
-          placeholder={`Filter ${total} objects…`}
-          aria-label="Filter catalog objects"
-          class="w-full rounded-lg border border-soil-300 bg-white px-3 py-2 text-sm text-soil-900 placeholder:text-soil-500 focus:border-link focus:outline-none focus:ring-[3px] focus:ring-link/20"
-        />
-        <nav class="mt-3 max-h-[60vh] overflow-y-auto pr-1 text-[13px]" aria-label="Catalog objects">
-          {schemas.map(s => (
-            <div class="mb-3">
-              <div class="mb-1 font-mono text-[12px] font-semibold text-soil-500">{w.catalog}.{s.name}</div>
-              <ul>
-                {[...s.tables.map(t => ({ name: t.name, k: KIND[t.kind] ?? KIND.table })), ...[...groupOverloads(s.functions)].map(([name, g]) => ({ name, k: fnKind(g[0]) }))].map(o => (
-                  <li data-obj-link={o.name.toLowerCase()}>
-                    <a href={`#${anchor(s.name, o.name)}`} class="flex items-center gap-2 rounded px-1.5 py-1 text-soil-700 no-underline hover:bg-soil-100 hover:text-link">
-                      <span class:list={['h-2 w-2 flex-none rounded-full', o.k.cls]} aria-hidden="true"></span>
-                      <span class="truncate font-mono">{o.name}</span>
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </nav>
-      </div>
-    </aside>
-
-    <!-- Objects -->
-    <div class="flex flex-col gap-3">
-      {schemas.map(s => (
-        <>
-          {schemas.length > 1 || s.comment ? (
-            <div class="mt-2 first:mt-0">
-              <h3 class="font-mono text-[15px] font-semibold text-soil-900">{w.catalog}.{s.name}</h3>
-              {s.comment && <p class="mt-1 text-sm text-soil-700" set:html={md(s.comment)} />}
-            </div>
-          ) : null}
-
-          {s.tables.map(t => (
-            <article id={anchor(s.name, t.name)} data-obj={`${t.name} ${t.comment ?? ''} ${t.columns.map(c => c.name).join(' ')}`.toLowerCase()} class="scroll-mt-32 rounded-xl border border-soil-300 bg-white p-4">
-              <header class="flex flex-wrap items-center gap-2">
-                <span class:list={['rounded-md px-2 py-0.5 text-[11.5px] font-semibold', (KIND[t.kind] ?? KIND.table).cls]}>{(KIND[t.kind] ?? KIND.table).label}</span>
-                <h4 class="font-mono text-[15px] font-semibold text-soil-900"><a href={`#${anchor(s.name, t.name)}`} class="text-inherit no-underline hover:text-link">{t.name}</a></h4>
-                <button type="button" class="ce-copy ml-auto rounded-md border border-soil-300 px-2 py-0.5 text-[12px] text-soil-700 hover:border-sun-400" data-sql={tableSql(s.name, t)}>Copy SQL</button>
-              </header>
-              {t.comment && <p class="mt-2 text-sm leading-relaxed text-soil-700" set:html={md(t.comment)} />}
-              {t.columns.length > 0 && (
-                <div class="mt-3 overflow-x-auto">
-                  <table class="w-full text-left text-[13px]">
-                    <thead class="text-[11.5px] text-soil-500">
-                      <tr><th class="py-1 pr-3 font-semibold">Column</th><th class="py-1 pr-3 font-semibold">Type</th><th class="py-1 font-semibold">Description</th></tr>
-                    </thead>
-                    <tbody class="divide-y divide-soil-200">
-                      {t.columns.map(c => (
-                        <tr>
-                          <td class="whitespace-nowrap py-1.5 pr-3 font-mono text-soil-900">{c.name}{c.nullable === false && <span class="ml-1 text-[10.5px] font-sans font-semibold text-sun-700" title="NOT NULL">NN</span>}</td>
-                          <td class="whitespace-nowrap py-1.5 pr-3 font-mono text-[12px] text-soil-600">{c.type}</td>
-                          <td class="py-1.5 text-soil-700" set:html={md(c.comment)} />
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {t.constraints.length > 0 && <p class="mt-2 font-mono text-[12px] text-soil-600">{t.constraints.join(' · ')}</p>}
-            </article>
-          ))}
-
-          {[...groupOverloads(s.functions)].map(([fname, group]) => {
-            // Argument docs come from the richest overload.
-            const f = group.reduce((a, b) => (b.arguments.length > a.arguments.length ? b : a));
-            const k = fnKind(f);
-            const comment = group.find(g => g.comment)?.comment;
-            return (
-              <article id={anchor(s.name, fname)} data-obj={`${fname} ${comment ?? ''} ${group.flatMap(g => g.arguments.map(a => a.name)).join(' ')}`.toLowerCase()} class="scroll-mt-32 rounded-xl border border-soil-300 bg-white p-4">
-                <header class="flex flex-wrap items-center gap-2">
-                  <span class:list={['rounded-md px-2 py-0.5 text-[11.5px] font-semibold', k.cls]}>{k.label}</span>
-                  <h4 class="font-mono text-[15px] font-semibold text-soil-900"><a href={`#${anchor(s.name, f.name)}`} class="text-inherit no-underline hover:text-link">{f.name}</a></h4>
-                  <button type="button" class="ce-copy ml-auto rounded-md border border-soil-300 px-2 py-0.5 text-[12px] text-soil-700 hover:border-sun-400" data-sql={fnSql(s.name, f)}>Copy SQL</button>
-                </header>
-                {group.map(f => (
-                <p class="mt-2 overflow-x-auto whitespace-nowrap font-mono text-[12.5px] text-soil-800">
-                  {f.name}(<>{f.arguments.map((a, i) => (<>{i > 0 && ', '}<span class="text-soil-900">{a.named ? `${ident(a.name ?? '')} := ` : a.name ? `${ident(a.name)} ` : ''}</span><span class="text-sun-700">{a.type}</span></>))}</>){f.return_type && <> <span class="text-soil-500">→</span> <span class="text-field-700">{f.return_type}</span></>}
-                </p>
-                ))}
-                {group.length > 1 && <p class="mt-1 text-[12px] text-soil-500">{group.length} overloads</p>}
-                {comment && <p class="mt-2 text-sm leading-relaxed text-soil-700" set:html={md(comment)} />}
-                {f.arguments.some(a => a.description || a.default != null) && (
-                  <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px]">
-                    {f.arguments.map(a => (
-                      <>
-                        <dt class="font-mono text-soil-900">{a.name}</dt>
-                        <dd class="text-soil-700"><span set:html={md(a.description)} />{a.default != null && <span class="ml-1 text-soil-500">(default <code class="font-mono">{String(a.default)}</code>)</span>}</dd>
-                      </>
-                    ))}
-                  </dl>
-                )}
-              </article>
-            );
-          })}
-        </>
-      ))}
-      <p data-explorer-empty class="hidden py-6 text-center text-sm text-soil-600">No objects match that filter.</p>
+  <div class="vtree" data-vtree>
+    <div class="vtree-head">
+      <label class="vtree-filter">
+        <Icon name="ph:magnifying-glass" class="vtree-filter-ic" aria-hidden="true" />
+        <span class="sr-only">Filter catalog objects</span>
+        <input type="search" data-vtree-filter placeholder={`Filter ${total} objects…`} autocomplete="off" />
+        <span class="vtree-count" data-vtree-count></span>
+      </label>
+      <button type="button" class="vtree-bulk" data-vtree-expand>Expand all</button>
+      <button type="button" class="vtree-bulk" data-vtree-collapse>Collapse all</button>
     </div>
+
+    {catalogs.map(c => (
+      <section class="vcat">
+        <div class="vcat-head">
+          <Icon name="ph:database-duotone" class="vcat-ic" aria-hidden="true" />
+          <span class="vcat-name">{c.name}</span>
+          <span class="vcat-sub">{plural(c.schemas.length, 'schema')}</span>
+        </div>
+
+        {c.schemas.map(s => {
+          const tables = s.tables.filter(t => t.kind !== 'view');
+          const views = s.tables.filter(t => t.kind === 'view');
+          const fnGroups = [...groupOverloads(s.functions)];
+          return (
+            <details class="vschema" data-name={s.name.toLowerCase()} open={singleSchema || undefined}>
+              <summary>
+                <Icon name="ph:caret-right" class="tri" aria-hidden="true" />
+                <Icon name="ph:folder-duotone" class="vschema-ic" aria-hidden="true" />
+                <span class="vschema-name">{s.name}</span>
+                <span class="vschema-sub">{schemaSummary(s)}</span>
+              </summary>
+              {s.comment && <div class="vdesc vschema-desc prose-vgi" set:html={md(s.comment)} />}
+
+              {[
+                { list: tables, label: 'Tables', icon: 'ph:table-duotone', cls: 'k-table' },
+                { list: views, label: 'Views', icon: 'ph:eye-duotone', cls: 'k-view' },
+              ].filter(g => g.list.length).map(g => (
+                <div class={`vgrp ${g.cls}`}>
+                  <div class="vglabel"><Icon name={g.icon} aria-hidden="true" />{g.label}</div>
+                  {g.list.map(t => (
+                    <details class="vrow" id={anchor(s.name, t.name)} data-name={`${t.name} ${t.columns.map(col => col.name).join(' ')}`.toLowerCase()}>
+                      <summary>
+                        <Icon name="ph:caret-right" class="tri" aria-hidden="true" />
+                        <Icon name={g.icon} class="vrow-ic" aria-hidden="true" />
+                        <span class="vrow-name">{t.name}</span>
+                        <span class="vrow-meta">{plural(t.columns.length, 'col')}</span>
+                      </summary>
+                      <div class="vbody">
+                        {t.comment && <div class="vdesc prose-vgi" set:html={md(t.comment)} />}
+                        {t.columns.length > 0 && (
+                          <>
+                            <div class="vlabel">Columns</div>
+                            <div class="vcols">
+                              {t.columns.map(col => (
+                                <div class="vcol">
+                                  <div class="vcol-line">
+                                    <span class="vcol-name">{col.name}{col.nullable === false && <span class="vnn" title="NOT NULL">not null</span>}</span>
+                                    <span class="vcol-type">{col.type}</span>
+                                  </div>
+                                  {col.comment && <div class="vcol-comment">{col.comment}</div>}
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        )}
+                        {t.constraints.length > 0 && <div class="vreturns"><b>Constraints</b>{t.constraints.join(' · ')}</div>}
+                        <div class="vactions"><button type="button" class="vcopy" data-sql={tableSql(c.name, s.name, t)}>Copy SQL</button><a class="vlink" href={`#${anchor(s.name, t.name)}`}>Link</a></div>
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              ))}
+
+              {FN_GROUPS.map(g => {
+                const rows = fnGroups.filter(([, grp]) => g.kinds.includes(grp[0].kind));
+                if (!rows.length) return null;
+                return (
+                  <div class={`vgrp ${g.cls}`}>
+                    <div class="vglabel"><Icon name={g.icon} aria-hidden="true" />{g.label}</div>
+                    {rows.map(([fname, group]) => {
+                      const rich = group.reduce((a, b) => (b.arguments.length > a.arguments.length ? b : a));
+                      const comment = group.find(x => x.comment)?.comment;
+                      const pos = rich.arguments.filter(a => !a.named);
+                      const named = rich.arguments.filter(a => a.named);
+                      return (
+                        <details class="vrow vfn" id={anchor(s.name, fname)} data-name={`${fname} ${rich.arguments.map(a => a.name).join(' ')}`.toLowerCase()}>
+                          <summary>
+                            <Icon name="ph:caret-right" class="tri" aria-hidden="true" />
+                            <Icon name={g.icon} class="vrow-ic" aria-hidden="true" />
+                            <span class="vrow-name">{fname}</span>
+                            <span class="vsig">({[...pos, ...named].map((a, i) => (<>{i > 0 && ', '}{a.name}{a.named && ' :='}{a.type && <> <span class="vsig-type">{a.type}</span></>}</>))}){group.length > 1 && <span class="vover"> +{group.length - 1} overload{group.length > 2 ? 's' : ''}</span>}</span>
+                          </summary>
+                          <div class="vbody">
+                            {comment && <div class="vdesc prose-vgi" set:html={md(comment)} />}
+                            {rich.arguments.length === 0 ? (
+                              <div class="vnoargs">No arguments</div>
+                            ) : (
+                              [{ label: named.length ? 'Positional arguments' : 'Arguments', list: pos }, { label: 'Named arguments', list: named }]
+                                .filter(x => x.list.length)
+                                .map(x => (
+                                  <>
+                                    <div class="vlabel">{x.label}</div>
+                                    <div class="vcols">
+                                      {x.list.map(a => (
+                                        <div class="vcol">
+                                          <div class="vcol-line">
+                                            <span class="vcol-name">{a.name}{a.named && <span class="vargk"> :=</span>}</span>
+                                            {a.type && <span class="vcol-type">{a.type}</span>}
+                                          </div>
+                                          {(a.description || a.default != null) && (
+                                            <div class="vcol-comment">
+                                              {a.description}
+                                              {a.description && a.default != null && ' · '}
+                                              {a.default != null && <span class="vdef">default {String(a.default)}</span>}
+                                            </div>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </>
+                                ))
+                            )}
+                            {group.length > 1 && (
+                              <>
+                                <div class="vlabel">Overloads</div>
+                                <div class="vover-list">
+                                  {group.map(o => <code>{o.name}({o.arguments.map(a => [a.name, a.type].filter(Boolean).join(' ')).join(', ')}){o.return_type ? ` → ${o.return_type}` : ''}</code>)}
+                                </div>
+                              </>
+                            )}
+                            {rich.return_type && <div class="vreturns"><b>Returns</b><span class="vrtype">{rich.return_type}</span></div>}
+                            <div class="vactions"><button type="button" class="vcopy" data-sql={fnSql(c.name, s.name, rich)}>Copy SQL</button><a class="vlink" href={`#${anchor(s.name, fname)}`}>Link</a></div>
+                          </div>
+                        </details>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </details>
+          );
+        })}
+      </section>
+    ))}
+    <p class="vnoresults hidden" data-vtree-empty>No matching objects.</p>
   </div>
 )}
 
+<style>
+  /* Kind palette and tint ladder from the VGI SDK landing page. */
+  .vtree {
+    --k-table: #0e7c86; --k-view: #7a4fd0; --k-scalar: #2f8f4e; --k-tablefn: #9a6500;
+    --k-agg: #c05a2a; --k-tio: #b03a6e; --k-macro: #2b6cb0; --type-color: #0e7c86;
+    --tint: 6%; --tint-hover: 11%; --tint-open: 15%; --edge: 24%; --edge-hover: 46%; --edge-open: 56%;
+    --line: var(--color-soil-300); --panel: #fffdf7; --muted: var(--color-soil-600); --ink: var(--color-soil-900);
+  }
+  .k-table { --kc: var(--k-table); } .k-view { --kc: var(--k-view); } .k-scalar { --kc: var(--k-scalar); }
+  .k-tablefn { --kc: var(--k-tablefn); } .k-agg { --kc: var(--k-agg); } .k-tio { --kc: var(--k-tio); } .k-macro { --kc: var(--k-macro); }
+
+  .vtree-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .vtree-filter { position: relative; flex: 1; min-width: 180px; display: flex; align-items: center; }
+  .vtree-filter :global(.vtree-filter-ic) { position: absolute; left: 10px; width: 15px; height: 15px; color: var(--muted); }
+  .vtree-filter input { width: 100%; font-size: 13.5px; padding: 7px 64px 7px 32px; border: 1px solid var(--line); border-radius: 9px; background: white; color: var(--ink); }
+  .vtree-filter input:focus { outline: none; border-color: var(--color-link); box-shadow: 0 0 0 3px rgb(69 99 47 / 0.2); }
+  .vtree-count { position: absolute; right: 11px; font-size: 11.5px; color: var(--muted); font-family: var(--font-mono); }
+  .vtree-bulk { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--panel); cursor: pointer; }
+  .vtree-bulk:hover { border-color: var(--color-sun-400); color: var(--ink); }
+
+  .vcat + .vcat { margin-top: 18px; }
+  .vcat-head { display: flex; align-items: center; gap: 8px; padding: 2px 2px 4px; }
+  .vcat-head :global(.vcat-ic) { width: 19px; height: 19px; color: var(--color-sun-700); }
+  .vcat-name { font-family: var(--font-mono); font-weight: 650; font-size: 15px; color: var(--ink); }
+  .vcat-sub { margin-left: auto; font-size: 12px; color: var(--muted); font-family: var(--font-mono); }
+
+  summary { list-style: none; cursor: pointer; }
+  summary::-webkit-details-marker { display: none; }
+  .vtree :global(.tri) { width: 12px; height: 12px; flex: none; color: var(--muted); transition: transform .15s; }
+  details[open] > summary > :global(.tri) { transform: rotate(90deg); }
+
+  /* level 1: schema card */
+  .vschema { border: 1px solid var(--line); border-radius: 14px; background: var(--panel); margin: 8px 0; }
+  .vschema > summary { display: flex; align-items: center; gap: 9px; padding: 11px 14px; }
+  .vschema[open] > summary { border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--ink) 3%, var(--panel)); border-radius: 14px 14px 0 0; }
+  .vschema > summary :global(.vschema-ic) { width: 17px; height: 17px; color: var(--k-view); }
+  .vschema-name { font-family: var(--font-mono); font-weight: 650; font-size: 14.5px; color: var(--ink); }
+  .vschema-sub { margin-left: auto; color: var(--muted); font-size: 12px; font-family: var(--font-mono); text-align: right; }
+  .vdesc.vschema-desc { margin: 12px 14px 4px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 8px; background: white; }
+
+  /* level 2: kind group */
+  .vgrp { margin: 4px 8px 8px 14px; padding: 2px 10px 6px 13px; border-left: 2px solid color-mix(in srgb, var(--kc) 40%, transparent); }
+  .vglabel { display: flex; align-items: center; gap: 7px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--kc); font-weight: 700; margin: 12px 0 7px; }
+  .vglabel :global(svg) { width: 15px; height: 15px; }
+
+  /* level 3: object rows as tinted cards */
+  .vrow { border: 1px solid color-mix(in srgb, var(--kc) var(--edge), var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--kc) var(--tint), white); margin: 5px 0; scroll-margin-top: 8rem; }
+  .vrow:hover { border-color: color-mix(in srgb, var(--kc) var(--edge-hover), var(--line)); background: color-mix(in srgb, var(--kc) var(--tint-hover), white); }
+  .vrow[open] { border-color: color-mix(in srgb, var(--kc) var(--edge-open), var(--line)); background: color-mix(in srgb, var(--kc) var(--tint-open), white); }
+  .vrow:target { box-shadow: 0 0 0 3px color-mix(in srgb, var(--kc) 35%, transparent); }
+  .vrow > summary { display: flex; align-items: center; gap: 8px; padding: 7px 11px; line-height: 1.3; }
+  .vfn > summary { align-items: flex-start; }
+  .vrow[open] > summary { border-bottom: 1px solid color-mix(in srgb, var(--kc) 25%, var(--line)); }
+  .vrow :global(.vrow-ic) { width: 16px; height: 16px; flex: none; color: var(--kc); }
+  .vrow-name { font-family: var(--font-mono); font-size: 12.8px; font-weight: 600; color: var(--ink); flex: none; }
+  .vrow-meta { margin-left: auto; color: var(--muted); font-size: 11.5px; font-family: var(--font-mono); }
+  .vsig { color: var(--muted); font-size: 12px; font-family: var(--font-mono); flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .vsig-type { color: color-mix(in srgb, var(--kc) 60%, var(--muted)); }
+  .vover { color: var(--muted); font-style: italic; }
+
+  /* level 4: body */
+  .vbody { padding: 9px 13px 11px; background: color-mix(in srgb, var(--kc) 4%, white); border-radius: 0 0 9px 9px; }
+  .vdesc { color: var(--ink); font-size: 13px; line-height: 1.55; margin: 0 0 10px; }
+  .prose-vgi :global(p) { margin: 4px 0; }
+  .prose-vgi :global(ul) { margin: 4px 0; padding-left: 18px; list-style: disc; }
+  .prose-vgi :global(code) { font-family: var(--font-mono); background: var(--color-soil-100); padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+  .prose-vgi :global(a) { color: var(--color-link); text-decoration: underline; }
+  .prose-vgi :global(table) { border-collapse: collapse; font-size: 12px; margin: 8px 0; }
+  .prose-vgi :global(th), .prose-vgi :global(td) { border: 1px solid var(--line); padding: 4px 9px; text-align: left; }
+  .vlabel { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 700; margin: 10px 0 6px; }
+  .vlabel:first-child { margin-top: 0; }
+  .vcols { display: flex; flex-direction: column; gap: 6px; }
+  .vcol { border: 1px solid color-mix(in srgb, var(--kc) 22%, var(--line)); border-radius: 7px; padding: 6px 10px; background: color-mix(in srgb, var(--kc) 4%, white); }
+  .vcol-line { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+  .vcol-name { font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+  .vcol-type { font-family: var(--font-mono); font-size: 12px; color: var(--type-color); text-align: right; overflow-wrap: anywhere; }
+  .vcol-comment { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .vnn { margin-left: 6px; font-family: var(--font-sans); font-size: 10.5px; font-weight: 600; color: var(--color-sun-700); }
+  .vargk { color: var(--muted); font-weight: 400; }
+  .vdef { font-family: var(--font-mono); color: var(--type-color); }
+  .vnoargs { color: var(--muted); font-size: 12.5px; font-style: italic; }
+  .vover-list { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+  .vover-list code { font-family: var(--font-mono); color: var(--ink); overflow-wrap: anywhere; }
+  .vreturns { margin-top: 10px; font-size: 12.5px; color: var(--muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
+  .vreturns b { color: var(--ink); font-family: var(--font-sans); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; margin-right: 8px; }
+  .vrtype { color: var(--type-color); }
+  .vactions { display: flex; gap: 8px; margin-top: 10px; }
+  .vcopy, .vlink { font-size: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 2px 9px; background: white; color: var(--color-soil-700); text-decoration: none; cursor: pointer; }
+  .vcopy:hover, .vlink:hover { border-color: var(--color-sun-400); color: var(--ink); }
+  .vnoresults { color: var(--muted); font-size: 13.5px; padding: 14px 4px; }
+  .hidden { display: none !important; }
+</style>
+
 <script>
-  function wireExplorer() {
-    document.querySelectorAll<HTMLElement>('[data-explorer]').forEach(root => {
+  function openTo(id: string) {
+    const el = id && document.getElementById(id);
+    if (!(el instanceof HTMLDetailsElement)) return;
+    for (let p: Element | null = el; p; p = p.parentElement) if (p instanceof HTMLDetailsElement) p.open = true;
+    el.scrollIntoView({ block: 'start' });
+  }
+  function wireTree() {
+    document.querySelectorAll<HTMLElement>('[data-vtree]').forEach(root => {
       if (root.dataset.wired) return;
       root.dataset.wired = '1';
-      const input = root.querySelector<HTMLInputElement>('[data-explorer-filter]');
-      const objs = Array.from(root.querySelectorAll<HTMLElement>('[data-obj]'));
-      const links = Array.from(root.querySelectorAll<HTMLElement>('[data-obj-link]'));
-      const empty = root.querySelector<HTMLElement>('[data-explorer-empty]');
-      input?.addEventListener('input', () => {
+      const input = root.querySelector<HTMLInputElement>('[data-vtree-filter]')!;
+      const count = root.querySelector<HTMLElement>('[data-vtree-count]')!;
+      const empty = root.querySelector<HTMLElement>('[data-vtree-empty]')!;
+      const rows = Array.from(root.querySelectorAll<HTMLDetailsElement>('details.vrow'));
+      input.addEventListener('input', () => {
         const q = input.value.trim().toLowerCase();
         let shown = 0;
-        objs.forEach(o => { const v = !q || o.dataset.obj!.includes(q); o.hidden = !v; if (v) shown++; });
-        links.forEach(l => { l.hidden = Boolean(q) && !l.dataset.objLink!.includes(q); });
-        empty?.classList.toggle('hidden', shown > 0);
+        root.querySelectorAll<HTMLDetailsElement>('details.vschema').forEach(sc => {
+          let hit = false;
+          sc.querySelectorAll<HTMLDetailsElement>('details.vrow').forEach(r => {
+            const m = !q || (r.dataset.name ?? '').includes(q);
+            r.classList.toggle('hidden', !m);
+            if (m) { shown++; hit = true; }
+          });
+          sc.querySelectorAll<HTMLElement>('.vgrp').forEach(g => g.classList.toggle('hidden', Boolean(q) && !g.querySelector('details.vrow:not(.hidden)')));
+          const nameHit = !q || (sc.dataset.name ?? '').includes(q);
+          sc.classList.toggle('hidden', !hit && !nameHit);
+          if (q && hit) sc.open = true;
+        });
+        count.textContent = q ? `${shown} of ${rows.length}` : '';
+        empty.classList.toggle('hidden', !(q && shown === 0));
       });
-      root.querySelectorAll<HTMLButtonElement>('.ce-copy').forEach(btn =>
+      root.querySelector('[data-vtree-expand]')?.addEventListener('click', () => root.querySelectorAll('details').forEach(d => (d.open = true)));
+      root.querySelector('[data-vtree-collapse]')?.addEventListener('click', () => root.querySelectorAll('details').forEach(d => (d.open = false)));
+      root.querySelectorAll<HTMLButtonElement>('.vcopy').forEach(btn =>
         btn.addEventListener('click', async () => {
           try {
             await navigator.clipboard.writeText(btn.dataset.sql ?? '');
@@ -188,7 +362,9 @@ const total = schemas.reduce((n, s) => n + s.tables.length + s.functions.length,
         }),
       );
     });
+    openTo(decodeURIComponent(location.hash.slice(1)));
   }
-  wireExplorer();
-  document.addEventListener('astro:after-swap', wireExplorer);
+  wireTree();
+  window.addEventListener('hashchange', () => openTo(decodeURIComponent(location.hash.slice(1))));
+  document.addEventListener('astro:after-swap', wireTree);
 </script>
