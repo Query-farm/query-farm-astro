@@ -39,7 +39,20 @@ SET ignore_sigpipe = true;
 COPY (SELECT * FROM range(1000000) t(n)) TO '| head -n 3' (FORMAT CSV, HEADER);
 ```
 
-With `ignore_sigpipe` on, the rest of the output is discarded, the command's exit status is still checked, and a reading command that is terminated by `SIGPIPE` is not reported as an error. The setting is read for each pipe as it is opened.
+With `ignore_sigpipe` on, the rest of the output is discarded and the command's exit status is still checked. The setting is read for each pipe as it is opened.
+
+## Stopping early and cancelling
+
+When DuckDB stops reading before the end of a command's output — a `LIMIT`, for example — it closes the pipe. A command that is still writing exits with `SIGPIPE`, which is not an error. In the DuckDB 2.0 build, a command that keeps running anyway (one that ignores `SIGPIPE`, or is busy with something else) gets one second to exit. After that it receives `SIGTERM`, then `SIGKILL` one second later. The query never waits for it indefinitely:
+
+```sql
+-- `yes` never ends; DuckDB reads one row and the command is stopped
+SELECT * FROM read_csv('yes |', header = false) LIMIT 1;
+```
+
+The same applies when a `COPY ... TO '| command'` fails partway through.
+
+In the DuckDB 2.0 build, cancelling a query (Ctrl-C in the CLI, `interrupt()` in a client API) also works while DuckDB is waiting on a pipe: waiting for a command's output, for room to write its input, or for the command to exit. The command is then terminated as above. On Windows, pipes still block until the command produces output or exits.
 
 ## Compared to alternatives
 
@@ -54,3 +67,33 @@ import Callout from '../../../components/docs/Callout.astro';
 <Callout type="danger" title="Pipe paths execute arbitrary shell commands">
 The same rule that applies to [`os.system(user_input)`](https://docs.python.org/3/library/os.html#os.system) in Python applies here: **never** build pipe paths from untrusted strings. In a multi-tenant or hosted DuckDB environment, consider not loading the `Shellfs` extension at all, or restricting which roles can use it. See [OWASP — Command Injection](https://owasp.org/www-community/attacks/Command_Injection) for the threat model.
 </Callout>
+
+### Turning shellfs off
+
+In the DuckDB 2.0 build, the extension runs **no** command while [`enable_external_access`](https://duckdb.org/docs/configuration/overview) is `false`. That includes paths that look like they are inside [`allowed_directories`](https://duckdb.org/docs/operations_manual/securing_duckdb/overview). DuckDB checks those with a prefix match, so a "file" such as `'/tmp/x; other-command |'` would otherwise pass. Earlier builds ran such a command.
+
+{/* check: skip intentionally fails, and would disable external access for later snippets */}
+```sql
+SET enable_external_access = false;
+SELECT * FROM read_csv('echo 1 |');
+-- Permission Error: Cannot run shell command "echo 1 |": shellfs commands are
+-- disabled because enable_external_access is false
+```
+
+To turn off shell commands while still allowing other external access (local files, HTTP), set [`shellfs_enabled`](#shellfs_enabled) to `false`. This setting only works in one direction: once it is `false`, `SET shellfs_enabled = true` and `RESET shellfs_enabled` are rejected. A plain `SET` affects the current connection. `SET GLOBAL` affects every connection that has not set it itself.
+
+{/* check: skip would disable shellfs for later snippets */}
+```sql
+SET GLOBAL shellfs_enabled = false;
+```
+
+For a hard guarantee, combine either setting with [`lock_configuration`](https://duckdb.org/docs/configuration/overview), or don't load the extension.
+
+## Changes in the DuckDB 2.0 build
+
+- **Security:** no command runs when `enable_external_access` is `false`, even inside `allowed_directories` (see [Turning shellfs off](#turning-shellfs-off)).
+- **New setting:** [`shellfs_enabled`](#shellfs_enabled), a one-way switch that turns shell commands off.
+- **Wrong direction is an error:** writing to a path that ends in `|` (`COPY ... TO 'cmd |'`) now fails with `Cannot write to "cmd |": a path that ends with '|' is a command that DuckDB reads from`. Reading a path that starts with `|` fails the same way. Earlier builds started the command in the wrong direction.
+- **No hangs:** queries waiting on a pipe can be cancelled, and a command that keeps running after DuckDB stops reading is terminated (see [Stopping early and cancelling](#stopping-early-and-cancelling)).
+- **Early close is never an error:** stopping early (a `LIMIT`) is not reported as a failure of the command, with or without `ignore_sigpipe`. Earlier builds printed `Exception in ShellFileHandle destructor` to standard output. A non-zero exit status after DuckDB has read all of a command's output is still an error.
+- **Binary pipes on Windows:** commands are opened in binary mode, so Parquet and other binary formats pass through without CRLF translation.
