@@ -98,7 +98,14 @@ The hash functions hash a value's bytes, so it matters which bytes those are:
 | `STRUCT`, `LIST`, `MAP`, `ARRAY`, tuples | The [row encoding](#hashing-several-columns-at-once) below |
 | `NULL` | Returns `NULL` |
 
-`0.0` and `-0.0` have different bytes and so hash differently, as do NaNs with different bit patterns. Cast to a canonical type first (for example `CAST(x AS BIGINT)`) when values that compare equal in SQL must hash equal.
+`0.0` and `-0.0` have different bytes and so hash differently, as do NaNs with different bit patterns. The functions deliberately don't normalize them, so hashes already stored stay valid. When values that compare equal in SQL must hash equal, normalize first:
+
+```sql
+SELECT xxh64(CASE WHEN isnan(x) THEN 'NaN'::DOUBLE WHEN x = 0 THEN 0.0::DOUBLE ELSE x END) AS h
+FROM (VALUES (-0.0::DOUBLE), (0.0::DOUBLE)) t(x);
+```
+
+For the same reason, cast integer inputs to one width (for example `BIGINT`) wherever the hash must agree across tables or systems.
 
 Types without a stable byte representation (`BIT`, `UNION`, `VARIANT`, …) are rejected when the query is planned, with an error naming the function and type — never halfway through a query.
 
