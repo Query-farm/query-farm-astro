@@ -22,8 +22,8 @@
           "description": "The second argument is a `JSON` object DuckDB builds from row columns (`{ 'salary': salary }`). Inside the script it appears as `context.<field>`. Anything DuckDB can encode to JSON crosses the boundary — numbers, strings, booleans, arrays, nested objects."
         },
         {
-          "label": "Compile-and-cache for constant scripts",
-          "description": "When the script string is a literal (or otherwise constant within a query), the parser runs once and per-row cost after warmup is interpreter execution only. When the script comes from a column (the rules-from-a-column pattern), each *distinct* script string parses on first encounter and caches by content — a handful of distinct rules is cheap; thousands per query is where parse cost starts to bite."
+          "label": "Compile-and-cache per thread",
+          "description": "Each DuckDB thread keeps one Rhai engine and a cache of compiled scripts. A literal script parses once per thread; when the script comes from a column (the rules-from-a-column pattern), each *distinct* script string parses on first encounter and is reused after that. A handful of distinct rules is cheap; thousands of distinct scripts per query is where parse cost starts to bite."
         },
         {
           "label": "Errors don't kill the query",
@@ -45,8 +45,12 @@
           "description": "Where flexibility wins over peak throughput — config-driven rules, ad-hoc transforms, audits, exploratory analysis, batches in the thousands-to-low-millions of rows. Beyond that, profile."
         },
         {
+          "label": "Bounded and cancellable",
+          "description": "In the DuckDB 2.0 build each evaluation is capped by settings — `evalexpr_rhai_max_operations` (default 100,000,000), `evalexpr_rhai_max_string_size` (16 MiB), `evalexpr_rhai_max_array_size` and `evalexpr_rhai_max_map_size` (1,000,000), `evalexpr_rhai_max_call_levels` (64) — so `loop {}` returns an error instead of pinning a CPU. Cancelling the query stops a running script, and deeply nested values cannot crash the process."
+        },
+        {
           "label": "Sandbox is intentional",
-          "description": "Rhai has no module loading, no file I/O, and no networking — module loading is explicitly disabled in this extension. That's a feature here: you can evaluate untrusted script text from a column without granting it access to anything outside `context`. If you need those capabilities, this is the wrong tool. See the [Rhai Book — Safety](https://rhai.rs/book/safety/) chapter."
+          "description": "Scripts have no file I/O, no networking, no process access and no module loading, and `print` / `debug` output is discarded. In the DuckDB 2.0 build the Rhai filesystem package that earlier builds bundled is removed and `import` of `.rhai` files from disk is refused, so the sandbox holds even for SQL users who could not otherwise touch files — independent of `enable_external_access`. You can evaluate untrusted script text from a column without granting it access to anything outside `context`. See the [Rhai Book — Safety](https://rhai.rs/book/safety/) chapter."
         },
         {
           "label": "Language is constrained",

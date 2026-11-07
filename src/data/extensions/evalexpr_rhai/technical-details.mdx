@@ -75,22 +75,70 @@ FROM range(1000, 1005);
 
 The Rhai language itself — operators, control flow, type system, the standard string / array / map methods — is documented in the [Rhai Book](https://rhai.rs/book/). The source and issue tracker live at [rhaiscript/rhai](https://github.com/rhaiscript/rhai).
 
-## Compile-and-cache for constant scripts
+## Compile-and-cache
 
-When the script string is a literal in the SQL — or otherwise constant within the query — the Rhai parser runs **once**. The resulting AST is cached and reused for every row. Per-row cost after warmup is interpreter execution only.
+Each DuckDB thread keeps one Rhai engine (with its packages registered) and a cache of compiled scripts. A literal script — or any script string seen before on that thread — is parsed **once**, and the AST is reused for every row after that. Per-row cost after warmup is interpreter execution only.
 
-When the script string comes from a column (the rules-from-a-column pattern in the lead snippet), each distinct script value parses on first encounter and caches by content. A handful of distinct rules is fine; thousands of distinct rules per query is the point at which parse cost starts to matter.
+When the script string comes from a column (the rules-from-a-column pattern in the lead snippet), each distinct script value parses on first encounter and is then served from the cache. A handful of distinct rules is fine; thousands of distinct rules per query is the point at which parse cost starts to matter.
+
+Every row is evaluated, even when the script and context are both constants: scripts can call random-number functions (`rand()`, `rand_float()`, `shuffle()`, ...), so the function is `VOLATILE`.
 
 ## The sandbox
 
-Rhai has no host I/O. Scripts cannot:
+Scripts cannot:
 
-- Open files, read environment variables, or touch the filesystem.
+- Open, read, write or delete files, or read environment variables.
 - Spawn processes or invoke shell commands.
 - Make network connections.
-- Load Rhai modules from disk (module loading is disabled in this extension).
+- Load Rhai modules from disk — `import` always fails with `Module not found` in the DuckDB 2.0 build.
+- Write to the server's console — `print` and `debug` are accepted but their output is discarded.
 
-The only thing a script can see is the `context` object you pass in. That makes it safe to evaluate script text supplied by users or stored in a config table — there's no host surface to reach. The full sandbox model is described in the [Rhai Book — Safety](https://rhai.rs/book/safety/) chapter.
+The only thing a script can see is the `context` object you pass in. That makes it safe to evaluate script text supplied by users or stored in a config table. The bundled packages are pure computation: [rhai-rand](https://github.com/rhaiscript/rhai-rand) (random numbers), [rhai-url](https://github.com/rhaiscript/rhai-url) (URL parsing, no fetching) and [rhai-sci](https://github.com/rhaiscript/rhai-sci) (statistics and matrices, built without its file/URL-reading `io` feature). The general sandbox model is described in the [Rhai Book — Safety](https://rhai.rs/book/safety/) chapter.
+
+<Callout type="warning" title="Earlier builds bundled filesystem functions">
+Builds before the DuckDB 2.0 release registered the [rhai-fs](https://github.com/rhaiscript/rhai-fs) package, so scripts could call `open_file()` and friends with the permissions of the DuckDB process — regardless of `enable_external_access` or `allowed_directories`. Earlier builds also let `import "path" as m;` load and run any `.rhai` file the process could read. The DuckDB 2.0 build removes the package and disables imports; those functions now fail with `Function not found`, and `import` with `Module not found`. Don't evaluate untrusted scripts on older builds.
+</Callout>
+
+## Limits and cancellation
+
+<Callout type="note" title="DuckDB 2.0 build">
+The settings below exist only in the DuckDB 2.0 build.
+</Callout>
+
+Every evaluation is bounded, so a runaway or hostile script returns the `error` arm instead of hanging a worker thread or exhausting memory:
+
+| Setting | Default | Bounds |
+| --- | --- | --- |
+| `evalexpr_rhai_max_operations` | `100000000` | Rhai operations per evaluation (`loop {}` stops here) |
+| `evalexpr_rhai_max_string_size` | `16777216` | Length in bytes of any string a script builds |
+| `evalexpr_rhai_max_array_size` | `1000000` | Elements in any array, nested arrays included |
+| `evalexpr_rhai_max_map_size` | `1000000` | Properties in an object map literal or merge |
+| `evalexpr_rhai_max_call_levels` | `64` | Depth of nested function calls (recursion) |
+
+Set any of them to `0` to remove that limit. Settings are read when a query starts:
+
+```sql
+SET evalexpr_rhai_max_operations = 1000;
+SELECT evalexpr_rhai('let n = 0; for i in 0..100000 { n += i; } n').error;
+-- 'Too many operations (line 1, ...)'
+RESET evalexpr_rhai_max_operations;
+```
+
+Running scripts poll the query's interrupt flag, so cancelling a query (Ctrl-C in the CLI, `interrupt()` from a client) stops it even with the operation limit disabled. Scripts run on a large dedicated stack, and results nested more than 128 levels deep come back as an error, so deeply nested arrays and maps cannot crash the process.
+
+## Changes in the DuckDB 2.0 release
+
+<Callout type="warning" title="Breaking: filesystem functions removed">
+The rhai-fs functions (`open_file`, `path`, `cwd`, `read_string`, `write`, `remove`, ...) are gone — see [The sandbox](#the-sandbox). Scripts that used them now return `Function not found` in the `error` arm, and `import` of a `.rhai` file from disk returns `Module not found`.
+</Callout>
+
+Also new in the DuckDB 2.0 build:
+
+- **Limits and cancellation:** the `evalexpr_rhai_max_*` settings and interrupt support described in [Limits and cancellation](#limits-and-cancellation). Scripts that previously ran forever, or ran more than 100 million operations, now return an error unless you raise the limit.
+- **Random functions per row:** a script that is constant across the query (for example `evalexpr_rhai('rand()')`) is evaluated for every row instead of once, so random values differ per row.
+- **Performance:** one engine per thread instead of one per row, and compiled scripts are cached for column-driven scripts too..
+- **Upstream:** Rhai 1.27, rhai-rand 0.2, rhai-sci 0.4 and rhai-url 0.0.6.
+- **Function metadata:** `duckdb_functions()` reports real parameter names (`expression`, `context`).
 
 ## Rhai vs. QuickJS — pick by need
 

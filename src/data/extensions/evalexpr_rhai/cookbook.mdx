@@ -112,6 +112,21 @@ FROM jobs;
 
 For a single column that's "result on success, NULL on failure," use `.ok` directly — it's `NULL` for the rows whose script threw.
 
+## Guard against runaway scripts
+
+Scripts from a column can contain mistakes like an endless loop. In the DuckDB 2.0 build they hit the operation limit and come back in the `error` arm instead of hanging the query. Tighten the limit for untrusted rules, then reset it:
+
+```sql
+SET evalexpr_rhai_max_operations = 100000;
+
+SELECT rule, evalexpr_rhai(rule).error AS failure
+FROM (VALUES ('loop { }'), ('40 + 2')) AS t(rule);
+
+RESET evalexpr_rhai_max_operations;
+```
+
+See [Limits and cancellation](#limits-and-cancellation) for all the `evalexpr_rhai_max_*` settings.
+
 ## Filtering on a script result
 
 Booleans returned from `.ok` work in `WHERE` directly:
@@ -123,7 +138,7 @@ WHERE evalexpr_rhai('context.salary > 100000 && context.years >= 5',
                     { 'salary': salary, 'years': years }).ok = TRUE;
 ```
 
-Constant script strings parse once and cache, so the rule isn't re-parsed per row.
+Compiled scripts are cached per thread, so the rule isn't re-parsed per row.
 
 ## Diagnostics
 
