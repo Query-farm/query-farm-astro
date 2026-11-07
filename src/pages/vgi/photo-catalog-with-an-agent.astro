@@ -1,0 +1,128 @@
+---
+import { Icon } from 'astro-icon/components';
+import PageLayout from '../../layouts/PageLayout.astro';
+import VGISubNav from '../../components/sections/VGISubNav.astro';
+import PageHead from '../../components/ui/PageHead.astro';
+import Button from '../../components/ui/Button.astro';
+import CodeBlock from '../../components/ui/CodeBlock.astro';
+import BrandMark from '../../components/vgi/BrandMark.astro';
+import AgentLanguageMarks from '../../components/vgi/AgentLanguageMarks.astro';
+import { VGI_AGENT_REQUESTS, VGI_SKILLS_SOURCE, vgiSkillsFile } from '../../lib/vgi-agents';
+import example from '../../data/vgi-photo-example.json';
+const request = VGI_AGENT_REQUESTS.find(item => item.id === 'files')!.prompt;
+const attach = `ATTACH 'photos' AS photos (
+    TYPE vgi,
+    LOCATION 'uv run --frozen --project photo_worker python photo_worker/photo_worker.py'
+);`;
+const query = `SELECT
+    coalesce(camera_model, '(unknown)') AS camera,
+    year(taken_at) AS year,
+    count(*) AS photos
+FROM photos.main.files('inputs/photos')
+GROUP BY ALL
+ORDER BY camera;`;
+---
+<PageLayout title="Turn a photo folder into a SQL catalog" description="Follow a tested, two-turn coding-agent conversation from a folder of sample photos to a VGI worker, ATTACH, and a useful DuckDB query.">
+  <VGISubNav />
+  <PageHead variant="section" eyebrow="Worked example" title="Turn a photo folder into a SQL catalog." hairband>
+    <Fragment slot="lede">Your filenames don’t tell you which cameras you used or which photos contain location data. Ask your coding agent to bring that metadata into DuckDB, where you can filter it, group it, and join it to other data.</Fragment>
+    <div class="mt-5 flex flex-wrap gap-3"><Button href="#try-it" variant="primary">Build it with your agent →</Button><Button href="#reproduce" variant="secondary">Run the saved example</Button></div>
+  </PageHead>
+
+  <article class="walkthrough section-container pb-16">
+    <div class="connection" aria-label="Sample photo files connect through a VGI worker to a DuckDB catalog">
+      <div><span class="connection-icon files"><Icon name="mdi:folder-image" size={30} /></span><strong>A folder of photos</strong><span>Camera, date, location</span></div>
+      <span class="connection-arrow" aria-hidden="true">→</span>
+      <div><img src="/vgi/vgi-hero.webp" alt="VGI" width="900" height="662" /><strong>Your agent’s worker</strong><span>Reads metadata locally</span></div>
+      <span class="connection-arrow" aria-hidden="true">→</span>
+      <div><span class="connection-icon database"><BrandMark name="duckdb" size={30} /></span><strong>A DuckDB catalog</strong><span><code>photos.main.files(…)</code></span></div>
+    </div>
+
+    <section id="try-it" class="walkthrough-section">
+      <span class="step-label">01 · Give your agent the skill</span>
+      <h2>Start in a fresh project.</h2>
+      <p>The skill teaches your agent how to build a VGI worker and test it through DuckDB. Install it in your project, selecting your coding agent when prompted.</p>
+      <CodeBlock code={`npx skills add ${VGI_SKILLS_SOURCE} --skill vgi-worker`} lang="bash" title="Install in your project’s terminal" tryable={false} />
+      <p class="small-copy">The installer uses Node.js. The saved Python example below also uses <a href="https://docs.astral.sh/uv/">uv</a>. <a href="/vgi/build-with-an-agent/#start">Agent-specific installation help →</a></p>
+    </section>
+
+    <section class="walkthrough-section">
+      <span class="step-label">02 · Give it something concrete to read</span>
+      <h2>Use the sample photos.</h2>
+      <p><a href="/vgi/agents/photo-catalog-inputs.zip" download>Download the sample inputs</a> and unzip them in your project. You’ll get an <code>inputs/photos</code> folder and an empty folder for testing.</p>
+      <div class="sample-files">
+        <div><Icon name="mdi:file-image-outline" size={23} /><strong>north.jpg</strong><span>Camera A · 2025 · GPS</span></div>
+        <div><Icon name="mdi:file-image-outline" size={23} /><strong>south.jpg</strong><span>Camera B · 2024 · GPS</span></div>
+        <div><Icon name="mdi:file-image-outline" size={23} /><strong>plain.jpg</strong><span>No EXIF metadata</span></div>
+      </div>
+      <p>These are tiny synthetic images with fictional metadata. The folder also contains a corrupt file and a nested photo: useful tests of what the worker should skip.</p>
+    </section>
+
+    <section class="walkthrough-section">
+      <span class="step-label">03 · Describe the outcome</span>
+      <h2>Paste the request. Choose your language.</h2>
+      <p>This is the same request offered on the quickstart. It leaves the folder and language open, so the agent should ask before writing code.</p>
+      <div class="prompt-copy"><CodeBlock code={request} lang="text" title="Your first message" tryable={false} /></div>
+      <div class="agent-question"><BrandMark name="claude-code" size={24} /><div><strong>The agent asks for the missing information</strong><p>Which folder should it read? Which language should it use? What should happen with subfolders or unreadable files?</p><span>Summary of the questions from the verified Claude Code run.</span></div></div>
+      <p>In this run, we chose Python and narrowed the scope to JPEGs directly in one folder. You can choose any supported language for your own build.</p>
+      <AgentLanguageMarks kind="languages" />
+      <div class="prompt-copy"><CodeBlock code={example.reply} lang="text" title="Our reply · Python for this worked run" tryable={false} /></div>
+      <p class="small-copy">Replace <code>inputs/photos</code> with your folder’s path. The example reply uses a relative path; the evaluation supplied the same folder as an absolute path.</p>
+    </section>
+
+    <section class="walkthrough-section">
+      <span class="step-label">04 · Let the agent build and verify</span>
+      <h2>A worker you can inspect and run.</h2>
+      <p>The agent creates a program that reads EXIF metadata and exposes <code>photos.main.files(folder)</code>. But a missing date or unreadable file must not silently become a believable value. The tests check those cases through real SQL.</p>
+      <div class="build-result"><span><BrandMark name="claude-code" size={22} />Claude Code</span><span><BrandMark name="python" size={22} />Python</span><span><Icon name="mdi:check-circle-outline" size={22} />Verified in DuckDB</span></div>
+      <ul class="checks"><li>Photos without EXIF return NULL metadata.</li><li>Corrupt files are skipped with a diagnostic; subfolders and symlinks are not followed.</li><li>Empty and NULL folder inputs return no rows.</li><li>A newly added photo appears on the next scan.</li><li>The original input files remain unchanged.</li></ul>
+      <p>The saved worker passed nine agent-written SQL checks and nine independent checks. Its source was copied unchanged into the downloadable example. The build was verified on {example.recordedOn}; it is one measured example, not a completion-time guarantee.</p>
+      <p><a href={vgiSkillsFile('examples/photo-catalog/README.md')}>Inspect the source, tests, and build provenance →</a></p>
+    </section>
+
+    <section class="walkthrough-section">
+      <span class="step-label">05 · Bring the catalog into your session</span>
+      <h2>ATTACH the worker. Ask a useful question.</h2>
+      <p>Your agent returns the launch command for its worker. After VGI is loaded, <code>ATTACH</code> adds the <code>photos</code> catalog to your DuckDB session. Its <code>main</code> schema contains the <code>files(folder)</code> table function.</p>
+      <CodeBlock code={attach} title="Saved Python example · run DuckDB from the example directory" tryable={false} />
+      <p>Now ask which cameras and years are represented in the folder:</p>
+      <CodeBlock code={query} title="Query the photo metadata" tryable={false} />
+      <div class="result-table"><table aria-label="Photo counts by camera and year"><thead><tr>{example.columns.map(column => <th scope="col">{column}</th>)}</tr></thead><tbody>{example.rows.map(row => <tr>{row.map(value => <td>{value === null ? <code>NULL</code> : value}</td>)}</tr>)}</tbody></table></div>
+      <p class="small-copy">Actual SQL results from the supplied synthetic images. The photo without metadata stays visible as an unknown camera and year.</p>
+      <p>The same catalog can answer another question: which photos contain location coordinates?</p>
+      <CodeBlock code={`SELECT path, latitude, longitude\nFROM photos.main.files('inputs/photos')\nWHERE latitude IS NOT NULL AND longitude IS NOT NULL;`} title="Find photos with location metadata" tryable={false} />
+      <p>The agent’s work is done. DuckDB calls the worker when you query it; the agent is no longer part of that execution.</p>
+    </section>
+
+    <section id="reproduce" class="walkthrough-section saved-example">
+      <span class="step-label">Reproduce the result</span>
+      <h2>Run the exact worker from this example.</h2>
+      <p><a href="/vgi/agents/photo-catalog-example.zip" download>Download the complete example</a>, unzip it, and run this from its directory:</p>
+      <CodeBlock code="uv run demo.py" lang="bash" title="Verify the saved worker and run the query" tryable={false} />
+      <p>The runner sets up VGI from <code>query_farm</code>, runs the saved SQL assertions, and prints the <code>ATTACH</code> statement and result for your local paths. Package and extension downloads need network access during setup; photo metadata processing stays local.</p>
+      <p class="small-copy"><a href="/vgi/agents/photo-catalog-downloads.json">Download sizes and SHA-256 checksums</a> · <a href={vgiSkillsFile('evals/onboarding/RESULTS.md')}>Onboarding evaluation results</a></p>
+      <div class="mt-6"><Button href="/vgi/build-with-an-agent/#start" variant="primary">Build your own connection →</Button></div>
+    </section>
+  </article>
+</PageLayout>
+<style>
+  .walkthrough { color:var(--color-soil-900); }
+  .walkthrough-section { max-width:80ch; margin-top:3.5rem; scroll-margin-top:8rem; }
+  .step-label { display:block; color:var(--color-sun-700); font-size:.8rem; font-weight:600; margin-bottom:.7rem; }
+  h2 { font-size:clamp(1.5rem,3vw,2rem); line-height:1.3; margin-bottom:1rem; }
+  .walkthrough p { font-size:.95rem; line-height:1.8; margin:1rem 0; }
+  .walkthrough p a { color:var(--color-field-700); text-decoration:underline; text-underline-offset:3px; }
+  .walkthrough .small-copy { color:var(--color-soil-600); font-size:.78rem; }
+  .connection { display:grid; grid-template-columns:1fr auto 1fr auto 1fr; gap:1rem; align-items:center; padding:1.6rem; border:1px solid var(--color-soil-300); border-radius:.8rem; background:#fffdf7; }
+  .connection>div { display:flex; flex-direction:column; align-items:center; gap:.5rem; text-align:center; min-width:0; }
+  .connection strong { font-size:.9rem; }.connection>div>span:last-child { font-size:.75rem; color:var(--color-soil-600); }.connection img { height:55px; width:75px; object-fit:contain; }
+  .connection-icon { display:flex; align-items:center; justify-content:center; height:55px; width:55px; border-radius:.7rem; }.files { color:#087f8c; background:#e3f4f0; }.database { background:#fff0c5; }.connection-arrow { color:var(--color-soil-500); font-size:1.5rem; }
+  .sample-files { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.75rem; margin:1.25rem 0; }.sample-files>div { display:flex; flex-direction:column; gap:.4rem; padding:1rem; border:1px solid var(--color-soil-300); border-radius:.6rem; background:#fffdf7; }.sample-files :global(svg) { color:#087f8c; }.sample-files strong { font-size:.85rem; }.sample-files span { font-size:.75rem; color:var(--color-soil-600); }
+  .prompt-copy :global(pre) { white-space:pre-wrap; overflow-wrap:anywhere; }.prompt-copy :global(code) { white-space:pre-wrap; }
+  .agent-question { display:flex; gap:.8rem; background:#fae8df; padding:1rem 1.2rem; border-radius:.6rem; margin:1.25rem 0; }.agent-question :global(.brand-mark) { color:#b95031; margin-top:.2rem; }.agent-question strong { font-size:.9rem; }.agent-question p { font-size:.85rem; margin:.35rem 0; }.agent-question span { font-size:.72rem; color:var(--color-soil-600); }
+  .build-result { display:flex; flex-wrap:wrap; gap:1rem 1.5rem; font-size:.85rem; margin:1.3rem 0; }.build-result>span { display:flex; align-items:center; gap:.45rem; }.build-result>span:first-child { color:#b95031; }.build-result>span:nth-child(2) { color:#3776ab; }.build-result>span:last-child { color:var(--color-field-700); }
+  .checks { list-style:disc; padding-left:1.3rem; font-size:.9rem; line-height:1.8; }.checks li { margin:.4rem 0; }
+  .result-table { border:1px solid var(--color-soil-300); border-radius:.6rem; overflow:auto; margin-top:1rem; }table { width:100%; border-collapse:collapse; font-size:.85rem; text-align:left; }th { background:var(--color-soil-100); }th,td { padding:.75rem 1rem; }td { border-top:1px solid var(--color-soil-300); }
+  .saved-example { border-top:1px solid var(--color-soil-300); padding-top:2rem; }
+  @media(max-width:600px) { .connection { grid-template-columns:1fr; gap:.7rem; padding:1.25rem; }.connection-arrow { transform:rotate(90deg); text-align:center; }.sample-files { grid-template-columns:1fr; }.walkthrough-section { margin-top:2.5rem; } }
+</style>

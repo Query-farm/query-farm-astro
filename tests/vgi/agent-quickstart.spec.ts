@@ -177,3 +177,23 @@ test('article explains VGI and links to the generated worker and SQL evidence', 
   await expect(page.getByRole('link', {name:'Get the generated worker and tests →'})).toHaveAttribute('href', /examples\/agent-github-releases\/README.md$/);
   await expect(page.locator('video, a[href*="agent-build-recording"]')).toHaveCount(0);
 });
+
+test('photo walkthrough carries the exact request and serves reproducible downloads', async ({ page }) => {
+  await page.goto('/vgi/build-with-an-agent/');
+  const request = await page.locator('#request-files [data-request-text]').textContent();
+  await page.getByRole('link', {name:'Follow a worked example →'}).click();
+  await expect(page.getByRole('heading', {level:1})).toContainText('Turn a photo folder into a SQL catalog');
+  await expect(page.locator('.prompt-copy').first()).toContainText(request!);
+  await expect(page.getByRole('list', {name:'Worker languages'}).locator('li')).toHaveCount(6);
+  await expect(page.getByRole('table', {name:'Photo counts by camera and year'}).locator('tbody tr')).toHaveCount(3);
+  await expect(page.getByRole('table', {name:'Photo counts by camera and year'})).toContainText('NULL');
+  for (const name of ['Download the sample inputs', 'Download the complete example']) {
+    const href = await page.getByRole('link', {name, exact:true}).getAttribute('href');
+    const response = await page.request.get(href!);
+    expect(response.status()).toBe(200);
+    expect((await response.body()).subarray(0,2).toString()).toBe('PK');
+  }
+  await page.setViewportSize({width:390,height:844});
+  await page.evaluate(() => document.fonts.ready);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
