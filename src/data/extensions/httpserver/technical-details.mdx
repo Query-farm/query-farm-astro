@@ -27,9 +27,9 @@ import Callout from '../../../components/docs/Callout.astro';
 Exposing a DuckDB connection over HTTP is genuinely risky. Treat this extension as a building block, not a finished product. Before binding to anything beyond `localhost`:
 
 - **Run DuckDB with `-readonly`.** Without it, any authenticated client can `INSERT`, `ATTACH`, `COPY TO`, install extensions, or call file-system functions ([`SQL injection`](https://owasp.org/www-community/attacks/SQL_Injection) is the entire API here — there is no safe parameterization path). The upstream README's first security note is exactly this.
-- **Front it with TLS.** The server speaks plain HTTP. [HTTP Basic](https://en.wikipedia.org/wiki/Basic_access_authentication) over plaintext is effectively no auth. Use [nginx](https://nginx.org/en/docs/http/ngx_http_ssl_module.html), [Caddy](https://caddyserver.com/docs/automatic-https), or [HAProxy](https://www.haproxy.org/) as a TLS terminator.
+- **Use TLS.** By default the server speaks plain HTTP, and [HTTP Basic](https://en.wikipedia.org/wiki/Basic_access_authentication) over plaintext is effectively no auth. On the DuckDB 2.0 build, set `httpserver_tls_cert` / `httpserver_tls_key` to serve HTTPS directly (see [Settings](#settings)); otherwise use [nginx](https://nginx.org/en/docs/http/ngx_http_ssl_module.html), [Caddy](https://caddyserver.com/docs/automatic-https), or [HAProxy](https://www.haproxy.org/) as a TLS terminator.
 - **One credential, no per-user scope.** Auth is binary — the client either presents the configured key or it doesn't. No users, no roles, no per-query allowlists, no rate limiting.
-- **Don't rely on a `localhost` bind alone.** Every response carries `Access-Control-Allow-Origin: *`, so a web page open in a browser on the same machine can send queries to a local server and read the results. Always set a credential, even on loopback.
+- **Browsers on the same machine.** The DuckDB 2.0 build refuses cross-origin browser requests (`403`) unless the origin is listed in `httpserver_allowed_origins`, and an unauthenticated loopback server rejects requests whose `Host` header isn't a loopback name, so a web page can't reach it through DNS rebinding. Earlier builds (including the Haybarn 1.5 build) send `Access-Control-Allow-Origin: *` on every response — there, always set a credential, even on loopback.
 - **Lock down the DuckDB process itself.** Follow [DuckDB's hardening guidance](https://duckdb.org/docs/operations_manual/securing_duckdb/overview) and consider disabling [community-extension installation](https://duckdb.org/docs/operations_manual/securing_duckdb/securing_extensions) on the served process.
 
 For internal APIs on a private network, behind a TLS proxy, against a read-only database — this extension is a great fit. For anything multi-tenant or internet-exposed, a dedicated SQL gateway is the right tool.
@@ -37,9 +37,9 @@ For internal APIs on a private network, behind a TLS proxy, against a read-only 
 
 ## Architecture
 
-[`httpserve_start`](#httpserve_start) starts an HTTP listener thread inside the DuckDB process. Each request runs on a fresh connection to the same database instance — so any extension you've `LOAD`ed, any database you've `ATTACH`ed, and any secret you've `CREATE`d is visible to HTTP clients. Connection-local state is not: temporary tables, `SET VARIABLE` values, and session settings from the calling connection are invisible to HTTP queries. There is one global server per DuckDB process; calling [`httpserve_start`](#httpserve_start) while it is running raises `HTTP server is already running`, so call [`httpserve_stop`](#httpserve_stop) first.
+[`httpserve_start`](#httpserve_start) starts an HTTP listener thread inside the DuckDB process. Each request runs on a fresh connection to the same database instance — so any extension you've `LOAD`ed, any database you've `ATTACH`ed, and any secret you've `CREATE`d is visible to HTTP clients. Connection-local state is not: temporary tables, `SET VARIABLE` values, and session settings from the calling connection are invisible to HTTP queries. Each database runs at most one server; calling [`httpserve_start`](#httpserve_start) while it is running raises `HTTP server is already running`, so call [`httpserve_stop`](#httpserve_stop) first. On the DuckDB 2.0 build the server belongs to the database that started it: closing that database stops the server, and two databases in one process can each serve on their own port. (Earlier builds have one global server per process that keeps the database alive until it is stopped.)
 
-`httpserve_start` binds the port before it returns. If the address can't be bound (port in use, privileged port, unknown interface), it raises `Failed to start HTTP server on <host>:<port>` and nothing is left running, so you can retry with another port. Pass port `0` to let the OS pick a free port; the returned message names the port actually bound.
+`httpserve_start` binds the port before it returns. If the address can't be bound (port in use — including by another server in the same process, privileged port, unknown interface), it raises `Failed to start HTTP server on <host>:<port>` and nothing is left running, so you can retry with another port. Pass port `0` to let the OS pick a free port; the returned message names the port actually bound.
 
 The endpoint surface is intentionally small:
 
@@ -52,7 +52,7 @@ There is no `/metrics`, no `/health` JSON, and no [OpenAPI](https://www.openapis
 
 The response format vocabulary mirrors the [ClickHouse HTTP interface](https://clickhouse.com/docs/en/interfaces/formats):
 
-- `?default_format=JSONEachRow` — newline-delimited rows ([JSONEachRow](https://clickhouse.com/docs/en/interfaces/formats#jsoneachrow)). This is the default. Every non-`NULL` value is rendered as a JSON string (`{"a":"42"}`).
+- `?default_format=JSONEachRow` — newline-delimited rows ([JSONEachRow](https://clickhouse.com/docs/en/interfaces/formats#jsoneachrow)). This is the default. On the DuckDB 2.0 build values keep their JSON types, as in `JSONCompact` (`{"a":42,"b":true,"c":[1,2]}`; `HUGEINT` stays a string); earlier builds render every non-`NULL` value as a JSON string (`{"a":"42"}`).
 - `?default_format=JSONCompact` — single document with `meta`, `data`, `rows`, and `statistics` keys ([JSONCompact](https://clickhouse.com/docs/en/interfaces/formats#jsoncompact)), with typed values.
 - `?default_format=CSV` — a header row followed by comma-separated rows.
 - `?default_format=XML` — a `<results>` document with one `<row>` per result row.
@@ -67,13 +67,26 @@ The third argument to [`httpserve_start`](#httpserve_start) selects the auth mod
 
 | `auth` argument           | Mode                                                                                    |
 |---------------------------|-----------------------------------------------------------------------------------------|
-| `''` (empty)              | No auth. Bind to `localhost` only and run on a trusted network.                          |
+| `''` (empty) or `NULL`    | No auth. On the DuckDB 2.0 build only loopback addresses (`127.x`, `::1`, `localhost`) may be served unless `httpserver_allow_unauthenticated_remote` is set. |
 | `'user:pass'` (one colon) | [HTTP Basic auth](https://datatracker.ietf.org/doc/html/rfc7617).                        |
 | any other value           | Shared key sent by clients in the `X-API-Key` header.                                    |
 
 Both auth modes are **single-credential** — there is one user/pass or one key per server. Each mode accepts only its own header: a `'user:pass'` server rejects `X-API-Key: user:pass`, and a key server rejects HTTP Basic credentials. A Basic-mode `401` carries `WWW-Authenticate`, so browsers prompt for the login. Multi-tenant or per-user access control belongs at a reverse proxy. The credential is compared in constant time but travels in plaintext over HTTP, so TLS in front is non-negotiable for anything beyond a loopback bind.
 
 To rotate a credential without restarting DuckDB, call [`httpserve_stop`](#httpserve_stop) and then [`httpserve_start`](#httpserve_start) again with the new value.
+
+## Settings
+
+The DuckDB 2.0 build adds four settings. [`httpserve_start`](#httpserve_start) reads them when it starts the server, so change them before starting (or restart the server).
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `httpserver_allowed_origins` | `''` | Comma-separated origins (e.g. `https://app.example.com`) whose web pages may call the server; they get CORS headers. `'*'` allows any origin (still without `Allow-Credentials`). Other cross-origin browser requests — an `Origin` that isn't the server itself, or `Sec-Fetch-Site: cross-site` — are refused with `403`. Non-browser clients (curl, httpfs, scripts) aren't affected. |
+| `httpserver_allow_unauthenticated_remote` | `false` | Allow an empty credential on a non-loopback address. Anyone who can reach the port can run any SQL. |
+| `httpserver_tls_cert` | `''` | PEM certificate (chain) file. With `httpserver_tls_key`, the server speaks HTTPS and the start message reads `HTTPS server started on …`. |
+| `httpserver_tls_key` | `''` | PEM private key file for `httpserver_tls_cert`. |
+
+Starting a network listener is external access: when [`enable_external_access`](https://duckdb.org/docs/configuration/overview) is `false`, `httpserve_start` raises a permission error.
 
 ## Scoping the served database
 
@@ -87,6 +100,8 @@ DUCKDB_HTTPSERVER_FOREGROUND=1 duckdb -readonly mydata.duckdb -c "
   SELECT httpserve_start('0.0.0.0', 9999, 'shared-api-key');
 "
 ```
+
+Once the server is running you can also switch off external access for everything it serves — `SET enable_external_access = false;` blocks file, network, and extension access for HTTP queries (it can't be switched back on, and `httpserve_start` is refused afterwards, so start the server first).
 
 See the [DuckDB CLI docs](https://duckdb.org/docs/api/cli) and the [securing DuckDB](https://duckdb.org/docs/operations_manual/securing_duckdb/overview) page for the full lockdown vocabulary — read-only mode, [restricting extension installation](https://duckdb.org/docs/operations_manual/securing_duckdb/securing_extensions), and disabling filesystem functions.
 
@@ -115,6 +130,25 @@ This is the closest pattern to "distributed DuckDB" that exists today — small,
 - **Hand-rolled FastAPI / Express service** — more flexible (per-user auth, request validation, custom response shapes) but adds another runtime to deploy. This extension is the right fit when *the SQL is the API*.
 - **[Airport](/products/extensions/airport) over Arrow Flight** — the right tool when both ends are inside a data system and you want columnar Arrow on the wire. Use httpserver when the client is a generic HTTP consumer (a browser, a Lambda, a curl in a cron job).
 - **[ADBC Scanner](/products/extensions/adbc_scanner) or [Airport](/products/extensions/airport) outbound** — for *querying* something else from DuckDB. httpserver is the inverse direction: making *this* DuckDB queryable.
+
+## Changes in the DuckDB 2.0 release
+
+<Callout type="warning" title="Breaking: safer defaults in the DuckDB 2.0 build">
+- **No auth means loopback only.** `httpserve_start('0.0.0.0', port, '')` now raises a permission error. Pass a credential, bind `127.0.0.1`, or `SET httpserver_allow_unauthenticated_remote = true`.
+- **No wildcard CORS.** Cross-origin browser requests get `403` unless their origin is listed in `httpserver_allowed_origins`. Set it to `'*'` for the old behaviour.
+- **`JSONEachRow` keeps JSON types** — numbers and booleans are no longer quoted.
+- **`enable_external_access = false` refuses `httpserve_start`.**
+- **A port that is already listening is an error**, even when the other server is in the same process (earlier builds could silently share it).
+</Callout>
+
+Also new in the DuckDB 2.0 build:
+
+- **Per-database servers.** The server belongs to the database that started it, stops when that database closes, and no longer keeps a closed database alive. Start and stop are thread-safe.
+- **Built-in TLS** through `httpserver_tls_cert` / `httpserver_tls_key`.
+- **DNS-rebinding protection** for unauthenticated loopback servers.
+- **`httpserve_stop()` from a served query** raises an error instead of hanging the server.
+- **Crash fixes:** a failed bind is reported as an error instead of aborting the process.
+- `httpserve_start` / `httpserve_stop` are volatile and documented in `duckdb_functions()` (descriptions, examples, parameter names).
 
 ## Recipe overview
 
