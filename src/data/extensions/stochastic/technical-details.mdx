@@ -72,7 +72,18 @@ SELECT dist_binomial_pdf(10, 1.5, 5);
 SELECT dist_normal_quantile(0.0, 1.0, 1.5);
 ```
 
-NaN and infinite parameters are rejected the same way. Evaluation points may be infinite, and a quantile at p = 0 or 1 of an unbounded distribution is `-inf` or `inf`.
+NaN and infinite parameters are rejected the same way. Evaluation points may be infinite, and the quantile at p = 0 or 1 is the lower or upper end of the support (`-inf` or `inf` when it is unbounded).
+
+Outside the support, and at an infinite `x`, the density and cumulative functions return their limits instead of raising an error: the PDF or PMF is 0, the CDF is 0 below the support and 1 above it, and the hazard is 0 below it (above it the hazard is undefined and raises an error). Discrete distributions only take whole numbers, so their PMF is 0 between them and their CDF steps at each integer:
+
+```sql
+SELECT dist_beta_pdf(2.0, 5.0, 1.5) AS above_support,
+       dist_exponential_cdf(1.0, -1.0) AS below_support,
+       dist_poisson_pmf(5.0, 2.5) AS between_integers,
+       dist_poisson_cdf(5.0, 2.5) = dist_poisson_cdf(5.0, 2) AS step;
+```
+
+`_support` and `_range` report an unbounded end as `inf`.
 
 Results are checked too. A calculation that breaks down numerically at extreme parameters — one that would return NaN, or a probability outside [0, 1] — raises an error such as `rayleigh: the result is not a number for these arguments` instead of returning a wrong value:
 
@@ -225,6 +236,7 @@ It also changes behavior:
 - Discrete quantiles use the smallest-x definition above. `dist_poisson_quantile(5, 0.3)` is now 4 (it was 3), and `dist_geometric_quantile(0.5, 0.95)` is now 4 (it was 3.32).
 - The gamma parameters are named `shape, scale`, and the extreme value and logistic location parameters are named `location`. Arguments are positional, so queries are unaffected.
 - Results that break down numerically at extreme parameters raise an error instead of returning NaN or an out-of-range probability, and the non-central distributions have the [parameter limits](#non-central-parameter-limits) above.
+- Points outside the support return the limits described under [parameter validation](#parameter-validation) instead of an error, discrete PMFs are 0 at non-integers (they were interpolated), `_support` and `_range` report unbounded ends as `inf` (they were `1.7976931348623157e+308`), and the skew normal and inverse Gaussian quantiles at p = 0 and 1 return the ends of the support (build 2026110701 and later).
 - Continuous CDFs and quantiles are faster on Linux ARM64: calculations stay in `DOUBLE`, which also makes results the same on every platform.
 
 ## Integer uniform and Pareto compatibility
