@@ -41,8 +41,6 @@ export interface LanguageDocsSection extends DocsSection {
 
 export const DOCS_ROOT = '/vgi/docs/';
 
-/** Monorepo the per-language starter templates are generated from. */
-export const STARTERS_REPO = 'https://github.com/Query-farm/vgi-starters';
 /** Docs page describing the starter templates. */
 export const STARTERS_PAGE = '/vgi/docs/concepts/starter-templates/';
 
