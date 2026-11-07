@@ -2,7 +2,7 @@ import Callout from '../../../components/docs/Callout.astro';
 
 ## Read the response shape
 
-Every `http_*` function returns a [JSON](https://duckdb.org/docs/data/json/overview) object with three fields — `status`, `reason`, and `body` ([`http_head`](#http_head) returns `headers` in place of `body`). Pull them out with [`->>`](https://duckdb.org/docs/data/json/json_functions):
+Every `http_*` function returns a [JSON](https://duckdb.org/docs/data/json/overview) object with `status`, `reason`, and `body` — plus the response `headers` as a JSON object on DuckDB 2.0 ([`http_head`](#http_head) returns only `status`, `reason` and `headers`). Pull them out with [`->>`](https://duckdb.org/docs/data/json/json_functions):
 
 ```sql
 WITH r AS (
@@ -17,7 +17,7 @@ FROM r;
 
 To dive into a JSON response body, cast it on the way out: `((res->>'body')::JSON)->>'$.field'`. See [`http_get`](#http_get) for the full signature.
 
-A request that never gets a response — DNS failure, refused connection, TLS error, or no data within the 10-second read timeout — does **not** raise an error. It returns `status` `-1` with the failure in `reason` (for example `HTTP GET request failed. Connection error.`), so check `status` before trusting `body`.
+A request that never gets a response — DNS failure, refused connection, TLS error, or a timeout (DuckDB's `http_timeout` on the 2.0 build; a fixed 10-second read timeout on earlier builds) — does **not** raise an error. It returns `status` `-1` with the failure in `reason` (for example `HTTP GET request failed. Connection error.`), so check `status` before trusting `body`.
 
 ## GET a JSON API and project a field
 
@@ -158,7 +158,7 @@ FROM r;
 SELECT (http_head('https://httpbin.org/')->>'status')::INT AS status;
 ```
 
-[`http_head`](#http_head) returns the status and reason like [`http_get`](#http_get), plus the response headers (lower-cased names, encoded as a JSON string in `headers`), but the server skips the body. Useful for "is this URL reachable?" probes before a heavier `GET`.
+[`http_head`](#http_head) returns the status and reason like [`http_get`](#http_get), plus the response headers (lower-cased names) in `headers` — a JSON object on DuckDB 2.0, a JSON-encoded string on earlier builds, so `(res->>'headers')::JSON` works on both — but the server skips the body. Useful for "is this URL reachable?" probes before a heavier `GET`.
 
 ## Trigger a webhook from a SQL pipeline
 
@@ -176,4 +176,29 @@ SELECT http_post(
     'finished':  now()::VARCHAR
   }
 );
+```
+
+## Update and delete resources (DuckDB 2.0)
+
+[`http_put`](#http_put) and [`http_delete`](#http_delete) complete the REST verbs. Read a response header with `->'headers'`:
+
+```sql
+SELECT
+  (http_put('https://httpbin.org/put', body => {'name': 'duck'})->>'status')::INT AS put_status,
+  (http_delete('https://httpbin.org/delete')->>'status')::INT AS delete_status,
+  http_get('https://httpbin.org/get')->'headers'->>'content-type' AS content_type;
+```
+
+## Keep a token in an HTTP secret (DuckDB 2.0)
+
+Requests go through DuckDB's HTTP stack, so an [HTTP secret](https://duckdb.org/docs/extensions/httpfs/https#authenticating) adds the bearer token to every request within its scope — and never to another host a redirect points at:
+
+```sql
+CREATE SECRET github_token (
+  TYPE http,
+  BEARER_TOKEN 'ghp_your_token',
+  SCOPE 'https://api.github.com/'
+);
+
+SELECT (http_get('https://api.github.com/user')->>'status')::INT AS status;
 ```

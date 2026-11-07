@@ -6,11 +6,11 @@
     {
       "icon": "🔌",
       "title": "How it works",
-      "description": "The extension is a deliberately thin SQL surface over a single synchronous HTTP request — there is no `ATTACH`, no secrets type, no connection pool, no background fetcher, and no retry machinery. Each function call opens a connection, issues the request, blocks until the full response is in memory, and returns it as a JSON struct. Because the function shape is stable and side-effect-free at the SQL layer, the result composes cleanly into CTEs, lateral joins, and `CREATE TABLE AS` — anywhere a scalar JSON value is acceptable.",
+      "description": "The extension is a deliberately thin SQL surface over a single synchronous HTTP request — there is no `ATTACH`, no connection pool and no background fetcher. Each function call issues the request, blocks until the full response is in memory, and returns it as a JSON value. On the DuckDB 2.0 build the request goes through DuckDB's own HTTP stack (the [httpfs](https://duckdb.org/docs/extensions/httpfs/overview) extension for `https://`), so DuckDB's HTTP settings and HTTP secrets apply. The result composes cleanly into CTEs, lateral joins, and `CREATE TABLE AS` — anywhere a scalar JSON value is acceptable.",
       "bulletPoints": [
         {
           "label": "Synchronous and blocking",
-          "description": "DuckDB stalls on each call until the response arrives or the underlying request fails — there is no per-row timeout knob and no async dispatch. A slow endpoint slows the whole query, and rows are processed in whatever order DuckDB chooses to evaluate the scalar."
+          "description": "DuckDB stalls on each call until the response arrives or the request fails. On DuckDB 2.0 the timeout is DuckDB's `http_timeout` setting (connect and read, default 30 s), failed idempotent requests are retried per `http_retries`, and a query can be interrupted between rows. A slow endpoint still slows the whole query."
         },
         {
           "label": "One call per row",
@@ -18,7 +18,7 @@
         },
         {
           "label": "JSON response struct",
-          "description": "Every call returns a JSON object shaped `{status, reason, body}` — `status` is the numeric HTTP code, `reason` is the [HTTP reason phrase](https://datatracker.ietf.org/doc/html/rfc9110#name-status-codes) (`\"OK\"`, `\"Not Found\"`), and `body` is always a string. Pull fields out with [`->>`](https://duckdb.org/docs/data/json/json_functions); to drill into a JSON response body, cast it first: `((res->>'body')::JSON)->>'$.field'`."
+          "description": "Every call returns a JSON object shaped `{status, reason, body}` — plus `headers` (the response headers as an object) on DuckDB 2.0. `status` is the numeric HTTP code, `reason` is the [HTTP reason phrase](https://datatracker.ietf.org/doc/html/rfc9110#name-status-codes), and `body` is a string (base64 with `body_encoding: \"base64\"` when it is not UTF-8, on 2.0). Pull fields out with [`->>`](https://duckdb.org/docs/data/json/json_functions); to drill into a JSON response body, cast it first: `((res->>'body')::JSON)->>'$.field'`."
         },
         {
           "label": "Headers and params are MAPs",
@@ -29,23 +29,27 @@
     {
       "icon": "🛡️",
       "title": "Scope and caveats",
-      "description": "The extension is honest-by-design about what it does not do. Read this before pointing it at production traffic — for anything it lacks (streaming, complex auth, retries, parallelism), keep a real HTTP client or shell out to `curl` via [shellfs](/products/extensions/shellfs).",
+      "description": "Read this before pointing it at production traffic — for anything it lacks (streaming, client certificates, parallel fan-out), keep a real HTTP client or shell out to `curl` via [shellfs](/products/extensions/shellfs).",
       "bulletPoints": [
         {
           "label": "Experimental status",
           "description": "Marked **experimental** by the [upstream README](https://github.com/Query-farm/duckdb-extension-httpclient) — \"USE AT YOUR OWN RISK!\". Pin a known-good extension version in any pipeline that depends on it."
         },
         {
-          "label": "GET and POST only",
-          "description": "The documented surface covers `GET` and `POST` (JSON or form-encoded) — no `PUT`, `PATCH`, or `DELETE`. For other [HTTP methods](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods), shell out to `curl` via [shellfs](/products/extensions/shellfs)."
+          "label": "GET, POST, PUT, DELETE, HEAD",
+          "description": "`GET`, `HEAD` and `POST` (JSON or form-encoded) on every build; `PUT` and `DELETE` on the DuckDB 2.0 build. There is no `PATCH` (DuckDB's HTTP layer has no PATCH request) — for that, shell out to `curl` via [shellfs](/products/extensions/shellfs)."
         },
         {
-          "label": "No retries, backoff, or streaming",
-          "description": "The request is issued once and the entire response body is buffered into memory — there is no automatic retry, no backoff, and no streaming read of large responses. Build retry/backoff in your application layer, and prefer shellfs + `curl` piped through [`read_csv`](https://duckdb.org/docs/data/csv/overview) / [`read_json`](https://duckdb.org/docs/data/json/loading_json.html) when a response is too big to hold in memory."
+          "label": "Buffered responses",
+          "description": "The entire response body is buffered into memory; on DuckDB 2.0 a body larger than `http_client_max_response_size` (default 100 MiB) raises an error. Prefer shellfs + `curl` piped through [`read_csv`](https://duckdb.org/docs/data/csv/overview) / [`read_json`](https://duckdb.org/docs/data/json/loading_json.html) when a response is too big to hold in memory."
         },
         {
           "label": "Credentials are visible in the query plan",
-          "description": "Any token or secret inlined into a `headers` or `params` map appears in the cached query plan and `EXPLAIN` output. Source credentials from the environment with [`getenv`](https://duckdb.org/docs/sql/functions/utility#getenv) and bind them through [`SET VARIABLE`](https://duckdb.org/docs/sql/statements/set) — `getenv` resolves at parse time, so the literal value never lands in a cached plan or session log."
+          "description": "Any token or secret inlined into a `headers` or `params` map appears in the cached query plan and `EXPLAIN` output. Source credentials from the environment with [`getenv`](https://duckdb.org/docs/sql/functions/utility#getenv) and bind them through [`SET VARIABLE`](https://duckdb.org/docs/sql/statements/set) — `getenv` resolves at parse time, so the literal value never lands in a cached plan or session log. On DuckDB 2.0 you can instead keep a bearer token or extra headers in an [HTTP secret](https://duckdb.org/docs/extensions/httpfs/https#authenticating) scoped to the API's URL."
+        },
+        {
+          "label": "Sandboxed (DuckDB 2.0)",
+          "description": "Every function refuses to send a request when `enable_external_access` is false. Redirects are re-checked hop by hop: `https://` is never downgraded to `http://`, and `Authorization`/`Cookie` headers are not forwarded to another host."
         }
       ]
     }

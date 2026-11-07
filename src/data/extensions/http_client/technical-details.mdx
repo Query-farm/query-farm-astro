@@ -2,24 +2,50 @@ import Callout from '../../../components/docs/Callout.astro';
 
 ## Response handling
 
-Each request returns a JSON object with `status`, `reason`, and `body`. The body is a string: cast it to `JSON` before extracting fields from a JSON response. Check the status first, because an error response may have a different shape from a successful response.
+Each request returns a JSON object with `status`, `reason`, and `body` (plus the response `headers` on DuckDB 2.0). The body is a string: cast it to `JSON` before extracting fields from a JSON response. Check the status first, because an error response may have a different shape from a successful response.
 
-Requests are synchronous and the full response is buffered in memory. Use this extension for small responses and limited numbers of requests. Retries, backoff, and request scheduling belong in the calling application when needed.
+Requests are synchronous and the full response is buffered in memory. Use this extension for small responses and limited numbers of requests. On the DuckDB 2.0 build, DuckDB's `http_timeout` and `http_retries` settings apply and `http_client_max_response_size` caps the body; request scheduling and rate limiting belong in the calling application.
 
 ## Architecture
 
-The extension is a thin SQL surface over a synchronous HTTP request. There is no `ATTACH`, no secrets type, no connection pool, no background fetcher — a small set of HTTP functions:
+The extension is a thin SQL surface over a synchronous HTTP request. There is no `ATTACH`, no connection pool and no background fetcher — a small set of HTTP functions:
 
-- [`http_get(url)`](#http_get) — `GET` request. A second form, `http_get(url, headers, params)`, sends request headers and appends the `params` [`MAP`](https://duckdb.org/docs/sql/data_types/map) to the URL as a query string.
-- [`http_post(url, headers, params)`](#http_post) — `POST` with `params` (a `JSON` value; a `MAP` is converted to a JSON object) sent as the `application/json` body.
+- [`http_get(url, headers, params)`](#http_get) — `GET` request. `headers` and `params` are optional [`MAP`](https://duckdb.org/docs/sql/data_types/map)s; `params` is appended to the URL as a query string.
+- [`http_post(url, headers, body)`](#http_post) — `POST` with a `JSON` body sent as `application/json`. The body parameter is named `params` on the Haybarn 1.5 build; DuckDB 2.0 calls it `body` and still accepts `params =>`.
 - [`http_post_form(url, headers, params)`](#http_post_form) — `POST` with `params` URL-encoded as [`application/x-www-form-urlencoded`](https://datatracker.ietf.org/doc/html/rfc1866).
-- [`http_head(url)`](#http_head) — `HEAD` request; returns the response headers instead of a body.
+- [`http_head(url, headers)`](#http_head) — `HEAD` request; returns the response headers instead of a body.
+- [`http_put(url, headers, body)`](#http_put) and [`http_delete(url, headers)`](#http_delete) — DuckDB 2.0 only.
 
-Each call returns a JSON object — `{status, reason, body}` — that you extract with DuckDB's [JSON operators](https://duckdb.org/docs/data/json/json_functions). The `body` is always a string; cast it with `(body)::JSON` if the response is JSON and you want to drill in. Redirects are followed automatically. A request that gets no response at all does not raise an error: it returns `status` `-1` and the failure message in `reason`.
+Each call returns a JSON object — `{status, reason, body}`, plus `headers` on DuckDB 2.0 — that you extract with DuckDB's [JSON operators](https://duckdb.org/docs/data/json/json_functions). The `body` is a string; cast it with `(body)::JSON` if the response is JSON and you want to drill in. A request that gets no response at all does not raise an error: it returns `status` `-1` and the failure message in `reason`. HTTP error statuses are returned, not raised.
 
 Because the function shape is stable and synchronous, the result of an `http_*` call composes cleanly into CTEs, lateral joins, and `CREATE TABLE AS` — anywhere a scalar JSON value is acceptable. The cost is the obvious one: one HTTP call per evaluation, in the order DuckDB chooses to evaluate the scalar.
 
 Every `http_*` function is registered as `VOLATILE`, like `random()`. DuckDB never folds a call with constant arguments at plan time, so `SELECT http_post(...)->>'access_token'` sends exactly one request. Earlier builds could send such a request twice, which matters for non-idempotent endpoints like OAuth code exchanges and webhooks.
+
+## Changes in the DuckDB 2.0 release
+
+The DuckDB 2.0 build replaces the extension's own HTTP client with DuckDB's HTTP stack and closes several security gaps.
+
+<Callout type="warning" title="Behaviour changes in the DuckDB 2.0 build">
+- **httpfs is required for `https://` and for every method except plain-HTTP `GET`.** DuckDB autoloads it when it is installed or installable; otherwise the call fails with a message telling you to `INSTALL httpfs; LOAD httpfs;`.
+- **Requests are refused when `enable_external_access` is false.**
+- **`https://` is never redirected to `http://`** — such a redirect raises an error. When a redirect moves to another scheme, host or port, the `Authorization`, `Cookie` and `Proxy-Authorization` headers you passed are not forwarded. A `303` (and a `301`/`302` answering a `POST`) is followed with a body-less `GET`, as browsers do; `307`/`308` keep the method and body.
+- **`http_head` returns `headers` as a JSON object** instead of a JSON-encoded string. `(res->>'headers')::JSON` works on both builds; on 2.0 you can write `res->'headers'->>'content-type'`.
+- **Bodies that are not valid UTF-8 are base64-encoded**, with `"body_encoding": "base64"` in the result, instead of producing invalid JSON. DuckDB's HTTP client does not decompress responses, so if you send `Accept-Encoding: gzip` yourself, a compressed body comes back base64-encoded — leave that header out.
+- **URLs are validated:** only `http://` and `https://` (a URL without a scheme is still treated as `http://`), a host is required, and spaces or control characters must be percent-encoded. `user:password@host` in the URL is sent as basic auth. Header names and values with line breaks are rejected.
+- **`NULL` arguments:** a `NULL` url still returns `NULL`; a `NULL` `headers`, `params` or `body` now means "none" instead of making the result `NULL`.
+</Callout>
+
+Also new in the DuckDB 2.0 build:
+
+- **New functions:** [`http_put`](#http_put) and [`http_delete`](#http_delete). `headers`, `params` and `body` are optional and can be passed by name; `http_post` takes `body =>` (with `params =>` kept as an alias).
+- **DuckDB's HTTP settings apply:** [`http_timeout`](https://duckdb.org/docs/extensions/httpfs/https) (connect and read timeout, default 30 seconds — earlier builds had a fixed 10-second read timeout and no connect timeout), `http_retries` (idempotent requests only, never `POST`), `http_proxy`, and the CA/certificate settings of httpfs.
+- **HTTP secrets:** a `bearer_token` or `extra_http_headers` stored in an [HTTP secret](https://duckdb.org/docs/extensions/httpfs/https#authenticating) is sent to URLs within the secret's scope, and looked up again on every redirect hop.
+- **Response headers** are included in every result as `headers`.
+- **Limits:** `SET http_client_max_response_size = <bytes>` (default 100 MiB) caps the body — a `GET` stops reading as soon as it is exceeded — and `SET http_client_max_redirects = <n>` (default 10; `0` returns the `3xx` response itself) bounds redirects. Queries can be interrupted between rows and while a `GET` body streams in.
+- `params` are percent-encoded and appended with `&` when the URL already has a query string; fragments (`#...`) are not sent.
+
+There is no `PATCH`: DuckDB's HTTP layer has no PATCH request type.
 
 ## Securing credentials
 
@@ -39,6 +65,18 @@ SELECT http_post(
 ```
 
 `getenv` resolves at parse time, so the literal credential never appears in any cached query plan or session log. The same pattern works for OAuth client credentials passed to [`http_post_form`](#http_post_form) — see the [Cookbook](#cookbook) for that recipe.
+
+On the DuckDB 2.0 build you can keep a bearer token out of your queries entirely with an [HTTP secret](https://duckdb.org/docs/extensions/httpfs/https#authenticating) scoped to the API:
+
+```sql
+CREATE SECRET api_auth (
+  TYPE http,
+  BEARER_TOKEN 'your-token',
+  SCOPE 'https://api.example.com/'
+);
+
+SELECT http_get('https://api.example.com/me');
+```
 
 ## Scoping per-row calls
 
