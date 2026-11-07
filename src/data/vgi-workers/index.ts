@@ -47,6 +47,8 @@ export interface Worker extends WorkerRecord {
   name: string;
   displayTitle: string;
   blurb: string;
+  /** Upstream libraries named in the GitHub description, e.g. librosa. */
+  builtOn: string[];
   categoryIds: string[];
   primaryCategory: Category | undefined;
   tint: { tile: string; ink: string };
@@ -219,7 +221,23 @@ function installMethods(w: WorkerRecord): InstallMethod[] {
   return out;
 }
 
+const LANG_TOKEN = /^(python|rust|go|golang|typescript|ts|java|bun)$/i;
+
+/** GitHub descriptions often end "(Python)" or "(Python, librosa)": the language
+ *  repeats the badge, so drop it and keep any library as `builtOn`. */
+function splitTagline(t: string): { text: string; builtOn: string[] } {
+  let text = t.trim().replace(/\s*A VGI worker\.?$/i, '');
+  const m = text.match(/\s*\(([^()]*)\)\s*\.?$/);
+  if (!m) return { text, builtOn: [] };
+  const parts = m[1].split(',').map(p => p.trim()).filter(Boolean);
+  if (!parts.some(p => LANG_TOKEN.test(p))) return { text, builtOn: [] };
+  return { text: text.slice(0, m.index).trim(), builtOn: parts.filter(p => !LANG_TOKEN.test(p)) };
+}
+/** Every worker here is for DuckDB, so a trailing "for/in DuckDB" says nothing. */
+const trimDuckdb = (t: string) => t.replace(/\s+(for|in|into)\s+DuckDB\.?$/i, '');
+
 function enrich(w: WorkerRecord): Worker {
+  const tag = splitTagline(w.tagline ?? '');
   const cats = categoriesFor(w.slug);
   const primary = cats[0];
   const objects: CatalogObject[] = [];
@@ -268,7 +286,8 @@ function enrich(w: WorkerRecord): Worker {
     ...w,
     name: w.repo,
     displayTitle: w.title || w.tagline || w.repo,
-    blurb: w.tagline || w.summary || '',
+    blurb: trimDuckdb(tag.text) || w.summary || '',
+    builtOn: tag.builtOn,
     categoryIds: cats.map(c => c.id),
     primaryCategory: primary,
     tint: tintClasses[(primary?.tint ?? 'slate') as keyof typeof tintClasses],
