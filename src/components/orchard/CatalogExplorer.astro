@@ -11,7 +11,8 @@
 // search results deep-link here and the row (and its schema) opens on arrival.
 import { marked } from 'marked';
 import { Icon } from 'astro-icon/components';
-import { groupOverloads, type Worker } from '../../data/vgi-workers';
+import { groupOverloads, objectExamples, type Worker } from '../../data/vgi-workers';
+import ObjectExamples from './ObjectExamples.astro';
 import type { WorkerFunction, WorkerSchema, WorkerTable } from '../../data/vgi-workers/schema';
 
 interface Props {
@@ -49,7 +50,6 @@ function tableSql(cat: string, schema: string, t: WorkerTable) {
   return `SELECT * FROM ${qualify(cat, schema, t.name)} LIMIT 10;`;
 }
 function fnSql(cat: string, schema: string, f: WorkerFunction) {
-  if (f.examples[0]) return f.examples[0].trim().replace(/;?$/, ';');
   const positional = f.arguments.filter(a => !a.named).map(a => `<${a.name || a.type}>`);
   const named = f.arguments.filter(a => a.named && a.default == null).map(a => `${a.name} := <${a.type}>`);
   const call = `${qualify(cat, schema, f.name)}(${[...positional, ...named].join(', ')})`;
@@ -108,6 +108,12 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
                 <span class="vschema-sub">{schemaSummary(s)}</span>
               </summary>
               {s.comment && <div class="vdesc vschema-desc prose-vgi" set:html={md(s.comment)} />}
+              {objectExamples([s], { requireMention: false }).length > 0 && (
+                <details class="vschema-ex">
+                  <summary><Icon name="ph:caret-right" class="tri" aria-hidden="true" />Schema examples ({objectExamples([s], { requireMention: false }).length})</summary>
+                  <div class="vschema-ex-body"><ObjectExamples examples={objectExamples([s], { requireMention: false })} limit={4} /></div>
+                </details>
+              )}
 
               {[
                 { list: tables, label: 'Tables', icon: 'ph:table-duotone', cls: 'k-table' },
@@ -121,7 +127,7 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
                         <Icon name="ph:caret-right" class="tri" aria-hidden="true" />
                         <Icon name={g.icon} class="vrow-ic" aria-hidden="true" />
                         <span class="vrow-name">{t.name}</span>
-                        <span class="vrow-meta">{plural(t.columns.length, 'col')}</span>
+                        <span class="vrow-meta">{objectExamples([t]).length > 0 && <span class="vexn">{plural(objectExamples([t]).length, 'example')}</span>}{plural(t.columns.length, 'col')}</span>
                       </summary>
                       <div class="vbody">
                         {t.comment && <div class="vdesc prose-vgi" set:html={md(t.comment)} />}
@@ -142,6 +148,7 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
                           </>
                         )}
                         {t.constraints.length > 0 && <div class="vreturns"><b>Constraints</b>{t.constraints.join(' · ')}</div>}
+                        <ObjectExamples examples={objectExamples([t])} />
                         <div class="vactions"><button type="button" class="vcopy" data-sql={tableSql(c.name, s.name, t)}>Copy SQL</button><a class="vlink" href={`#${anchor(s.name, t.name)}`}>Link</a></div>
                       </div>
                     </details>
@@ -160,6 +167,7 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
                       const comment = group.find(x => x.comment)?.comment;
                       const pos = rich.arguments.filter(a => !a.named);
                       const named = rich.arguments.filter(a => a.named);
+                      const exs = objectExamples(group);
                       return (
                         <details class="vrow vfn" id={anchor(s.name, fname)} data-name={`${fname} ${rich.arguments.map(a => a.name).join(' ')}`.toLowerCase()}>
                           <summary>
@@ -167,6 +175,7 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
                             <Icon name={g.icon} class="vrow-ic" aria-hidden="true" />
                             <span class="vrow-name">{fname}</span>
                             <span class="vsig">({[...pos, ...named].map((a, i) => (<>{i > 0 && ', '}{a.name}{a.named && ' :='}{a.type && <> <span class="vsig-type">{a.type}</span></>}</>))}){group.length > 1 && <span class="vover"> +{group.length - 1} overload{group.length > 2 ? 's' : ''}</span>}</span>
+                            {exs.length > 0 && <span class="vrow-meta"><span class="vexn">{plural(exs.length, 'example')}</span></span>}
                           </summary>
                           <div class="vbody">
                             {comment && <div class="vdesc prose-vgi" set:html={md(comment)} />}
@@ -207,6 +216,7 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
                               </>
                             )}
                             {rich.return_type && <div class="vreturns"><b>Returns</b><span class="vrtype">{rich.return_type}</span></div>}
+                            <ObjectExamples examples={exs} />
                             <div class="vactions"><button type="button" class="vcopy" data-sql={fnSql(c.name, s.name, rich)}>Copy SQL</button><a class="vlink" href={`#${anchor(s.name, fname)}`}>Link</a></div>
                           </div>
                         </details>
@@ -279,6 +289,13 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
   .vrow[open] > summary { border-bottom: 1px solid color-mix(in srgb, var(--kc) 25%, var(--line)); }
   .vrow :global(.vrow-ic) { width: 16px; height: 16px; flex: none; color: var(--kc); }
   .vrow-name { font-family: var(--font-mono); font-size: 12.8px; font-weight: 600; color: var(--ink); flex: none; }
+  .vexn { display: inline-block; margin-right: 8px; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--color-sun-400) 22%, transparent); color: var(--color-sun-700); font-family: var(--font-sans, inherit); font-size: 11px; }
+  .vschema-ex { margin: 4px 0 8px 26px; }
+  .vschema-ex > summary { list-style: none; display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--color-soil-700); }
+  .vschema-ex > summary::-webkit-details-marker { display: none; }
+  .vschema-ex[open] > summary :global(.tri) { transform: rotate(90deg); }
+  .vschema-ex-body { margin-top: 6px; }
+  .vschema-ex-body :global(.vlabel) { display: none; }
   .vrow-meta { margin-left: auto; color: var(--muted); font-size: 11.5px; font-family: var(--font-mono); }
   .vsig { color: var(--muted); font-size: 12px; font-family: var(--font-mono); flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
   .vsig-type { color: color-mix(in srgb, var(--kc) 60%, var(--muted)); }
@@ -356,8 +373,9 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
         btn.addEventListener('click', async () => {
           try {
             await navigator.clipboard.writeText(btn.dataset.sql ?? '');
+            const label = btn.dataset.label ?? (btn.dataset.label = btn.textContent ?? 'Copy');
             btn.textContent = 'Copied';
-            setTimeout(() => (btn.textContent = 'Copy SQL'), 1500);
+            setTimeout(() => (btn.textContent = label), 1500);
           } catch { /* clipboard unavailable */ }
         }),
       );

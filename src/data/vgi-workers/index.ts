@@ -4,7 +4,7 @@
 // The generated file is optional on disk (import.meta.glob), so a checkout
 // without a harvest still builds and lists nothing rather than failing.
 
-import { catalogFileSchema, type WorkerRecord, type WorkerFunction, type WorkerTable } from './schema';
+import { catalogFileSchema, type WorkerRecord, type WorkerFunction, type WorkerTable, type WorkerSchema } from './schema';
 import { categories, categoriesFor, searchAliases, tintClasses } from './taxonomy.mjs';
 
 // Falls back to a two-worker fixture so the pages render before a harvest exists.
@@ -100,6 +100,69 @@ export function groupOverloads(fns: WorkerFunction[]): Map<string, WorkerFunctio
   const m = new Map<string, WorkerFunction[]>();
   for (const f of fns) (m.get(f.name) ?? m.set(f.name, []).get(f.name)!).push(f);
   return m;
+}
+
+// ── Examples ────────────────────────────────────────────────────────────────
+export interface ObjectExample {
+  description: string | null;
+  sql: string;
+}
+const normSql = (q: string) => q.trim().replace(/;\s*$/, '').replace(/\s+/g, ' ').toLowerCase();
+const tagExamples = (v: unknown): ObjectExample[] =>
+  Array.isArray(v)
+    ? v.flatMap(e =>
+        e && typeof e === 'object' && typeof (e as { sql?: unknown }).sql === 'string'
+          ? [{ description: ((e as { description?: string }).description ?? null) || null, sql: (e as { sql: string }).sql }]
+          : [],
+      )
+    : [];
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** `sql` calls function `name` (bare or qualified): `name(`. */
+const callsFn = (sql: string, name: string) => new RegExp(`(^|[^\\w])"?${esc(name)}"?\\s*\\(`, 'i').test(sql);
+/** `sql` reads table `name`: `FROM|JOIN [cat.][schema.]name`. */
+const readsTable = (sql: string, name: string) =>
+  new RegExp(`\\b(from|join)\\s+(("?\\w+"?)\\.){0,2}"?${esc(name)}"?(?![\\w(])`, 'i').test(sql);
+const mentions = (sql: string, name: string) => callsFn(sql, name) || readsTable(sql, name);
+
+/**
+ * The examples an object (table, function overload group or schema) declares, deduped.
+ * `vgi.example_queries` is the author's list for this object. `vgi.executable_examples` is
+ * often inherited from the catalog, so for a table or function it only counts when the SQL
+ * actually uses the object.
+ */
+export function objectExamples(
+  objs: { name?: string; tags?: Record<string, unknown> | null; examples?: string[] }[],
+  opts: { requireMention?: boolean } = {},
+): ObjectExample[] {
+  const seen = new Set<string>();
+  const out: ObjectExample[] = [];
+  const add = (e: ObjectExample) => {
+    const k = normSql(e.sql);
+    if (!k || seen.has(k)) return;
+    seen.add(k);
+    out.push({ ...e, sql: e.sql.trim().replace(/;?\s*$/, ';') });
+  };
+  for (const o of objs) {
+    const tags = o.tags ?? {};
+    for (const e of tagExamples(tags['vgi.example_queries'])) add(e);
+    for (const sql of o.examples ?? []) add({ description: null, sql });
+    for (const e of tagExamples(tags['vgi.executable_examples'])) {
+      if (opts.requireMention === false || (o.name && mentions(e.sql, o.name))) add(e);
+    }
+  }
+  return out;
+}
+
+/** Catalog objects an example query uses, as {name, anchor} for linking into the explorer. */
+export function exampleObjects(w: { schemas: WorkerSchema[] }, sql: string): { name: string; anchor: string }[] {
+  const out: { name: string; anchor: string }[] = [];
+  for (const s of w.schemas) {
+    for (const t of s.tables) if (readsTable(sql, t.name)) out.push({ name: t.name, anchor: anchorFor(s.name, t.name) });
+    for (const name of groupOverloads(s.functions).keys()) if (callsFn(sql, name)) out.push({ name, anchor: anchorFor(s.name, name) });
+  }
+  // In order of first use in the query.
+  const at = (n: string) => sql.toLowerCase().search(new RegExp(`[^\\w]"?${esc(n.toLowerCase())}"?([^\\w]|$)`));
+  return out.sort((a, b) => at(a.name) - at(b.name)).slice(0, 5);
 }
 
 function quote(s: string) {
