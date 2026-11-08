@@ -83,6 +83,30 @@ export const LANGUAGE_ICON: Record<string, string> = {
   Java: 'simple-icons:openjdk',
 };
 
+// Readable worker names: "Trading calendar", not "vgi-trading-calendar" (the repo keeps that).
+// Sentence case; acronyms and product names as their owners write them.
+const NAME_OVERRIDES: Record<string, string> = {
+  asn1: 'ASN.1', bgp: 'BGP', bson: 'BSON', cbor: 'CBOR', cve: 'CVE', disasm: 'Disassembler',
+  evtx: 'Windows event logs (EVTX)', fhir: 'FHIR', fixedformat: 'Fixed-width files', hl7: 'HL7', ical: 'iCalendar',
+  ioc: 'Indicators of compromise', iso20022: 'ISO 20022', libpostal: 'libpostal', llm: 'LLM', mft: 'NTFS MFT',
+  netflow: 'NetFlow', nlp: 'NLP', odata: 'OData', ortools: 'OR-Tools', pdf: 'PDF', pe: 'PE executables',
+  pii: 'PII detection', poi: 'Points of interest', pprof: 'pprof', proj: 'PROJ', reghive: 'Registry hives',
+  saml: 'SAML', secretscan: 'Secret scanning', sourcemap: 'Source maps', statsmodels: 'statsmodels',
+  sympy: 'SymPy', threatintel: 'Threat intel', tiktoken: 'tiktoken', tlsfp: 'TLS fingerprints',
+  useragent: 'User agents', x12: 'X12 EDI', x509: 'X.509', xslt: 'XSLT', yara: 'YARA', yfinance: 'Yahoo Finance',
+  'azure-loganalytics': 'Azure Log Analytics', 'azure-resourcegraph': 'Azure Resource Graph', 'azure-signins': 'Azure sign-ins',
+  'etf-first-trust': 'First Trust ETFs', 'etf-globalx': 'Global X ETFs', 'etf-invesco': 'Invesco ETFs',
+  'etf-ishares': 'iShares ETFs', 'etf-jpmorgan': 'J.P. Morgan ETFs', 'etf-schwab': 'Schwab ETFs',
+  'etf-spdr': 'SPDR ETFs', 'etf-vanguard': 'Vanguard ETFs', 'etf-wisdomtree': 'WisdomTree ETFs',
+};
+export function workerName(slug: string): string {
+  if (NAME_OVERRIDES[slug]) return NAME_OVERRIDES[slug];
+  const words = slug.split('-');
+  if (words[0] === 'azure') return ['Azure', ...words.slice(1)].join(' ');
+  const text = words.join(' ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 const anchorFor = (schema: string, name: string) =>
   `obj-${schema}-${name}`.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
 
@@ -363,7 +387,7 @@ function enrich(w: WorkerRecord): Worker {
 
   return {
     ...w,
-    name: w.repo,
+    name: workerName(w.slug),
     displayTitle: w.title || w.tagline || w.repo,
     blurb: trimDuckdb(tag.text) || w.summary || '',
     builtOn: tag.builtOn,
@@ -420,8 +444,8 @@ export function searchDocuments() {
       id: `w:${w.slug}`,
       type: 'worker',
       worker: w.slug,
-      title: w.repo,
-      text: [w.displayTitle, w.blurb, w.summary].filter(Boolean).join(' — '),
+      title: workerName(w.slug),
+      text: [w.repo, w.displayTitle, w.blurb, w.summary].filter(Boolean).join(' — '),
       keywords: [...w.keywords, ...w.topics, ...w.categories, ...(searchAliases[w.slug as keyof typeof searchAliases] ?? [])].join(' '),
       category: w.categoryIds.join(' '),
       language: w.language,
@@ -434,6 +458,7 @@ export function searchDocuments() {
         id,
         type: o.kind,
         worker: w.slug,
+        workerName: w.name,
         title: o.name,
         text: o.comment,
         keywords: o.signature,

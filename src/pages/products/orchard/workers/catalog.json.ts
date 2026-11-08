@@ -10,7 +10,8 @@ export function GET() {
       schemaVersion: 1,
       generatedAt,
       workers: workers.map(w => ({
-        name: w.repo,
+        name: w.name,
+        repo: w.repo,
         slug: w.slug,
         catalog: w.catalog,
         title: w.displayTitle,

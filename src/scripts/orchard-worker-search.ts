@@ -8,6 +8,7 @@ interface Doc {
   id: string;
   type: string;
   worker: string;
+  workerName?: string;
   title: string;
   text: string;
   keywords: string;
@@ -142,7 +143,7 @@ export function initWorkerDirectory() {
     objList.innerHTML = objectHits
       .map(({ doc }) => `<li class="min-w-0 py-2"><a class="group flex min-w-0 flex-wrap items-baseline gap-x-2 no-underline" href="/products/orchard/workers/${doc.worker}#${doc.anchor ?? ''}">
           <span class="font-mono text-[13.5px] font-semibold text-soil-900 group-hover:text-link">${esc(doc.title)}</span>
-          <span class="text-[12px] text-sun-700">${esc(KIND_LABEL[doc.type] ?? doc.type)} · vgi-${esc(doc.worker)}</span>
+          <span class="text-[12px] text-sun-700">${esc(KIND_LABEL[doc.type] ?? doc.type)} · ${esc(doc.workerName ?? doc.worker)}</span>
           <span class="block w-full min-w-0 truncate text-[13px] text-soil-600">${esc(doc.text || '')}</span></a></li>`)
       .join('');
 
