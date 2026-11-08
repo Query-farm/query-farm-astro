@@ -19,7 +19,7 @@ interface Doc {
 }
 
 const KIND_LABEL: Record<string, string> = {
-  worker: 'worker',
+  worker: 'connector',
   table: 'table',
   view: 'view',
   scalar: 'function',
@@ -32,7 +32,7 @@ const KIND_LABEL: Record<string, string> = {
 
 let indexPromise: Promise<{ mini: MiniSearch<Doc>; docs: Map<string, Doc> }> | null = null;
 function loadIndex() {
-  indexPromise ??= fetch('/products/orchard/workers/search.json')
+  indexPromise ??= fetch('/products/orchard/connectors/search.json')
     .then(r => r.json() as Promise<Doc[]>)
     .then(list => {
       const mini = new MiniSearch<Doc>({
@@ -141,14 +141,14 @@ export function initWorkerDirectory() {
     objectHits = objectHits.filter(h => visible.has(h.doc.worker)).slice(0, 8);
     objBox.classList.toggle('hidden', objectHits.length === 0);
     objList.innerHTML = objectHits
-      .map(({ doc }) => `<li class="min-w-0 py-2"><a class="group flex min-w-0 flex-wrap items-baseline gap-x-2 no-underline" href="/products/orchard/workers/${doc.worker}#${doc.anchor ?? ''}">
+      .map(({ doc }) => `<li class="min-w-0 py-2"><a class="group flex min-w-0 flex-wrap items-baseline gap-x-2 no-underline" href="/products/orchard/connectors/${doc.worker}#${doc.anchor ?? ''}">
           <span class="font-mono text-[13.5px] font-semibold text-soil-900 group-hover:text-link">${esc(doc.title)}</span>
           <span class="text-[12px] text-sun-700">${esc(KIND_LABEL[doc.type] ?? doc.type)} · ${esc(doc.workerName ?? doc.worker)}</span>
           <span class="block w-full min-w-0 truncate text-[13px] text-soil-600">${esc(doc.text || '')}</span></a></li>`)
       .join('');
 
     empty.classList.toggle('hidden', shown > 0);
-    count.textContent = shown === items.length ? `${items.length} workers` : `Showing ${shown} of ${items.length} workers`;
+    count.textContent = shown === items.length ? `${items.length} connectors` : `Showing ${shown} of ${items.length} connectors`;
   }
 
   let t: number | undefined;

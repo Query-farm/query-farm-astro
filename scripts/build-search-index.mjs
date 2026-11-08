@@ -121,12 +121,12 @@ async function main() {
   //    per catalog object (table / function / macro) so ⌘K finds, say,
   //    `delta_e` and lands on its anchor in vgi-color's catalog explorer.
   let workerObjects = 0;
-  const workerDocs = join(DIST, 'products', 'orchard', 'workers', 'search.json');
+  const workerDocs = join(DIST, 'products', 'orchard', 'connectors', 'search.json');
   if (existsSync(workerDocs)) {
     for (const d of JSON.parse(await readFile(workerDocs, 'utf8'))) {
       if (d.type === 'worker') continue;
       await index.addCustomRecord({
-        url: `/products/orchard/workers/${d.worker}#${d.anchor ?? ''}`,
+        url: `/products/orchard/connectors/${d.worker}#${d.anchor ?? ''}`,
         content: [d.title, d.text, d.keywords].filter(Boolean).join(' — '),
         language: 'en',
         filters: { kind: ['function'] },

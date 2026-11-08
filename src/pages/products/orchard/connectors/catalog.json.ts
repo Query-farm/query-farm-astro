@@ -20,7 +20,7 @@ export function GET() {
         categories: w.categoryIds,
         keywords: w.keywords,
         offering: w.offering,
-        href: `${SITE}/products/orchard/workers/${w.slug}`,
+        href: `${SITE}/products/orchard/connectors/${w.slug}`,
         repository: w.repo_url,
         license: w.license ?? null,
         release: w.release ? { tag: w.release.tag, publishedAt: w.release.published_at ?? null } : null,
