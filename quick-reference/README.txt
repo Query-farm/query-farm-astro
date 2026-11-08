@@ -1,5 +1,5 @@
 QUERY.FARM EXTENSION QUICK REFERENCES
-Edition: October 7, 2026
+Edition: November 8, 2026
 
 32 public Query.Farm extensions, arranged by extension slug.
 The public filter in src/data/extensions.ts is authoritative. It excludes the
@@ -16,20 +16,32 @@ Equivalent direct commands and a single-guide preview:
   node quick-reference/build.mjs --check
   node quick-reference/build.mjs --check --only a5
   node quick-reference/build.mjs --check --extension-dir /path/to/built-extensions
+  node quick-reference/build.mjs --check --repository query_farm --only tera
   python3 quick-reference/check-layout.py
 
 Requirements: Node.js, Typst (tested 0.15.1), Poppler (pdfinfo, pdffonts,
-pdftotext, pdfunite), and zip. SQL checks also need DuckDB (tested 1.5.6)
-with the relevant community extensions installed. Install with:
+pdftotext, pdfunite), and zip. SQL checks also need the duckdb CLI with the
+relevant extensions installed. This edition validates twenty guides on the
+released DuckDB 2.0.0 CLI with the published Query.Farm 2.0 builds:
+  SET allow_extension_repositories = 'allowed';
+  CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm
+      WITH PREFIX 'https://duckdb-extensions.query.farm';
+  INSTALL extension_name FROM query_farm;
+DuckDB 2.0 refuses a plain LOAD of an extension from a custom repository, so
+check those guides with --repository query_farm: the checks then run
+LOAD <slug> FROM query_farm, validation.json records the repository, and the
+guide's install block shows the query_farm commands. Use a throwaway HOME so
+checks never touch ~/.duckdb, and unset AI_AGENT/CLAUDECODE so the 2.0 CLI
+does not switch to agent output. Guides without a recorded repository keep
+their DuckDB 1.5.6 validation and community install instructions:
   INSTALL extension_name FROM community;
 The build never installs extensions or accesses external example endpoints.
 An optional --extension-dir contains <slug>.duckdb_extension files built for
 the installed DuckDB version. Checks load those files with -unsigned; other
 extensions use their installed packages. This does not replace the local
 extension cache. validation.json records local-build provenance and SHA-256.
-The six repaired guides in this edition target the v1.5 fixes in FINDINGS.txt;
-their checks intentionally reject the older buggy community builds. Supply
-the fixed artifacts until matching community packages are available. A render
+The October 2026 edition repaired guides against the v1.5 fixes recorded in
+FINDINGS.txt; A5, Lindel and Stochastic keep their local v1.5 build records. A render
 without --check uses the saved validation versions and needs no extension files.
 Examples execute in a separate temporary directory and database per extension.
 External services, credentials, drivers and interactive lifecycle examples
@@ -121,20 +133,26 @@ CONTENT SOURCES AND VERIFIED LIMITS
 Each guide links to its extension's actual GitHub source and Query.Farm docs.
 Local sources: src/data/extensions/<slug>/{generated,augment}, cookbook.mdx,
 technical-details.mdx; runtime catalogs and locally available extension source.
-Five guides require source/manual review rather than runnable local examples:
-ADBC Scanner's newer ATTACH API, Events, HTTP Server, Tributary and VGI.
-Events, Tributary and VGI have no community package on the tested DuckDB 1.5.6
-macOS arm64 host. Remote portions of other connector examples are also deferred.
+Four guides require source/manual review rather than runnable local examples:
+Events, HTTP Server, Tributary and VGI. Events, Tributary and VGI have no
+package on the validation host. ADBC Scanner's driver examples and remote
+portions of other connector examples are also deferred.
 
-The guides document the fixed v1.5 behavior and identify older build caveats:
+The November 2026 edition describes the DuckDB 2.0 builds of ADBC Scanner,
+Cronjob, Evalexpr Rhai, Fuzzycomplete, GeoSilo, Hashfuncs, HTTP Client,
+HTTP Server, Inflector, JSON Schema, JSONata, QuickJS, Radio, RapidFuzz,
+Redis, Shellfs, Tera, Textplot, TSID and WebMacro: their sandboxing and
+external-access refusals, new limit settings, and new functions such as
+cron_job_history, tsid_uuid, geosilo_is_valid, jsonata_validate,
+json_schema_is_valid/json_schema_errors, redis_command, http_put/http_delete,
+inflector_humanize, rapidfuzz_extract_one and tp_sparkline_agg. Radio's
+loopback:// transport makes its delivery example runnable offline.
+
+The remaining guides document the fixed v1.5 behavior, including:
 - Lindel's exact input width limits, signed/float bit-pattern behavior, geographic
   offsets and quantization, and one-dimensional signed decoding limitation.
 - Corrected Pareto labels and discrete uniform_int analytics in Stochastic.
-- GeoSilo's merged spatial-extension overloads in either load order.
-- JSON Schema validation errors and safe TRY handling.
-- Fuzzycomplete's replacement of preloaded autocomplete on fixed builds.
-- MiniJinja's row-dependent context API and Shellfs' explicit gzip compression.
-- Canonical xxh3_128_hex output with legacy numeric hash values preserved.
+- MiniJinja's row-dependent context API.
 
 The corresponding authored website documentation was corrected and validated.
 FINDINGS.txt records the original reproductions, fixes, commits and validation.

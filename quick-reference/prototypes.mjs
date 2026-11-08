@@ -14,12 +14,14 @@ const extensions = ['lindel', 'stochastic'];
 const flags = process.argv.slice(2);
 let check = false;
 let extensionDir;
+let repository;
 for (let i = 0; i < flags.length; i++) {
   if (flags[i] === '--check') check = true;
   else if (flags[i] === '--extension-dir' && flags[i + 1]) extensionDir = flags[++i];
-  else throw new Error('Usage: node quick-reference/prototypes.mjs [--check] [--extension-dir path]');
+  else if (flags[i] === '--repository' && flags[i + 1]) repository = flags[++i];
+  else throw new Error('Usage: node quick-reference/prototypes.mjs [--check] [--extension-dir path] [--repository name]');
 }
-const runtime = extensionRuntime(extensionDir);
+const runtime = extensionRuntime(extensionDir, repository);
 const reportPath = join(root, 'quick-reference/validation.json');
 const report = existsSync(reportPath) ? JSON.parse(readFileSync(reportPath, 'utf8')) : {};
 

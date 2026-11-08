@@ -32,12 +32,20 @@
     {
       "name": "murmurhash3_32 / murmurhash3_x64_128",
       "description": "Named MurmurHash3 variants for explicit algorithm selection."
+    },
+    {
+      "name": "spark_hash / iceberg_bucket / kafka_partition",
+      "description": "Reproduce Spark, Iceberg and Kafka hashing; farm_fingerprint matches BigQuery."
+    },
+    {
+      "name": "jump_hash(key, buckets)",
+      "description": "Consistent hashing: adding a shard moves about 1/(n+1) of keys."
     }
   ],
   "notes": [
     {
       "title": "Keep the representation fixed",
-      "body": "Match input bytes, type and seed. Fixed v1.5 hex output uses canonical high64 then low64. Older 0dec806 reverses those halves. Numeric UHUGEINT output retains its legacy layout for stored-key compatibility; use the hex function for interchange."
+      "body": "Match input bytes, type and seed: 0.0 and -0.0, or NaNs with different bits, hash differently, so normalize when SQL-equal values must match. Hex output is canonical high64 then low64; numeric UHUGEINT output keeps its legacy layout for stored keys."
     },
     {
       "title": "Collisions are possible",
@@ -54,7 +62,7 @@
     {
       "title": "Format a string fingerprint",
       "sql": "SELECT xxh3_128_hex('hello') AS digest;\n-- 32 lowercase hexadecimal characters",
-      "caption": "Fixed v1.5 builds match canonical xxHash digests directly.",
+      "caption": "Matches canonical xxHash digests from Python, Rust and C.",
       "mode": "local"
     },
     {
@@ -62,7 +70,16 @@
       "sql": "SELECT typeof(xxh3_64('hello')) AS small,\n       typeof(xxh3_128('hello')) AS large;\n-- UBIGINT, UHUGEINT",
       "caption": "Choose the width for your collision budget and storage format.",
       "mode": "local"
+    },
+    {
+      "title": "Match another system",
+      "sql": "SELECT spark_hash('Spark', [123], 2) AS h;\n-- -1321691492, as in Spark's hash()",
+      "caption": "For Spark bucketing use ((h % n) + n) % n; iceberg_bucket(value, n) follows the Iceberg spec.",
+      "mode": "local"
     }
   ],
-  "assertions": "SELECT CASE WHEN xxh3_128_hex('hello')='b5e9c1ad071b3e7fc779cfaa5e523818' AND typeof(xxh3_64('hello'))='UBIGINT' AND typeof(xxh3_128('hello'))='UHUGEINT' THEN true ELSE error('Hashfuncs canonical digest or width mismatch; requires fixed v1.5 build') END;"
+  "assertions": [
+    "SELECT CASE WHEN xxh3_128_hex('hello')='b5e9c1ad071b3e7fc779cfaa5e523818' AND typeof(xxh3_64('hello'))='UBIGINT' AND typeof(xxh3_128('hello'))='UHUGEINT' THEN true ELSE error('Hashfuncs canonical digest or width mismatch') END;",
+    "SELECT CASE WHEN spark_hash('Spark', [123], 2) = -1321691492 AND iceberg_bucket(34, 16) = iceberg_bucket(34::BIGINT, 16) THEN true ELSE error('Hashfuncs system-compatibility mismatch') END;"
+  ]
 }

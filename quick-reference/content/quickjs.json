@@ -19,7 +19,7 @@
     },
     {
       "name": "quickjs_eval(function, ...)",
-      "description": "Call a JavaScript function and return JSON."
+      "description": "Call a JavaScript function with native arguments; return JSON, or NULL for undefined."
     },
     {
       "name": "arg0, arg1, ...",
@@ -30,14 +30,14 @@
       "description": "Access a parsed copy of JSON strings in the table form."
     },
     {
-      "name": "JSON.parse(text)",
-      "description": "Parse a JSON string argument inside quickjs_eval."
+      "name": "SET quickjs_timeout_ms / quickjs_memory_limit",
+      "description": "Bound each evaluation (no timeout and 256MB by default); Ctrl-C also cancels."
     }
   ],
   "notes": [
     {
       "title": "Match the return shape",
-      "body": "Scalar quickjs returns VARCHAR, quickjs_eval returns JSON, and FROM quickjs returns rows in a result column. Cast or extract the result explicitly when the surrounding SQL needs a numeric or structured value."
+      "body": "Scalar quickjs returns VARCHAR, quickjs_eval returns JSON, and FROM quickjs returns rows in a result column. Arguments arrive as numbers, BigInt, Date, arrays and objects; JSON text stays a string. Cast or extract results explicitly."
     },
     {
       "title": "Keep the interpreter focused",
@@ -58,11 +58,14 @@
       "mode": "local"
     },
     {
-      "title": "Reshape a JSON document",
-      "sql": "SELECT quickjs_eval(\n  'text => { const d = JSON.parse(text);' ||\n  'return {user: d.name, active: true}; }',\n  '{\"name\":\"Ada\"}'\n);\n-- {\"user\":\"Ada\",\"active\":true}",
-      "caption": "JSON arrives as text here; parse before accessing its fields.",
+      "title": "Reshape a struct",
+      "sql": "SELECT quickjs_eval(\n  'd => ({user: d.name, tags: d.tags.length})',\n  {'name': 'Ada', 'tags': ['x', 'y']}\n);\n-- {\"user\":\"Ada\",\"tags\":2}",
+      "caption": "Structs and lists arrive as objects and arrays; JSON text still needs JSON.parse.",
       "mode": "local"
     }
   ],
-  "assertions": "SELECT CASE WHEN quickjs_eval('x => x * x', 7)::INTEGER = 49 AND (quickjs_eval('text => { const d = JSON.parse(text); return {user: d.name, active: true}; }', '{\"name\":\"Ada\"}')->>'user') = 'Ada' THEN true ELSE error('QuickJS result mismatch') END; SELECT CASE WHEN sum(result::INTEGER)=18 THEN true ELSE error('QuickJS table mismatch') END FROM quickjs('parsed_arg0.map(x => x * arg1)', '[1,2,3]', 3);"
+  "assertions": [
+    "SELECT CASE WHEN quickjs_eval('x => x * x', 7)::INTEGER = 49 AND (quickjs_eval('d => ({user: d.name, tags: d.tags.length})', {'name': 'Ada', 'tags': ['x', 'y']})->>'user') = 'Ada' AND quickjs_eval('(x) => x + 1', 1::SMALLINT)::INTEGER = 2 AND quickjs_eval('() => undefined') IS NULL THEN true ELSE error('QuickJS result mismatch') END;",
+    "SELECT CASE WHEN sum(result::INTEGER)=18 THEN true ELSE error('QuickJS table mismatch') END FROM quickjs('parsed_arg0.map(x => x * arg1)', '[1,2,3]', 3);"
+  ]
 }

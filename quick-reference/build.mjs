@@ -12,13 +12,15 @@ const args = process.argv.slice(2);
 let check = false;
 let only;
 let extensionDir;
+let repository;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--check') check = true;
   else if (args[i] === '--only' && args[i + 1]) only = args[++i];
   else if (args[i] === '--extension-dir' && args[i + 1]) extensionDir = args[++i];
-  else throw new Error('Usage: node quick-reference/build.mjs [--check] [--only slug] [--extension-dir path]');
+  else if (args[i] === '--repository' && args[i + 1]) repository = args[++i];
+  else throw new Error('Usage: node quick-reference/build.mjs [--check] [--only slug] [--extension-dir path] [--repository name]');
 }
-const runtime = extensionRuntime(extensionDir);
+const runtime = extensionRuntime(extensionDir, repository);
 if (only && !catalog.some(item => item.slug === only)) throw new Error(`Not a public extension: ${only}`);
 const selected = catalog.filter(item => !only || item.slug === only);
 const prototypes = new Set(['lindel', 'stochastic']);
@@ -85,7 +87,8 @@ function checkContent(data, slug) {
 
 if (selected.some(item => prototypes.has(item.slug))) {
   execFileSync(process.execPath, [join(root, 'quick-reference/prototypes.mjs'), ...(check ? ['--check'] : []),
-    ...(extensionDir ? ['--extension-dir', extensionDir] : [])], { cwd: root, stdio: 'inherit' });
+    ...(extensionDir ? ['--extension-dir', extensionDir] : []),
+    ...(repository ? ['--repository', repository] : [])], { cwd: root, stdio: 'inherit' });
   if (check) {
     report = JSON.parse(readFileSync(reportPath, 'utf8'));
   }
@@ -102,7 +105,9 @@ for (const item of selected) {
   }
   const checked = report[item.slug];
   const revision = revisionLabel(item.slug, checked);
-  compile('quick-reference/guide.typ', `${item.slug}.pdf`, { extension: item.slug, revision });
+  compile('quick-reference/guide.typ', `${item.slug}.pdf`, {
+    extension: item.slug, revision, ...(checked?.repository ? { repository: checked.repository } : {}),
+  });
   console.log(`Rendered ${item.slug}.pdf`);
 }
 if (check) writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n');

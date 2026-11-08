@@ -1,7 +1,7 @@
 {
   "title": "Rhai",
   "subtitle": "Evaluate expressions and rules stored as text",
-  "intro": "Run Rhai expressions inside a query, pass row values as JSON context, and read a typed success or error result. Useful for configurable business rules, small transformations, and scripts that need local variables or branching.",
+  "intro": "Run sandboxed Rhai expressions inside a query, pass row values as JSON context, and read a typed success or error result. Useful for configurable business rules, small transformations, and scripts that need local variables or branching.",
   "flow": [
     "Script text",
     "Row context",
@@ -32,6 +32,10 @@
     {
       "name": "let / if / fn",
       "description": "Bind variables, branch, and define helpers inside scripts."
+    },
+    {
+      "name": "SET evalexpr_rhai_max_operations = n",
+      "description": "Cap work per evaluation (default 100M); sibling settings bound strings, arrays, maps and call depth."
     }
   ],
   "notes": [
@@ -41,7 +45,7 @@
     },
     {
       "title": "Use it where rules change",
-      "body": "Scripts run per row. Keep routine transformations in native SQL; use Rhai when stored rules or branching improve clarity. A constant script can reuse its parsed expression while context changes."
+      "body": "Scripts see only the context you pass: no filesystem functions or module imports, so stored or user-supplied rules are safe to evaluate. The function is volatile and runs per row, so rand() differs per row. Keep routine transformations in native SQL."
     }
   ],
   "examples": [
@@ -62,7 +66,16 @@
       "sql": "SELECT evalexpr_rhai('1 / 0').error;\n-- Runtime error text",
       "caption": "A failing Rhai expression returns the error arm.",
       "mode": "local"
+    },
+    {
+      "title": "Bound runaway scripts",
+      "sql": "SET evalexpr_rhai_max_operations = 1000;\nSELECT evalexpr_rhai('loop {}').error;\n-- Too many operations (line 1, …)\nRESET evalexpr_rhai_max_operations;",
+      "caption": "Limits return the error arm; cancelling the query also stops a running script.",
+      "mode": "local"
     }
   ],
-  "assertions": "SELECT CASE WHEN evalexpr_rhai('fn sq(x) { x * x } sq(context.n)', {'n':7}).ok::INTEGER = 49 AND evalexpr_rhai('1 / 0').ok IS NULL AND evalexpr_rhai('1 / 0').error IS NOT NULL THEN true ELSE error('Rhai result/error contract failed') END;"
+  "assertions": [
+    "SELECT CASE WHEN evalexpr_rhai('fn sq(x) { x * x } sq(context.n)', {'n':7}).ok::INTEGER = 49 AND evalexpr_rhai('1 / 0').ok IS NULL AND evalexpr_rhai('1 / 0').error IS NOT NULL THEN true ELSE error('Rhai result/error contract failed') END;",
+    "SET evalexpr_rhai_max_operations = 1000; SELECT CASE WHEN evalexpr_rhai('loop {}').error LIKE 'Too many operations%' AND evalexpr_rhai('open_file(\"x\")').error LIKE 'Function not found%' THEN true ELSE error('Rhai sandbox/limit contract failed') END; RESET evalexpr_rhai_max_operations;"
+  ]
 }

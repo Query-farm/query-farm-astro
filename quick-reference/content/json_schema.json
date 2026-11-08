@@ -1,7 +1,7 @@
 {
   "title": "JSON Schema",
   "subtitle": "Validate JSON contracts and apply declared defaults",
-  "intro": "Check JSON documents against a schema inside SQL, then fill missing properties from schema defaults. Useful at ingest and during audits. Invalid documents raise errors in this build, so choose strict validation or a deliberate TRY wrapper.",
+  "intro": "Check JSON documents against a schema inside SQL, report exactly what failed, and fill missing properties from schema defaults. Drafts 4 through 2020-12 are selected by $schema; a schema without one uses 2020-12.",
   "flow": [
     "Schema + JSON",
     "Validate",
@@ -10,12 +10,20 @@
   "referenceTitle": "Core SQL surface",
   "reference": [
     {
+      "name": "json_schema_is_valid(schema, data)",
+      "description": "Return TRUE or FALSE; invalid data never raises an error."
+    },
+    {
+      "name": "json_schema_errors(schema, data)",
+      "description": "List path, keyword and message per failure; [] when valid."
+    },
+    {
       "name": "json_schema_validate(schema, data)",
-      "description": "Return TRUE on success; raise an error on invalid data."
+      "description": "Return TRUE, or raise an error naming up to five failures."
     },
     {
       "name": "json_schema_validate_schema(schema)",
-      "description": "Check schema acceptance; invalid schemas can raise errors."
+      "description": "Check that the schema itself is accepted before relying on it."
     },
     {
       "name": "json_schema_patch(schema, data)",
@@ -26,25 +34,31 @@
       "description": "Return the document with defaults applied."
     },
     {
-      "name": "TRY(expression)",
-      "description": "DuckDB wrapper: convert runtime validation errors into NULL."
+      "name": "\"$schema\": \"…/draft-07/schema#\"",
+      "description": "Choose draft 4, 6, 7, 2019-09 or 2020-12; unknown values are errors."
     }
   ],
   "notes": [
     {
       "title": "Make validation policy explicit",
-      "body": "Plain validation aborts on nonconforming input. COALESCE(TRY(json_schema_validate(...)), false) gives a filterable flag. Lint your schema first: TRY also hides malformed schemas, so a bad contract could otherwise mark every row invalid."
+      "body": "Filter with json_schema_is_valid and report with json_schema_errors; use json_schema_validate where nonconforming input should abort the query. Lint the schema first, so a bad contract cannot quietly mark every row invalid."
     },
     {
-      "title": "Draft and defaults",
-      "body": "The validator primarily targets draft-07. Test the keywords your contract uses and keep reference targets within the schema. Defaults are applied by patch/update; a successful validate call alone does not rewrite the original JSON."
+      "title": "Drafts, formats and patterns",
+      "body": "Declare draft-07 for array-form tuple items. format is validated, and pattern uses RE2, so lookaround and backreferences are schema errors. Remote $ref targets are not loaded. Defaults apply only through patch and update."
     }
   ],
   "examples": [
     {
       "title": "Flag valid and invalid rows",
-      "sql": "SELECT payload, coalesce(try(\n  json_schema_validate(\n    '{\"type\":\"integer\"}', payload\n  )), false) AS valid\nFROM (VALUES ('5'::JSON), ('\"five\"'::JSON))\n  t(payload);\n-- 5: true; \"five\": false",
-      "caption": "TRY preserves the query when a row violates the schema.",
+      "sql": "SELECT payload, json_schema_is_valid(\n  '{\"type\":\"integer\"}', payload\n) AS valid\nFROM (VALUES ('5'::JSON), ('\"five\"'::JSON))\n  t(payload);\n-- 5: true; \"five\": false",
+      "caption": "No TRY wrapper is needed: a violating row returns false.",
+      "mode": "local"
+    },
+    {
+      "title": "Explain each failure",
+      "sql": "SELECT unnest(json_schema_errors(\n  '{\"properties\":{\"age\":{\"minimum\":0}}}',\n  '{\"age\":-1}'\n), recursive := true);\n-- /age | minimum | Minimum value is 0 …",
+      "caption": "One row per failing keyword, located by JSON Pointer.",
       "mode": "local"
     },
     {
@@ -54,5 +68,9 @@
       "mode": "local"
     }
   ],
-  "assertions": "SELECT CASE WHEN json_schema_validate('{\"type\":\"integer\"}', '5') AND TRY(json_schema_validate('{\"type\":\"integer\"}', '\"five\"')) IS NULL AND (json_schema_update(getvariable('schema'), '{}')->>'retries') = '3' AND (json_schema_patch(getvariable('schema'), '{}')->>'$[0].op') = 'add' THEN true ELSE error('JSON Schema contract mismatch') END;"
+  "assertions": [
+    "SELECT CASE WHEN json_schema_validate('{\"type\":\"integer\"}', '5') AND NOT json_schema_is_valid('{\"type\":\"integer\"}', '\"five\"') AND (json_schema_update(getvariable('schema'), '{}')->>'retries') = '3' AND (json_schema_patch(getvariable('schema'), '{}')->>'$[0].op') = 'add' THEN true ELSE error('JSON Schema contract mismatch') END;",
+    "SELECT CASE WHEN json_schema_errors('{\"properties\":{\"age\":{\"minimum\":0}}}', '{\"age\":-1}')[1].path = '/age' AND json_schema_errors('{\"properties\":{\"age\":{\"minimum\":0}}}', '{\"age\":-1}')[1].keyword = 'minimum' AND len(json_schema_errors('{\"type\":\"integer\"}', '5')) = 0 THEN true ELSE error('json_schema_errors mismatch') END;",
+    "SELECT CASE WHEN NOT json_schema_is_valid('{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"prefixItems\":[{\"type\":\"integer\"}]}', '[\"x\"]') THEN true ELSE error('2020-12 prefixItems not enforced') END;"
+  ]
 }

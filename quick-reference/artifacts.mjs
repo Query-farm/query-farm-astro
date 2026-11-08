@@ -30,7 +30,7 @@ function sourceHash(slug, validation) {
   const hash = createHash('sha256');
   for (const file of files) hash.update(file).update('\0').update(read(file)).update('\0');
   const checked = validation[slug];
-  hash.update(JSON.stringify({ status: checked?.status, duckdb: checked?.duckdb, extension: checked?.extension, source: checked?.source }));
+  hash.update(JSON.stringify({ status: checked?.status, duckdb: checked?.duckdb, extension: checked?.extension, source: checked?.source, repository: checked?.repository }));
   if (!bespoke.has(slug)) {
     const metadata = JSON.parse(read(`src/data/extensions/${slug}/augment/metadata.json`));
     // Only metadata used by the PDF belongs here; changes to web copy and

@@ -84,9 +84,17 @@
   }
 ]
 
-#let installation(slug) = grid(columns: (80pt, 1fr), gutter: 10pt, align: horizon,
+// Guides validated on DuckDB 2.0 install from the Query.Farm repository;
+// the others keep the community instructions they were checked against.
+#let installation(slug, repository: none) = grid(columns: (80pt, 1fr), gutter: 10pt, align: horizon,
   text(weight: 600, size: 8.5pt)[Install & load],
-  sql("INSTALL " + slug + " FROM community;\nLOAD " + slug + ";", size: 8pt),
+  if repository == "query_farm" {
+    sql("SET allow_extension_repositories = 'allowed';\n"
+      + "CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm WITH PREFIX 'https://duckdb-extensions.query.farm';\n"
+      + "INSTALL " + slug + " FROM query_farm;  LOAD " + slug + " FROM query_farm;", size: 7pt)
+  } else {
+    sql("INSTALL " + slug + " FROM community;\nLOAD " + slug + ";", size: 8pt)
+  },
 )
 
 #let note(title, body) = block(width: 100%, inset: (left: 9pt, right: 9pt, y: 8pt), fill: sand, stroke: (left: 2pt + gold), breakable: false)[

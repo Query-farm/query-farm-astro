@@ -15,7 +15,7 @@
     },
     {
       "name": "tera_render(template, context)",
-      "description": "Render with a JSON object supplying variables."
+      "description": "Render with a JSON object or struct; arrays and scalars are errors."
     },
     {
       "name": "autoescape := false",
@@ -23,7 +23,11 @@
     },
     {
       "name": "template_path := glob",
-      "description": "Load template files; the first argument becomes a name."
+      "description": "Load template files through DuckDB's file system; the first argument becomes a name."
+    },
+    {
+      "name": "SET tera_allow_get_env = true",
+      "description": "Opt in to get_env(); it is disabled by default and without external access."
     },
     {
       "name": "{{ value | upper }}",
@@ -37,7 +41,7 @@
   "notes": [
     {
       "title": "Choose inline text or a file",
-      "body": "Without template_path, the first argument is template source. With a file glob, use a matching template name such as email.html. Files support includes, inheritance, and reusable template authoring outside SQL."
+      "body": "Without template_path, the first argument is template source. With a file or glob, use a matching template name such as email.html; a glob that matches nothing is an error. Files support includes, inheritance and macros, and respect allowed_directories when external access is off."
     },
     {
       "title": "Escaping follows the output",
@@ -53,8 +57,8 @@
     },
     {
       "title": "Render a plain-text list",
-      "sql": "SELECT tera_render(\n  '{% for x in xs %}{{ x }}' ||\n  '{% if not loop.last %}, {% endif %}' ||\n  '{% endfor %}',\n  '{\"xs\":[\"B&O\",\"Acme\"]}',\n  autoescape := false\n);\n-- B&O, Acme",
-      "caption": "Use loop.last for separators; disable autoescape for plain text.",
+      "sql": "SELECT tera_render(\n  '{% for x in xs %}{{ x }}' ||\n  '{% if not loop.last %}, {% endif %}' ||\n  '{% endfor %}',\n  {'xs': ['B&O', 'Acme']},\n  autoescape := false\n);\n-- B&O, Acme",
+      "caption": "A struct casts to the JSON context; disable autoescape for plain text.",
       "mode": "local"
     },
     {
@@ -65,5 +69,8 @@
       "reason": "Requires the template file shown in the caption; the PDF does not create it."
     }
   ],
-  "assertions": "SELECT CASE WHEN tera_render('<p>{{ name | upper }}</p>', '{\"name\":\"Ada & Grace\"}') = '<p>ADA &amp; GRACE</p>' AND tera_render('{% for x in xs %}{{ x }}{% if not loop.last %}, {% endif %}{% endfor %}', '{\"xs\":[\"B&O\",\"Acme\"]}', autoescape := false) = 'B&O, Acme' THEN true ELSE error('Tera result mismatch') END;"
+  "assertions": [
+    "SELECT CASE WHEN tera_render('<p>{{ name | upper }}</p>', '{\"name\":\"Ada & Grace\"}') = '<p>ADA &amp; GRACE</p>' AND tera_render('{% for x in xs %}{{ x }}{% if not loop.last %}, {% endif %}{% endfor %}', '{\"xs\":[\"B&O\",\"Acme\"]}', autoescape := false) = 'B&O, Acme' THEN true ELSE error('Tera result mismatch') END;",
+    "SELECT CASE WHEN tera_render('{{ user.name }}', {'user': {'name': 'Alice'}}) = 'Alice' THEN true ELSE error('struct context failed') END;"
+  ]
 }

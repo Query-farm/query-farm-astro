@@ -1,7 +1,7 @@
 {
   "title": "GeoSilo",
   "subtitle": "Compact geometry with explicit precision.",
-  "intro": "Store geometries as scaled integer coordinates with delta encoding. GeoSilo provides a GEOSILO column type, direct measurements and bounds, and explicit encode/decode functions for BLOB pipelines. Choose precision before comparing storage size or query performance.",
+  "intro": "Store geometries as scaled integer coordinates with delta encoding. GeoSilo provides a GEOSILO column type, direct measurements and bounds, explicit encode/decode functions, and validation for untrusted BLOBs.",
   "flow": [
     "Native GEOMETRY",
     "Scale + delta encode",
@@ -11,11 +11,11 @@
   "reference": [
     {
       "name": "GEOSILO('EPSG:3857')",
-      "description": "Typed geometry storage with CRS metadata and automatic coordinate scale."
+      "description": "Typed storage with CRS metadata and automatic scale."
     },
     {
       "name": "geosilo_encode(geom[,scale])",
-      "description": "Encode GEOMETRY to BLOB with automatic or explicit integer scale."
+      "description": "Encode GEOMETRY to BLOB with automatic or explicit scale."
     },
     {
       "name": "geosilo_decode(blob)",
@@ -23,19 +23,23 @@
     },
     {
       "name": "geosilo_metadata(blob)",
-      "description": "Inspect geometry_type, vertex_type, and scale without decoding the geometry."
+      "description": "Read geometry_type, vertex_type and scale without decoding."
     },
     {
       "name": "ST_Area / ST_Perimeter",
-      "description": "Measure GEOSILO polygons directly; results use the coordinate system’s units."
+      "description": "Measure polygons directly, in the coordinate system’s units."
     },
     {
-      "name": "ST_XMin / ST_XMax",
-      "description": "Read X bounds; ST_YMin and ST_YMax provide the Y bounds."
+      "name": "ST_XMin … ST_YMax / ST_NPoints",
+      "description": "Read bounds and vertex counts without decoding."
     },
     {
-      "name": "ST_GeometryType / ST_NPoints",
-      "description": "Inspect the geometry kind and count of vertices."
+      "name": "geosilo_is_valid(blob)",
+      "description": "TRUE for a well-formed blob; never raises an error."
+    },
+    {
+      "name": "geosilo_validate / try_geosilo_decode",
+      "description": "Describe the first problem, or decode malformed blobs to NULL."
     }
   ],
   "notes": [
@@ -45,7 +49,7 @@
     },
     {
       "title": "Spatial compatibility",
-      "body": "Fixed v1.5 builds merge shared ST_* overloads, so either extension can load first. These examples pass with spatial loaded first on DuckDB 1.5.6. Older GeoSilo d088741 collides with spatial 04270fe; upgrade or use geosilo alone."
+      "body": "Either extension can load first. Native ST_* overloads follow spatial's semantics, including MULTI* geometries and collections: areas subtract holes, polygons have length 0 and empty geometries give NULL. Other ST_* functions decode through the implicit cast."
     }
   ],
   "examples": [
@@ -63,8 +67,8 @@
     },
     {
       "title": "Set a scale for a BLOB pipeline",
-      "sql": "WITH encoded AS (\n  SELECT geosilo_encode(\n    'POINT(1.234 2.345)'::GEOMETRY,100\n  ) AS blob\n)\nSELECT geosilo_decode(blob)::VARCHAR AS wkt\nFROM encoded;",
-      "caption": "Returns POINT (1.23 2.35): decoding retains the chosen quantization.",
+      "sql": "WITH encoded AS (\n  SELECT geosilo_encode(\n    'POINT(1.234 2.345)'::GEOMETRY,100\n  ) AS blob\n)\nSELECT geosilo_is_valid(blob) AS ok,\n  geosilo_decode(blob)::VARCHAR AS wkt\nFROM encoded;",
+      "caption": "Returns true, POINT (1.23 2.35): decoding retains the chosen quantization.",
       "mode": "local"
     }
   ],
@@ -73,6 +77,7 @@
   ],
   "assertions": [
     "SELECT CASE WHEN ST_Area(geom)=100 AND ST_Perimeter(geom)=40 AND (geosilo_metadata(geom)).scale=100 THEN true ELSE error('GeoSilo polygon measurements or scale mismatch') END FROM plots;",
-    "SELECT CASE WHEN geosilo_decode(geosilo_encode('POINT(1.234 2.345)'::GEOMETRY,100))::VARCHAR='POINT (1.23 2.35)' THEN true ELSE error('GeoSilo explicit scale mismatch') END;"
+    "SELECT CASE WHEN geosilo_decode(geosilo_encode('POINT(1.234 2.345)'::GEOMETRY,100))::VARCHAR='POINT (1.23 2.35)' THEN true ELSE error('GeoSilo explicit scale mismatch') END;",
+    "SELECT CASE WHEN NOT geosilo_is_valid('\\x54\\xff\\xff\\xff\\x7f'::BLOB) AND geosilo_validate('\\x54\\xff\\xff\\xff\\x7f'::BLOB) IS NOT NULL AND try_geosilo_decode('\\x54\\xff'::BLOB) IS NULL AND geosilo_validate(geosilo_encode(ST_Point(1, 2))) IS NULL THEN true ELSE error('GeoSilo validation contract failed') END;"
   ]
 }

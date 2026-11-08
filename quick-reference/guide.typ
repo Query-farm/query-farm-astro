@@ -5,7 +5,7 @@
 #show: sheet.with(extension: data.title, revision: sys.inputs.at("revision"))
 
 #masthead(data.title, slug, data.subtitle)
-#installation(slug)
+#installation(slug, repository: sys.inputs.at("repository", default: none))
 #v(8pt)
 
 #grid(columns: (1fr, 1fr), gutter: 20pt,

@@ -11,11 +11,11 @@
   "reference": [
     {
       "name": "cron(sql, schedule)",
-      "description": "Register a query; returns the job ID as VARCHAR."
+      "description": "Register a query; returns the job ID. Invalid SQL or schedules that never match a date are errors."
     },
     {
       "name": "cron_jobs()",
-      "description": "Table function listing scheduled jobs and their status."
+      "description": "List jobs: TIMESTAMPTZ next_run and last_run, run_count, error_count, created_at."
     },
     {
       "name": "cron_delete(job_id)",
@@ -23,7 +23,7 @@
     },
     {
       "name": "cron_job_history()",
-      "description": "Last 100 runs per job: start, finish, success, result (DuckDB 2.0)."
+      "description": "Last 100 runs per job: start, finish, success and result or error."
     },
     {
       "name": "second minute hour day month weekday",
@@ -45,7 +45,7 @@
     },
     {
       "title": "Keep and use the returned ID",
-      "body": "Do not assume a job will always be task_0. Store the returned identifier and use it for cancellation. A successful registration does not establish that the scheduled SQL will succeed."
+      "body": "Do not assume a job will always be task_0. Store the returned identifier and use it for cancellation. Registration checks the SQL and schedule, not that runs succeed: watch error_count and cron_job_history()."
     }
   ],
   "examples": [
@@ -57,8 +57,8 @@
     },
     {
       "title": "Inspect jobs",
-      "sql": "SELECT * FROM cron_jobs();",
-      "caption": "Review schedule and status while the same DuckDB process remains running.",
+      "sql": "SELECT job_id, schedule, next_run,\n       run_count, error_count\nFROM cron_jobs();",
+      "caption": "next_run is a TIMESTAMPTZ; review jobs while the same DuckDB process remains running.",
       "mode": "local"
     },
     {
@@ -68,5 +68,8 @@
       "mode": "local"
     }
   ],
-  "assertions": "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM cron_jobs() j JOIN scheduled s USING (job_id)) THEN true ELSE error('scheduled job was not removed') END;"
+  "assertions": [
+    "CREATE TEMP TABLE probe AS SELECT cron('SELECT 1', '0 0 2 * * *') AS job_id; SELECT CASE WHEN (SELECT typeof(next_run) FROM cron_jobs() JOIN probe USING (job_id)) = 'TIMESTAMP WITH TIME ZONE' THEN true ELSE error('next_run is not TIMESTAMPTZ') END; SELECT cron_delete(job_id) FROM probe;",
+    "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM cron_jobs() j JOIN scheduled s USING (job_id)) THEN true ELSE error('scheduled job was not removed') END;"
+  ]
 }

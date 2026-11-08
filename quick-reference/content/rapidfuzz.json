@@ -1,7 +1,7 @@
 {
   "title": "RapidFuzz",
   "subtitle": "Fuzzy string comparisons beside your data.",
-  "intro": "Score candidate pairs using edit-distance and token-based matching. Normalize text first, select a score that matches your data, then rank or threshold the candidates.",
+  "intro": "Score candidate pairs using edit-distance and token-based matching, compared by Unicode character. Normalize text first, select a score that matches your data, then rank, threshold, or pick the best match from a list.",
   "flow": [
     "Normalize text",
     "Score candidates",
@@ -11,7 +11,7 @@
   "reference": [
     {
       "name": "rapidfuzz_ratio(a, b)",
-      "description": "General string similarity on a 0\u2013100 scale."
+      "description": "General string similarity on a 0–100 scale."
     },
     {
       "name": "rapidfuzz_partial_ratio(a, b)",
@@ -26,22 +26,26 @@
       "description": "Compare token sets; discounts repeated words."
     },
     {
+      "name": "rapidfuzz_levenshtein_distance(a, b)",
+      "description": "Edits as BIGINT; costs and score_cutoff are named options."
+    },
+    {
       "name": "rapidfuzz_osa_distance(a, b)",
       "description": "Edit distance with adjacent transpositions; smaller is closer."
     },
     {
-      "name": "rapidfuzz_hamming_distance(a, b)",
-      "description": "Count positional differences between strings."
-    },
-    {
       "name": "rapidfuzz_jaro_winkler_normalized_similarity",
       "description": "Normalized similarity from 0 to 1; larger is closer."
+    },
+    {
+      "name": "rapidfuzz_extract_one(query, choices)",
+      "description": "Best match from a list: choice, score and choice_index."
     }
   ],
   "notes": [
     {
       "title": "Score scales differ",
-      "body": "Ratio functions use 0\u2013100. Normalized similarities use 0\u20131. Distance functions point the other way: zero means an exact match. A score is not a match probability."
+      "body": "Ratio functions use 0–100 and normalized similarities 0–1. Counting distances return BIGINT and point the other way: zero is an exact match. Characters, not bytes, are compared, so café to cafe is one edit. A score is not a match probability."
     },
     {
       "title": "Reduce candidate pairs first",
@@ -66,7 +70,16 @@
       "sql": "SELECT rapidfuzz_osa_distance(\n  'form', 'from'\n) AS edits;\n-- 1",
       "caption": "OSA counts one adjacent transposition as one edit.",
       "mode": "local"
+    },
+    {
+      "title": "Pick the best from a list",
+      "sql": "SELECT rapidfuzz_extract_one('acme corp',\n  ['acme co', 'acme corp.', 'apex corp'],\n  scorer := 'ratio'\n) AS best;\n-- {choice: acme corp., score: 94.7…, choice_index: 2}",
+      "caption": "No join needed; rapidfuzz_extract returns the top_k matches as a list.",
+      "mode": "local"
     }
   ],
-  "assertions": "SELECT CASE WHEN rapidfuzz_token_sort_ratio('world hello','hello world')=100 AND rapidfuzz_osa_distance('form','from')=1 THEN true ELSE error('fuzzy scores') END;"
+  "assertions": [
+    "SELECT CASE WHEN rapidfuzz_token_sort_ratio('world hello','hello world')=100 AND rapidfuzz_osa_distance('form','from')=1 THEN true ELSE error('fuzzy scores') END;",
+    "SELECT CASE WHEN rapidfuzz_extract_one('acme corp', ['acme co', 'acme corp.', 'apex corp'], scorer := 'ratio').choice_index = 2 AND rapidfuzz_levenshtein_distance('café', 'cafe') = 1 AND typeof(rapidfuzz_osa_distance('form', 'from')) = 'BIGINT' THEN true ELSE error('RapidFuzz 2.0 contract failed') END;"
+  ]
 }
