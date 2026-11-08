@@ -250,7 +250,9 @@ function splitTagline(t: string): { text: string; builtOn: string[] } {
   return { text: text.slice(0, m.index).trim(), builtOn: parts.filter(p => !LANG_TOKEN.test(p)) };
 }
 /** Every worker here is for DuckDB, so a trailing "for/in DuckDB" says nothing. */
-const trimDuckdb = (t: string) => t.replace(/\s+(for|in|into)\s+DuckDB\.?$/i, '');
+// Stripping it (or the language suffix) can leave a dangling separator: "… schedules — for DuckDB".
+const trimDuckdb = (t: string) =>
+  t.replace(/\s+(for|in|into)\s+DuckDB\.?$/i, '').replace(/[\s—–:;,-]+$/, '');
 
 function enrich(w: WorkerRecord): Worker {
   const tag = splitTagline(w.tagline ?? '');
