@@ -195,6 +195,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'vgi/docs/concepts' },
             { label: 'Function lifecycle', slug: 'vgi/docs/concepts/lifecycle' },
             { label: 'Argument serialization', slug: 'vgi/docs/concepts/argument-serialization' },
+            { label: 'Secret types', slug: 'vgi/docs/concepts/secret-types' },
             { label: 'Test a worker through SQL', slug: 'vgi/docs/concepts/testing' },
             { label: 'Starter templates', slug: 'vgi/docs/concepts/starter-templates' },
           ],
