@@ -114,14 +114,30 @@ const githubAuto = (w: WorkerRecord) => w.run?.github_auto ?? `github-auto://Que
 const uvxLocation = (w: WorkerRecord) =>
   w.run?.uvx ?? `uvx --from git+${w.repo_url}@${w.release?.tag ?? 'main'} ${w.run?.script ?? `${w.repo}-worker`}`;
 
+/**
+ * Installing the vgi extension differs by engine. Stock DuckDB 2.0 needs the Query Farm
+ * repository registered (and `LOAD … FROM query_farm`: DuckDB keeps repository installs
+ * separately). Haybarn ships vgi in its community channel.
+ */
+export const VGI_SETUP = {
+  duckdb: [
+    "SET allow_extension_repositories = 'allowed';",
+    '',
+    'CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm',
+    "    WITH PREFIX 'https://duckdb-extensions.query.farm';",
+    '',
+    'INSTALL vgi FROM query_farm;',
+    'LOAD vgi FROM query_farm;',
+  ].join('\n'),
+  haybarn: ['INSTALL vgi FROM community;', 'LOAD vgi;'].join('\n'),
+} as const;
+
+/** The ATTACH (plus first example query). The extension setup is shown separately, per engine. */
 function attachSql(w: WorkerRecord, location: string, comment?: string) {
   const required = w.attach_options.filter(o => o.required);
   const opts = [`TYPE vgi`, `LOCATION ${quote(location)}`, ...required.map(o => `${o.name.toUpperCase()} '…'`)];
   const first = w.example_queries[0]?.sql?.trim();
   return [
-    'INSTALL vgi FROM community;',
-    'LOAD vgi;',
-    '',
     ...(comment ? [`-- ${comment}`] : []),
     `ATTACH ${quote(w.catalog)} AS ${w.catalog} (`,
     opts.map(o => `  ${o}`).join(',\n'),

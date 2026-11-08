@@ -1,6 +1,6 @@
 // Machine-readable index of every Orchard worker — for agents, LLM tools and
 // anyone scripting against the directory. Mirrors haybarn/extensions/catalog.json.
-import { workers, generatedAt } from '../../../../data/vgi-workers';
+import { workers, generatedAt, VGI_SETUP } from '../../../../data/vgi-workers';
 
 const SITE = 'https://query.farm';
 
@@ -25,7 +25,9 @@ export function GET() {
         release: w.release ? { tag: w.release.tag, publishedAt: w.release.published_at ?? null } : null,
         platforms: w.platforms,
         image: w.image ?? null,
-        attachSql: w.attachSql,
+        // Runnable as-is on stock DuckDB 2.0; Haybarn uses setup.haybarn instead.
+        attachSql: `${VGI_SETUP.duckdb}\n\n${w.attachSql}`,
+        setup: VGI_SETUP,
         objects: w.objects.map(o => ({ schema: o.schema, name: o.name, kind: o.kind, signature: o.signature, description: o.comment || null })),
       })),
     }),
