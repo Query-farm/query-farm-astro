@@ -142,6 +142,31 @@ export const workerRecordSchema = z.object({
   secret_types: z
     .array(z.object({ name: z.string(), description: str, provider: str }).passthrough())
     .default([]),
+  // Full declarations from the vgi extension's vgi_secret_types(): description,
+  // where to get credentials (vgi_doc_url), each CREATE SECRET key, and the
+  // functions that need it. Null when the harvest's extension couldn't report it.
+  secret_type_details: z
+    .array(
+      z.object({
+        name: z.string(),
+        description: str,
+        doc_url: str,
+        parameters: z
+          .array(
+            z.object({
+              name: z.string(),
+              type: str,
+              required: z.boolean().nullable().optional(),
+              redact: z.boolean().nullable().optional(),
+              description: str,
+            }),
+          )
+          .default([]),
+        required_by: z.array(z.string()).default([]),
+      }),
+    )
+    .nullable()
+    .optional(),
   // From `vgi-lint dump`: the worker was attached the way users are told to and
   // every executable example ran. Only verified workers are listed.
   verification: z

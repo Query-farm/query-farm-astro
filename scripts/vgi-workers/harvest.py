@@ -795,6 +795,7 @@ def merge_worker(g: dict[str, Any], c: dict[str, Any] | None,
         "counts": cat.get("counts") or empty_counts,
         "lint": lint,
         "secret_types": c.get("secret_types") or [],
+        "secret_type_details": cat.get("secret_type_details"),
         "verification": c.get("verification"),
         "harvest": {
             "status": c.get("status"),
@@ -805,6 +806,28 @@ def merge_worker(g: dict[str, Any], c: dict[str, Any] | None,
     }
 
 
+def secret_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize `SELECT * FROM vgi_secret_types()` rows to the dump's shape.
+
+    `vgi-lint dump` (2.2.0+) emits `catalog.secret_type_details` itself when the
+    extension has vgi_secret_types(); this reads rows captured separately (e.g.
+    with a newer extension build than the harvest ran on).
+    """
+    out = []
+    for r in rows:
+        out.append({
+            "name": r.get("secret_type") or r.get("name"),
+            "description": r.get("description") or None,
+            "doc_url": r.get("doc_url") or None,
+            "parameters": [
+                {k: p.get(k) for k in ("name", "type", "required", "redact", "description")}
+                for p in (r.get("parameters") or [])
+            ],
+            "required_by": list(r.get("required_by") or []),
+        })
+    return out
+
+
 def phase_merge(args: argparse.Namespace) -> None:
     work = Path(args.work)
     github = json.loads((work / "github.json").read_text())
@@ -812,6 +835,7 @@ def phase_merge(args: argparse.Namespace) -> None:
     catdir = Path(args.catalogs) if args.catalogs else work / "catalogs"
     dumps = Path(args.dumps) if getattr(args, "dumps", None) else None
     fleet = load_fleet(Path(args.fleet))
+    secret_dir = Path(args.secret_types) if getattr(args, "secret_types", None) else None
     # Keep executable names found by earlier tarball harvests (the dump only
     # records the transport LOCATION it attached with).
     prev_out = Path(args.out)
@@ -827,6 +851,14 @@ def phase_merge(args: argparse.Namespace) -> None:
         else:
             f = catdir / f"{g['repo']}.json"
             c = json.loads(f.read_text()) if f.exists() else None
+        if c is not None and secret_dir is not None and not (c.get("catalog") or {}).get(
+            "secret_type_details"
+        ):
+            sf = secret_dir / f"{g['repo']}.json"
+            if sf.exists():
+                c.setdefault("catalog", {})["secret_type_details"] = secret_rows(
+                    json.loads(sf.read_text())
+                )
         workers.append(merge_worker(g, c, fleet, plan.get(g["repo"], {})))
     doc = {
         "generated_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
@@ -964,6 +996,8 @@ def main() -> None:
                    "adds verification, fresh lint, secret types)")
     p.add_argument("--fleet", default=str(DEFAULT_FLEET))
     p.add_argument("--out", default=str(DEFAULT_OUT))
+    p.add_argument("--secret-types", help="directory of <repo>.json `vgi_secret_types()` rows, "
+                   "used when a dump has no secret_type_details")
     p.set_defaults(fn=phase_merge)
 
     p = sub.add_parser("manifest", help="write a `vgi-lint fleet dump` manifest that attaches each "

@@ -9,6 +9,7 @@ import CodeTabs from '../../../../components/ui/CodeTabs.astro';
 import OrchardSubNav from '../../../../components/sections/OrchardSubNav.astro';
 import WorkerCard from '../../../../components/orchard/WorkerCard.astro';
 import CatalogExplorer from '../../../../components/orchard/CatalogExplorer.astro';
+import WorkerCredentials from '../../../../components/orchard/WorkerCredentials.astro';
 import { formatExampleSql } from '../../../../data/vgi-workers/format-sql';
 import { workers, relatedWorkers, platformLabel, VGI_SETUP, exampleObjects, type Worker } from '../../../../data/vgi-workers';
 
@@ -53,7 +54,16 @@ const coverage = [
     label: 'Every object documented',
     ok: w.objects.length > 0 && w.objects.every(o => o.comment),
   },
+  ...(w.credentials.length
+    ? [
+        { label: 'Secret keys documented (vgi_doc)', ok: w.credentials.every(c => c.params.every(p => p.description)) },
+        { label: 'Required keys marked (vgi_required)', ok: w.credentials.some(c => c.params.some(p => p.required)) },
+        { label: 'Credentials link (vgi_doc_url)', ok: w.credentials.every(c => c.docUrl) },
+      ]
+    : []),
 ];
+const hasCredentials = w.credentials.length > 0;
+const secretList = w.credentials.map(c => c.type);
 
 const facts: [string, string][] = [
   ['Catalog', w.catalog],
@@ -70,7 +80,7 @@ const facts: [string, string][] = [
     : []),
   ['Cost', w.offering.pricing === 'open' ? 'Free and open source — you run it yourself' : 'Paid'],
   ...(w.facets.needsCredentials
-    ? [['Credentials', w.facets.secretTypes.length ? `Needs a DuckDB secret of type ${w.facets.secretTypes.join(' or ')}` : 'Needs credentials at ATTACH'] as [string, string]]
+    ? [['Credentials', w.facets.secretTypes.length ? `Uses a DuckDB secret of type ${w.facets.secretTypes.join(' or ')}` : 'Needs credentials at ATTACH'] as [string, string]]
     : []),
 ];
 
@@ -137,7 +147,8 @@ const H2 = 'text-2xl text-soil-900';
       <section id="quick-start" class="mt-12 scroll-mt-32">
         <h2 class={H2}>Quick start</h2>
         <p class="mt-2 text-soil-700">
-          The worker runs locally as a subprocess of DuckDB or Haybarn — there's nothing to sign up for.
+          The worker runs locally as a subprocess of DuckDB or Haybarn — there's nothing to sign up for with Query.Farm.
+          {hasCredentials && <>It calls an outside service, so some functions need your own credentials — see <a href="#credentials" class="text-link underline decoration-link/40 underline-offset-2">step 3</a>.</>}
         </p>
         <h3 class="mt-6 text-[17px] font-semibold text-soil-900">1. Install the vgi extension</h3>
         <p class="mt-1 text-[15px] text-soil-700">
@@ -163,6 +174,15 @@ const H2 = 'text-2xl text-soil-900';
             <CodeBlock code={w.attachSql} lang="sql" title="attach.sql" tryable={false} />
           )}
         </div>
+        {hasCredentials && (
+          <>
+            <h3 class="mt-7 text-[17px] font-semibold text-soil-900">3. Add your credentials</h3>
+            <p class="mt-1 text-[15px] text-soil-700">
+              Create a DuckDB secret of type {secretList.map((t, i) => <>{i > 0 && (i === secretList.length - 1 ? ' or ' : ', ')}<a href={`#secret-${t}`} class="font-mono text-link underline decoration-link/40 underline-offset-2">{t}</a></>)} — the keys and a ready-to-fill
+              <code class="rounded bg-soil-100 px-1.5 py-0.5 font-mono text-[14px] text-soil-900">CREATE SECRET</code> are under <a href="#credentials" class="text-link underline decoration-link/40 underline-offset-2">Credentials</a>.
+            </p>
+          </>
+        )}
         {w.attach_options.length > 0 && (
           <div class="mt-5 rounded-xl border border-soil-300 bg-[#fffdf7] p-4">
             <h3 class="text-[15px] font-semibold text-soil-900">ATTACH options</h3>
@@ -177,6 +197,19 @@ const H2 = 'text-2xl text-soil-900';
           </div>
         )}
       </section>
+
+      <!-- Credentials -->
+      {hasCredentials && (
+        <section id="credentials" class="mt-12 scroll-mt-32">
+          <h2 class={H2}>Credentials</h2>
+          <p class="mt-2 text-soil-700">
+            {w.credentials.length === 1 ? 'The secret type' : `The ${w.credentials.length} secret types`} <code class="font-mono">{w.catalog}</code> declares, as reported by the worker itself.
+          </p>
+          <div class="mt-5">
+            <WorkerCredentials credentials={w.credentials} catalog={w.catalog} />
+          </div>
+        </section>
+      )}
 
       <!-- Examples -->
       {examples.length > 0 && (
@@ -275,6 +308,11 @@ const H2 = 'text-2xl text-soil-900';
               </div>
             ))}
           </dl>
+          {hasCredentials && (
+            <a href="#credentials" class="mt-3 inline-flex items-center gap-1.5 text-sm text-link underline decoration-link/40 underline-offset-2">
+              <Icon name="ph:key" class="h-4 w-4" aria-hidden="true" />Credentials setup
+            </a>
+          )}
           <div class="mt-4 flex flex-col gap-1.5 border-t border-soil-200 pt-3 text-sm">
             <a href={w.repo_url} class="text-link underline decoration-link/40 underline-offset-2">Source on GitHub</a>
             <span class="font-mono text-[12.5px] text-soil-600">{w.repo_url.replace('https://github.com/', '')}</span>

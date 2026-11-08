@@ -29,6 +29,16 @@ export function GET() {
         // Runnable as-is on stock DuckDB 2.0; Haybarn uses setup.haybarn instead.
         attachSql: `${VGI_SETUP.duckdb}\n\n${w.attachSql}`,
         setup: VGI_SETUP,
+        // Declared secret types (vgi_secret_types()): keys, functions that need
+        // them, and a ready-to-fill CREATE SECRET. Empty when none are needed.
+        credentials: w.credentials.map(c => ({
+          secretType: c.type,
+          description: c.description,
+          docUrl: c.docUrl,
+          parameters: c.params,
+          requiredBy: c.neededBy.map(f => f.name),
+          createSecret: c.createSql,
+        })),
         objects: w.objects.map(o => ({ schema: o.schema, name: o.name, kind: o.kind, signature: o.signature, description: o.comment || null })),
       })),
     }),

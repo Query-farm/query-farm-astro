@@ -43,6 +43,26 @@ export interface CatalogObject {
   fields: string;
 }
 
+export interface CredentialParam {
+  name: string;
+  type: string | null;
+  required: boolean;
+  redact: boolean;
+  description: string | null;
+}
+
+/** One secret type the worker declares, ready to render as a credentials block. */
+export interface Credential {
+  type: string;
+  description: string | null;
+  docUrl: string | null;
+  params: CredentialParam[];
+  /** Functions declaring a requirement on this type, linked into the catalog explorer. */
+  neededBy: { name: string; anchor: string | null }[];
+  /** A ready-to-fill CREATE SECRET; redacted keys read from the environment. */
+  createSql: string;
+}
+
 export interface Worker extends WorkerRecord {
   name: string;
   displayTitle: string;
@@ -63,6 +83,8 @@ export interface Worker extends WorkerRecord {
     secretTypes: string[];
     indexed: boolean;
   };
+  /** Full secret-type declarations; empty when the worker needs none or none were harvested. */
+  credentials: Credential[];
 }
 
 const PLATFORM_LABEL: Record<Platform, string> = {
@@ -109,6 +131,50 @@ export function workerName(slug: string): string {
 
 const anchorFor = (schema: string, name: string) =>
   `obj-${schema}-${name}`.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+
+/** Environment variable a redacted secret key is read from in the CREATE SECRET template. */
+function envVarFor(type: string, param: string): string {
+  const p = param.toLowerCase();
+  // `anthropic_api_key` already names its service; `api_key` / `key` borrow the type's.
+  if (/_(api_key|token|key)$/.test(p) && p !== 'api_key') return p.toUpperCase();
+  return `${type}_${p}`.toUpperCase().replace(/[^A-Z0-9_]+/g, '_');
+}
+
+function createSecretSql(type: string, params: CredentialParam[]): string {
+  if (!params.length) return `CREATE SECRET ${type} (TYPE ${type});`;
+  const width = Math.max(...params.map(p => p.name.length));
+  const lines = params.map((p, i) => {
+    const value = p.redact ? `getenv('${envVarFor(type, p.name)}')` : `'<${p.name}>'`;
+    const sep = i < params.length - 1 ? ',' : '';
+    const notes = [p.required ? 'required' : '', p.redact ? 'secret' : ''].filter(Boolean).join(', ');
+    return `    ${p.name.padEnd(width)} ${value}${sep}${notes ? `  -- ${notes}` : ''}`;
+  });
+  return `CREATE SECRET ${type} (\n    TYPE ${type},\n${lines.join('\n')}\n);`;
+}
+
+function credentialsFor(w: WorkerRecord): Credential[] {
+  const fnAnchors = new Map<string, string>();
+  for (const s of w.schemas) {
+    for (const name of groupOverloads(s.functions).keys()) fnAnchors.set(`${s.name}.${name}`.toLowerCase(), anchorFor(s.name, name));
+  }
+  return (w.secret_type_details ?? []).map(st => {
+    const params: CredentialParam[] = st.parameters.map(p => ({
+      name: p.name,
+      type: p.type ?? null,
+      required: Boolean(p.required),
+      redact: Boolean(p.redact),
+      description: p.description ?? null,
+    }));
+    return {
+      type: st.name,
+      description: st.description ?? null,
+      docUrl: st.doc_url ?? null,
+      params,
+      neededBy: st.required_by.map(q => ({ name: q.split('.').pop() ?? q, anchor: fnAnchors.get(q.toLowerCase()) ?? null })),
+      createSql: createSecretSql(st.name, params),
+    };
+  });
+}
 
 const fnSignature = (f: WorkerFunction) => {
   const args = f.arguments
@@ -400,6 +466,7 @@ function enrich(w: WorkerRecord): Worker {
     objects,
     totals: { tables, functions, tableFunctions, macros },
     facets: { surfaces, needsCredentials, secretTypes: secretTypes.map(t => t.name), indexed: w.harvest?.status === 'ok' },
+    credentials: credentialsFor(w),
   };
 }
 
