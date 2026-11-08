@@ -24,7 +24,8 @@ Fuzzycomplete uses the Rust crate [`code-fuzzy-match`](https://crates.io/crates/
 - **Ordered subsequence.** Every character of your query must appear in the candidate, in order. They don't have to be contiguous — `usr` matches `users` and `user_settings` but not `setUR`.
 - **Word-boundary bonuses.** Characters that follow a separator (`_`, `.`) or sit at a camelCase boundary score higher. That's why `gNS` reliably picks `getNotificationStatus`.
 - **Run bonuses.** Contiguous match runs score higher than scattered hits — `users` beats `u_e_r_s` for the query `usr`.
-- **Tie-breakers.** Equal fuzzy scores break by candidate length (shorter wins), then lexicographically.
+- **Tie-breakers.** Equal fuzzy scores break by relevance, then by fewer `_`/`.` separated parts, then lexicographically. Relevance (DuckDB 2.0, build `2026110701` and later): `SELECT`, then `FROM`/`INSERT`/`UPDATE`/`DELETE`, before other keywords; your own tables, views, catalogs and schemas before built-in ones; columns of the tables named anywhere in the statement before other columns; columns before functions. `suggestion_score` still reports only the fuzzy match, so the shell keeps listing equally good matches instead of picking one.
+- **Comments.** Text inside `--` and `/* */` comments is skipped; inside an unterminated comment there are no suggestions. Block comments are recognised on DuckDB 2.0 from build `2026110701`.
 
 ## Replaces, not supplements, the built-in
 
@@ -76,6 +77,10 @@ Each row has the same five columns as the stock extension, which the DuckDB shel
 | `extra_char` | `VARCHAR` | The character the shell appends after accepting: a space after keywords, `.` after catalogs and schemas, the path separator after directories, a quote after file names |
 
 The stock extension's named parameters are accepted too: `max_suggestion_count` caps the number of suggestions (default 20) and `max_file_suggestion_count` the number of file and directory suggestions, e.g. `sql_auto_complete('SELECT * FROM ', max_suggestion_count := 5)`. `max_exact_suggestion_count` is accepted but has no effect, since fuzzy matching has no exact-only tail.
+
+### File names and the sandbox
+
+Inside a string literal the completer lists the files in the directory you are typing (directories end in the path separator, files in a closing quote). It goes through DuckDB's file system, so with `SET enable_external_access = false` file and directory completion fails with a `Permission Error` (the shell then shows no suggestions); keyword, table and column completion keep working. On DuckDB 2.0 from build `2026110701`, file names that are not valid UTF-8 are skipped; earlier builds aborted the shell when Tab-completing in a directory that contained one.
 
 ## What's in the box
 
