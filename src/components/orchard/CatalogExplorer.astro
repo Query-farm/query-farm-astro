@@ -9,11 +9,17 @@
 // Supports several catalogs and several schemas per catalog; a single-schema
 // worker opens its schema by default. Every object keeps a stable anchor —
 // search results deep-link here and the row (and its schema) opens on arrival.
+//
+// A very large catalog (vgi-github: ~800 REST functions) would put megabytes of
+// argument docs into the page, so past LAZY_OVER objects each row's body is a
+// placeholder that fetches its own static fragment on first open.
 import { marked } from 'marked';
 import { Icon } from 'astro-icon/components';
 import { groupOverloads, objectExamples, type Worker } from '../../data/vgi-workers';
 import ObjectExamples from './ObjectExamples.astro';
-import type { WorkerFunction, WorkerSchema, WorkerTable } from '../../data/vgi-workers/schema';
+import CatalogObjectBody from './CatalogObjectBody.astro';
+import { lazyCatalog, objectFragmentUrl } from '../../data/vgi-workers/lazy';
+import type { WorkerSchema } from '../../data/vgi-workers/schema';
 
 interface Props {
   worker: Worker;
@@ -46,15 +52,6 @@ const FN_GROUPS: { kinds: string[]; label: string; icon: string; cls: string }[]
   { kinds: ['other'], label: 'Other functions', icon: 'ph:function-duotone', cls: 'k-scalar' },
 ];
 
-function tableSql(cat: string, schema: string, t: WorkerTable) {
-  return `SELECT * FROM ${qualify(cat, schema, t.name)} LIMIT 10;`;
-}
-function fnSql(cat: string, schema: string, f: WorkerFunction) {
-  const positional = f.arguments.filter(a => !a.named).map(a => `<${a.name || a.type}>`);
-  const named = f.arguments.filter(a => a.named && a.default == null).map(a => `${a.name} := <${a.type}>`);
-  const call = `${qualify(cat, schema, f.name)}(${[...positional, ...named].join(', ')})`;
-  return ['table', 'table_in_out', 'table_macro'].includes(f.kind) ? `SELECT * FROM ${call} LIMIT 10;` : `SELECT ${call};`;
-}
 const plural = (n: number, s: string) => `${n} ${s}${n === 1 ? '' : 's'}`;
 function schemaSummary(s: WorkerSchema) {
   const tables = s.tables.filter(t => t.kind !== 'view').length;
@@ -67,6 +64,7 @@ function schemaSummary(s: WorkerSchema) {
 }
 const total = catalogs.reduce((n, c) => n + c.schemas.reduce((m, s) => m + s.tables.length + groupOverloads(s.functions).size, 0), 0);
 const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
+const lazy = lazyCatalog(w);
 ---
 
 {total === 0 ? (
@@ -75,7 +73,7 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
     <code class="font-mono">SELECT * FROM duckdb_functions() WHERE database_name = '{w.catalog}'</code> to explore it locally.
   </div>
 ) : (
-  <div class="vtree" data-vtree>
+  <div class="vtree" data-vtree data-lazy={lazy ? '1' : undefined}>
     <div class="vtree-head">
       <label class="vtree-filter">
         <Icon name="ph:magnifying-glass" class="vtree-filter-ic" aria-hidden="true" />
@@ -129,28 +127,11 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
                         <span class="vrow-name">{t.name}</span>
                         <span class="vrow-meta">{objectExamples([t]).length > 0 && <span class="vexn">{plural(objectExamples([t]).length, 'example')}</span>}{plural(t.columns.length, 'col')}</span>
                       </summary>
-                      <div class="vbody">
-                        {t.comment && <div class="vdesc prose-vgi" set:html={md(t.comment)} />}
-                        {t.columns.length > 0 && (
-                          <>
-                            <div class="vlabel">Columns</div>
-                            <div class="vcols">
-                              {t.columns.map(col => (
-                                <div class="vcol">
-                                  <div class="vcol-line">
-                                    <span class="vcol-name">{col.name}{col.nullable === false && <span class="vnn" title="NOT NULL">not null</span>}</span>
-                                    <span class="vcol-type">{col.type}</span>
-                                  </div>
-                                  {col.comment && <div class="vcol-comment">{col.comment}</div>}
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        )}
-                        {t.constraints.length > 0 && <div class="vreturns"><b>Constraints</b>{t.constraints.join(' · ')}</div>}
-                        <ObjectExamples examples={objectExamples([t])} />
-                        <div class="vactions"><button type="button" class="vcopy" data-sql={tableSql(c.name, s.name, t)}>Copy SQL</button><a class="vlink" href={`#${anchor(s.name, t.name)}`}>Link</a></div>
-                      </div>
+                      {lazy ? (
+                        <div class="vbody vbody-lazy" data-src={objectFragmentUrl(w.slug, anchor(s.name, t.name))}>Loading…</div>
+                      ) : (
+                        <CatalogObjectBody catalog={c.name} schema={s.name} anchor={anchor(s.name, t.name)} table={t} />
+                      )}
                     </details>
                   ))}
                 </div>
@@ -164,7 +145,6 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
                     <div class="vglabel"><Icon name={g.icon} aria-hidden="true" />{g.label}</div>
                     {rows.map(([fname, group]) => {
                       const rich = group.reduce((a, b) => (b.arguments.length > a.arguments.length ? b : a));
-                      const comment = group.find(x => x.comment)?.comment;
                       const pos = rich.arguments.filter(a => !a.named);
                       const named = rich.arguments.filter(a => a.named);
                       const exs = objectExamples(group);
@@ -177,48 +157,11 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
                             <span class="vsig">({[...pos, ...named].map((a, i) => (<>{i > 0 && ', '}{a.name}{a.named && ' :='}{a.type && <> <span class="vsig-type">{a.type}</span></>}</>))}){group.length > 1 && <span class="vover"> +{group.length - 1} overload{group.length > 2 ? 's' : ''}</span>}</span>
                             {exs.length > 0 && <span class="vrow-meta"><span class="vexn">{plural(exs.length, 'example')}</span></span>}
                           </summary>
-                          <div class="vbody">
-                            {comment && <div class="vdesc prose-vgi" set:html={md(comment)} />}
-                            {rich.arguments.length === 0 ? (
-                              <div class="vnoargs">No arguments</div>
-                            ) : (
-                              [{ label: named.length ? 'Positional arguments' : 'Arguments', list: pos }, { label: 'Named arguments', list: named }]
-                                .filter(x => x.list.length)
-                                .map(x => (
-                                  <>
-                                    <div class="vlabel">{x.label}</div>
-                                    <div class="vcols">
-                                      {x.list.map(a => (
-                                        <div class="vcol">
-                                          <div class="vcol-line">
-                                            <span class="vcol-name">{a.name}{a.named && <span class="vargk"> :=</span>}</span>
-                                            {a.type && <span class="vcol-type">{a.type}</span>}
-                                          </div>
-                                          {(a.description || a.default != null) && (
-                                            <div class="vcol-comment">
-                                              {a.description}
-                                              {a.description && a.default != null && ' · '}
-                                              {a.default != null && <span class="vdef">default {String(a.default)}</span>}
-                                            </div>
-                                          )}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </>
-                                ))
-                            )}
-                            {group.length > 1 && (
-                              <>
-                                <div class="vlabel">Overloads</div>
-                                <div class="vover-list">
-                                  {group.map(o => <code>{o.name}({o.arguments.map(a => [a.name, a.type].filter(Boolean).join(' ')).join(', ')}){o.return_type ? ` → ${o.return_type}` : ''}</code>)}
-                                </div>
-                              </>
-                            )}
-                            {rich.return_type && <div class="vreturns"><b>Returns</b><span class="vrtype">{rich.return_type}</span></div>}
-                            <ObjectExamples examples={exs} />
-                            <div class="vactions"><button type="button" class="vcopy" data-sql={fnSql(c.name, s.name, rich)}>Copy SQL</button><a class="vlink" href={`#${anchor(s.name, fname)}`}>Link</a></div>
-                          </div>
+                          {lazy ? (
+                            <div class="vbody vbody-lazy" data-src={objectFragmentUrl(w.slug, anchor(s.name, fname))}>Loading…</div>
+                          ) : (
+                            <CatalogObjectBody catalog={c.name} schema={s.name} anchor={anchor(s.name, fname)} group={group} />
+                          )}
                         </details>
                       );
                     })}
@@ -301,35 +244,13 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
   .vsig-type { color: color-mix(in srgb, var(--kc) 60%, var(--muted)); }
   .vover { color: var(--muted); font-style: italic; }
 
-  /* level 4: body */
-  .vbody { padding: 9px 13px 11px; background: color-mix(in srgb, var(--kc) 4%, white); border-radius: 0 0 9px 9px; }
+  /* level 4: body — styled by CatalogObjectBody; .vdesc/.prose-vgi also serve schema descriptions */
   .vdesc { color: var(--ink); font-size: 13px; line-height: 1.55; margin: 0 0 10px; }
   .prose-vgi :global(p) { margin: 4px 0; }
   .prose-vgi :global(ul) { margin: 4px 0; padding-left: 18px; list-style: disc; }
   .prose-vgi :global(code) { font-family: var(--font-mono); background: var(--color-soil-100); padding: 1px 5px; border-radius: 4px; font-size: .92em; }
   .prose-vgi :global(a) { color: var(--color-link); text-decoration: underline; }
-  .prose-vgi :global(table) { border-collapse: collapse; font-size: 12px; margin: 8px 0; }
-  .prose-vgi :global(th), .prose-vgi :global(td) { border: 1px solid var(--line); padding: 4px 9px; text-align: left; }
-  .vlabel { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 700; margin: 10px 0 6px; }
-  .vlabel:first-child { margin-top: 0; }
-  .vcols { display: flex; flex-direction: column; gap: 6px; }
-  .vcol { border: 1px solid color-mix(in srgb, var(--kc) 22%, var(--line)); border-radius: 7px; padding: 6px 10px; background: color-mix(in srgb, var(--kc) 4%, white); }
-  .vcol-line { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
-  .vcol-name { font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; color: var(--ink); }
-  .vcol-type { font-family: var(--font-mono); font-size: 12px; color: var(--type-color); text-align: right; overflow-wrap: anywhere; }
-  .vcol-comment { color: var(--muted); font-size: 12px; margin-top: 3px; }
-  .vnn { margin-left: 6px; font-family: var(--font-sans); font-size: 10.5px; font-weight: 600; color: var(--color-sun-700); }
-  .vargk { color: var(--muted); font-weight: 400; }
-  .vdef { font-family: var(--font-mono); color: var(--type-color); }
-  .vnoargs { color: var(--muted); font-size: 12.5px; font-style: italic; }
-  .vover-list { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
-  .vover-list code { font-family: var(--font-mono); color: var(--ink); overflow-wrap: anywhere; }
-  .vreturns { margin-top: 10px; font-size: 12.5px; color: var(--muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
-  .vreturns b { color: var(--ink); font-family: var(--font-sans); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; margin-right: 8px; }
-  .vrtype { color: var(--type-color); }
-  .vactions { display: flex; gap: 8px; margin-top: 10px; }
-  .vcopy, .vlink { font-size: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 2px 9px; background: white; color: var(--color-soil-700); text-decoration: none; cursor: pointer; }
-  .vcopy:hover, .vlink:hover { border-color: var(--color-sun-400); color: var(--ink); }
+  .vtree :global(.vbody-lazy) { padding: 9px 13px 11px; color: var(--muted); font-size: 12.5px; font-style: italic; }
   .vnoresults { color: var(--muted); font-size: 13.5px; padding: 14px 4px; }
   .hidden { display: none !important; }
 </style>
@@ -340,6 +261,20 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
     if (!(el instanceof HTMLDetailsElement)) return;
     for (let p: Element | null = el; p; p = p.parentElement) if (p instanceof HTMLDetailsElement) p.open = true;
     el.scrollIntoView({ block: 'start' });
+  }
+  async function loadBody(row: HTMLDetailsElement) {
+    const slot = row.querySelector<HTMLElement>(':scope > .vbody-lazy');
+    if (!slot || slot.dataset.loading) return;
+    slot.dataset.loading = '1';
+    try {
+      const html = await (await fetch(slot.dataset.src!)).text();
+      const body = new DOMParser().parseFromString(html, 'text/html').querySelector('.vbody');
+      if (!body) throw new Error('no body');
+      slot.replaceWith(document.importNode(body, true));
+    } catch {
+      slot.textContent = 'Could not load details.';
+      delete slot.dataset.loading;
+    }
   }
   function wireTree() {
     document.querySelectorAll<HTMLElement>('[data-vtree]').forEach(root => {
@@ -367,18 +302,26 @@ const singleSchema = catalogs.length === 1 && catalogs[0].schemas.length === 1;
         count.textContent = q ? `${shown} of ${rows.length}` : '';
         empty.classList.toggle('hidden', !(q && shown === 0));
       });
-      root.querySelector('[data-vtree-expand]')?.addEventListener('click', () => root.querySelectorAll('details').forEach(d => (d.open = true)));
+      // Lazy rows fetch their body the first time they open ('toggle' doesn't
+      // bubble, so listen in the capture phase).
+      root.addEventListener('toggle', e => {
+        const d = e.target;
+        if (d instanceof HTMLDetailsElement && d.open) void loadBody(d);
+      }, true);
+      // Expand all on a lazy tree opens schemas only — not hundreds of fetches.
+      root.querySelector('[data-vtree-expand]')?.addEventListener('click', () =>
+        root.querySelectorAll<HTMLDetailsElement>(root.dataset.lazy ? 'details.vschema' : 'details').forEach(d => (d.open = true)));
       root.querySelector('[data-vtree-collapse]')?.addEventListener('click', () => root.querySelectorAll('details').forEach(d => (d.open = false)));
-      root.querySelectorAll<HTMLButtonElement>('.vcopy').forEach(btn =>
-        btn.addEventListener('click', async () => {
-          try {
-            await navigator.clipboard.writeText(btn.dataset.sql ?? '');
-            const label = btn.dataset.label ?? (btn.dataset.label = btn.textContent ?? 'Copy');
-            btn.textContent = 'Copied';
-            setTimeout(() => (btn.textContent = label), 1500);
-          } catch { /* clipboard unavailable */ }
-        }),
-      );
+      root.addEventListener('click', async e => {
+        const btn = (e.target as Element).closest<HTMLButtonElement>('.vcopy');
+        if (!btn) return;
+        try {
+          await navigator.clipboard.writeText(btn.dataset.sql ?? '');
+          const label = btn.dataset.label ?? (btn.dataset.label = btn.textContent ?? 'Copy');
+          btn.textContent = 'Copied';
+          setTimeout(() => (btn.textContent = label), 1500);
+        } catch { /* clipboard unavailable */ }
+      });
     });
     openTo(decodeURIComponent(location.hash.slice(1)));
   }

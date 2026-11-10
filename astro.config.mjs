@@ -547,6 +547,8 @@ export default defineConfig({
         const { pathname } = new URL(page);
         // The report's original preview URL redirects to its published blog post.
         if (pathname === '/research/duckdb-2-release-activity/') return false;
+        // Orchard catalog-explorer row fragments, fetched on demand by the worker page.
+        if (/^\/products\/orchard\/connectors\/[^/]+\/objects\//.test(pathname)) return false;
         // Match the rendered canonical rules; materially different archives
         // remain indexable, even when they share function names.
         const archiveId = pathname.match(/^\/products\/haybarn\/functions\/releases\/([^/]+)(?:\/|$)/)?.[1];

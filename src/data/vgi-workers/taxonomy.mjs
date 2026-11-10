@@ -57,7 +57,7 @@ export const categories = [
   {
     id: 'web', name: 'Web & public data', icon: 'ph:newspaper', tint: 'gold',
     description: 'Web search, news, Wikipedia and scholarly literature.',
-    members: 'search news wikipedia scholar google',
+    members: 'search news wikipedia scholar google mlb',
   },
   {
     id: 'cloud', name: 'Cloud & enterprise', icon: 'ph:cloud', tint: 'slate',
@@ -67,7 +67,7 @@ export const categories = [
   {
     id: 'devtools', name: 'Developer & systems', icon: 'ph:code', tint: 'slate',
     description: 'Source code, profiles, symbolication and network telemetry.',
-    members: 'code pprof perf symbols netflow bgp',
+    members: 'github code pprof perf symbols netflow bgp',
   },
 ].map(c => ({ ...c, members: c.members.split(/\s+/).filter(Boolean) }));
 

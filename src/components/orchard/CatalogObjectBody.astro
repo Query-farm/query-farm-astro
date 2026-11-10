@@ -1,0 +1,128 @@
+---
+// The expanded body of one catalog-explorer row: description, columns or
+// arguments, overloads, return type, examples and the copy/link actions.
+// Rendered inline by CatalogExplorer, or — for very large catalogs — as its own
+// static fragment (pages/products/orchard/connectors/[slug]/objects/[obj].astro)
+// that the explorer fetches the first time the row is opened.
+import { marked } from 'marked';
+import { objectExamples } from '../../data/vgi-workers';
+import ObjectExamples from './ObjectExamples.astro';
+import type { WorkerFunction, WorkerTable } from '../../data/vgi-workers/schema';
+
+type Props =
+  | { catalog: string; schema: string; anchor: string; table: WorkerTable; group?: undefined }
+  | { catalog: string; schema: string; anchor: string; group: WorkerFunction[]; table?: undefined };
+const { catalog, schema, anchor, table: t, group } = Astro.props;
+
+const qualify = (name: string) => (schema === 'main' ? `${catalog}.${name}` : `${catalog}.${schema}.${name}`);
+const md = (s?: string | null) => (s ? (marked.parse(s) as string) : '');
+
+let sql = '';
+let rich: WorkerFunction | undefined;
+let comment: string | null | undefined;
+if (t) {
+  sql = `SELECT * FROM ${qualify(t.name)} LIMIT 10;`;
+  comment = t.comment;
+} else {
+  rich = group!.reduce((a, b) => (b.arguments.length > a.arguments.length ? b : a));
+  comment = group!.find(x => x.comment)?.comment;
+  const positional = rich.arguments.filter(a => !a.named).map(a => `<${a.name || a.type}>`);
+  const named = rich.arguments.filter(a => a.named && a.default == null).map(a => `${a.name} := <${a.type}>`);
+  const call = `${qualify(rich.name)}(${[...positional, ...named].join(', ')})`;
+  sql = ['table', 'table_in_out', 'table_macro'].includes(rich.kind) ? `SELECT * FROM ${call} LIMIT 10;` : `SELECT ${call};`;
+}
+const pos = rich?.arguments.filter(a => !a.named) ?? [];
+const named = rich?.arguments.filter(a => a.named) ?? [];
+const exs = t ? objectExamples([t]) : objectExamples(group!);
+---
+
+<div class="vbody">
+  {comment && <div class="vdesc prose-vgi" set:html={md(comment)} />}
+  {t && t.columns.length > 0 && (
+    <>
+      <div class="vlabel">Columns</div>
+      <div class="vcols">
+        {t.columns.map(col => (
+          <div class="vcol">
+            <div class="vcol-line">
+              <span class="vcol-name">{col.name}{col.nullable === false && <span class="vnn" title="NOT NULL">not null</span>}</span>
+              <span class="vcol-type">{col.type}</span>
+            </div>
+            {col.comment && <div class="vcol-comment">{col.comment}</div>}
+          </div>
+        ))}
+      </div>
+    </>
+  )}
+  {t && t.constraints.length > 0 && <div class="vreturns"><b>Constraints</b>{t.constraints.join(' · ')}</div>}
+  {rich && (rich.arguments.length === 0 ? (
+    <div class="vnoargs">No arguments</div>
+  ) : (
+    [{ label: named.length ? 'Positional arguments' : 'Arguments', list: pos }, { label: 'Named arguments', list: named }]
+      .filter(x => x.list.length)
+      .map(x => (
+        <>
+          <div class="vlabel">{x.label}</div>
+          <div class="vcols">
+            {x.list.map(a => (
+              <div class="vcol">
+                <div class="vcol-line">
+                  <span class="vcol-name">{a.name}{a.named && <span class="vargk"> :=</span>}</span>
+                  {a.type && <span class="vcol-type">{a.type}</span>}
+                </div>
+                {(a.description || a.default != null) && (
+                  <div class="vcol-comment">
+                    {a.description}
+                    {a.description && a.default != null && ' · '}
+                    {a.default != null && <span class="vdef">default {String(a.default)}</span>}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      ))
+  ))}
+  {group && group.length > 1 && (
+    <>
+      <div class="vlabel">Overloads</div>
+      <div class="vover-list">
+        {group.map(o => <code>{o.name}({o.arguments.map(a => [a.name, a.type].filter(Boolean).join(' ')).join(', ')}){o.return_type ? ` → ${o.return_type}` : ''}</code>)}
+      </div>
+    </>
+  )}
+  {rich?.return_type && <div class="vreturns"><b>Returns</b><span class="vrtype">{rich.return_type}</span></div>}
+  <ObjectExamples examples={exs} />
+  <div class="vactions"><button type="button" class="vcopy" data-sql={sql}>Copy SQL</button><a class="vlink" href={`#${anchor}`}>Link</a></div>
+</div>
+
+<style>
+  .vbody { padding: 9px 13px 11px; background: color-mix(in srgb, var(--kc) 4%, white); border-radius: 0 0 9px 9px; }
+  .vdesc { color: var(--ink); font-size: 13px; line-height: 1.55; margin: 0 0 10px; }
+  .prose-vgi :global(p) { margin: 4px 0; }
+  .prose-vgi :global(ul) { margin: 4px 0; padding-left: 18px; list-style: disc; }
+  .prose-vgi :global(code) { font-family: var(--font-mono); background: var(--color-soil-100); padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+  .prose-vgi :global(a) { color: var(--color-link); text-decoration: underline; }
+  .prose-vgi :global(table) { border-collapse: collapse; font-size: 12px; margin: 8px 0; }
+  .prose-vgi :global(th), .prose-vgi :global(td) { border: 1px solid var(--line); padding: 4px 9px; text-align: left; }
+  .vlabel { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 700; margin: 10px 0 6px; }
+  .vlabel:first-child { margin-top: 0; }
+  .vcols { display: flex; flex-direction: column; gap: 6px; }
+  .vcol { border: 1px solid color-mix(in srgb, var(--kc) 22%, var(--line)); border-radius: 7px; padding: 6px 10px; background: color-mix(in srgb, var(--kc) 4%, white); }
+  .vcol-line { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+  .vcol-name { font-family: var(--font-mono); font-size: 12.5px; font-weight: 600; color: var(--ink); }
+  .vcol-type { font-family: var(--font-mono); font-size: 12px; color: var(--type-color); text-align: right; overflow-wrap: anywhere; }
+  .vcol-comment { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .vnn { margin-left: 6px; font-family: var(--font-sans); font-size: 10.5px; font-weight: 600; color: var(--color-sun-700); }
+  .vargk { color: var(--muted); font-weight: 400; }
+  .vdef { font-family: var(--font-mono); color: var(--type-color); }
+  .vnoargs { color: var(--muted); font-size: 12.5px; font-style: italic; }
+  .vover-list { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+  .vover-list code { font-family: var(--font-mono); color: var(--ink); overflow-wrap: anywhere; }
+  .vreturns { margin-top: 10px; font-size: 12.5px; color: var(--muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
+  .vreturns b { color: var(--ink); font-family: var(--font-sans); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; margin-right: 8px; }
+  .vrtype { color: var(--type-color); }
+  .vactions { display: flex; gap: 8px; margin-top: 10px; }
+  .vcopy, .vlink { font-size: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 2px 9px; background: white; color: var(--color-soil-700); text-decoration: none; cursor: pointer; }
+  .vcopy:hover, .vlink:hover { border-color: var(--color-sun-400); color: var(--ink); }
+</style>

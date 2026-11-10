@@ -876,7 +876,7 @@ def phase_merge(args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------
 
 # Python console scripts that are the bare repo name rather than `<repo>-worker`.
-BARE_SCRIPT = {"vgi-docgen", "vgi-explain", "vgi-match", "vgi-ortools", "vgi-recommender",
+BARE_SCRIPT = {"vgi-docgen", "vgi-explain", "vgi-github", "vgi-match", "vgi-mlb", "vgi-ortools", "vgi-recommender",
                "vgi-statsmodels"}
 DOCKER_PRIMARY = {"vgi-libpostal"}  # needs a system C library + ~2 GB of model data
 

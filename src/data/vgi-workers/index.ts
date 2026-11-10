@@ -120,6 +120,7 @@ const NAME_OVERRIDES: Record<string, string> = {
   'etf-first-trust': 'First Trust ETFs', 'etf-globalx': 'Global X ETFs', 'etf-invesco': 'Invesco ETFs',
   'etf-ishares': 'iShares ETFs', 'etf-jpmorgan': 'J.P. Morgan ETFs', 'etf-schwab': 'Schwab ETFs',
   'etf-spdr': 'SPDR ETFs', 'etf-vanguard': 'Vanguard ETFs', 'etf-wisdomtree': 'WisdomTree ETFs',
+  github: 'GitHub', mlb: 'MLB',
 };
 export function workerName(slug: string): string {
   if (NAME_OVERRIDES[slug]) return NAME_OVERRIDES[slug];
