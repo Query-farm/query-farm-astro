@@ -513,6 +513,7 @@ export function searchDocuments() {
       worker: w.slug,
       title: workerName(w.slug),
       text: [w.repo, w.displayTitle, w.blurb, w.summary].filter(Boolean).join(' — '),
+      blurb: w.blurb,
       keywords: [...w.keywords, ...w.topics, ...w.categories, ...(searchAliases[w.slug as keyof typeof searchAliases] ?? [])].join(' '),
       category: w.categoryIds.join(' '),
       language: w.language,

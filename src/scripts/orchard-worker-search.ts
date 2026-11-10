@@ -11,6 +11,7 @@ interface Doc {
   workerName?: string;
   title: string;
   text: string;
+  blurb?: string;
   keywords: string;
   fields?: string;
   anchor?: string;
@@ -63,6 +64,11 @@ export function initWorkerDirectory() {
   const count = root.querySelector<HTMLElement>('#ow-count')!;
   const objBox = root.querySelector<HTMLElement>('#ow-objects')!;
   const objList = root.querySelector<HTMLElement>('#ow-objects-list')!;
+  const elsewhere = root.querySelector<HTMLElement>('#ow-elsewhere');
+  const elsewhereList = root.querySelector<HTMLElement>('#ow-elsewhere-list');
+  const allLink = root.querySelector<HTMLAnchorElement>('#ow-all-link');
+  const categoryNames: Record<string, string> = JSON.parse(root.dataset.categoryNames ?? '{}');
+  const inGrid = new Set(items.map(el => el.dataset.slug!));
   const chips = Array.from(root.querySelectorAll<HTMLButtonElement>('.ow-chip'));
   chips.forEach(c => c.setAttribute('aria-pressed', 'false'));
 
@@ -108,8 +114,9 @@ export function initWorkerDirectory() {
     if (q.length >= 2) {
       const { mini, docs } = await loadIndex();
       if (my !== seq) return;
-      const scope = root!.dataset.category;
-      const results = mini.search(q, scope ? { filter: r => (docs.get(r.id)?.category ?? '').split(' ').includes(scope) } : undefined);
+      // Search every connector, even on a category page: the grid shows this
+      // category's matches and the rest are listed under "other categories".
+      const results = mini.search(q);
       ranking = new Map();
       for (const r of results) {
         const d = docs.get(r.id)!;
@@ -147,8 +154,38 @@ export function initWorkerDirectory() {
           <span class="block w-full min-w-0 truncate text-[13px] text-soil-600">${esc(doc.text || '')}</span></a></li>`)
       .join('');
 
+    renderElsewhere(q, ranking);
+    // Nothing here but matches elsewhere: keep the empty note short so the
+    // "other categories" list is on screen.
+    const elsewhereHits = Boolean(elsewhere && ranking && [...ranking.keys()].some(s => !inGrid.has(s)));
     empty.classList.toggle('hidden', shown > 0);
+    empty.classList.toggle('py-16', !elsewhereHits);
+    empty.classList.toggle('py-6', elsewhereHits);
+    count.classList.toggle('hidden', shown === 0 && elsewhereHits);
     count.textContent = shown === items.length ? `${items.length} connectors` : `Showing ${shown} of ${items.length} connectors`;
+  }
+
+  async function renderElsewhere(q: string, ranking: Map<string, { score: number; why: string }> | null) {
+    if (!elsewhere || !elsewhereList || !allLink) return;
+    const others = ranking ? [...ranking.entries()].filter(([slug]) => !inGrid.has(slug)).sort((a, b) => b[1].score - a[1].score) : [];
+    elsewhere.classList.toggle('hidden', others.length === 0);
+    if (!others.length) return;
+    const { docs } = await loadIndex();
+    elsewhereList.innerHTML = others
+      .slice(0, 6)
+      .map(([slug, hit]) => {
+        const d = docs.get(`w:${slug}`);
+        const cats = (d?.category ?? '').split(' ').map(c => categoryNames[c]).filter(Boolean).join(', ');
+        return `<li><a class="group block h-full rounded-lg border border-soil-300 bg-[#fffdf7] p-3 no-underline transition hover:border-sun-400" href="/products/orchard/connectors/${slug}">
+          <span class="flex flex-wrap items-baseline gap-x-2"><span class="font-semibold text-soil-900 group-hover:text-link">${esc(d?.title ?? slug)}</span>
+          <span class="text-[12px] text-sun-700">${esc(cats)}</span></span>
+          ${d?.blurb ? `<span class="mt-1 block text-[13px] leading-snug text-soil-600">${esc(d.blurb)}</span>` : ''}
+          ${hit.why ? `<span class="mt-1 block text-[12.5px] text-soil-500">Matched ${hit.why}</span>` : ''}</a></li>`;
+      })
+      .join('');
+    const total = others.length;
+    allLink.href = `/products/orchard/connectors?q=${encodeURIComponent(q)}`;
+    allLink.firstChild!.textContent = total > 6 ? `See all ${total} other matches ` : `Search all connectors for “${q}” `;
   }
 
   let t: number | undefined;
