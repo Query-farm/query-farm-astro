@@ -211,7 +211,7 @@ export interface ObjectExample {
   description: string | null;
   sql: string;
 }
-const normSql = (q: string) => q.trim().replace(/;\s*$/, '').replace(/\s+/g, ' ').toLowerCase();
+export const normSql = (q: string) => q.trim().replace(/;\s*$/, '').replace(/\s+/g, ' ').toLowerCase();
 const tagExamples = (v: unknown): ObjectExample[] =>
   Array.isArray(v)
     ? v.flatMap(e =>
@@ -253,6 +253,18 @@ export function objectExamples(
     for (const e of tagExamples(tags['vgi.executable_examples'])) {
       if (opts.requireMention === false || (o.name && mentions(e.sql, o.name))) add(e);
     }
+  }
+  return out;
+}
+
+/** Normalised SQL of every example the Catalog explorer shows (schema blocks, tables, function groups). */
+export function catalogViewSql(w: { schemas: WorkerSchema[] }): Set<string> {
+  const out = new Set<string>();
+  const add = (xs: ObjectExample[]) => xs.forEach(e => out.add(normSql(e.sql)));
+  for (const s of w.schemas) {
+    add(objectExamples([s], { requireMention: false }));
+    for (const t of s.tables) add(objectExamples([t]));
+    for (const group of groupOverloads(s.functions).values()) add(objectExamples(group));
   }
   return out;
 }
