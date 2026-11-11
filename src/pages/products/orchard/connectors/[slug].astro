@@ -40,7 +40,18 @@ function renderDoc(src: string): string {
     },
   );
 }
-const docHtml = w.doc_md ? renderDoc(w.doc_md) : '';
+// The catalog comment is meant as a one-paragraph summary, but some workers put their
+// whole markdown doc there (often the same text as vgi.doc_md). Show it as the plain
+// lede only when it is plain prose that the doc doesn't already open with; markdown
+// with no doc behind it is rendered as the doc instead.
+const looksMarkdown = (s: string) => /^#{1,6}\s|\n\s*\n|\*\*|`|^\s*[-*]\s/m.test(s);
+const norm = (s: string) => s.replace(/[#*`_>\-]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+const summaryText = w.summary?.trim() ?? '';
+const summaryInDoc = Boolean(summaryText && w.doc_md && norm(w.doc_md).includes(norm(summaryText).slice(0, 120)));
+const summaryIsMd = looksMarkdown(summaryText);
+const docSource = w.doc_md || (summaryIsMd ? summaryText : '');
+const showSummary = Boolean(summaryText) && summaryText !== w.blurb && !summaryIsMd && !summaryInDoc;
+const docHtml = docSource ? renderDoc(docSource) : '';
 const examples = w.example_queries.length
   ? w.example_queries
   : w.readme_sql
@@ -232,10 +243,10 @@ const H2 = 'text-2xl text-soil-900';
   <div class="mx-auto w-full max-w-[1200px] px-6 py-10 sm:px-7 lg:grid lg:grid-cols-[1fr_18rem] lg:gap-10">
     <div class="min-w-0">
       <!-- Overview -->
-      {(w.summary || docHtml) && (
+      {(showSummary || docHtml) && (
         <section>
           <h2 class={H2}>Overview</h2>
-          {w.summary && w.summary !== w.blurb && <p class="mt-3 text-[17px] leading-relaxed text-soil-700">{w.summary}</p>}
+          {showSummary && <p class="mt-3 text-[17px] leading-relaxed text-soil-700">{w.summary}</p>}
           {docHtml && <div class="prose mt-3 max-w-none text-[15.5px] prose-headings:text-soil-900 prose-p:text-soil-700 prose-li:text-soil-700 prose-a:text-link prose-strong:text-soil-900 prose-code:text-soil-900 prose-code:bg-soil-100 prose-code:font-medium prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-[14px] prose-code:font-mono prose-code:before:content-none prose-code:after:content-none prose-pre:bg-rock-900 prose-pre:text-[#e9e1d3]" set:html={docHtml} />}
         </section>
       )}
