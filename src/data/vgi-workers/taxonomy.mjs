@@ -95,7 +95,7 @@ export const categories = [
 // connectors read as one choice rather than nine near-duplicates.
 export const families = [
   {
-    id: 'azure', name: 'Microsoft Azure', icon: 'simple-icons:microsoftazure',
+    id: 'azure', name: 'Microsoft Azure', icon: 'ph:cloud',
     description: 'Entra directory and sign-ins, Defender, risk, Log Analytics, Resource Graph, governance, cost and Microsoft 365 files.',
     members: 'azure-directory azure-signins azure-defender azure-risk azure-loganalytics azure-resourcegraph azure-governance azure-cost azure-files',
   },

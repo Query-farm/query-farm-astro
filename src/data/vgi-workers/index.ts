@@ -6,6 +6,7 @@
 
 import { catalogFileSchema, type WorkerRecord, type WorkerFunction, type WorkerTable, type WorkerSchema } from './schema';
 import { categories, categoriesFor, families, familyFor, groups, searchAliases, tintClasses } from './taxonomy.mjs';
+import { workerIcons } from './icons.mjs';
 // The repo list the harvest works from; read here only to check every worker it includes has a category.
 import inventoryToml from '../../../scripts/vgi-workers/inventory.toml?raw';
 
@@ -68,6 +69,8 @@ export interface Credential {
 export interface Worker extends WorkerRecord {
   name: string;
   displayTitle: string;
+  /** Card/hero icon: icons.mjs, else the primary category's icon. */
+  icon: string;
   blurb: string;
   /** Upstream libraries named in the GitHub description, e.g. librosa. */
   builtOn: string[];
@@ -127,15 +130,26 @@ const NAME_OVERRIDES: Record<string, string> = {
   evtx: 'Windows event logs (EVTX)', fhir: 'FHIR', fixedformat: 'Fixed-width files', hl7: 'HL7', ical: 'iCalendar',
   ioc: 'Indicators of compromise', iso20022: 'ISO 20022', libpostal: 'libpostal', llm: 'LLM', mft: 'NTFS MFT',
   netflow: 'NetFlow', nlp: 'NLP', odata: 'OData', ortools: 'OR-Tools', pdf: 'PDF', pe: 'PE executables',
-  pii: 'PII detection', poi: 'Points of interest', pprof: 'pprof', proj: 'PROJ', reghive: 'Registry hives',
+  pii: 'PII detection', poi: 'Excel (Apache POI)', pprof: 'pprof', proj: 'PROJ', reghive: 'Registry hives',
   saml: 'SAML', secretscan: 'Secret scanning', sourcemap: 'Source maps', statsmodels: 'statsmodels',
   sympy: 'SymPy', threatintel: 'Threat intel', tiktoken: 'tiktoken', tlsfp: 'TLS fingerprints',
   useragent: 'User agents', x12: 'X12 EDI', x509: 'X.509', xslt: 'XSLT', yara: 'YARA', yfinance: 'Yahoo Finance',
-  'azure-loganalytics': 'Azure Log Analytics', 'azure-resourcegraph': 'Azure Resource Graph', 'azure-signins': 'Azure sign-ins',
+  'azure-loganalytics': 'Azure Log Analytics', 'azure-resourcegraph': 'Azure Resource Graph',
   'etf-first-trust': 'First Trust ETFs', 'etf-globalx': 'Global X ETFs', 'etf-invesco': 'Invesco ETFs',
   'etf-ishares': 'iShares ETFs', 'etf-jpmorgan': 'J.P. Morgan ETFs', 'etf-schwab': 'Schwab ETFs',
   'etf-spdr': 'SPDR ETFs', 'etf-vanguard': 'Vanguard ETFs', 'etf-wisdomtree': 'WisdomTree ETFs',
   github: 'GitHub', mlb: 'MLB',
+  // Azure: Microsoft's product names are title case ("Log Analytics"), so the family is too.
+  'azure-cost': 'Azure Cost', 'azure-defender': 'Azure Defender', 'azure-directory': 'Azure Directory',
+  'azure-files': 'Azure Files', 'azure-governance': 'Azure Governance', 'azure-risk': 'Azure Risk',
+  'azure-signins': 'Azure Sign-ins',
+  arcgis: 'ArcGIS', hackernews: 'Hacker News', 'open-meteo': 'Open-Meteo', typesafe: 'TypeSafe',
+  'scikit-bio': 'scikit-bio', 'scikit-learn': 'scikit-learn',
+  nba: 'NBA', nfl: 'NFL', nhl: 'NHL', ufc: 'UFC', nascar: 'NASCAR', f1: 'Formula 1',
+  'ncaa-basketball': 'NCAA basketball', 'ncaa-football': 'NCAA football', 'us-soccer': 'US soccer',
+  // Workers in inventory.toml not yet listed (private or unreleased), named ahead of time.
+  adbc: 'ADBC', mvt: 'Vector tiles (MVT)', cdc: 'Postgres CDC', graphql: 'GraphQL', grpc: 'gRPC',
+  ldap: 'LDAP', scim: 'SCIM', soap: 'SOAP', opa: 'OPA', fsm: 'State machines', kinesis: 'Kinesis',
 };
 export function workerName(slug: string): string {
   if (NAME_OVERRIDES[slug]) return NAME_OVERRIDES[slug];
@@ -521,6 +535,7 @@ function enrich(w: WorkerRecord): Worker {
     builtOn: tag.builtOn,
     categoryIds: cats.map(c => c.id),
     primaryCategory: primary,
+    icon: (workerIcons as Record<string, string>)[w.slug] ?? primary?.icon ?? 'ph:cube',
     tint: tintClasses[(primary?.tint ?? 'slate') as keyof typeof tintClasses],
     platforms,
     installMethods: methods,
