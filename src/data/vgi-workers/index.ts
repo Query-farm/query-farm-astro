@@ -7,6 +7,7 @@
 import { catalogFileSchema, type WorkerRecord, type WorkerFunction, type WorkerTable, type WorkerSchema } from './schema';
 import { categories, categoriesFor, families, familyFor, groups, searchAliases, tintClasses } from './taxonomy.mjs';
 import { workerIcons } from './icons.mjs';
+import { formatExampleSql } from './format-sql';
 // The repo list the harvest works from; read here only to check every worker it includes has a category.
 import inventoryToml from '../../../scripts/vgi-workers/inventory.toml?raw';
 
@@ -14,6 +15,15 @@ import inventoryToml from '../../../scripts/vgi-workers/inventory.toml?raw';
 const files = import.meta.glob(['./catalog.generated.json', './catalog.fixture.json'], { eager: true, import: 'default' });
 const raw = files['./catalog.generated.json'] ?? files['./catalog.fixture.json'] ?? { generated_at: '', workers: [] };
 const parsed = catalogFileSchema.parse(raw);
+
+// Captured sample results (scripts/vgi-workers/capture-results.py), keyed by repo then
+// normalised SQL. Optional: a page without one just shows the query.
+const resultFiles = import.meta.glob('./results.generated.json', { eager: true, import: 'default' });
+type RawResult = { columns: string[]; types: string[]; rows: unknown[][]; more: boolean };
+const rawResults = (resultFiles['./results.generated.json'] ?? { workers: {} }) as {
+  workers: Record<string, { captured_at: string; results: Record<string, RawResult> }>;
+};
+export type SampleResult = RawResult & { capturedAt: string };
 
 export const generatedAt = parsed.generated_at;
 
@@ -368,7 +378,8 @@ export const VGI_SETUP = {
 function attachSql(w: WorkerRecord, location: string, comment?: string) {
   const required = w.attach_options.filter(o => o.required);
   const opts = [`TYPE vgi`, `LOCATION ${quote(location)}`, ...required.map(o => `${o.name.toUpperCase()} '…'`)];
-  const first = w.example_queries[0]?.sql?.trim();
+  const starter = starterQuery(w)?.trim();
+  const first = starter && (starter.length > 80 ? formatExampleSql(starter) : starter);
   return [
     ...(comment ? [`-- ${comment}`] : []),
     `ATTACH ${quote(w.catalog)} AS ${w.catalog} (`,
@@ -578,6 +589,28 @@ if (unclassified.length) {
 export { categories, groups, families, familyFor };
 export const categoryById = (id: string) => categories.find(c => c.id === id);
 export const getWorker = (slug: string) => workers.find(w => w.slug === slug);
+/** How well a captured result shows off a worker: a real table beats a one-cell
+ *  true/false check (many catalog examples are assertions written for tests). */
+export function resultScore(r: SampleResult | undefined): number {
+  if (!r || r.rows.length === 0) return 0;
+  const single = r.rows.length === 1 && r.columns.length === 1;
+  if (single) return typeof r.rows[0][0] === 'boolean' ? 0.5 : 1;
+  return 2 + Math.min(r.rows.length, 5) / 5 + Math.min(r.columns.length, 6) / 6;
+}
+
+/** The query shown under the ATTACH: the first example whose captured result is a real
+ *  table (2+ rows and 2+ columns), else the first example. */
+export function starterQuery(w: { repo: string; example_queries: { sql?: string | null }[] }): string | undefined {
+  const sqls = w.example_queries.map(e => e.sql).filter((s): s is string => Boolean(s));
+  return sqls.find(s => { const r = sampleResult(w, s); return Boolean(r && r.rows.length >= 2 && r.columns.length >= 2); }) ?? sqls[0];
+}
+
+/** The captured result for one of a worker's queries, if there is one. */
+export function sampleResult(w: { repo: string }, sql: string): SampleResult | undefined {
+  const rw = rawResults.workers[w.repo];
+  const r = rw?.results[normSql(sql)];
+  return r && { ...r, capturedAt: rw.captured_at };
+}
 export const workersInCategory = (id: string) => workers.filter(w => w.categoryIds.includes(id));
 export const languages = Array.from(new Set(workers.map(w => w.language))).sort();
 

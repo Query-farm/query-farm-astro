@@ -1,0 +1,48 @@
+---
+// A captured sample result under an example query. The rows come from
+// results.generated.json (scripts/vgi-workers/capture-results.py): the worker's
+// verified release, run once, first rows kept. Nothing here queries live.
+import ResultTable from '../ui/ResultTable.astro';
+import type { SampleResult } from '../../data/vgi-workers';
+
+interface Props {
+  result: SampleResult;
+  /** The worker fetches from an outside service, so a reader's rows will differ. */
+  live?: boolean;
+}
+const { result: r, live = false } = Astro.props;
+
+const MAX_COLS = 6;
+const cols = r.columns.slice(0, MAX_COLS);
+const hiddenCols = r.columns.length - cols.length;
+const NUMERIC = /^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT|FLOAT|DOUBLE|DECIMAL)/i;
+const numericCols = r.types.slice(0, MAX_COLS).flatMap((t, i) => (NUMERIC.test(t) ? [i] : []));
+// Display only: round float noise (354.73999 → 354.74), group big counts, and show
+// timestamps as "2026-11-11 14:30" rather than raw ISO.
+const fmt = (v: unknown): string | number => {
+  if (v === null || v === undefined) return 'NULL';
+  if (typeof v === 'boolean') return String(v);
+  if (typeof v === 'number') {
+    if (!Number.isInteger(v)) return Number(v.toPrecision(Math.abs(v) >= 1 ? 8 : 4)).toLocaleString('en-US', { maximumFractionDigits: Math.abs(v) >= 100 ? 2 : 4 });
+    return Math.abs(v) >= 10000 ? v.toLocaleString('en-US') : v;
+  }
+  const s = String(v);
+  const ts = s.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::00(?:\.0+)?)?(?:\+00:00|Z)?$/);
+  return ts ? `${ts[1]} ${ts[2]}` : s;
+};
+const rows = r.rows.map(row => row.slice(0, MAX_COLS).map(fmt));
+const date = new Date(r.capturedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+const shown = `${r.rows.length} ${r.rows.length === 1 ? 'row' : 'rows'}${r.more ? ' shown' : ''}`;
+const title = [`Sample output · ${shown}`, hiddenCols > 0 && `+${hiddenCols} more ${hiddenCols === 1 ? 'column' : 'columns'}`, `captured ${date}`]
+  .filter(Boolean)
+  .join(' · ');
+---
+
+{rows.length > 0 ? (
+  <div class="ow-result">
+    <ResultTable columns={cols} rows={rows} numericCols={numericCols} title={title} />
+    {live && <p class="mt-1.5 text-[12.5px] text-soil-500">Live data — run it yourself for today's rows.</p>}
+  </div>
+) : (
+  <p class="mt-2 text-[12.5px] text-soil-500">Returns no rows for this input (captured {date}).</p>
+)}

@@ -11,8 +11,9 @@ import OrchardSubNav from '../../../../components/sections/OrchardSubNav.astro';
 import WorkerCard from '../../../../components/orchard/WorkerCard.astro';
 import CatalogExplorer from '../../../../components/orchard/CatalogExplorer.astro';
 import WorkerCredentials from '../../../../components/orchard/WorkerCredentials.astro';
+import ExampleResult from '../../../../components/orchard/ExampleResult.astro';
 import { formatExampleSql } from '../../../../data/vgi-workers/format-sql';
-import { workers, relatedWorkers, platformLabel, platformIcon, platformOrder, VGI_SETUP, exampleObjects, catalogViewSql, normSql, readableQuestions, type Worker } from '../../../../data/vgi-workers';
+import { workers, relatedWorkers, platformLabel, platformIcon, platformOrder, VGI_SETUP, exampleObjects, catalogViewSql, normSql, readableQuestions, sampleResult, resultScore, starterQuery, type Worker } from '../../../../data/vgi-workers';
 
 export function getStaticPaths() {
   return workers.map(w => ({ params: { slug: w.slug }, props: { worker: w } }));
@@ -58,6 +59,10 @@ const examples = w.example_queries.length
     ? [{ title: 'From the README', description: null, sql: w.readme_sql.replace(/^```sql\n?|```$/g, '').trim() }]
     : [];
 const questions = readableQuestions(w.agent_tasks);
+// Workers that fetch from an outside service: a captured result is a sample, not what you'll get.
+const liveData = w.primaryCategory?.group === 'sources';
+const firstExample = starterQuery(w);
+const firstResult = firstExample ? sampleResult(w, firstExample) : undefined;
 const exampleList = examples.map(e => ({ ...e, uses: exampleObjects(w, e.sql) }));
 // "Try these queries" is the visible taster, not a second copy of the Catalog explorer:
 // up to six examples spread across different objects (described ones first), then only
@@ -67,7 +72,9 @@ const inCatalog = catalogViewSql(w);
 const featured: typeof exampleList = [];
 {
   const seenObj = new Set<string>();
-  const ranked = [...exampleList].sort((a, b) => Number(!(a.title || a.description)) - Number(!(b.title || b.description)));
+  // Captured results first (a real table beats a true/false check), then described ones.
+  const score = (e: (typeof exampleList)[number]) => resultScore(sampleResult(w, e.sql)) * 2 + Number(Boolean(e.title || e.description));
+  const ranked = [...exampleList].sort((a, b) => score(b) - score(a));
   for (const e of ranked) {
     if (featured.length >= EXAMPLES_SHOWN) break;
     const key = e.uses[0]?.anchor ?? `sql:${normSql(e.sql)}`;
@@ -76,7 +83,7 @@ const featured: typeof exampleList = [];
     featured.push(e);
   }
   for (const e of ranked) if (featured.length < EXAMPLES_SHOWN && !featured.includes(e)) featured.push(e);
-  featured.sort((a, b) => exampleList.indexOf(a) - exampleList.indexOf(b));
+  featured.sort((a, b) => score(b) - score(a) || exampleList.indexOf(a) - exampleList.indexOf(b));
 }
 const moreExamples = exampleList.filter(e => !featured.includes(e) && !inCatalog.has(normSql(e.sql)));
 const inCatalogCount = exampleList.filter(e => !featured.includes(e) && inCatalog.has(normSql(e.sql))).length;
@@ -282,6 +289,12 @@ const H2 = 'text-2xl text-soil-900';
           ) : (
             <CodeBlock code={w.attachSql} lang="sql" title="attach.sql" tryable={false} />
           )}
+          {firstResult && (
+            <>
+              <p class="mt-4 text-[15px] text-soil-700">The query under the ATTACH returns:</p>
+              <ExampleResult result={firstResult} live={liveData} />
+            </>
+          )}
         </div>
         {hasCredentials && (
           <>
@@ -349,6 +362,7 @@ const H2 = 'text-2xl text-soil-900';
                       </p>
                     )}
                     <CodeBlock code={formatExampleSql(e.sql)} lang="sql" tryable={false} />
+                    {sampleResult(w, e.sql) && <ExampleResult result={sampleResult(w, e.sql)!} live={liveData} />}
                     {e.uses.length > 0 && (
                       <p class="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-soil-500">
                         Uses
@@ -374,6 +388,7 @@ const H2 = 'text-2xl text-soil-900';
                           </p>
                         )}
                         <CodeBlock code={formatExampleSql(e.sql)} lang="sql" tryable={false} />
+                    {sampleResult(w, e.sql) && <ExampleResult result={sampleResult(w, e.sql)!} live={liveData} />}
                         {e.uses.length > 0 && (
                           <p class="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12.5px] text-soil-500">
                             Uses
