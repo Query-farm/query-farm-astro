@@ -5,7 +5,6 @@
 // see src/scripts/orchard-worker-search.ts.
 import { Icon } from 'astro-icon/components';
 import WorkerCard from './WorkerCard.astro';
-import FamilyCard from './FamilyCard.astro';
 import { categories, groups, familyFor, workers as allWorkers, workersInCategory, type Worker } from '../../data/vgi-workers';
 
 interface Props {
@@ -22,30 +21,11 @@ const railGroups = groups
   .map(g => ({ ...g, items: categories.filter(c => c.group === g.id).map(railCat).filter(c => c.count > 0) }))
   .filter(g => g.items.length > 0);
 
-// Directory entries: a family with two or more listed members collapses into one card;
-// families first, then connectors A–Z.
-type Entry = { kind: 'worker'; worker: Worker } | { kind: 'family'; family: NonNullable<ReturnType<typeof familyFor>>; members: Worker[] };
-function entriesFor(list: Worker[]): Entry[] {
-  const fams: Entry[] = [];
-  const singles: Entry[] = [];
-  const done = new Set<string>();
-  for (const w of [...list].sort((a, b) => a.name.localeCompare(b.name))) {
-    const fam = familyFor(w.slug);
-    const members = fam ? list.filter(m => fam.members.includes(m.slug)) : [];
-    if (fam && members.length >= 2) {
-      if (!done.has(fam.id)) {
-        done.add(fam.id);
-        fams.push({ kind: 'family', family: fam, members: members.sort((a, b) => a.name.localeCompare(b.name)) });
-      }
-    } else singles.push({ kind: 'worker', worker: w });
-  }
-  return [...fams, ...singles];
-}
-const entryCount = (es: Entry[]) => es.reduce((n, e) => n + (e.kind === 'family' ? e.members.length : 1), 0);
+const byName = (a: Worker, b: Worker) => a.name.localeCompare(b.name);
 
-// Idle view (no search or filter): grouped by category on the directory home, at most
-// OVERVIEW_SHOWN entries per category with a link to the rest; a category page shows
-// all of its entries.
+// Idle view (no search or filter) on the directory home: grouped by category, one row
+// of cards per category (primary category only, so each worker appears once) and a link
+// to the rest.
 const OVERVIEW_SHOWN = 3; // one row per category at desktop width
 const overview = activeCategory
   ? null
@@ -54,11 +34,29 @@ const overview = activeCategory
         ...g,
         sections: categories
           .filter(c => c.group === g.id)
-          .map(c => ({ cat: c, entries: entriesFor(workersInCategory(c.id).filter(w => w.primaryCategory?.id === c.id)) }))
-          .filter(s => s.entries.length > 0),
+          .map(c => ({ cat: c, workers: workersInCategory(c.id).filter(w => w.primaryCategory?.id === c.id).sort(byName) }))
+          .filter(s => s.workers.length > 0),
       }))
       .filter(g => g.sections.length > 0);
-const categoryEntries = activeCategory ? entriesFor(workers) : null;
+
+// A category page: a family (one product line split per service or issuer, e.g. the
+// Azure connectors) gets its own subheading with its members' cards beneath; the rest
+// follow A–Z.
+type Block = { family?: NonNullable<ReturnType<typeof familyFor>>; workers: Worker[] };
+function blocksFor(list: Worker[]): Block[] {
+  const fams = new Map<string, Block>();
+  const rest: Worker[] = [];
+  for (const w of [...list].sort(byName)) {
+    const fam = familyFor(w.slug);
+    const n = fam ? list.filter(m => fam.members.includes(m.slug)).length : 0;
+    if (fam && n >= 2) {
+      if (!fams.has(fam.id)) fams.set(fam.id, { family: fam, workers: [] });
+      fams.get(fam.id)!.workers.push(w);
+    } else rest.push(w);
+  }
+  return [...fams.values(), ...(rest.length ? [{ workers: rest }] : [])];
+}
+const categoryBlocks = activeCategory ? blocksFor(workers) : null;
 
 const surfaceOpts = [
   { id: 'tables', label: 'Tables' },
@@ -134,7 +132,7 @@ const platformsOf = (w: Worker) => {
         <ul id="ow-objects-list" class="mt-2 divide-y divide-soil-200"></ul>
       </section>
 
-      <!-- Idle view: grouped by category (home) or this category's entries, families collapsed.
+      <!-- Idle view: grouped by category (home), or this category's connectors with families under their own subheading.
            Search and filters switch to the flat grid below. -->
       <div id="ow-overview">
         {overview && overview.map((g, gi) => (
@@ -144,7 +142,7 @@ const platformsOf = (w: Worker) => {
               <p class="mt-1 text-[15px] text-soil-600">{g.description}</p>
             </div>
             {g.sections.map(s => {
-              const shown = s.entries.slice(0, OVERVIEW_SHOWN);
+              const shown = s.workers.slice(0, OVERVIEW_SHOWN);
               const total = workersInCategory(s.cat.id).length;
               return (
                 <section class="mt-8" aria-labelledby={`ow-sec-${s.cat.id}`}>
@@ -154,27 +152,37 @@ const platformsOf = (w: Worker) => {
                       <a href={`/products/orchard/connectors/category/${s.cat.id}`} class="no-underline hover:text-link">{s.cat.name}</a>
                     </h3>
                     <a href={`/products/orchard/connectors/category/${s.cat.id}`} class="text-sm font-medium text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">
-                      {entryCount(shown) < total ? `See all ${total} →` : `${total} ${total === 1 ? 'connector' : 'connectors'} →`}
+                      {shown.length < total ? `See all ${total} →` : `${total} ${total === 1 ? 'connector' : 'connectors'} →`}
                     </a>
                   </div>
                   <p class="mt-1 text-sm text-soil-600">{s.cat.description}</p>
                   <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                    {shown.map(e => e.kind === 'family'
-                      ? <FamilyCard family={e.family} members={e.members} showCategory={false} />
-                      : <WorkerCard worker={e.worker} showCategory={false} />)}
+                    {shown.map(w => <WorkerCard worker={w} showCategory={false} />)}
                   </div>
                 </section>
               );
             })}
           </div>
         ))}
-        {categoryEntries && (
-          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {categoryEntries.map(e => e.kind === 'family'
-              ? <FamilyCard family={e.family} members={e.members} showCategory={false} />
-              : <WorkerCard worker={e.worker} showCategory={false} />)}
-          </div>
-        )}
+        {categoryBlocks && categoryBlocks.map((b, i) => (
+          <section class:list={[{ 'mt-10': i > 0 }]} aria-label={b.family?.name}>
+            {b.family ? (
+              <div class="mb-4">
+                <h2 class="flex items-center gap-2 text-lg font-semibold text-soil-900">
+                  <Icon name={b.family.icon} class="h-5 w-5 text-soil-500" aria-hidden="true" />
+                  {b.family.name}
+                  <span class="text-sm font-normal text-soil-500">· {b.workers.length} connectors</span>
+                </h2>
+                <p class="mt-1 text-sm text-soil-600">{b.family.description}</p>
+              </div>
+            ) : categoryBlocks.length > 1 && (
+              <h2 class="mb-4 text-lg font-semibold text-soil-900">More connectors</h2>
+            )}
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {b.workers.map(w => <WorkerCard worker={w} showCategory={false} />)}
+            </div>
+          </section>
+        ))}
       </div>
 
       <div id="ow-grid" class="hidden grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
