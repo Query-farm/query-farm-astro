@@ -257,6 +257,35 @@ export function objectExamples(
   return out;
 }
 
+/**
+ * The agent test tasks a person would actually ask: `vgi.agent_test_tasks` are written to
+ * test an AI agent, so many carry fixture data (hex/BLOB literals, JSON, XML, test-file
+ * paths) or output rules. Keep short, literal-free ones, drop the "Using the attached
+ * 'x' worker," preamble, and cap the list.
+ */
+const FIXTURE = [
+  /\n/,
+  /from_hex|\bBLOB\b|\\x[0-9a-f]{2}/i,
+  /'[0-9a-f]{16,}'/i, // hex literal
+  /[A-Za-z0-9+/]{32,}={0,2}/, // base64 run
+  /[{[]\s*"/, // JSON
+  /<[a-z][\w:-]*[\s>/]/i, // XML/HTML markup
+  /\btest\/|\/data\/|\.(?:exe|dll|so|bin|pcap|evtx|dat)\b/i, // fixture files
+  /'[^']{48,}'/, // long quoted payload
+  /\bcolumn(?:s)? named\b|\breturn (?:one|a single|the count as) (?:column|value)/i, // grading instructions
+];
+export function readableQuestions(tasks: string[], max = 6): string[] {
+  const out: string[] = [];
+  for (const raw of tasks) {
+    let q = raw.trim().replace(/^Using (?:only )?the attached (?:'[^']+'|\S+) worker,\s*/i, '');
+    q = q.charAt(0).toUpperCase() + q.slice(1);
+    if (q.length > 160 || FIXTURE.some(re => re.test(q))) continue;
+    if (!out.includes(q)) out.push(q);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 /** Normalised SQL of every example the Catalog explorer shows (schema blocks, tables, function groups). */
 export function catalogViewSql(w: { schemas: WorkerSchema[] }): Set<string> {
   const out = new Set<string>();
