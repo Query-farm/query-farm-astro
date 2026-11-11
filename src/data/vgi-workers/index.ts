@@ -316,7 +316,7 @@ function attachSql(w: WorkerRecord, location: string, comment?: string) {
 // Install recipes, best first. The vgi extension's transports do the fetching:
 // `github-auto://` downloads, SHA-256-checks and caches the platform binary,
 // `docker://` runs the signed image, and a uvx command builds a Python worker
-// from its tag. Manual download stays as the fallback.
+// from its tag.
 function installMethods(w: WorkerRecord): InstallMethod[] {
   const out: InstallMethod[] = [];
   const assets = w.release?.assets ?? [];
@@ -380,27 +380,6 @@ function installMethods(w: WorkerRecord): InstallMethod[] {
       ],
     });
 
-  if (tarballs.length) {
-    const unix = tarballs.filter(a => !a.platform.startsWith('windows'));
-    const cmd = w.run?.command?.trim() ?? `./${w.repo}-worker`;
-    const loc = cmd.startsWith('./') || cmd.startsWith('/') ? cmd : `./${cmd}`;
-    out.push({
-      id: 'manual',
-      label: 'Manual download',
-      icon: 'ph:download-simple',
-      steps: [
-        {
-          title: 'Download, verify and unpack',
-          description: 'Each asset has a SHA-256 checksum and a Sigstore cosign bundle next to it on the release page.',
-          lang: 'bash',
-          code: unix
-            .map(a => [`# ${platformLabel(a.platform)}`, `curl -LO ${a.url}`, `curl -LO ${a.url.replace(/\.tar\.gz$/, '.sha256')}`, `shasum -a 256 -c ${a.name.replace(/\.tar\.gz$/, '.sha256')} && tar xzf ${a.name}`].join('\n'))
-            .join('\n\n'),
-        },
-        { title: 'Attach it', lang: 'sql', code: attachSql(w, loc) },
-      ],
-    });
-  }
   return out;
 }
 
