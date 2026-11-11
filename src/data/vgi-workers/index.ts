@@ -375,6 +375,24 @@ function installMethods(w: WorkerRecord): InstallMethod[] {
   const jar = assets.find(a => a.platform === 'jar');
   const runsOnDockerOnly = w.run?.method === 'docker';
 
+  // A worker verified against an HTTP(S) endpoint (e.g. a hosted Cloudflare Worker):
+  // nothing to install, so it leads.
+  const hosted = w.verification?.location;
+  if (hosted && /^https?:\/\//.test(hosted))
+    out.push({
+      id: 'hosted',
+      label: 'Hosted',
+      icon: 'ph:cloud',
+      steps: [
+        {
+          title: 'Attach the hosted endpoint',
+          description: 'Nothing to install: the vgi extension talks to the worker over HTTPS.',
+          lang: 'sql',
+          code: attachSql(w, hosted),
+        },
+      ],
+    });
+
   if (tarballs.length && !runsOnDockerOnly)
     out.push({
       id: 'github',

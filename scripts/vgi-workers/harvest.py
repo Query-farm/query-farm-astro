@@ -136,9 +136,18 @@ def check_inventory(inv: dict[str, Any], repos: list[dict[str, Any]]) -> dict[st
             if opts.get(k):
                 row[k] = opts[k]
         listable.append(row)
-    stale_excludes = sorted(n for n in inv["exclude"] if n in by and not released(by[n]))
+    stale_excludes = sorted(
+        n for n in inv["exclude"]
+        if n not in by or (by[n].get("visibility") or "").upper() != "PUBLIC" or by[n].get("isArchived"))
+    # Public worker-looking repos with no release yet and not in the file: not an error
+    # (they can't be listed), but the likeliest place a forgotten worker hides.
+    unreleased = sorted(
+        n for n, r in by.items()
+        if n.startswith("vgi-") and (r.get("visibility") or "").upper() == "PUBLIC"
+        and not r.get("isArchived") and not r.get("latestRelease")
+        and n not in inv["include"] and n not in inv["exclude"])
     return {"listable": listable, "waiting": waiting, "unclassified": unclassified,
-            "stale_excludes": stale_excludes}
+            "stale_excludes": stale_excludes, "unreleased": unreleased}
 
 
 def report_inventory(res: dict[str, Any]) -> None:
@@ -147,8 +156,11 @@ def report_inventory(res: dict[str, Any]) -> None:
         log("inventory: included but not listable yet: "
             + ", ".join(f"{r} ({why})" for r, why in res["waiting"]))
     if res["stale_excludes"]:
-        log("inventory: excluded repos no longer public/released (can be dropped): "
+        log("inventory: excluded repos that are no longer public (can be dropped): "
             + ", ".join(res["stale_excludes"]))
+    if res["unreleased"]:
+        log("inventory: public vgi-* repos with no release, not in inventory.toml (release them to "
+            "list them): " + ", ".join(res["unreleased"]))
     if res["unclassified"]:
         log("inventory: UNCLASSIFIED public, released vgi-* repos — add each to [include] or "
             "[exclude] in inventory.toml: " + ", ".join(res["unclassified"]))
