@@ -11,7 +11,7 @@ import WorkerCard from '../../../../components/orchard/WorkerCard.astro';
 import CatalogExplorer from '../../../../components/orchard/CatalogExplorer.astro';
 import WorkerCredentials from '../../../../components/orchard/WorkerCredentials.astro';
 import { formatExampleSql } from '../../../../data/vgi-workers/format-sql';
-import { workers, relatedWorkers, platformLabel, VGI_SETUP, exampleObjects, type Worker } from '../../../../data/vgi-workers';
+import { workers, relatedWorkers, platformLabel, platformIcon, platformOrder, VGI_SETUP, exampleObjects, type Worker } from '../../../../data/vgi-workers';
 
 export function getStaticPaths() {
   return workers.map(w => ({ params: { slug: w.slug }, props: { worker: w } }));
@@ -65,13 +65,19 @@ const coverage = [
 const hasCredentials = w.credentials.length > 0;
 const secretList = w.credentials.map(c => c.type);
 
+const runsOn: { label: string; icon: string }[] = [
+  ...w.platforms.filter(p => p !== 'wasm').sort(platformOrder).map(p => ({ label: platformLabel(p), icon: platformIcon(p) })),
+  ...(w.language === 'Python' ? [{ label: 'Any OS (uv)', icon: 'simple-icons:python' }] : []),
+  ...(w.language === 'Java' ? [{ label: 'Any OS (Java 21+)', icon: 'simple-icons:openjdk' }] : []),
+  ...(w.image ? [{ label: 'Docker', icon: 'simple-icons:docker' }] : []),
+];
+
 const facts: [string, string][] = [
   ['Catalog', w.catalog],
   ['Language', w.language],
   ...(w.builtOn.length ? [['Built on', w.builtOn.join(', ')] as [string, string]] : []),
   ...(w.release ? [['Release', w.release.tag] as [string, string]] : []),
   ...(w.license ? [['Licence', w.license] as [string, string]] : []),
-  ['Runs on', [...w.platforms.filter(p => p !== 'wasm').map(platformLabel), ...(w.language === 'Python' ? ['Any OS (uv)'] : []), ...(w.language === 'Java' ? ['Any OS (Java 21+)'] : []), ...(w.image ? ['Docker'] : [])].join(', ') || '—'],
   ...(w.verification?.verified
     ? [[
         'Verified',
@@ -83,6 +89,9 @@ const facts: [string, string][] = [
     ? [['Credentials', w.facets.secretTypes.length ? `Uses a DuckDB secret of type ${w.facets.secretTypes.join(' or ')}` : 'Needs credentials at ATTACH'] as [string, string]]
     : []),
 ];
+
+// "Runs on" sits where it always did: after the release/licence facts, before Verified/Cost.
+const runsOnAt = facts.findIndex(([k]) => k === 'Verified' || k === 'Cost');
 
 const jsonLd = [
   {
@@ -301,7 +310,28 @@ const H2 = 'text-2xl text-soil-900';
         <div class="rounded-xl border border-soil-300 bg-[#fffdf7] p-5">
           <h2 class="text-[15px] font-semibold text-soil-900">At a glance</h2>
           <dl class="mt-3 flex flex-col gap-2 text-sm">
-            {facts.map(([k, v]) => (
+            {facts.slice(0, runsOnAt).map(([k, v]) => (
+              <div>
+                <dt class="text-[12px] font-semibold text-soil-500">{k}</dt>
+                <dd class="text-soil-800">{v}</dd>
+              </div>
+            ))}
+            <div>
+              <dt class="text-[12px] font-semibold text-soil-500">Runs on</dt>
+              <dd class="text-soil-800">
+                {runsOn.length ? (
+                  <ul class="mt-1 flex flex-col gap-1">
+                    {runsOn.map(r => (
+                      <li class="flex items-center gap-2">
+                        <Icon name={r.icon} class="h-4 w-4 flex-none text-cat-field-ink" aria-hidden="true" />
+                        {r.label}
+                      </li>
+                    ))}
+                  </ul>
+                ) : '—'}
+              </dd>
+            </div>
+            {facts.slice(runsOnAt).map(([k, v]) => (
               <div>
                 <dt class="text-[12px] font-semibold text-soil-500">{k}</dt>
                 <dd class="text-soil-800">{v}</dd>

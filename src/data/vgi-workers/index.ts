@@ -96,6 +96,19 @@ const PLATFORM_LABEL: Record<Platform, string> = {
 };
 export const platformLabel = (p: string) => PLATFORM_LABEL[p as Platform] ?? p;
 
+/** The site's standard platform marks (same as the Haybarn install picker and extension pages). */
+const PLATFORM_ICON: Record<Platform, string> = {
+  osx_arm64: 'simple-icons:apple',
+  linux_amd64: 'simple-icons:linux',
+  linux_arm64: 'simple-icons:linux',
+  windows_amd64: 'simple-icons:windows',
+  wasm: 'simple-icons:webassembly',
+};
+export const platformIcon = (p: string) => PLATFORM_ICON[p as Platform] ?? 'ph:cpu';
+const PLATFORM_ORDER: string[] = ['linux_amd64', 'linux_arm64', 'osx_arm64', 'windows_amd64'];
+export const platformOrder = (a: string, b: string) =>
+  (PLATFORM_ORDER.indexOf(a) + 1 || 99) - (PLATFORM_ORDER.indexOf(b) + 1 || 99);
+
 export const LANGUAGE_ICON: Record<string, string> = {
   Rust: 'simple-icons:rust',
   Python: 'simple-icons:python',
