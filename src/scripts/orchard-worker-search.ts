@@ -56,8 +56,15 @@ export function initWorkerDirectory() {
   if (!root || root.dataset.wired) return;
   root.dataset.wired = '1';
 
+  // Phones: the category rail is one horizontal row; bring the current category into view.
+  const rail = root.querySelector<HTMLElement>('.ow-rail');
+  const activeCat = rail?.querySelector<HTMLElement>('.ow-cat.is-active');
+  if (rail && activeCat && rail.scrollWidth > rail.clientWidth) rail.scrollLeft += activeCat.getBoundingClientRect().left - rail.getBoundingClientRect().left - 16;
+
   const input = root.querySelector<HTMLInputElement>('#ow-search')!;
   const grid = root.querySelector<HTMLElement>('#ow-grid')!;
+  // Idle (no query, no filter) shows the grouped overview; anything else, the flat grid.
+  const overview = root.querySelector<HTMLElement>('#ow-overview');
   const items = Array.from(grid.querySelectorAll<HTMLElement>('.ow-item'));
   const original = [...items];
   const empty = root.querySelector<HTMLElement>('#ow-empty')!;
@@ -108,6 +115,17 @@ export function initWorkerDirectory() {
     const my = ++seq;
     const q = input.value.trim();
     syncUrl();
+    const idle = q.length < 2 && Object.values(selected).every(s => s.size === 0);
+    overview?.classList.toggle('hidden', !idle);
+    grid.classList.toggle('hidden', idle);
+    grid.classList.toggle('grid', !idle);
+    if (idle) {
+      objBox.classList.add('hidden');
+      empty.classList.add('hidden');
+      count.classList.add('hidden');
+      renderElsewhere(q, null);
+      return;
+    }
 
     let ranking: Map<string, { score: number; why: string }> | null = null;
     let objectHits: { doc: Doc; score: number }[] = [];

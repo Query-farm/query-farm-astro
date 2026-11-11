@@ -5,7 +5,9 @@
 // without a harvest still builds and lists nothing rather than failing.
 
 import { catalogFileSchema, type WorkerRecord, type WorkerFunction, type WorkerTable, type WorkerSchema } from './schema';
-import { categories, categoriesFor, searchAliases, tintClasses } from './taxonomy.mjs';
+import { categories, categoriesFor, families, familyFor, groups, searchAliases, tintClasses } from './taxonomy.mjs';
+// The repo list the harvest works from; read here only to check every worker it includes has a category.
+import inventoryToml from '../../../scripts/vgi-workers/inventory.toml?raw';
 
 // Falls back to a two-worker fixture so the pages render before a harvest exists.
 const files = import.meta.glob(['./catalog.generated.json', './catalog.fixture.json'], { eager: true, import: 'default' });
@@ -528,7 +530,19 @@ if (unclassified.length) {
   throw new Error(`Orchard taxonomy: unclassified workers ${unclassified.join(', ')} — add them to src/data/vgi-workers/taxonomy.mjs`);
 }
 
-export { categories };
+// …and every worker inventory.toml includes (listed yet or not) already has a category,
+// so adding a repo there without classifying it fails the build instead of shipping an
+// unclassified card after the next harvest.
+{
+  const include = inventoryToml.split(/^\[exclude\]/m)[0].split(/^\[include\]/m)[1] ?? '';
+  const slugs = [...include.matchAll(/^vgi-([\w.-]+)\s*=/gm)].map(m => m[1]);
+  const missing = slugs.filter(s => categoriesFor(s).length === 0);
+  if (missing.length) {
+    throw new Error(`Orchard taxonomy: inventory.toml includes workers with no category: ${missing.join(', ')} — add them to src/data/vgi-workers/taxonomy.mjs`);
+  }
+}
+
+export { categories, groups, families, familyFor };
 export const categoryById = (id: string) => categories.find(c => c.id === id);
 export const getWorker = (slug: string) => workers.find(w => w.slug === slug);
 export const workersInCategory = (id: string) => workers.filter(w => w.categoryIds.includes(id));

@@ -5,7 +5,8 @@
 // see src/scripts/orchard-worker-search.ts.
 import { Icon } from 'astro-icon/components';
 import WorkerCard from './WorkerCard.astro';
-import { categories, workers as allWorkers, workersInCategory, languages, type Worker } from '../../data/vgi-workers';
+import FamilyCard from './FamilyCard.astro';
+import { categories, groups, familyFor, workers as allWorkers, workersInCategory, type Worker } from '../../data/vgi-workers';
 
 interface Props {
   workers: Worker[];
@@ -13,12 +14,51 @@ interface Props {
 }
 const { workers, activeCategory } = Astro.props;
 
-const rail = [
-  { id: '', name: 'All connectors', icon: 'ph:squares-four', count: allWorkers.length, href: '/products/orchard/connectors' },
-  ...categories
-    .map(c => ({ id: c.id, name: c.name, icon: c.icon, count: workersInCategory(c.id).length, href: `/products/orchard/connectors/category/${c.id}` }))
-    .filter(c => c.count > 0),
-];
+const railCat = (c: (typeof categories)[number]) => ({
+  id: c.id, name: c.name, icon: c.icon, count: workersInCategory(c.id).length, href: `/products/orchard/connectors/category/${c.id}`,
+});
+// The rail: "All", then each group's categories under its heading.
+const railGroups = groups
+  .map(g => ({ ...g, items: categories.filter(c => c.group === g.id).map(railCat).filter(c => c.count > 0) }))
+  .filter(g => g.items.length > 0);
+
+// Directory entries: a family with two or more listed members collapses into one card;
+// families first, then connectors A–Z.
+type Entry = { kind: 'worker'; worker: Worker } | { kind: 'family'; family: NonNullable<ReturnType<typeof familyFor>>; members: Worker[] };
+function entriesFor(list: Worker[]): Entry[] {
+  const fams: Entry[] = [];
+  const singles: Entry[] = [];
+  const done = new Set<string>();
+  for (const w of [...list].sort((a, b) => a.name.localeCompare(b.name))) {
+    const fam = familyFor(w.slug);
+    const members = fam ? list.filter(m => fam.members.includes(m.slug)) : [];
+    if (fam && members.length >= 2) {
+      if (!done.has(fam.id)) {
+        done.add(fam.id);
+        fams.push({ kind: 'family', family: fam, members: members.sort((a, b) => a.name.localeCompare(b.name)) });
+      }
+    } else singles.push({ kind: 'worker', worker: w });
+  }
+  return [...fams, ...singles];
+}
+const entryCount = (es: Entry[]) => es.reduce((n, e) => n + (e.kind === 'family' ? e.members.length : 1), 0);
+
+// Idle view (no search or filter): grouped by category on the directory home, at most
+// OVERVIEW_SHOWN entries per category with a link to the rest; a category page shows
+// all of its entries.
+const OVERVIEW_SHOWN = 3; // one row per category at desktop width
+const overview = activeCategory
+  ? null
+  : groups
+      .map(g => ({
+        ...g,
+        sections: categories
+          .filter(c => c.group === g.id)
+          .map(c => ({ cat: c, entries: entriesFor(workersInCategory(c.id).filter(w => w.primaryCategory?.id === c.id)) }))
+          .filter(s => s.entries.length > 0),
+      }))
+      .filter(g => g.sections.length > 0);
+const categoryEntries = activeCategory ? entriesFor(workers) : null;
 
 const surfaceOpts = [
   { id: 'tables', label: 'Tables' },
@@ -63,21 +103,28 @@ const platformsOf = (w: Worker) => {
     <p class="mt-2 text-[13px] text-soil-500">Full-text search covers each connector's description and every table, column and function in the catalog it attaches.</p>
   </div>
 
-  <div class="mt-8 lg:grid lg:grid-cols-[14rem_1fr] lg:gap-10">
-    <!-- Category rail -->
+  <div class="mt-8 lg:grid lg:grid-cols-[15.5rem_1fr] lg:gap-9">
+    <!-- Category rail: compact rows under each group heading; a swipeable chip row on phones -->
     <nav aria-label="Worker categories" class="mb-8 lg:mb-0">
-      <h2 class="mb-3 hidden text-[12.5px] font-semibold text-soil-500 lg:block">Categories</h2>
-      <ul class="flex flex-wrap gap-2 lg:sticky lg:top-28 lg:flex-col lg:gap-1">
-        {rail.map(c => (
-          <li>
-            <a href={c.href} class:list={['ow-cat', { 'is-active': (activeCategory ?? '') === c.id }]} aria-current={(activeCategory ?? '') === c.id ? 'page' : undefined}>
-              <Icon name={c.icon} class="h-4 w-4 flex-none opacity-70" aria-hidden="true" />
-              <span class="flex-1">{c.name}</span>
-              <span class="ow-cat__count qf-figure">{c.count}</span>
-            </a>
-          </li>
+      <div class="ow-rail lg:sticky lg:top-28">
+        <a href="/products/orchard/connectors" class:list={['ow-cat', { 'is-active': !activeCategory }]} aria-current={!activeCategory ? 'page' : undefined}>
+          <Icon name="ph:squares-four" class="ow-cat__icon" aria-hidden="true" />
+          <span class="ow-cat__name">All connectors</span>
+          <span class="ow-cat__count qf-figure">{allWorkers.length}</span>
+        </a>
+        {railGroups.map(g => (
+          <>
+            <h2 class="ow-rail__group">{g.name}</h2>
+            {g.items.map(c => (
+              <a href={c.href} class:list={['ow-cat', { 'is-active': activeCategory === c.id }]} aria-current={activeCategory === c.id ? 'page' : undefined}>
+                <Icon name={c.icon} class="ow-cat__icon" aria-hidden="true" />
+                <span class="ow-cat__name">{c.name}</span>
+                <span class="ow-cat__count qf-figure">{c.count}</span>
+              </a>
+            ))}
+          </>
         ))}
-      </ul>
+      </div>
     </nav>
 
     <div class="min-w-0">
@@ -87,7 +134,50 @@ const platformsOf = (w: Worker) => {
         <ul id="ow-objects-list" class="mt-2 divide-y divide-soil-200"></ul>
       </section>
 
-      <div id="ow-grid" class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <!-- Idle view: grouped by category (home) or this category's entries, families collapsed.
+           Search and filters switch to the flat grid below. -->
+      <div id="ow-overview">
+        {overview && overview.map((g, gi) => (
+          <div class:list={['ow-group', { 'mt-14': gi > 0 }]}>
+            <div class="border-b border-soil-300 pb-3">
+              <h2 class="text-2xl text-soil-900">{g.name}</h2>
+              <p class="mt-1 text-[15px] text-soil-600">{g.description}</p>
+            </div>
+            {g.sections.map(s => {
+              const shown = s.entries.slice(0, OVERVIEW_SHOWN);
+              const total = workersInCategory(s.cat.id).length;
+              return (
+                <section class="mt-8" aria-labelledby={`ow-sec-${s.cat.id}`}>
+                  <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <h3 id={`ow-sec-${s.cat.id}`} class="flex items-center gap-2 text-lg font-semibold text-soil-900">
+                      <Icon name={s.cat.icon} class="h-5 w-5 text-soil-500" aria-hidden="true" />
+                      <a href={`/products/orchard/connectors/category/${s.cat.id}`} class="no-underline hover:text-link">{s.cat.name}</a>
+                    </h3>
+                    <a href={`/products/orchard/connectors/category/${s.cat.id}`} class="text-sm font-medium text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">
+                      {entryCount(shown) < total ? `See all ${total} →` : `${total} ${total === 1 ? 'connector' : 'connectors'} →`}
+                    </a>
+                  </div>
+                  <p class="mt-1 text-sm text-soil-600">{s.cat.description}</p>
+                  <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                    {shown.map(e => e.kind === 'family'
+                      ? <FamilyCard family={e.family} members={e.members} showCategory={false} />
+                      : <WorkerCard worker={e.worker} showCategory={false} />)}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        ))}
+        {categoryEntries && (
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {categoryEntries.map(e => e.kind === 'family'
+              ? <FamilyCard family={e.family} members={e.members} showCategory={false} />
+              : <WorkerCard worker={e.worker} showCategory={false} />)}
+          </div>
+        )}
+      </div>
+
+      <div id="ow-grid" class="hidden grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {workers.map(w => (
           <div
             class="ow-item flex flex-col"
@@ -107,7 +197,7 @@ const platformsOf = (w: Worker) => {
         {activeName ? <>No {activeName} connectors match.</> : 'No connectors match.'}
         <button type="button" id="ow-reset" class="text-link underline decoration-link/40 underline-offset-2 hover:decoration-link">Clear filters</button>
       </div>
-      <p id="ow-count" class="mt-8 text-center text-[13px] font-medium text-soil-500">{workers.length} connectors</p>
+      <p id="ow-count" class="mt-8 hidden text-center text-[13px] font-medium text-soil-500">{workers.length} connectors</p>
 
       {/* A search on a category page also looks across every connector. */}
       {activeCategory && (
@@ -136,16 +226,30 @@ const platformsOf = (w: Worker) => {
   .ow-chip:hover { border-color: var(--color-sun-400); color: var(--color-soil-900); }
   .ow-chip[aria-pressed='true'] { background: var(--color-soil-900); border-color: var(--color-soil-900); color: var(--color-cream); }
   .ow-chip:focus-visible, .ow-cat:focus-visible { outline: none; border-color: var(--color-link); box-shadow: 0 0 0 3px rgb(69 99 47 / 0.25); }
+  /* Rail: plain rows on desktop; one swipeable row of chips on phones and tablets. */
+  .ow-rail { display: flex; gap: 0.5rem; overflow-x: auto; padding-bottom: 0.25rem; scrollbar-width: none; }
+  .ow-rail::-webkit-scrollbar { display: none; }
+  .ow-rail__group { display: none; }
   .ow-cat {
-    display: flex; align-items: center; gap: 0.5rem; border-radius: 0.5rem; border: 1px solid var(--color-soil-300);
-    background: #fffdf7; padding: 0.4rem 0.75rem; font-size: 0.875rem; color: var(--color-soil-700); text-decoration: none;
+    display: flex; flex: none; align-items: center; gap: 0.5rem; border-radius: 9999px; border: 1px solid var(--color-soil-300);
+    background: #fffdf7; padding: 0.3rem 0.8rem; font-size: 0.875rem; color: var(--color-soil-700); text-decoration: none; white-space: nowrap;
     transition: background 0.14s, color 0.14s, border-color 0.14s;
   }
   .ow-cat:hover { border-color: var(--color-sun-400); color: var(--color-soil-900); }
-  .ow-cat.is-active { background: var(--color-soil-900); border-color: var(--color-soil-900); color: var(--color-cream); }
+  .ow-cat__icon { width: 1rem; height: 1rem; flex: none; opacity: 0.65; }
   .ow-cat__count { font-size: 0.72rem; color: var(--color-soil-500); }
+  .ow-cat.is-active { background: var(--color-soil-900); border-color: var(--color-soil-900); color: var(--color-cream); }
   .ow-cat.is-active .ow-cat__count { color: var(--color-cream-2); }
-  @media (min-width: 1024px) { .ow-cat { width: 100%; } }
+  @media (min-width: 1024px) {
+    .ow-rail { flex-direction: column; gap: 0; overflow: visible; padding: 0; max-height: calc(100vh - 8rem); overflow-y: auto; }
+    .ow-rail__group {
+      display: block; margin: 1.1rem 0 0.35rem; padding: 0 0.6rem; font-size: 11.5px; font-weight: 600;
+      letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-soil-500);
+    }
+    .ow-cat { border: 0; border-radius: 0.375rem; background: transparent; padding: 0.32rem 0.6rem; white-space: nowrap; }
+    .ow-cat:hover { background: var(--color-soil-200); }
+    .ow-cat__name { flex: 1; }
+  }
 </style>
 
 <script>
