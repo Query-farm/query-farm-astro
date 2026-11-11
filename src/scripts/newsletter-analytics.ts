@@ -1,4 +1,4 @@
-import { newsletterEvent, newsletterSource, trackSiteEvent } from '../lib/newsletter-analytics';
+import { NEWSLETTER_SUBMIT_EVENT, newsletterEvent, newsletterSource, trackSiteEvent } from '../lib/newsletter-analytics';
 
 const lastSubmission = new WeakMap<HTMLFormElement, number>();
 
@@ -11,14 +11,15 @@ document.addEventListener('submit', event => {
   const source = form.dataset.newsletterSource === 'duckdb-2-release-activity'
     ? form.dataset.newsletterSource : newsletterSource(location.pathname, location.search);
   const params = newsletterEvent(form.dataset.newsletterPlacement ?? 'site', source);
-  trackSiteEvent('newsletter_submit', params);
   const metadata = form.querySelector<HTMLInputElement>('[name="metadata__source"]');
   if (metadata) metadata.value = params.content_id;
+  trackSiteEvent(NEWSLETTER_SUBMIT_EVENT, params);
   // Native navigation to Buttondown is preserved for CAPTCHA and error handling.
 });
 
 document.addEventListener('click', event => {
-  const link = (event.target as Element).closest<HTMLAnchorElement>('a');
+  if (!(event.target instanceof Element)) return;
+  const link = event.target.closest<HTMLAnchorElement>('a');
   if (!link) return;
   const url = new URL(link.href);
   if (url.origin !== location.origin || !/^\/company\/newsletter\/?$/.test(url.pathname)) return;

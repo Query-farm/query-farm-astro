@@ -3,6 +3,8 @@
  * a submit event must never be recorded as a confirmed subscription.
  */
 type EventName = 'newsletter_click' | 'newsletter_submit' | 'consultation_click';
+/** Canonical name; newsletter_signup is a historical reporting alias only. */
+export const NEWSLETTER_SUBMIT_EVENT = 'newsletter_submit' as const;
 type EventParams = { content_id: string; placement: string; method: string; subscription_status?: 'submitted'; newsletter_name?: string };
 type AnalyticsRuntime = { location: { hostname: string }; gtag?: (command: 'event', name: EventName, params: EventParams & { transport_type: string }) => void };
 
@@ -14,8 +16,13 @@ export function trackSiteEvent(name: EventName, params: EventParams, runtime: An
     ...(params.subscription_status ? { subscription_status: params.subscription_status } : {}),
     ...(params.newsletter_name ? { newsletter_name: params.newsletter_name } : {}),
   };
-  runtime.gtag('event', name, { ...safe, transport_type: 'beacon' });
-  return true;
+  try {
+    runtime.gtag('event', name, { ...safe, transport_type: 'beacon' });
+    return true;
+  } catch {
+    // Tracking must never interfere with native Buttondown navigation.
+    return false;
+  }
 }
 
 export function newsletterSource(pathname: string, search: string) {

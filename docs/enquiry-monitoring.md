@@ -1,4 +1,113 @@
-# Contact enquiry tracking and email delivery
+# Conversion reporting, booking tracking and inquiry delivery
+
+## Report business outcomes separately
+
+`src/data/conversion-events.json` is the event classification policy. The browser
+uses **`newsletter_submit`** for signup requests. Historical
+`newsletter_signup` events are an alias for the same request in reports; do not
+emit both names and do not label either as a confirmed subscriber.
+
+| Report | Events | What it establishes |
+| --- | --- | --- |
+| Leads | `generate_lead` | Resend accepted a validated inquiry. Delivery and qualification are separate. |
+| Bookings | `book_call` | A fresh Cal.com callback reported an accepted booking with no payment pending. |
+| Newsletter requests | `newsletter_submit`, historical `newsletter_signup` | A submitted Buttondown request; confirmation happens off-site. |
+| Pending booking requests | `booking_requested` | Organizer confirmation or payment is pending. |
+| Engagement | Email/consultation/CTA clicks, SQL trials/runs, tutorial activity, newsletter navigation, scheduler selections | Interest and product use, not leads or bookings. |
+| Diagnostics | Inquiry stages/errors, scheduler load/errors, unknown booking callbacks | Journey health; never add `enquiry_accepted` to `generate_lead`. |
+
+Do not use GA4's undifferentiated `keyEvents` total as the number of leads or
+bookings. Report each outcome using its explicit event name. Micro-actions
+remain useful and continue to be recorded.
+
+### GA4 configuration migration
+
+For property `552129062`, the configuration observed on November 11, 2026 needs
+these changes in Admin → Events / Key events:
+
+1. Keep `generate_lead` and `book_call` marked as key events.
+2. Stop marking `contact_email_click`, `post_next_step_click`,
+   `try_query_run`, and the historical `newsletter_signup` as key events.
+   This changes their key-event flags, not collection of the events themselves.
+3. Keep `newsletter_submit` as an ordinary event in the newsletter-request
+   report. Do not create a rule that also emits `newsletter_signup`.
+4. Leave unrelated/default events such as `purchase` alone. Filter the lead and
+   booking reports by their event names, regardless of other property settings.
+5. Record when the configuration and site code changes go live. Key-event
+   changes do not rewrite history, and old `book_call` events did not validate
+   confirmation status. Do not compare the old aggregate key-event count with
+   the new one as a conversion-rate change.
+
+This is a reviewable migration, not a configuration change performed by the
+repository. The VGI Google Analytics worker has read-only access and cannot
+apply these flags.
+
+### Reproduce the separated report
+
+Use an existing `ga4` attachment to the local `vgi-google-analytics` worker and
+run `scripts/analytics/export-conversions.sql` from a scratch directory. Adjust
+the two literal dates to the complete reporting period first. Its exports use
+the production hostnames and one `eventName` row for the whole period. Then:
+
+```sh
+node --import tsx scripts/analytics/conversion-report.mjs \
+  --events /path/to/events.json --key-events /path/to/key-events.json \
+  --start 2026-10-22 --end 2026-11-09 --output /path/to/conversion-report.json
+```
+
+The JSON separates leads, bookings, newsletter requests, pending booking
+requests, engagement and diagnostics. It also proposes key-event flags to
+keep, enable or disable and lists unmanaged flags. It only reads local files;
+it cannot send events, modify Google configuration or call providers.
+Keep raw users and sessions on their source-event rows. Summing those values
+across events or aliases double-counts people. The script rejects duplicate
+event-name rows so daily exports cannot silently become unique-user totals.
+
+## Validate the newsletter and booking journeys
+
+Newsletter submission preserves native Buttondown navigation, browser email
+validation and source metadata. Analytics failures do not block the request.
+Only `newsletter_submit` is emitted. Provider-side double opt-in, rejection and
+unsubscribe outcomes must be read from Buttondown; the browser cannot infer them.
+
+The scheduler installs its event handlers before requesting the inline embed.
+`linkReady`, event selection, embed failure and the direct fallback link have
+separate diagnostic or engagement events. `bookingSuccessfulV2` is classified
+using the documented `status`, `paymentRequired` and booking UID:
+
+- `ACCEPTED` with `paymentRequired: false` and a UID emits `book_call`.
+- `PENDING`, or an accepted booking still requiring payment, emits
+  `booking_requested`.
+- Incomplete or unexpected results emit `booking_result_unknown`.
+- Repeated callbacks for a UID do not duplicate a result. Different UIDs can
+  each count, and a pending request may later become confirmed.
+- Legacy success, reschedule, cancellation and dry-run callbacks do not create
+  new booking conversions. The UID stays in memory for deduplication and is
+  never sent to Google, along with attendee details, titles and meeting URLs.
+
+Cal.com's provider records are authoritative for later approval, cancellations,
+payment and attendance. The direct scheduler fallback is an outbound journey;
+this website cannot observe its eventual outcome. A browser event may be
+blocked by consent or an ad blocker. Provider availability is assumed for this
+implementation, as requested; no live booking, newsletter submission or email
+was sent to validate it.
+
+```sh
+npm run test:conversions
+npm run test:enquiry
+```
+
+The conversion tests cover native newsletter submission and its failure paths,
+the scheduling page's actual script and queued Cal.com callbacks, and reporting
+classification. Chromium requests are intercepted at context level, including
+popup navigations. Existing inquiry tests exercise acceptance, rejection,
+retries, signed delivery notifications and database persistence. Together these
+check response handling with simulated provider outcomes; they do not assert
+that a real message was delivered or a meeting was booked. Both suites run in
+deployment CI (their browser portions honor the existing infrastructure-outage
+skip input).
+
+## Contact inquiry acceptance and delivery
 
 `POST /api/enquiry` validates the form and Turnstile, then sends to Resend. A
 successful provider response must include an email ID before the form counts a
@@ -163,6 +272,8 @@ separate operational check and was not performed here.
 
 ## Provider references
 
+- [Cal.com embed events](https://cal.com/help/embedding/embed-events)
+- [GA4 key-event configuration](https://developers.google.com/analytics/devguides/config/admin/v1/rest/v1beta/properties.keyEvents)
 - [Resend webhook verification](https://resend.com/docs/webhooks/verify-webhooks-requests)
 - [Svix signature format and independent test vector](https://docs.svix.com/receiving/verifying-payloads/how-manual)
 - [Resend delivery event types](https://resend.com/docs/webhooks/event-types)
