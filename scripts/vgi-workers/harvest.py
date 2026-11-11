@@ -4,8 +4,14 @@
 Produces ``src/data/vgi-workers/catalog.generated.json`` for the website's
 worker directory. Three phases, each runnable on its own:
 
+``inventory`` (needs an authenticated ``gh``)
+    Checks ``scripts/vgi-workers/inventory.toml`` against GitHub: every public,
+    released, non-archived ``vgi-*`` repo must be under [include] or [exclude].
+    Exits non-zero naming any repo that is in neither, so a new worker can't be
+    missed. ``github`` runs the same check first.
+
 ``github``   (needs an authenticated ``gh``; run on a workstation)
-    Reads the worker list, keeps the PUBLIC ``Query-farm`` repos, and records
+    Takes the [include] workers that are public with a release, and records
     each repo's description/topics, latest release + assets, README, and
     whether it publishes a docker image. Writes ``<work>/github.json`` and the
     attach plan ``<work>/plan.json``.
@@ -55,10 +61,9 @@ ORG = "Query-farm"
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent.parent
 DEFAULT_OUT = REPO_ROOT / "src" / "data" / "vgi-workers" / "catalog.generated.json"
-DEFAULT_LIST = Path.home() / "Development" / "vgi-workers-created.txt"
+DEFAULT_INVENTORY = HERE / "inventory.toml"
 DEFAULT_FLEET = Path.home() / "Development" / "vgi-fleet-report" / "fleet.json"
 DEFAULT_WORK = Path(tempfile.gettempdir()) / "vgi-workers-harvest"
-EXCLUDE = {"vgi-matchrecognize", "vgi-proxy"}  # retired
 PLATFORMS = ("linux_amd64", "linux_arm64", "osx_arm64", "osx_amd64", "windows_amd64", "wasm")
 SKIP_ASSET_SUFFIXES = (".sha256", ".cosign.bundle", ".sig", ".pem", ".intoto.jsonl", ".sbom.json")
 BINARY_LANGS = {"Rust", "Go", "TypeScript"}
@@ -81,21 +86,86 @@ def log(msg: str) -> None:
 # --------------------------------------------------------------------------
 
 
-def read_worker_list(path: Path) -> list[dict[str, str]]:
-    """Parse ``# repo lang catalog ...`` rows from the worker list file."""
-    rows: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for line in path.read_text().splitlines():
-        m = re.match(r"^\s*(\d+)\s+(vgi-[A-Za-z0-9_.-]+)\s+(\S+)\s+(\S+)", line)
-        if not m:
+def load_inventory(path: Path) -> dict[str, Any]:
+    """[include] (repo -> options) and [exclude] (repo -> reason) from inventory.toml."""
+    import tomllib
+
+    data = tomllib.loads(path.read_text())
+    include = data.get("include") or {}
+    exclude = data.get("exclude") or {}
+    both = sorted(set(include) & set(exclude))
+    if both:
+        raise SystemExit(f"inventory: in both [include] and [exclude]: {', '.join(both)}")
+    return {"include": include, "exclude": exclude}
+
+
+def list_org_repos() -> list[dict[str, Any]]:
+    """Every Query-farm repo with visibility, archive state, language and latest release (one call)."""
+    p = subprocess.run(
+        ["gh", "repo", "list", ORG, "--limit", "2000", "--json",
+         "name,visibility,isArchived,primaryLanguage,latestRelease"],
+        capture_output=True, text=True, timeout=300, check=True)
+    return json.loads(p.stdout)
+
+
+def check_inventory(inv: dict[str, Any], repos: list[dict[str, Any]]) -> dict[str, Any]:
+    """Classify GitHub's view against the inventory. `listable` rows feed the harvest."""
+    by = {r["name"]: r for r in repos}
+
+    def released(r: dict[str, Any]) -> bool:
+        return (r.get("visibility") or "").upper() == "PUBLIC" and not r.get("isArchived") \
+            and bool(r.get("latestRelease"))
+
+    candidates = sorted(n for n, r in by.items() if n.startswith("vgi-") and released(r))
+    unclassified = [n for n in candidates if n not in inv["include"] and n not in inv["exclude"]]
+    listable, waiting = [], []
+    for repo, opts in sorted(inv["include"].items()):
+        r = by.get(repo)
+        if r is None:
+            waiting.append((repo, "no such repo"))
             continue
-        repo = m.group(2)
-        if repo in seen or repo in EXCLUDE:
+        if not released(r):
+            why = ("archived" if r.get("isArchived") else
+                   "private" if (r.get("visibility") or "").upper() != "PUBLIC" else "no release yet")
+            waiting.append((repo, why))
             continue
-        seen.add(repo)
-        lang = LANG_NORMAL.get(m.group(3).lower(), m.group(3))
-        rows.append({"repo": repo, "language": lang, "catalog": m.group(4)})
-    return rows
+        lang = (r.get("primaryLanguage") or {}).get("name") or ""
+        row = {"repo": repo, "language": LANG_NORMAL.get(lang.lower(), lang),
+               "catalog": opts.get("catalog") or repo.removeprefix("vgi-").replace("-", "_")}
+        for k in ("script", "run", "location"):
+            if opts.get(k):
+                row[k] = opts[k]
+        listable.append(row)
+    stale_excludes = sorted(n for n in inv["exclude"] if n in by and not released(by[n]))
+    return {"listable": listable, "waiting": waiting, "unclassified": unclassified,
+            "stale_excludes": stale_excludes}
+
+
+def report_inventory(res: dict[str, Any]) -> None:
+    log(f"inventory: {len(res['listable'])} workers to harvest")
+    if res["waiting"]:
+        log("inventory: included but not listable yet: "
+            + ", ".join(f"{r} ({why})" for r, why in res["waiting"]))
+    if res["stale_excludes"]:
+        log("inventory: excluded repos no longer public/released (can be dropped): "
+            + ", ".join(res["stale_excludes"]))
+    if res["unclassified"]:
+        log("inventory: UNCLASSIFIED public, released vgi-* repos — add each to [include] or "
+            "[exclude] in inventory.toml: " + ", ".join(res["unclassified"]))
+
+
+def resolve_inventory(args: argparse.Namespace) -> list[dict[str, str]]:
+    res = check_inventory(load_inventory(Path(args.inventory)), list_org_repos())
+    report_inventory(res)
+    if res["unclassified"] and not getattr(args, "allow_unclassified", False):
+        raise SystemExit(1)
+    return res["listable"]
+
+
+def phase_inventory(args: argparse.Namespace) -> None:
+    rows = resolve_inventory(args)
+    if args.json:
+        print(json.dumps(rows, indent=1))
 
 
 def gh_api(path: str, *, raw: bool = False) -> Any:
@@ -218,8 +288,7 @@ def build_plan_entry(g: dict[str, Any]) -> dict[str, Any]:
 def phase_github(args: argparse.Namespace) -> None:
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
-    rows = read_worker_list(Path(args.list))
-    log(f"github: {len(rows)} candidate repos")
+    rows = resolve_inventory(args)
     with cf.ThreadPoolExecutor(12) as ex:
         results = list(ex.map(fetch_github, rows))
     public = [r for r in results if r.get("visibility") == "public"]
@@ -876,20 +945,19 @@ def phase_merge(args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------
 
 # Python console scripts that are the bare repo name rather than `<repo>-worker`.
-BARE_SCRIPT = {"vgi-docgen", "vgi-explain", "vgi-github", "vgi-match", "vgi-mlb", "vgi-ortools", "vgi-recommender",
-               "vgi-statsmodels"}
-DOCKER_PRIMARY = {"vgi-libpostal"}  # needs a system C library + ~2 GB of model data
 
 
 def user_location(g: dict[str, Any]) -> tuple[str, str | None]:
     """The LOCATION a user is told to ATTACH, plus an optional jar URL to fetch first."""
     repo, rel = g["repo"], g.get("release") or {}
     tag = rel.get("tag", "main")
-    if repo in DOCKER_PRIMARY:
+    if g.get("location"):
+        return g["location"], None
+    if g.get("run") == "docker":
         return f"docker://ghcr.io/{ORG.lower()}/{repo}:{tag.removeprefix('v')}", None
     lang = g["language"]
     if lang == "Python":
-        script = repo if repo in BARE_SCRIPT else f"{repo}-worker"
+        script = g.get("script") or f"{repo}-worker"
         return f"uvx --from git+https://github.com/{ORG}/{repo}@{tag} {script}", None
     if lang == "Java":
         jar = next((a for a in rel.get("assets", []) if a["name"].endswith(".jar")), None)
@@ -957,9 +1025,19 @@ def main() -> None:
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument("--work", default=str(DEFAULT_WORK), help="scratch/cache directory")
 
+    def inventory_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument("--inventory", default=str(DEFAULT_INVENTORY))
+        p.add_argument("--allow-unclassified", action="store_true",
+                       help="warn instead of failing on repos missing from inventory.toml")
+
+    p = sub.add_parser("inventory", help="check inventory.toml against GitHub")
+    inventory_args(p)
+    p.add_argument("--json", action="store_true", help="print the workers to harvest")
+    p.set_defaults(fn=phase_inventory)
+
     p = sub.add_parser("github")
     common(p)
-    p.add_argument("--list", default=str(DEFAULT_LIST))
+    inventory_args(p)
     p.set_defaults(fn=phase_github)
 
     p = sub.add_parser("catalog")
@@ -1011,7 +1089,7 @@ def main() -> None:
 
     p = sub.add_parser("all")
     common(p)
-    p.add_argument("--list", default=str(DEFAULT_LIST))
+    inventory_args(p)
     p.add_argument("--remote", required=True, help="ssh target, e.g. ec2-user@host")
     p.add_argument("--remote-env", help="file to source remotely (sets PATH etc.)")
     p.add_argument("--remote-dir", default="$W/harvest")
