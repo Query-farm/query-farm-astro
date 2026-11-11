@@ -275,8 +275,16 @@ function quote(s: string) {
 
 const imageTag = (w: WorkerRecord) => (w.release?.tag ? w.release.tag.replace(/^v/, '') : 'latest');
 
-/** `github-auto://` picks the release asset for the host platform by name. */
-const githubAuto = (w: WorkerRecord) => w.run?.github_auto ?? `github-auto://Query-farm/${w.repo}@${w.release?.tag ?? 'latest'}`;
+/**
+ * `github-auto://` picks the release asset for the host platform by name. With no `@tag` the
+ * extension resolves the repo's latest release at ATTACH time (vgi e9115c4) and pins that tag
+ * for the session, so the published snippet never goes stale. The harvest-verified tag stays
+ * as the pin hint.
+ */
+const githubAuto = (w: WorkerRecord) => {
+  const loc = w.run?.github_auto ?? `github-auto://Query-farm/${w.repo}`;
+  return loc.replace(/@v?\d+\.\d+\.\d+[^/'\s]*/, '');
+};
 /** Python workers aren't on PyPI; uvx installs them straight from the release tag. */
 const uvxLocation = (w: WorkerRecord) =>
   w.run?.uvx ?? `uvx --from git+${w.repo_url}@${w.release?.tag ?? 'main'} ${w.run?.script ?? `${w.repo}-worker`}`;
@@ -332,7 +340,7 @@ function installMethods(w: WorkerRecord): InstallMethod[] {
       steps: [
         {
           title: 'Attach the release directly',
-          description: `The vgi extension downloads the ${w.release?.tag} build for your platform (${tarballs.map(a => platformLabel(a.platform)).join(', ')}), checks its SHA-256 and caches it.`,
+          description: `The vgi extension finds the latest release (currently ${w.release?.tag}), downloads the build for your platform (${tarballs.map(a => platformLabel(a.platform)).join(', ')}), checks its SHA-256 and caches it. To pin a version, add the tag: ${githubAuto(w)}@${w.release?.tag}`,
           lang: 'sql',
           code: attachSql(w, githubAuto(w)),
         },
