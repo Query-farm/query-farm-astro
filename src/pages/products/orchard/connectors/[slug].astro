@@ -120,20 +120,48 @@ const facts: [string, string][] = [
   ...(w.builtOn.length ? [['Built on', w.builtOn.join(', ')] as [string, string]] : []),
   ...(w.release ? [['Release', w.release.tag] as [string, string]] : []),
   ...(w.license ? [['Licence', w.license] as [string, string]] : []),
-  ...(w.verification?.verified
-    ? [[
-        'Verified',
-        `${w.verification.checked_at ? new Date(w.verification.checked_at).toISOString().slice(0, 10) + ' — ' : ''}${w.verification.passed ?? 0}/${(w.verification.total ?? 0) - (w.verification.needs_credentials ?? 0)} examples pass${w.verification.needs_credentials ? ` (${w.verification.needs_credentials} more need credentials)` : ''} via ${w.verification.transport ?? 'attach'}${w.verification.environment?.haybarn_version ? ` on Haybarn ${w.verification.environment.haybarn_version}` : ''}`,
-      ] as [string, string]]
-    : []),
   ['Cost', w.offering.pricing === 'open' ? 'Free and open source — you run it yourself' : 'Paid'],
   ...(w.facets.needsCredentials
     ? [['Credentials', w.facets.secretTypes.length ? `Uses a DuckDB secret of type ${w.facets.secretTypes.join(' or ')}` : 'Needs credentials at ATTACH'] as [string, string]]
     : []),
 ];
 
-// "Runs on" sits where it always did: after the release/licence facts, before Verified/Cost.
-const runsOnAt = facts.findIndex(([k]) => k === 'Verified' || k === 'Cost');
+// "Runs on" and "Tested" sit after the release/licence facts, before Cost.
+// "Tested": the harvest attaches the release the way the Quick start does and runs the
+// worker's executable examples. Say that in plain words; the transport and engine build
+// go in the authors panel.
+const v = w.verification;
+const testedDate = v?.checked_at
+  ? new Date(v.checked_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+  : null;
+const runnable = (v?.total ?? 0) - (v?.needs_credentials ?? 0);
+const queries = (n: number) => `${n} test ${n === 1 ? 'query' : 'queries'}`;
+const tested: { ok: boolean; headline: string; detail: string } | null = !v
+  ? null
+  : v.verified && v.needs_credentials
+    ? {
+        ok: true,
+        headline: 'Tested without credentials',
+        detail: `We installed ${w.release?.tag ?? 'the release'} the way the Quick start does: ${v.passed ?? 0} of ${queries(runnable)} passed, and ${v.needs_credentials} more need your own credentials.`,
+      }
+    : v.verified
+      ? {
+          ok: true,
+          headline: 'Tested',
+          detail: `We installed ${w.release?.tag ?? 'the release'} the way the Quick start does and ran its ${queries(runnable)}. ${runnable === 1 ? 'It passed.' : 'All passed.'}`,
+        }
+      : {
+          ok: false,
+          headline: 'Not confirmed yet',
+          detail: `Our last check of ${w.release?.tag ?? 'the release'} didn't pass (${v.passed ?? 0} of ${queries(runnable)}). That can be our test machine rather than the worker.`,
+        };
+const testedEnv = v
+  ? [v.transport && `via ${v.transport}`, v.environment?.haybarn_version && `Haybarn ${v.environment.haybarn_version}`, v.environment?.vgi_extension_version && `vgi ${v.environment.vgi_extension_version}`, v.environment?.platform as string | undefined]
+      .filter(Boolean)
+      .join(' · ')
+  : '';
+
+const runsOnAt = facts.findIndex(([k]) => k === 'Cost');
 
 const jsonLd = [
   {
@@ -399,6 +427,18 @@ const H2 = 'text-2xl text-soil-900';
                 ) : '—'}
               </dd>
             </div>
+            {tested && (
+              <div title={testedEnv || undefined}>
+                <dt class="text-[12px] font-semibold text-soil-500">Tested</dt>
+                <dd class="mt-0.5">
+                  <span class={`inline-flex items-center gap-1.5 font-medium ${tested.ok ? 'text-field-700' : 'text-sun-700'}`}>
+                    <Icon name={tested.ok ? 'ph:check-circle-fill' : 'ph:warning-circle-fill'} class="h-4 w-4 flex-none" aria-hidden="true" />
+                    {tested.headline}{testedDate && <span class="font-normal text-soil-600">· {testedDate}</span>}
+                  </span>
+                  <p class="mt-1 text-[13px] leading-relaxed text-soil-700">{tested.detail}</p>
+                </dd>
+              </div>
+            )}
             {facts.slice(runsOnAt).map(([k, v]) => (
               <div>
                 <dt class="text-[12px] font-semibold text-soil-500">{k}</dt>
@@ -428,6 +468,11 @@ const H2 = 'text-2xl text-soil-900';
               </li>
             ))}
           </ul>
+          {v && (
+            <p class="mt-3 text-[13px] leading-relaxed text-soil-700">
+              <span class="font-semibold text-soil-900">Last check:</span> {v.status?.replace(/_/g, ' ')}{v.checked_at && `, ${v.checked_at.replace('T', ' ').replace(/\+00:00$/, ' UTC')}`}{testedEnv && <><br /><span class="font-mono text-[12px] text-soil-600">{testedEnv}</span></>}
+            </p>
+          )}
           <a href="/vgi/docs/" class="mt-3 inline-block text-[13px] text-link underline decoration-link/40 underline-offset-2">Metadata tags reference →</a>
         </details>
       </div>
