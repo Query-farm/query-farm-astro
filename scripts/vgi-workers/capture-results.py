@@ -36,6 +36,7 @@ from typing import Any
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 CATALOG = ROOT / "src" / "data" / "vgi-workers" / "catalog.generated.json"
+SHOWCASE = ROOT / "src" / "data" / "vgi-workers" / "showcase.json"
 RESULTS = ROOT / "src" / "data" / "vgi-workers" / "results.generated.json"
 
 MAX_ROWS = 5
@@ -55,6 +56,7 @@ def norm_sql(q: str) -> str:
 
 def phase_plan(args: argparse.Namespace) -> None:
     doc = json.loads(CATALOG.read_text())
+    showcase = json.loads(SHOWCASE.read_text()) if SHOWCASE.exists() else {}
     want = set(args.repos.split(","))
     jobs = []
     for w in doc["workers"]:
@@ -68,6 +70,9 @@ def phase_plan(args: argparse.Namespace) -> None:
             print(f"skip {w['repo']}: examples need credentials", file=sys.stderr)
             continue
         sqls = [e["sql"] for e in (w.get("example_queries") or []) if e.get("sql")][:MAX_EXAMPLES]
+        show = (showcase.get(w["repo"].removeprefix("vgi-")) or {}).get("sql")
+        if show:
+            sqls = [show, *sqls]  # the page's showcase query, always captured
         jobs.append({"repo": w["repo"], "catalog": w["catalog"], "location": v["location"], "sql": sqls})
     Path(args.out).write_text(json.dumps(jobs, indent=1))
     print(f"plan: {len(jobs)} workers, {sum(len(j['sql']) for j in jobs)} queries -> {args.out}", file=sys.stderr)
@@ -109,6 +114,7 @@ def run_chunk(job: dict[str, Any], sqls: list[str], out_path: str) -> None:
     try:
         con = duckdb.connect()
         con.sql("INSTALL vgi FROM community; LOAD vgi")
+        con.sql("SET TimeZone = 'UTC'")  # captured timestamps read the same wherever this runs
         loc = job["location"].replace("'", "''")
         con.sql(f"ATTACH '{job['catalog']}' AS {job['catalog']} (TYPE vgi, LOCATION '{loc}')")
     except Exception as e:  # noqa: BLE001 - record and move on

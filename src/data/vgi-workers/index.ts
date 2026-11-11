@@ -8,6 +8,7 @@ import { catalogFileSchema, type WorkerRecord, type WorkerFunction, type WorkerT
 import { categories, categoriesFor, families, familyFor, groups, searchAliases, tintClasses } from './taxonomy.mjs';
 import { workerIcons } from './icons.mjs';
 import { formatExampleSql } from './format-sql';
+import showcaseFile from './showcase.json';
 // The repo list the harvest works from; read here only to check every worker it includes has a category.
 import inventoryToml from '../../../scripts/vgi-workers/inventory.toml?raw';
 
@@ -24,6 +25,8 @@ const rawResults = (resultFiles['./results.generated.json'] ?? { workers: {} }) 
   workers: Record<string, { captured_at: string; results: Record<string, RawResult> }>;
 };
 export type SampleResult = RawResult & { capturedAt: string };
+// Hand-picked "what you get" queries (showcase.json), keyed by slug.
+const SHOWCASE = showcaseFile as unknown as Record<string, { title: string; sql: string } | string>;
 
 export const generatedAt = parsed.generated_at;
 
@@ -598,11 +601,28 @@ export function resultScore(r: SampleResult | undefined): number {
   return 2 + Math.min(r.rows.length, 5) / 5 + Math.min(r.columns.length, 6) / 6;
 }
 
-/** The query shown under the ATTACH: the first example whose captured result is a real
- *  table (2+ rows and 2+ columns), else the first example. */
-export function starterQuery(w: { repo: string; example_queries: { sql?: string | null }[] }): string | undefined {
-  const sqls = w.example_queries.map(e => e.sql).filter((s): s is string => Boolean(s));
-  return sqls.find(s => { const r = sampleResult(w, s); return Boolean(r && r.rows.length >= 2 && r.columns.length >= 2); }) ?? sqls[0];
+type ExampleLike = { sql?: string | null; title?: string | null; description?: string | null };
+
+/** The worker's "what you get" query: the hand-picked one in showcase.json if its result
+ *  was captured, else the first example whose captured result is a real table (2+ rows,
+ *  2+ columns). Undefined when nothing has a result to show. */
+export function showcaseFor(w: { repo: string; example_queries: ExampleLike[] }): { title: string | null; sql: string; result: SampleResult } | undefined {
+  const pick = SHOWCASE[w.repo.replace(/^vgi-/, '')];
+  if (pick && typeof pick === 'object') {
+    const result = sampleResult(w, pick.sql);
+    if (result) return { title: pick.title, sql: pick.sql, result };
+  }
+  for (const e of w.example_queries) {
+    if (!e.sql) continue;
+    const result = sampleResult(w, e.sql);
+    if (result && result.rows.length >= 2 && result.columns.length >= 2) return { title: e.title || e.description || null, sql: e.sql, result };
+  }
+  return undefined;
+}
+
+/** The query shown under the ATTACH: the showcase if there is one, else the first example. */
+export function starterQuery(w: { repo: string; example_queries: ExampleLike[] }): string | undefined {
+  return showcaseFor(w)?.sql ?? w.example_queries.find(e => e.sql)?.sql ?? undefined;
 }
 
 /** The captured result for one of a worker's queries, if there is one. */
