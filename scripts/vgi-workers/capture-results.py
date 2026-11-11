@@ -27,6 +27,7 @@ import base64
 import datetime as dt
 import decimal
 import json
+import math
 import multiprocessing as mp
 import re
 import sys
@@ -86,6 +87,8 @@ def cell(v: Any) -> str | int | float | None:
     if v is None or isinstance(v, (bool, int)):
         return v
     if isinstance(v, float):
+        if math.isnan(v) or math.isinf(v):  # not representable in JSON; show as DuckDB prints it
+            return "NaN" if math.isnan(v) else ("inf" if v > 0 else "-inf")
         return round(v, 6)
     if isinstance(v, decimal.Decimal):
         return float(v)
@@ -190,7 +193,7 @@ def phase_merge(args: argparse.Namespace) -> None:
     cur = json.loads(RESULTS.read_text()) if RESULTS.exists() else {"workers": {}}
     cur["workers"].update(new["workers"])
     cur["workers"] = dict(sorted(cur["workers"].items()))
-    RESULTS.write_text(json.dumps(cur, indent=1, ensure_ascii=False) + "\n")
+    RESULTS.write_text(json.dumps(cur, indent=1, ensure_ascii=False, allow_nan=False) + "\n")
     print(f"merge: {len(new['workers'])} workers -> {RESULTS} ({len(cur['workers'])} total)", file=sys.stderr)
 
 

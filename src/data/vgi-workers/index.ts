@@ -9,6 +9,7 @@ import { categories, categoriesFor, families, familyFor, groups, searchAliases, 
 import { workerIcons } from './icons.mjs';
 import { formatExampleSql } from './format-sql';
 import showcaseFile from './showcase.json';
+import descriptionOverrides from './descriptions.json';
 // The repo list the harvest works from; read here only to check every worker it includes has a category.
 import inventoryToml from '../../../scripts/vgi-workers/inventory.toml?raw';
 
@@ -497,6 +498,30 @@ function splitTagline(t: string): { text: string; builtOn: string[] } {
 const trimDuckdb = (t: string) =>
   t.replace(/\s+(for|in|into)\s+DuckDB\.?$/i, '').replace(/[\s—–:;,-]+$/, '');
 
+/** Card descriptions read as one consistent voice: drop "in DuckDB with SQL" and other
+ *  VGI/DuckDB boilerplate (every connector here is both), trailing repo names and
+ *  periods; descriptions.json overrides the ones rules can't fix. */
+const DESCRIPTIONS = descriptionOverrides as unknown as Record<string, string>;
+function cleanBlurb(slug: string, text: string): string {
+  if (typeof DESCRIPTIONS[slug] === 'string') return DESCRIPTIONS[slug];
+  let s = text.trim();
+  // ETF family: "<Issuer> US ETF data (catalog + holdings) as DuckDB tables over VGI…"
+  const etf = s.match(/^(.*?)\s+US ETF data\s*\(/);
+  if (etf) return `${etf[1]} US ETFs — fund lineup and holdings`;
+  s = s
+    .replace(/\\\$/g, '$')
+    .replace(/^(?:a\s+)?(?:read-only\s+)?VGI worker:?\s*(?:exposing\s+)?/i, '')
+    .replace(/\s*[—–-]?\s*an?\s+read-only VGI worker(?: by Query\.Farm)?\.?/i, '')
+    .replace(/\s*\(VGI worker\)/i, '')
+    .replace(/\s+(?:in|for|to)\s+(?:DuckDB(?:\/SQL)?|Haybarn)(?:\s+with)?\s+SQL\b/gi, '')
+    .replace(/\s+for DuckDB\/SQL\b/gi, '')
+    .replace(/\s+as (?:ordinary |queryable )?DuckDB (?:tables|table functions)(?: over VGI)?/gi, '')
+    .replace(/\s*[—–-]\s*vgi-[a-z0-9-]+\.?$/i, '')
+    .replace(/\.\s*$/, '')
+    .replace(/[\s—–:;,-]+$/, '');
+  return s.charAt(0).toUpperCase() === s.charAt(0) || /^(?:i[A-Z]|scikit|e[A-Z])/.test(s) ? s : s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function enrich(w: WorkerRecord): Worker {
   const tag = splitTagline(w.tagline ?? '');
   const cats = categoriesFor(w.slug);
@@ -545,7 +570,7 @@ function enrich(w: WorkerRecord): Worker {
     ...w,
     name: workerName(w.slug),
     displayTitle: w.title || w.tagline || w.repo,
-    blurb: trimDuckdb(tag.text) || w.summary || '',
+    blurb: cleanBlurb(w.slug, trimDuckdb(tag.text) || w.summary || ''),
     builtOn: tag.builtOn,
     categoryIds: cats.map(c => c.id),
     primaryCategory: primary,
