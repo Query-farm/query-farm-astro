@@ -15,7 +15,9 @@ const fixture = `<!doctype html><form data-enquiry-form novalidate>
   <button type="button" data-enquiry-retry hidden>Try the security check again</button>
   <p data-enquiry-status></p></form><div data-enquiry-sent hidden tabindex="-1">Accepted</div>`;
 
-test('contact funnel and retry behavior in Chromium, with every request intercepted', async t => {
+test('contact funnel and retry behavior in Chromium, with every request intercepted', {
+  skip: process.env.SKIP_BROWSER_TESTS === 'true',
+}, async t => {
   const bundle = await build({ entryPoints: [new URL('../src/lib/enquiry-form.ts', import.meta.url).pathname], bundle: true, write: false, format: 'iife', globalName: 'EnquiryClient' });
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());

@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      skip_browser_tests:
+        description: 'Skip Chromium installation and browser tests for this run (infrastructure outage only)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -27,13 +32,21 @@ jobs:
 
       - run: npm ci
 
+      - name: Record browser test bypass
+        if: ${{ inputs.skip_browser_tests }}
+        run: |
+          echo 'Chromium installation, enquiry browser tests, and browser smoke tests were explicitly skipped for this manual run. All other validation remains enabled.' >> "$GITHUB_STEP_SUMMARY"
+
       - run: npx playwright install --with-deps chromium
+        if: ${{ !inputs.skip_browser_tests }}
 
       - run: npm run check
 
       - run: npm run test:haybarn-functions
 
       - run: npm run test:enquiry
+        env:
+          SKIP_BROWSER_TESTS: ${{ inputs.skip_browser_tests }}
 
       - run: npm run test:haybarn-extensions
 
@@ -53,6 +66,7 @@ jobs:
 
       - name: Run browser smoke tests
         id: browser_tests
+        if: ${{ !inputs.skip_browser_tests }}
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/browser-results.json
         run: npm run test:browser:smoke -- --workers=4 --reporter=line,json
