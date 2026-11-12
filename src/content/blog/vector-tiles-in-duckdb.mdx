@@ -1,0 +1,165 @@
+---
+title: "Vector tiles as DuckDB tables"
+description: "vgi-mvt reads the vector tiles behind most web maps into DuckDB tables, one row per feature, and writes tilesets back with COPY. Counting places in central Florence reads 273 KB of a 4.66 GB worldwide archive."
+pubDate: 2026-11-12
+author: "Query Farm Team"
+tags: ["DuckDB", "VGI", "Geospatial", "Engineering"]
+heroImage: "/media/posts/vector-tiles-in-duckdb/social.png"
+heroImageAlt: "Vector tiles as DuckDB tables. Paper slips in map colours feed four cut-apart paper tiles that a road runs across, which become a stack of paper map layers of the Ponte Vecchio in Florence."
+leadVisual:
+  src: "/media/posts/vector-tiles-in-duckdb/vector-tiles-artwork.webp"
+  alt: ""
+  width: 1440
+  height: 480
+showDescription: false
+draft: false
+nextStep:
+  title: "vgi-mvt"
+  pitch: "Read PMTiles, MBTiles, tile-server URLs and single .mvt tiles as DuckDB tables, and write PMTiles back with COPY. Runs as a VGI worker in stock DuckDB 2.0."
+  href: "/vgi/"
+  cta: "Get started with VGI"
+  repo: "https://github.com/Query-farm/vgi-mvt"
+---
+
+import TileCutFigure from '../../components/blog/vector-tiles/TileCutFigure.astro';
+import ByteRangesFigure from '../../components/blog/vector-tiles/ByteRangesFigure.astro';
+import RowsToTilesFigure from '../../components/blog/vector-tiles/RowsToTilesFigure.astro';
+
+<aside class="article-brief" aria-labelledby="article-brief-title">
+  <div class="article-brief-inner">
+    <p id="article-brief-title" class="article-brief-label">In brief</p>
+    <ul>
+      <li><a href="https://github.com/Query-farm/vgi-mvt">vgi-mvt</a> reads Mapbox Vector Tiles into DuckDB, from PMTiles files and URLs, MBTiles, <code>{"{z}/{x}/{y}"}</code> tile servers or single tiles. Attach a tileset and each layer is a table with a <code>GEOMETRY</code> column and typed attribute columns.</li>
+      <li>A spatial filter decides which tiles are read. Counting places in central Florence read 273 KB of a 4.66 GB worldwide archive and took 0.79 s.</li>
+      <li><code>COPY … TO (FORMAT 'mvt.pmtiles')</code> writes a tileset, every layer in one statement. It suits city- and country-sized data; tippecanoe and planetiler remain the tools for a planet.</li>
+    </ul>
+  </div>
+</aside>
+
+Most web maps get their data as vector tiles: features cut into a pyramid of `z/x/y` squares, each square encoded as a [Mapbox Vector Tile](https://github.com/mapbox/vector-tile-spec). Basemaps, building footprints, places and census boundaries are all published this way, often as a single [PMTiles](https://docs.protomaps.com/pmtiles/) file on object storage. The format is made for drawing, not for counting a city's hotels, measuring its roads or joining its buildings to your own data. DuckDB's spatial extension can open these files through GDAL with `ST_Read`, but it counts features that cross tile edges more than once and can't read only the area you ask about.
+
+[vgi-mvt](https://github.com/Query-farm/vgi-mvt) does both. It is a [VGI](/vgi/) worker, a separate process that adds functions and catalogs to DuckDB, and it decodes tiles into rows. Attach a tileset and its layers become tables:
+
+```sql
+SET allow_extension_repositories = 'allowed';
+CREATE EXTENSION REPOSITORY IF NOT EXISTS query_farm WITH PREFIX 'https://duckdb-extensions.query.farm';
+INSTALL vgi FROM query_farm;
+LOAD vgi FROM query_farm;
+
+ATTACH 'mvt' AS florence (TYPE vgi,
+  LOCATION 'uvx --from git+https://github.com/Query-farm/vgi-mvt@v0.2.2 vgi-mvt-worker',
+  tileset 'https://raw.githubusercontent.com/protomaps/PMTiles/main/spec/v3/protomaps(vector)ODbL_firenze.pmtiles');
+
+SELECT "pmap:kind" AS kind, count(*) AS roads
+FROM florence.roads
+GROUP BY kind ORDER BY roads DESC;
+```
+
+| kind | roads |
+|---|---:|
+| minor_road | 1,907 |
+| path | 1,046 |
+| medium_road | 257 |
+| major_road | 166 |
+| other | 15 |
+| highway | 8 |
+
+The first four lines install the VGI extension; `ATTACH` starts the worker. The Protomaps sample of Florence becomes thirteen tables, from `boundaries` to `water`, read at the archive's most detailed zoom, z15. Each attribute in the tiles becomes a column under the tileset's own name, which is why `"pmap:kind"` needs quotes. The geometry column is `GEOMETRY('OGC:CRS84')`, so the spatial extension's functions work on it, and a `COPY` to GeoParquet keeps the coordinate system.
+
+Behind the tables are three functions you can also call directly: `read_tiles` reads a tileset, `read_mvt` reads one tile, and `mvt_decode` decodes tile blobs already in a query.
+
+## A tileset stores a feature once per tile it touches
+
+A vector tile holds what falls inside its square, plus a small buffer around it so lines don't break visibly at the seams. A road that crosses a tile edge is stored once in every tile it reaches. Decode the tiles one by one and that road comes back as several rows that overlap at each edge, so `count(*)`, `sum(ST_Length(…))` and `sum(ST_Area(…))` all come out too high.
+
+<TileCutFigure />
+
+The `tile_edges` argument of `read_tiles` decides what to do about it. `'raw'` returns each tile exactly as stored. `'clip'` trims every piece to its own tile, so pieces no longer overlap. `'merge'`, the default, also joins the pieces of each feature back into one row. Points need no joining; each is kept only in the tile that contains it.
+
+The Florence roads layer at z14 covers 3,557 roads:
+
+| `tile_edges` | Rows |
+|---|---:|
+| `'raw'` | 4,092 |
+| `'clip'` | 3,847 |
+| `'merge'` | 3,557 |
+
+Merging relies on feature ids, so a feature without one can still come back as several rows when its pieces don't meet. Coordinates are also rounded to each tile's 4096 × 4096 grid, about a metre at z14. And tiles are a simplified copy of their source: lower zooms generalise and drop features. vgi-mvt reads the most detailed zoom unless you ask for another, and if you have the source data, use it.
+
+DuckDB's `ST_Read` has no such option: it returns every piece as its own row. On the same Florence file it gives 29,026 rows for 27,789 distinct building ids, and 1,642 rows for 1,384 land-use areas. It can't read five of the thirteen layers at all, roads, places and points of interest among them. Their tags include names that differ only in case, such as `name:Gsw` and `name:gsw`, and DuckDB rejects the result with a duplicate column name error. vgi-mvt reads all thirteen.
+
+## A filter over Florence reads 273 KB of a 4.66 GB file
+
+The [Overture](https://docs.overturemaps.org/) places sample is a single 4.66 GB PMTiles file covering the world. This query asks about one corner of one city:
+
+```sql
+SELECT category_main, count(*) AS n
+FROM mvt.main.read_tiles('https://r2-public.protomaps.com/protomaps-sample-datasets/overture-pois.pmtiles', layer := 'pois')
+WHERE ST_Intersects(geometry, ST_MakeEnvelope(11.24, 43.76, 11.27, 43.78))
+GROUP BY ALL ORDER BY n DESC LIMIT 5;
+```
+
+| category_main | n |
+|---|---:|
+| NULL | 681 |
+| hotel | 467 |
+| italian_restaurant | 430 |
+| landmark_and_historical_building | 284 |
+| clothing_store | 200 |
+
+The VGI extension passes the bounding box of the envelope to the worker, and the worker reads only the tiles under it. DuckDB then applies the exact `ST_Intersects` to the rows that come back. `ST_Contains`, `ST_Within`, `ST_Covers`, `ST_CoveredBy`, `ST_Overlaps`, `ST_Touches`, `ST_Crosses` and `ST_Equals` work the same way.
+
+<ByteRangesFigure />
+
+The query took 0.79 s, the median of five runs on an Apple M3 Mac, each with a fresh worker and no cached tiles. The worker made six HTTP range requests: three for the archive's header and directories, 31.6 KB, and three for the tiles, 241.6 KB. The same query through `ST_Read`, which has no way to take the box, hadn't finished after 15 minutes.
+
+PMTiles stores tiles in the order of a Hilbert curve, which keeps nearby tiles close together in the file, so a small box usually needs one or two reads. This box straddles a boundary between quarters of the curve, which is why two of its tiles sit 25 MB away from the other two.
+
+The filter has to be a constant geometry. A box that comes from a join, or that sits under an `OR` or a `NOT`, isn't passed to the worker. Those queries read the whole zoom level instead, up to a limit of 10,000 tiles by default. If that happens, pass the box yourself, as the `bbox` option when you attach or as arguments to `read_tiles`.
+
+## Writing a tileset back is one COPY
+
+The worker also adds a `COPY` format. Each row becomes one feature, and a `layer` column says which layer it goes in, so one statement writes a whole tileset. This one rebuilds nine layers of the Florence sample:
+
+```sql
+COPY (
+    SELECT layer, feature_id, properties, geometry,
+           CASE layer WHEN 'buildings' THEN 13 WHEN 'pois' THEN 14 END AS minz
+    FROM mvt.main.read_tiles('…/protomaps(vector)ODbL_firenze.pmtiles', zoom := 15)
+    WHERE list_contains(['earth', 'landuse', 'natural', 'water', 'roads',
+                         'transit', 'buildings', 'pois', 'places'], layer)
+    ORDER BY list_position(['earth', 'landuse', 'natural', 'water', 'roads',
+                            'transit', 'buildings', 'pois', 'places'], layer)
+) TO 'florence.pmtiles' (FORMAT 'mvt.pmtiles', minzoom 10, maxzoom 15, minzoom_column 'minz',
+     name 'Florence', attribution '© OpenStreetMap contributors, Protomaps');
+```
+
+`feature_id` becomes each feature's id. `properties` is the JSON object of attributes that `read_tiles` returns, and it is expanded back into separate attributes; any other column becomes an attribute as it is. `minz` holds `buildings` back until z13 and `pois` until z14, which keeps the low-zoom tiles small. The `ORDER BY` sets the drawing order within each tile.
+
+<RowsToTilesFigure />
+
+For each zoom level, the worker simplifies every line and polygon once, so neighbouring tiles agree where they meet. It then cuts each feature into the tiles it reaches, including their buffers, and snaps the pieces to the tile grid, repairing any polygon the cut or the snap made invalid. Identical tiles are stored once, and the tiles are written in Hilbert order, so the result reads as cheaply as the archive above.
+
+The statement wrote 42,695 features into 123 tiles, 3.6 MB, in 12.8 s, including reading the sample over HTTP. MapLibre draws the result like any other PMTiles basemap:
+
+<figure>
+  <img src="/media/posts/vector-tiles-in-duckdb/florence-maplibre.webp" alt="A street map of central Florence rendered by MapLibre from the tileset written by COPY: the Arno in blue with its bridges, the Duomo and Piazza della Signoria among dense buildings, white streets, green parks south of the river, and red dots for thousands of places." width="1440" height="860" loading="lazy" />
+  <figcaption>The written <code>florence.pmtiles</code> in MapLibre GL 4.7 at z15.4. We wrote the style; every tile came from the <code>COPY</code>.</figcaption>
+</figure>
+
+The writer doesn't drop features to keep tiles small: every feature appears at every zoom in its range. If a compressed tile grows past `max_tile_bytes` (500 KB by default), the `COPY` stops with an error that names the tile and suggests raising `minzoom`, setting `minzoom_column`, or simplifying more. Tippecanoe and planetiler thin features automatically, which is what a planet-scale basemap needs. The writer is Python, with the geometry work done on whole arrays at a time: a million random points took 70 s to tile up to z10 and 85 s up to z12. That is comfortable for a city or a country.
+
+## Code and measurement details
+
+| Item | Detail |
+| --- | --- |
+| vgi-mvt | [v0.2.2](https://github.com/Query-farm/vgi-mvt/releases/tag/v0.2.2), commit [`a9ad527`](https://github.com/Query-farm/vgi-mvt/commit/a9ad527) |
+| DuckDB | 2.0.0 (Python package), VGI extension from the Query Farm repository |
+| Machine | Apple M3 Mac; remote archives read over the internet |
+| Data | [Protomaps Florence sample](https://github.com/protomaps/PMTiles/tree/main/spec/v3) (ODbL); [Overture places sample](https://r2-public.protomaps.com/protomaps-sample-datasets/overture-pois.pmtiles), 4,656,603,871 bytes |
+| Florence query | Median of five runs, each with a fresh worker process; request counts from instrumenting the worker's HTTP reader |
+| `ST_Read` comparison | DuckDB 2.0.0 spatial extension (`a3dbcd1781`), Florence sample over `/vsicurl/`; distinct ids from GDAL's `mvt_id` column; the Overture query run once through `ST_Read` over `/vsicurl/` and stopped at 15 minutes |
+| Points benchmark | 1,000,000 random points over 30° × 25°, `max_tile_bytes 0` (no limit), vgi-mvt 0.2.0 |
+| Figures | Every coordinate, count and byte offset comes from the worker; the export script is in this site's repository at `scripts/vector-tiles-blog/export.py` |
+
+The [README](https://github.com/Query-farm/vgi-mvt#readme) documents every function and every `ATTACH` and `COPY` option. If something doesn't work as described, [open an issue](https://github.com/Query-farm/vgi-mvt/issues).

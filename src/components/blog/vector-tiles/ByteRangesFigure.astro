@@ -1,0 +1,165 @@
+---
+/**
+ * Figure 2: a query box becomes a few byte ranges of a 4.66 GB PMTiles archive.
+ * Data: src/data/blog/vector-tiles-in-duckdb/byte-ranges.json (scripts/vector-tiles-blog/export.py):
+ * the z14 tiles around central Florence in the Overture POI archive, their real tile ids
+ * and byte offsets, and the range requests vgi-mvt sent for the box.
+ */
+import StepFigure from './StepFigure.astro';
+import { fmtBytes } from './geom';
+import data from '../../../data/blog/vector-tiles-in-duckdb/byte-ranges.json';
+import facts from '../../../data/blog/vector-tiles-in-duckdb/facts.json';
+
+const W = 760, H = 470;
+const z = data.zoom;
+const hood = data.neighbourhood;
+const xs = hood.map(t => t.x), ys = hood.map(t => t.y);
+const x0 = Math.min(...xs), y0 = Math.min(...ys);
+const cols = Math.max(...xs) - x0 + 1, rows = Math.max(...ys) - y0 + 1;
+const G = { x: 28, y: 40, cell: 46 };
+const cellX = (x: number) => G.x + (x - x0) * G.cell;
+const cellY = (y: number) => G.y + (y - y0) * G.cell;
+const inBox = new Set(data.box_tiles.map(t => `${t.x}/${t.y}`));
+
+// Shade tiles by size (a proxy for how many places they hold), on a log scale.
+const sizes = hood.map(t => t.length);
+const lo = Math.log(Math.min(...sizes)), hi = Math.log(Math.max(...sizes));
+const shade = (n: number) => {
+  const k = (Math.log(n) - lo) / (hi - lo || 1);
+  const a = [247, 239, 222], b = [201, 166, 112];
+  return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(',')})`;
+};
+
+// The Hilbert path: consecutive tile ids, drawn only where they are map neighbours.
+const byId = [...hood].sort((a, b) => a.tile_id - b.tile_id);
+let path = '';
+byId.forEach((t, i) => {
+  const cx = cellX(t.x) + G.cell / 2, cy = cellY(t.y) + G.cell / 2;
+  const p = byId[i - 1];
+  const joined = p && p.tile_id === t.tile_id - 1 && Math.abs(p.x - t.x) + Math.abs(p.y - t.y) === 1;
+  path += `${joined ? 'L' : 'M'}${cx} ${cy}`;
+});
+
+// The query box in tile coordinates.
+const n = 2 ** z;
+const tx = (lon: number) => ((lon + 180) / 360) * n;
+const ty = (lat: number) => ((1 - Math.log(Math.tan((lat * Math.PI) / 180) + 1 / Math.cos((lat * Math.PI) / 180)) / Math.PI) / 2) * n;
+const [west, south, east, north] = data.box;
+const box = {
+  x: G.x + (tx(west) - x0) * G.cell, y: G.y + (ty(north) - y0) * G.cell,
+  w: (tx(east) - tx(west)) * G.cell, h: (ty(south) - ty(north)) * G.cell,
+};
+
+// The file: the neighbourhood's tiles in offset order, as a vertical strip. Tiles that sit
+// back to back in the file touch; anything else in between becomes a break.
+const S = { x: 560, y: 40, w: 30, h: rows * G.cell };
+const byOffset = [...hood].sort((a, b) => a.offset - b.offset);
+const breaks = byOffset.filter((t, i) => i > 0 && byOffset[i - 1].offset + byOffset[i - 1].length !== t.offset).length;
+const GAP = 7;
+const total = byOffset.reduce((s, t) => s + t.length, 0);
+const scale = (S.h - breaks * GAP) / total;
+let y = S.y;
+const blocks = byOffset.map((t, i) => {
+  if (i > 0 && byOffset[i - 1].offset + byOffset[i - 1].length !== t.offset) y += GAP;
+  const b = { ...t, y, h: Math.max(t.length * scale, 0.6), box: inBox.has(`${t.x}/${t.y}`) };
+  y += t.length * scale;
+  return b;
+});
+const blockOf = (offset: number) => blocks.find(b => b.offset === offset)!;
+const requests = data.tile_requests.map(r => {
+  const first = blockOf(r.offset);
+  const lastB = blocks.filter(b => b.offset >= r.offset && b.offset < r.offset + r.length).at(-1)!;
+  return { ...r, y1: first.y, y2: lastB.y + lastB.h };
+});
+
+// The whole archive as a bar, with the strip's window marked.
+const A = { x: 452, y: S.y, w: 14, h: S.h };
+const archive = facts.byte_ranges.archive_bytes;
+const winLo = byOffset[0].offset, winHi = byOffset.at(-1)!.offset + byOffset.at(-1)!.length;
+const ay = (o: number) => A.y + (o / archive) * A.h;
+const read = facts.byte_ranges.tile_bytes + facts.byte_ranges.directory_bytes;
+const share = ((read / archive) * 100).toFixed(3);
+const apart = (Math.max(...data.box_tiles.map(t => t.offset)) - Math.min(...data.box_tiles.map(t => t.offset))) / 1e6;
+
+const steps = [
+  `The ${hood.length} z${z} tiles around central Florence in <a href="https://docs.overturemaps.org/">Overture</a>'s worldwide places, a single ${fmtBytes(archive)} PMTiles file. Darker tiles are larger, because they hold more places.`,
+  `PMTiles stores tiles in Hilbert-curve order, the line through the map. The strip on the right is the same ${hood.length} tiles in file order: neighbours on the map are mostly neighbours in the file.`,
+  `<code>WHERE ST_Intersects(geometry, ST_MakeEnvelope(…))</code> over central Florence touches <strong>${data.box_tiles.length} tiles</strong>. DuckDB passes the box to the worker, which looks up only those tiles in the archive's directory.`,
+  `In the file they sit in two places, ${Math.round(apart)} MB apart: the box straddles the boundary between two quarters of the curve.`,
+  `Tiles close together in the file are fetched together: <strong>${requests.length} range requests, ${fmtBytes(facts.byte_ranges.tile_bytes)}</strong>. With ${fmtBytes(facts.byte_ranges.directory_bytes)} of directory, the query reads ${share}% of the archive.`,
+];
+---
+
+<StepFigure id="fig-byte-ranges" steps={steps} label="Animation: a query box becomes a few byte-range requests to a large PMTiles archive">
+  <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-labelledby="fig-byte-ranges-title">
+    <title id="fig-byte-ranges-title">{`An ${cols} by ${rows} grid of z${z} tiles around Florence with a Hilbert curve through them, and a strip showing the same tiles in file order. A query box covers ${data.box_tiles.length} tiles, which sit in two places in the ${fmtBytes(archive)} file, ${Math.round(apart)} MB apart; vgi-mvt reads them with ${requests.length} range requests totalling ${fmtBytes(facts.byte_ranges.tile_bytes)}.`}</title>
+    <defs>
+      <marker id="br-tick" viewBox="0 0 6 6" refX="3" refY="3" markerWidth="6" markerHeight="6"><path d="M0 3h6" stroke="#211a12" /></marker>
+    </defs>
+    <rect width={W} height={H} fill="#f4efe3" />
+    <text class="br-head" x={G.x} y="26">{`Map: z${z} tiles ${x0}–${x0 + cols - 1} × ${y0}–${y0 + rows - 1}`}</text>
+    <text class="br-head" x={A.x - 6} y="26">The file</text>
+
+    {hood.map(t => (
+      <rect class={`br-cell ${inBox.has(`${t.x}/${t.y}`) ? 'br-in' : ''}`} x={cellX(t.x) + 1} y={cellY(t.y) + 1} width={G.cell - 2} height={G.cell - 2} rx="2" fill={shade(t.length)} />
+    ))}
+    <path class="br-curve vt-anim" d={path} pathLength="1" />
+    <rect class="br-box vt-anim" x={box.x} y={box.y} width={box.w} height={box.h} />
+
+    {/* Whole archive */}
+    <rect x={A.x} y={A.y} width={A.w} height={A.h} class="br-archive" />
+    <text class="br-small" x={A.x + A.w / 2} y={A.y + A.h + 16} text-anchor="middle">{fmtBytes(archive)}</text>
+    <rect class="br-window vt-anim" x={A.x - 3} y={ay(winLo) - 1} width={A.w + 6} height={Math.max(ay(winHi) - ay(winLo), 2) + 2} />
+    <path class="br-zoom vt-anim" d={`M${A.x + A.w + 3} ${ay(winLo)}L${S.x - 4} ${S.y}M${A.x + A.w + 3} ${ay(winHi)}L${S.x - 4} ${S.y + S.h}`} />
+
+    {/* The strip: these tiles in file order */}
+    <g class="br-strip vt-anim">
+      {blocks.map(b => (
+        <rect class={`br-block ${b.box ? 'br-in' : ''}`} x={S.x} y={b.y} width={S.w} height={b.h} fill={shade(b.length)} />
+      ))}
+      <text class="br-small" x={S.x + S.w / 2} y={S.y + S.h + 16} text-anchor="middle">{`${fmtBytes(winHi - winLo)} window`}</text>
+    </g>
+    <g class="br-requests vt-anim">
+      {requests.map(r => (
+        <g>
+          <path d={`M${S.x + S.w + 6} ${r.y1}h8V${r.y2}h-8`} class="br-bracket" />
+          <text class="br-req" x={S.x + S.w + 20} y={(r.y1 + r.y2) / 2 + 4}>{`1 request · ${fmtBytes(r.length)}`}</text>
+        </g>
+      ))}
+    </g>
+    <g class="br-where vt-anim">
+      {[...new Set(data.box_tiles.map(t => Math.round(t.offset / 1e7)))].map(k => {
+        const t = data.box_tiles.find(tt => Math.round(tt.offset / 1e7) === k)!;
+        const b = blockOf(t.offset);
+        return <text class="br-small" x={S.x - 8} y={b.y + 4} text-anchor="end">{`${(t.offset / 1e9).toFixed(3)} GB`}</text>;
+      })}
+    </g>
+  </svg>
+  <figcaption slot="caption">Real tile ids, sizes and offsets from the <a href="https://r2-public.protomaps.com/protomaps-sample-datasets/overture-pois.pmtiles">Overture POI sample archive</a>, and the requests vgi-mvt sent for the box {data.box.join(', ')}. Strip heights are proportional to tile size; breaks mark other tiles in between.</figcaption>
+</StepFigure>
+
+<style is:global>
+  #fig-byte-ranges .br-head { font: 600 13px var(--font-sans); fill: var(--color-soil-800); }
+  #fig-byte-ranges .br-small { font: 500 11px var(--font-mono); fill: var(--color-soil-600); }
+  #fig-byte-ranges .br-req { font: 600 12px var(--font-sans); fill: var(--color-soil-900); }
+  #fig-byte-ranges .br-cell { stroke: #fbf8f1; stroke-width: 1; }
+  #fig-byte-ranges .br-curve { fill: none; stroke: var(--color-soil-900); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; }
+  #fig-byte-ranges .br-box { fill: rgba(192, 142, 47, 0.18); stroke: var(--color-sun-700); stroke-width: 2; stroke-dasharray: 6 4; opacity: 0; }
+  #fig-byte-ranges .br-archive { fill: var(--color-soil-200); stroke: var(--color-soil-400); }
+  #fig-byte-ranges .br-window { fill: var(--color-sun-500); opacity: 0; }
+  #fig-byte-ranges .br-zoom { fill: none; stroke: var(--color-soil-400); stroke-dasharray: 3 3; opacity: 0; }
+  #fig-byte-ranges text.br-zoom { fill: var(--color-soil-600); stroke: none; }
+  #fig-byte-ranges .br-strip { opacity: 0; }
+  #fig-byte-ranges .br-block { stroke: #fbf8f1; stroke-width: 0.5; }
+  #fig-byte-ranges .br-requests, #fig-byte-ranges .br-where { opacity: 0; }
+  #fig-byte-ranges .br-bracket { fill: none; stroke: var(--color-soil-900); stroke-width: 1.6; }
+  #fig-byte-ranges .br-in { transition: fill 600ms ease; }
+
+  #fig-byte-ranges.vt-s1 .br-curve { stroke-dashoffset: 0; }
+  #fig-byte-ranges.vt-s1 .br-strip, #fig-byte-ranges.vt-s1 .br-window, #fig-byte-ranges.vt-s1 .br-zoom { opacity: 1; }
+  #fig-byte-ranges.vt-s2 .br-box { opacity: 1; }
+  #fig-byte-ranges.vt-s2 .br-in { fill: var(--color-sun-500); }
+  #fig-byte-ranges.vt-s2 .br-curve { opacity: 0.35; }
+  #fig-byte-ranges.vt-s3 .br-where { opacity: 1; }
+  #fig-byte-ranges.vt-s4 .br-requests { opacity: 1; }
+</style>

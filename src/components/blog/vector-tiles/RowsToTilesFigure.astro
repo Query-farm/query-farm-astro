@@ -1,0 +1,138 @@
+---
+/**
+ * Figure 3: rows become the layers of one tile.
+ * Data: src/data/blog/vector-tiles-in-duckdb/rows-to-tiles.json (scripts/vector-tiles-blog/export.py):
+ * one z15 tile (Ponte Vecchio) of the tileset written by COPY ... TO (FORMAT 'mvt.pmtiles'),
+ * decoded layer by layer in tile coordinates (0–4096).
+ */
+import StepFigure from './StepFigure.astro';
+import { pathData, points, fmtInt, fmtBytes } from './geom';
+import data from '../../../data/blog/vector-tiles-in-duckdb/rows-to-tiles.json';
+import facts from '../../../data/blog/vector-tiles-in-duckdb/facts.json';
+
+const W = 760, H = 520;
+const GRID = 1024; // draw on a 1024 grid: whole-number coordinates keep the inline SVG small
+const SIZE = 290;  // tile edge on screen, px, when flat
+const CX = 505, CY = 272;
+
+const STYLE: Record<string, { label: string; swatch: string }> = {
+  earth: { label: 'earth', swatch: '#e9e1cf' },
+  landuse: { label: 'landuse', swatch: '#bcd6a0' },
+  natural: { label: 'natural', swatch: '#a9cc8c' },
+  water: { label: 'water', swatch: '#8fbfe0' },
+  roads: { label: 'roads', swatch: '#ffffff' },
+  transit: { label: 'transit', swatch: '#8a8fa0' },
+  buildings: { label: 'buildings', swatch: '#d4c7b2' },
+  pois: { label: 'pois', swatch: '#c1603b' },
+  places: { label: 'places', swatch: '#211a12' },
+};
+
+const layers = data.layers.map((l, i) => {
+  const k = GRID / l.extent;
+  const project = (x: number, y: number): [number, number] => [x * k - GRID / 2, y * k - GRID / 2];
+  const lines: { kind: string | null; d: string }[] = [];
+  const polys: { kind: string | null; d: string }[] = [];
+  const dots: [number, number][] = [];
+  for (const f of l.features) {
+    const t = f.geometry.type;
+    if (t.endsWith('Point')) dots.push(...points(f.geometry, project));
+    else if (t.endsWith('LineString')) lines.push({ kind: f.kind, d: pathData(f.geometry, project, 0) });
+    else polys.push({ kind: f.kind, d: pathData(f.geometry, project, 0) });
+  }
+  return { name: l.name, i, n: l.features.length, lines, polys, dots, ...STYLE[l.name] };
+});
+const total = layers.reduce((s, l) => s + l.n, 0);
+const rt = facts.rows_to_tiles;
+const tileCount = Object.values(rt.tiles_per_zoom).reduce((s: number, v) => s + (v as number), 0);
+
+const steps = [
+  `One <code>COPY</code> takes ${fmtInt(rt.rows)} rows from nine Florence layers. Each row has a <code>layer</code>, an id, attributes and a geometry. This z15 tile around the Ponte Vecchio gets ${fmtInt(total)} of them.`,
+  `Each layer becomes its own sheet of the tile: features clipped to the tile plus its buffer, simplified for the zoom, and snapped to the tile's 4096-unit grid.`,
+  `The sheets stack in the order the rows arrived, so the query's <code>ORDER BY</code> decides what draws on top: buildings over roads, places over everything.`,
+  `One tile: ${layers.length} layers, ${fmtInt(total)} features, ${fmtBytes(data.compressed_bytes)} gzipped. The archive holds ${tileCount} tiles like it from z10 to z15, ${fmtBytes(rt.archive_bytes)} in all.`,
+];
+---
+
+<StepFigure id="fig-rows-to-tiles" steps={steps} interval={3000} label="Animation: rows from nine layers become the stacked layers of one vector tile">
+  <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-labelledby="fig-rows-to-tiles-title">
+    <title id="fig-rows-to-tiles-title">{`A table of nine layers with the number of features each contributes to one z15 tile of Florence, and the tile itself: its layers shown as separate sheets, then stacked, then as a flat map of the Arno, the Ponte Vecchio, streets and ${fmtInt(layers.find(l => l.name === 'buildings')?.n ?? 0)} buildings.`}</title>
+    <rect width={W} height={H} fill="#f4efe3" />
+
+    <g class="rt-table">
+      <text class="rt-head" x="28" y="44">layer</text>
+      <text class="rt-head" x="228" y="44" text-anchor="end">rows in this tile</text>
+      <line x1="28" x2="228" y1="54" y2="54" class="rt-rule" />
+      {layers.map((l, k) => (
+        <g class="rt-row vt-anim" style={`--i:${k}`}>
+          <rect x="28" y={68 + k * 34} width="14" height="14" rx="3" fill={l.swatch} class="rt-swatch" />
+          <text class="rt-name" x="52" y={80 + k * 34}>{l.label}</text>
+          <text class="rt-n" x="228" y={80 + k * 34} text-anchor="end">{fmtInt(l.n)}</text>
+        </g>
+      ))}
+      <line x1="28" x2="228" y1={64 + layers.length * 34} y2={64 + layers.length * 34} class="rt-rule" />
+      <text class="rt-name" x="52" y={86 + layers.length * 34}>total</text>
+      <text class="rt-n rt-total" x="228" y={86 + layers.length * 34} text-anchor="end">{fmtInt(total)}</text>
+      <text class="rt-tilename" x="28" y={H - 26}>{`tile ${data.tile.z}/${data.tile.x}/${data.tile.y}`}</text>
+    </g>
+
+    <g transform={`translate(${CX} ${CY}) scale(${SIZE / GRID})`}>
+      {layers.map(l => (
+        <g class={`rt-sheet vt-anim rt-${l.name}`} style={`--i:${l.i}; --n:${layers.length}`}>
+          <rect class="rt-paper" x={-GRID / 2} y={-GRID / 2} width={GRID} height={GRID} />
+          {l.polys.length > 0 && <path class="rt-poly" d={l.polys.map(p => p.d).join('')} />}
+          {l.lines.length > 0 && <path class="rt-line" d={l.lines.map(p => p.d).join('')} />}
+          {l.dots.length > 0 && (
+            <path class="rt-dot" d={l.dots.map(([x, y]) => `M${Math.round(x)} ${Math.round(y)}h0`).join('')} />
+          )}
+        </g>
+      ))}
+      <rect class="rt-frame vt-anim" x={-GRID / 2} y={-GRID / 2} width={GRID} height={GRID} />
+    </g>
+  </svg>
+  <figcaption slot="caption">Real tile: z15/{data.tile.x}/{data.tile.y} of the tileset written by the <code>COPY</code> below, decoded layer by layer. {fmtBytes(data.raw_bytes)} decoded, {fmtBytes(data.compressed_bytes)} as stored.</figcaption>
+</StepFigure>
+
+<style is:global>
+  #fig-rows-to-tiles .rt-head { font: 600 12px var(--font-sans); fill: var(--color-soil-700); }
+  #fig-rows-to-tiles .rt-name { font: 500 13px var(--font-mono); fill: var(--color-soil-900); }
+  #fig-rows-to-tiles .rt-n { font: 500 13px var(--font-sans); font-variant-numeric: tabular-nums; fill: var(--color-soil-900); }
+  #fig-rows-to-tiles .rt-total { font-weight: 700; }
+  #fig-rows-to-tiles .rt-rule { stroke: var(--color-soil-300); }
+  #fig-rows-to-tiles .rt-swatch { stroke: rgba(0, 0, 0, 0.18); }
+  #fig-rows-to-tiles .rt-tilename { font: 500 12px var(--font-mono); fill: var(--color-soil-600); }
+
+  /* The sheets. Inner content is centred on 0,0, so transforms pivot on the tile centre. */
+  #fig-rows-to-tiles .rt-sheet {
+    transform-origin: 0 0;
+    transform: translate(0, calc((4 - var(--i)) * 105px)) scale(1, 0.56) rotate(-45deg);
+    transition-delay: calc(var(--i) * 70ms);
+    opacity: 0;
+  }
+  #fig-rows-to-tiles .rt-paper { fill: rgba(255, 253, 247, 0.55); stroke: rgba(33, 26, 18, 0.35); stroke-width: 3; }
+  #fig-rows-to-tiles .rt-frame { fill: none; stroke: var(--color-soil-900); stroke-width: 3; opacity: 0; }
+  #fig-rows-to-tiles .rt-poly { stroke: none; }
+  #fig-rows-to-tiles .rt-line { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  #fig-rows-to-tiles .rt-dot { stroke-linecap: round; }
+  #fig-rows-to-tiles .rt-earth .rt-poly { fill: #e9e1cf; }
+  #fig-rows-to-tiles .rt-landuse .rt-poly { fill: #bcd6a0; }
+  #fig-rows-to-tiles .rt-natural .rt-poly { fill: #a9cc8c; }
+  #fig-rows-to-tiles .rt-water .rt-poly { fill: #8fbfe0; }
+  #fig-rows-to-tiles .rt-water .rt-line { stroke: #8fbfe0; stroke-width: 6; }
+  #fig-rows-to-tiles .rt-roads .rt-line { stroke: #ffffff; stroke-width: 7; }
+  #fig-rows-to-tiles .rt-roads .rt-paper { fill: rgba(205, 196, 178, 0.55); }
+  #fig-rows-to-tiles .rt-transit .rt-line { stroke: #6f7486; stroke-width: 4; stroke-dasharray: 14 10; }
+  #fig-rows-to-tiles .rt-buildings .rt-poly { fill: #cdbfa8; }
+  #fig-rows-to-tiles .rt-pois .rt-dot { stroke: #c1603b; stroke-width: 9; }
+  #fig-rows-to-tiles .rt-places .rt-dot { stroke: #211a12; stroke-width: 22; }
+
+  /* Step 1: sheets appear, fanned out. */
+  #fig-rows-to-tiles.vt-s1 .rt-sheet { opacity: 1; }
+  /* Step 2: they stack. */
+  #fig-rows-to-tiles.vt-s2 .rt-sheet { transform: translate(0, calc(var(--i) * -6px)) scale(1, 0.56) rotate(-45deg); transition-delay: calc((var(--n) - var(--i)) * 50ms); }
+  #fig-rows-to-tiles.vt-s2 .rt-paper { fill: transparent; stroke: transparent; }
+  #fig-rows-to-tiles.vt-s2 .rt-earth .rt-paper { fill: #efe9dc; }
+  /* Step 3: flat, as a map draws it. */
+  #fig-rows-to-tiles.vt-s3 .rt-sheet { transform: none; transition-delay: 0ms; }
+  #fig-rows-to-tiles.vt-s3 .rt-frame { opacity: 1; }
+  #fig-rows-to-tiles .rt-paper { transition: fill 600ms ease, stroke 600ms ease; }
+</style>

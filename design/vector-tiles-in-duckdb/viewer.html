@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Florence tileset viewer</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/pmtiles@3.2.1/dist/pmtiles.js"></script>
+<style>
+  :root { --panel: rgba(255,255,255,.94); --ink: #1d2433; --muted: #5b6475; --line: #d9dde5; }
+  html, body { margin: 0; height: 100%; font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: #f4f1ea; }
+  #map { position: absolute; inset: 0; }
+  .panel { position: absolute; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+           box-shadow: 0 2px 12px rgba(0,0,0,.08); padding: 12px 14px; }
+  #info { top: 12px; left: 12px; width: 260px; }
+  #info h1 { font-size: 15px; margin: 0 0 2px; }
+  #info p { margin: 0 0 8px; color: var(--muted); }
+  #layers label { display: flex; align-items: center; gap: 8px; padding: 2px 0; cursor: pointer; }
+  #layers .sw { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,.15); }
+  #layers .n { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #zoom { margin-top: 8px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #feature { bottom: 24px; right: 12px; width: 300px; max-height: 45vh; overflow: auto; display: none; }
+  #feature h2 { font-size: 13px; margin: 0 0 6px; }
+  #feature table { border-collapse: collapse; width: 100%; }
+  #feature td { padding: 2px 4px; border-top: 1px solid var(--line); vertical-align: top; word-break: break-word; }
+  #feature td:first-child { color: var(--muted); white-space: nowrap; }
+  @media (max-width: 600px) { #info { width: auto; right: 12px; } #feature { left: 12px; width: auto; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="info" class="panel">
+  <h1>Florence, re-tiled by vgi-mvt</h1>
+  <p>Written with <code>COPY … TO (FORMAT 'mvt.pmtiles')</code>: 9 layers, z10–15. Click a feature to see its attributes.</p>
+  <div id="layers"></div>
+  <div id="zoom"></div>
+</div>
+<div id="feature" class="panel"></div>
+<script>
+const protocol = new pmtiles.Protocol();
+maplibregl.addProtocol("pmtiles", protocol.tile);
+const url = new URL("florence.pmtiles", location.href).href;
+const src = "florence";
+const kind = ["get", "pmap:kind"];
+
+const LAYERS = [
+  { id: "earth", color: "#efe9dc", style: [{ type: "fill", paint: { "fill-color": "#efe9dc" } }] },
+  { id: "landuse", color: "#cfe3b4", style: [{ type: "fill", paint: {
+      "fill-color": ["match", kind, ["park", "grass", "garden", "forest", "wood"], "#cfe3b4",
+                     ["pitch", "playground"], "#b9dca0", ["pedestrian"], "#e9e3d6",
+                     ["school", "university", "college", "hospital"], "#efdccf", "#e3dccb"],
+      "fill-opacity": 0.85 } }] },
+  { id: "natural", color: "#bcd9a2", style: [{ type: "fill", paint: { "fill-color": "#bcd9a2", "fill-opacity": 0.7 } }] },
+  { id: "water", color: "#9cc6e4", style: [
+      { type: "fill", filter: ["==", ["geometry-type"], "Polygon"], paint: { "fill-color": "#9cc6e4" } },
+      { type: "line", filter: ["==", ["geometry-type"], "LineString"], paint: { "line-color": "#9cc6e4", "line-width": 2 } }] },
+  { id: "roads", color: "#ffffff", style: [
+      { type: "line", suffix: "casing", layout: { "line-cap": "round", "line-join": "round" }, paint: {
+          "line-color": "#c9c3b6",
+          "line-width": ["interpolate", ["linear"], ["zoom"], 12,
+            ["match", kind, "highway", 3, "major_road", 2.5, "medium_road", 2, "path", 0, 1],
+            16, ["match", kind, "highway", 14, "major_road", 12, "medium_road", 10, "path", 0, 7]] } },
+      { type: "line", layout: { "line-cap": "round", "line-join": "round" }, paint: {
+          "line-color": ["match", kind, "highway", "#f6c46b", "major_road", "#fbe3a6", "#ffffff"],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 12,
+            ["match", kind, "highway", 2, "major_road", 1.6, "medium_road", 1.2, 0.6],
+            16, ["match", kind, "highway", 11, "major_road", 9, "medium_road", 7.5, 5]] },
+        filter: ["!=", kind, "path"] },
+      { type: "line", suffix: "paths", filter: ["==", kind, "path"], paint: {
+          "line-color": "#a39c8d", "line-dasharray": [2, 1.5],
+          "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.6, 16, 1.5] } }] },
+  { id: "transit", color: "#8a8fa0", style: [{ type: "line", paint: { "line-color": "#8a8fa0", "line-width": 1.5, "line-dasharray": [3, 2] } }] },
+  { id: "buildings", color: "#d8cfc0", style: [{ type: "fill", paint: { "fill-color": "#d8cfc0", "fill-outline-color": "#bfb4a2" } }] },
+  { id: "pois", color: "#c2553d", style: [
+      { type: "circle", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 14, 1.6, 16, 3.5, 18, 5],
+          "circle-color": "#c2553d", "circle-opacity": ["interpolate", ["linear"], ["zoom"], 14, 0.55, 16, 0.95],
+          "circle-stroke-color": "#fff", "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 14, 0, 16, 1] } },
+      { type: "symbol", suffix: "label", minzoom: 16, layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Regular"],
+          "text-size": 11, "text-offset": [0, 0.9], "text-anchor": "top", "text-optional": true },
+        paint: { "text-color": "#7a3424", "text-halo-color": "#fff", "text-halo-width": 1.2 } }] },
+  { id: "places", color: "#1d2433", style: [{ type: "symbol", layout: { "text-field": ["get", "name"], "text-font": ["Noto Sans Medium"],
+      "text-size": ["match", kind, "locality", 16, 12] },
+      paint: { "text-color": "#1d2433", "text-halo-color": "#fff", "text-halo-width": 1.5 } }] },
+];
+
+const styleLayers = [{ id: "bg", type: "background", paint: { "background-color": "#f4f1ea" } }];
+for (const l of LAYERS) {
+  for (const s of l.style) {
+    const spec = { id: s.suffix ? `${l.id}-${s.suffix}` : l.id + (s.type === "line" && l.id === "water" ? "-line" : ""),
+                   type: s.type, source: src, "source-layer": l.id, paint: s.paint };
+    if (s.layout) spec.layout = s.layout;
+    if (s.filter) spec.filter = s.filter;
+    if (s.minzoom) spec.minzoom = s.minzoom;
+    styleLayers.push(spec);
+  }
+}
+// casing under the road fill
+const ci = styleLayers.findIndex(l => l.id === "roads-casing"), ri = styleLayers.findIndex(l => l.id === "roads");
+if (ci > ri) styleLayers.splice(ri, 0, styleLayers.splice(ci, 1)[0]);
+
+const map = new maplibregl.Map({
+  container: "map", center: [11.2546, 43.7700], zoom: 14.2, hash: true,
+  style: { version: 8, glyphs: "https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf",
+           sources: { [src]: { type: "vector", url: `pmtiles://${url}`,
+             attribution: "© OpenStreetMap contributors, Protomaps · re-tiled by vgi-mvt" } },
+           layers: styleLayers },
+});
+map.addControl(new maplibregl.NavigationControl(), "top-right");
+
+const box = document.getElementById("layers");
+for (const l of LAYERS) {
+  const lab = document.createElement("label");
+  lab.innerHTML = `<input type="checkbox" checked><span class="sw" style="background:${l.color}"></span>${l.id}<span class="n" id="n-${l.id}"></span>`;
+  lab.querySelector("input").addEventListener("change", e => {
+    for (const s of map.getStyle().layers.filter(x => x["source-layer"] === l.id))
+      map.setLayoutProperty(s.id, "visibility", e.target.checked ? "visible" : "none");
+  });
+  box.appendChild(lab);
+}
+function counts() {
+  document.getElementById("zoom").textContent = `zoom ${map.getZoom().toFixed(1)} · features drawn per layer`;
+  for (const l of LAYERS) {
+    const n = map.querySourceFeatures(src, { sourceLayer: l.id }).length;
+    document.getElementById(`n-${l.id}`).textContent = n.toLocaleString();
+  }
+}
+map.on("idle", counts);
+
+const fb = document.getElementById("feature");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+map.on("click", e => {
+  const f = map.queryRenderedFeatures(e.point).find(x => x.sourceLayer);
+  if (!f) { fb.style.display = "none"; return; }
+  const rows = Object.entries(f.properties).filter(([k]) => !k.startsWith("name:")).sort()
+    .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("");
+  fb.innerHTML = `<h2>${esc(f.sourceLayer)} · ${esc(f.geometry.type)}${f.id !== undefined ? " · id " + esc(f.id) : ""}</h2><table>${rows}</table>`;
+  fb.style.display = "block";
+});
+map.on("mousemove", e => { map.getCanvas().style.cursor = map.queryRenderedFeatures(e.point).some(x => x.sourceLayer) ? "pointer" : ""; });
+</script>
+</body>
+</html>

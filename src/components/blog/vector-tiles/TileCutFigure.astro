@@ -1,0 +1,137 @@
+---
+/**
+ * Figure 1: one road, as a tileset stores it and as read_tiles returns it.
+ * Data: src/data/blog/vector-tiles-in-duckdb/tile-cut.json (scripts/vector-tiles-blog/export.py),
+ * real geometry from vgi-mvt reading the Protomaps Florence sample at z15 in raw, clip and
+ * merge mode, in Web Mercator metres.
+ */
+import StepFigure from './StepFigure.astro';
+import { pathData, centre, fmtInt } from './geom';
+import data from '../../../data/blog/vector-tiles-in-duckdb/tile-cut.json';
+import facts from '../../../data/blog/vector-tiles-in-duckdb/facts.json';
+
+const W = 760, H = 480, E = 16; // explode distance, px
+const BUFFER = 19.1; // metres: 4 px of a 256 px tile at z15
+const COLORS = ['#c08e2f', '#5f7a3c', '#c1603b', '#7a9a54'];
+
+const tiles = data.tiles.map((t, i) => ({ ...t, color: COLORS[i % COLORS.length] }));
+const xs = tiles.map(t => t.x), ys = tiles.map(t => t.y);
+const minTx = Math.min(...xs), minTy = Math.min(...ys);
+// The shared corner of the four tiles.
+const corner = tiles.find(t => t.x === minTx + 1 && t.y === minTy + 1)!.bounds; // [minx, miny, maxx, maxy]
+const cx = corner[0], cy = corner[3];
+
+// Viewport: the road plus the corner, padded, at the figure's aspect ratio.
+const merged = data.merged.coordinates.flat(data.merged.type === 'LineString' ? 0 : 1) as number[][];
+let vx0 = Math.min(cx, ...merged.map(p => p[0])), vx1 = Math.max(cx, ...merged.map(p => p[0]));
+let vy0 = Math.min(cy, ...merged.map(p => p[1])), vy1 = Math.max(cy, ...merged.map(p => p[1]));
+const pad = 110;
+vx0 -= pad; vx1 += pad; vy0 -= pad; vy1 += pad;
+const res = Math.max((vx1 - vx0) / (W - 2 * E - 20), (vy1 - vy0) / (H - 2 * E - 20));
+const mx = (vx0 + vx1) / 2, my = (vy0 + vy1) / 2;
+const project = (x: number, y: number): [number, number] => [W / 2 + (x - mx) / res, H / 2 - (y - my) / res];
+const [pcx, pcy] = project(cx, cy);
+
+// Each tile's quadrant of the viewport, and the direction it moves when the tiles part.
+const quads = tiles.map(t => {
+  const left = t.x === minTx, top = t.y === minTy;
+  const rect = {
+    x: left ? 0 : pcx, y: top ? 0 : pcy,
+    w: left ? pcx : W - pcx, h: top ? pcy : H - pcy,
+  };
+  const b = BUFFER / res;
+  const buf = { x: left ? -E : pcx - b, y: top ? -E : pcy - b, w: (left ? pcx + b + E : W - pcx + b + E), h: (top ? pcy + b + E : H - pcy + b + E) };
+  const raw = data.raw.find(p => p.x === t.x && p.y === t.y);
+  const clip = data.clip.find(p => p.x === t.x && p.y === t.y);
+  const context = data.context.filter(c => {
+    const [gx, gy] = centre(c.geometry);
+    return gx >= t.bounds[0] && gx < t.bounds[2] && gy >= t.bounds[1] && gy < t.bounds[3];
+  });
+  return {
+    ...t, rect, buf, dx: left ? -E : E, dy: top ? -E : E, left, top,
+    raw: raw ? pathData(raw.geometry, project) : null,
+    clip: clip ? pathData(clip.geometry, project) : null,
+    context: context.map(c => ({ kind: c.kind, d: pathData(c.geometry, project) })),
+  };
+});
+const bufferOnly = quads.find(q => q.raw && !q.clip);
+const mergedPath = pathData(data.merged, project);
+const roads = facts.roads_z14;
+
+const steps = [
+  `<strong>${data.road}</strong>, one road in Florence, ${fmtInt(facts.tile_cut.length_m)} m long. Four z15 tiles meet under it.`,
+  `The tileset stores it once per tile it touches: <strong>${facts.tile_cut.pieces_raw} pieces</strong>. Each runs past its tile's edge into a ${Math.round(BUFFER)} m buffer (4 pixels at 256), dashed here, so renderers don't clip lines at tile seams.`,
+  `One of the four is only a buffer copy: a few metres of road inside the margin of a tile it never enters. <code>tile_edges := 'raw'</code> returns all ${facts.tile_cut.pieces_raw} as rows.`,
+  `<code>tile_edges := 'clip'</code> cuts each piece back to its own tile. The buffer copy disappears: <strong>${facts.tile_cut.pieces_clip} pieces</strong>, none overlapping.`,
+  `<code>tile_edges := 'merge'</code>, the default, joins pieces that share a layer, id and properties where they meet: <strong>one row</strong> again. Across the whole roads layer at z14, ${fmtInt(roads.raw.rows)} stored rows become ${fmtInt(roads.merge.rows)}, one per feature.`,
+];
+---
+
+<StepFigure id="fig-tile-cut" steps={steps} label="Animation: one road cut into tiles and joined back into one row">
+  <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-labelledby="fig-tile-cut-title">
+    <title id="fig-tile-cut-title">{`${data.road} in Florence crosses the corner where four z15 tiles meet. The tileset stores it as ${facts.tile_cut.pieces_raw} pieces, one per tile, each extending ${Math.round(BUFFER)} metres past its tile edge; one piece lies only in a tile's buffer. Clipping leaves ${facts.tile_cut.pieces_clip} pieces; merging joins them into one ${facts.tile_cut.length_m} metre line.`}</title>
+    <defs>
+      {quads.map((q, i) => (
+        <clipPath id={`tc-clip-${i}`}><rect x={q.rect.x} y={q.rect.y} width={q.rect.w} height={q.rect.h} /></clipPath>
+      ))}
+    </defs>
+    <rect width={W} height={H} fill="#f4efe3" />
+    {quads.map((q, i) => (
+      <g class="tc-tile vt-anim" style={`--dx:${q.dx}px; --dy:${q.dy}px`}>
+        <rect class="tc-paper" x={q.rect.x} y={q.rect.y} width={q.rect.w} height={q.rect.h} />
+        <g clip-path={`url(#tc-clip-${i})`} class="tc-context">
+          {q.context.map(c => <path d={c.d} class={`tc-road tc-${c.kind}`} />)}
+        </g>
+        <rect class="tc-buffer vt-anim" x={q.buf.x} y={q.buf.y} width={q.buf.w} height={q.buf.h} />
+        <rect class="tc-edge" x={q.rect.x} y={q.rect.y} width={q.rect.w} height={q.rect.h} />
+        {q.raw && <path d={q.raw} class={`tc-raw vt-anim ${q === bufferOnly ? 'tc-only-buffer' : ''}`} style={`stroke:${q.color}`} />}
+        {q.clip && <path d={q.clip} class="tc-clip vt-anim" style={`stroke:${q.color}`} />}
+        <text class="tc-label" x={q.left ? q.rect.x + E + 10 : q.rect.x + q.rect.w - E - 10} y={q.top ? q.rect.y + E + 20 : q.rect.y + q.rect.h - E - 12} text-anchor={q.left ? 'start' : 'end'}>
+          {`15/${q.x}/${q.y}`}
+        </text>
+      </g>
+    ))}
+    {bufferOnly && bufferOnly.raw && (
+      <g class="tc-callout vt-anim" style={`--dx:${bufferOnly.dx}px; --dy:${bufferOnly.dy}px`}>
+        <circle cx={project(...(data.raw.find(p => p.x === bufferOnly.x && p.y === bufferOnly.y)!.geometry.coordinates[0] as [number, number]))[0]}
+                cy={project(...(data.raw.find(p => p.x === bufferOnly.x && p.y === bufferOnly.y)!.geometry.coordinates[0] as [number, number]))[1]}
+                r="26" />
+      </g>
+    )}
+    <path d={mergedPath} class="tc-merged vt-anim" />
+  </svg>
+  <figcaption slot="caption">Real geometry: vgi-mvt reading the <a href="https://github.com/protomaps/PMTiles/tree/main/spec/v3">Protomaps Florence sample</a> at z15 in each <code>tile_edges</code> mode. Web Mercator, about {Math.round((vx1 - vx0) / 10) * 10} m across.</figcaption>
+</StepFigure>
+
+<style is:global>
+  #fig-tile-cut .tc-paper { fill: #fbf8f1; }
+  #fig-tile-cut .tc-edge { fill: none; stroke: var(--color-soil-300); stroke-width: 1; }
+  #fig-tile-cut .tc-buffer { fill: none; stroke: var(--color-soil-600); stroke-width: 1; stroke-dasharray: 4 4; opacity: 0; }
+  #fig-tile-cut .tc-road { fill: none; stroke: #ddd3c1; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.2; }
+  #fig-tile-cut .tc-major_road, #fig-tile-cut .tc-highway { stroke-width: 4; stroke: #e2cfa6; }
+  #fig-tile-cut .tc-medium_road { stroke-width: 3; }
+  #fig-tile-cut .tc-label { font: 500 12px var(--font-mono); fill: var(--color-soil-600); }
+  #fig-tile-cut .tc-raw, #fig-tile-cut .tc-clip { fill: none; stroke-width: 9; stroke-linecap: round; stroke-linejoin: round; opacity: 0; }
+  #fig-tile-cut .tc-clip { stroke-width: 9; }
+  #fig-tile-cut .tc-merged { fill: none; stroke: var(--color-soil-900); stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
+  #fig-tile-cut .tc-callout circle { fill: none; stroke: var(--color-soil-900); stroke-width: 1.6; stroke-dasharray: 3 3; }
+  #fig-tile-cut .tc-callout { opacity: 0; }
+
+  /* Step 1 on: tiles part, pieces and buffers show, the joined road fades. */
+  #fig-tile-cut.vt-s1 .tc-tile { transform: translate(var(--dx), var(--dy)); }
+  #fig-tile-cut.vt-s1 .tc-buffer { opacity: 0.9; }
+  #fig-tile-cut.vt-s1 .tc-raw { opacity: 0.95; }
+  #fig-tile-cut.vt-s1 .tc-merged { opacity: 0; }
+  /* Step 2: point at the buffer-only piece. */
+  #fig-tile-cut.vt-s2 .tc-callout { opacity: 1; transform: translate(var(--dx), var(--dy)); }
+  /* Step 3: clip — raw pieces give way to clipped ones. */
+  #fig-tile-cut.vt-s3 .tc-raw { opacity: 0; }
+  #fig-tile-cut.vt-s3 .tc-clip { opacity: 0.95; }
+  #fig-tile-cut.vt-s3 .tc-callout { opacity: 0; }
+  /* Step 4: merge — tiles close up, one road again. */
+  #fig-tile-cut.vt-s4 .tc-tile { transform: none; }
+  #fig-tile-cut.vt-s4 .tc-buffer { opacity: 0; }
+  #fig-tile-cut.vt-s4 .tc-clip { opacity: 0; }
+  #fig-tile-cut.vt-s4 .tc-merged { opacity: 1; }
+  #fig-tile-cut:not(.vt-s1) .tc-merged { opacity: 1; }
+</style>

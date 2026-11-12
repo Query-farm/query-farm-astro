@@ -1,0 +1,162 @@
+---
+/**
+ * An animated figure for the vector-tiles post: an SVG stage that moves through a
+ * fixed sequence of steps, each with one sentence of narration.
+ *
+ * - Server-rendered in its final step, so without JavaScript, or with
+ *   prefers-reduced-motion, the reader sees the finished picture and every step's
+ *   sentence as a list (DESIGN_BRIEF.md §8).
+ * - With JavaScript it plays once when half of it scrolls into view, then stops on the
+ *   last step. It never loops. Back, forward and replay are always available.
+ * - Steps drive CSS classes on the figure: `vt-s1` … `vt-sN` are present for every step
+ *   reached, so a stage's rules read "from step 2 on, show this".
+ */
+interface Props {
+  id: string;
+  steps: string[];
+  /** Milliseconds per step when playing. */
+  interval?: number;
+  label: string;
+}
+const { id, steps, interval = 2600, label } = Astro.props;
+const last = steps.length - 1;
+const reached = Array.from({ length: last + 1 }, (_, i) => `vt-s${i}`).join(' ');
+---
+
+<figure class={`vt-fig ${reached}`} id={id} data-vt-stepper data-step={last} data-interval={interval} aria-label={label}>
+  <div class="vt-stage">
+    <slot />
+  </div>
+  <div class="vt-bar" hidden>
+    <button type="button" class="vt-btn" data-vt="prev" aria-label="Previous step">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5" /></svg>
+    </button>
+    <button type="button" class="vt-btn vt-play" data-vt="play" aria-label="Play">
+      <svg class="i-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3v10l8-5z" /></svg>
+      <svg class="i-pause" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3v10M11 3v10" /></svg>
+      <svg class="i-replay" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8a4.5 4.5 0 1 0 1.3-3.2M3.5 2.5v2.8h2.8" /></svg>
+    </button>
+    <button type="button" class="vt-btn" data-vt="next" aria-label="Next step">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5" /></svg>
+    </button>
+    <span class="vt-count qf-figure" aria-hidden="true"><span data-vt="n">{last + 1}</span> / {last + 1}</span>
+  </div>
+  <ol class="vt-steps">
+    {steps.map((s, i) => <li data-i={i} set:html={s} />)}
+  </ol>
+  <slot name="caption" />
+</figure>
+
+<script>
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  for (const fig of document.querySelectorAll<HTMLElement>('[data-vt-stepper]')) {
+    const items = [...fig.querySelectorAll<HTMLLIElement>('.vt-steps li')];
+    const last = items.length - 1;
+    const bar = fig.querySelector<HTMLElement>('.vt-bar')!;
+    const play = fig.querySelector<HTMLButtonElement>('[data-vt="play"]')!;
+    const prev = fig.querySelector<HTMLButtonElement>('[data-vt="prev"]')!;
+    const next = fig.querySelector<HTMLButtonElement>('[data-vt="next"]')!;
+    const n = fig.querySelector<HTMLElement>('[data-vt="n"]')!;
+    const interval = Number(fig.dataset.interval) || 2600;
+    let step = last;
+    let timer: number | undefined;
+
+    fig.classList.add('vt-js');
+    bar.hidden = false;
+    items.forEach(li => li.setAttribute('aria-live', 'off'));
+    fig.querySelector('.vt-steps')!.setAttribute('aria-live', 'polite');
+
+    const show = (i: number) => {
+      step = Math.max(0, Math.min(last, i));
+      fig.dataset.step = String(step);
+      for (let k = 0; k <= last; k++) fig.classList.toggle(`vt-s${k}`, k <= step);
+      items.forEach((li, k) => (li.hidden = k !== step));
+      n.textContent = String(step + 1);
+      prev.disabled = step === 0;
+      next.disabled = step === last;
+      fig.dataset.playing = timer === undefined ? 'false' : 'true';
+      fig.dataset.atEnd = step === last ? 'true' : 'false';
+      play.setAttribute('aria-label', timer !== undefined ? 'Pause' : step === last ? 'Replay' : 'Play');
+    };
+    const stop = () => {
+      if (timer !== undefined) window.clearInterval(timer);
+      timer = undefined;
+      show(step);
+    };
+    const start = () => {
+      if (step === last) show(0);
+      timer = window.setInterval(() => {
+        if (step >= last - 1) {
+          show(last);
+          stop();
+        } else show(step + 1);
+      }, interval);
+      show(step);
+    };
+
+    play.addEventListener('click', () => (timer !== undefined ? stop() : start()));
+    prev.addEventListener('click', () => { stop(); show(step - 1); });
+    next.addEventListener('click', () => { stop(); show(step + 1); });
+    show(last);
+
+    if (!reduce.matches && 'IntersectionObserver' in window) {
+      const seen = new IntersectionObserver(entries => {
+        if (entries.some(e => e.isIntersecting)) {
+          seen.disconnect();
+          show(0);
+          window.setTimeout(start, 700);
+        }
+      }, { threshold: 0.5 });
+      seen.observe(fig);
+    }
+  }
+</script>
+
+<style is:global>
+  .vt-fig { margin: 2.25rem 0; }
+  .vt-stage {
+    background: var(--color-soil-50);
+    border: 1px solid var(--color-soil-200);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .vt-stage svg { display: block; width: 100%; height: auto; }
+  .vt-bar {
+    display: flex; align-items: center; gap: 0.35rem;
+    margin-top: 0.6rem;
+  }
+  .vt-bar[hidden] { display: none; }
+  .vt-btn {
+    display: inline-grid; place-items: center;
+    width: 2rem; height: 2rem; border-radius: 999px;
+    border: 1px solid var(--color-soil-300); background: #fff; color: var(--color-soil-900);
+    cursor: pointer;
+  }
+  .vt-btn:hover:not(:disabled) { border-color: var(--color-soil-600); }
+  .vt-btn:focus-visible { outline: 2px solid var(--color-sun-500); outline-offset: 2px; }
+  .vt-btn:disabled { opacity: 0.35; cursor: default; }
+  .vt-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .vt-play svg path { fill: currentColor; }
+  .vt-play .i-pause path, .vt-play .i-replay path { fill: none; }
+  .vt-play .i-pause, .vt-play .i-replay { display: none; }
+  .vt-fig[data-playing="true"] .vt-play .i-play { display: none; }
+  .vt-fig[data-playing="true"] .vt-play .i-pause { display: block; }
+  .vt-fig[data-playing="false"][data-at-end="true"] .vt-play .i-play { display: none; }
+  .vt-fig[data-playing="false"][data-at-end="true"] .vt-play .i-replay { display: block; }
+  .vt-count { margin-left: 0.4rem; font-size: 0.8rem; color: var(--color-soil-600); }
+  .vt-steps {
+    list-style: none; padding: 0; margin: 0.5rem 0 0;
+    font-size: 0.95rem; line-height: 1.5; color: var(--color-soil-900);
+  }
+  .vt-fig:not(.vt-js) .vt-steps { list-style: decimal; padding-left: 1.4rem; }
+  .vt-fig.vt-js .vt-steps li { min-height: 3em; }
+  .vt-steps code { font-size: 0.85em; }
+  .vt-fig figcaption { margin-top: 0.4rem; font-size: 0.85rem; color: var(--color-soil-600); }
+
+  /* Shared stage motion. Each figure's own rules use these timings. */
+  .vt-fig .vt-anim { transition: opacity 600ms ease, transform 900ms cubic-bezier(.3, .7, .2, 1), stroke-dashoffset 1800ms ease; }
+  @media (prefers-reduced-motion: reduce) {
+    .vt-fig .vt-anim { transition: none !important; }
+  }
+</style>
