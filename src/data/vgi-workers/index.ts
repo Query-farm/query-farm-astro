@@ -605,10 +605,14 @@ if (unclassified.length) {
 // …and every worker inventory.toml includes (listed yet or not) already has a category,
 // so adding a repo there without classifying it fails the build instead of shipping an
 // unclassified card after the next harvest.
+/** Every worker inventory.toml includes: built, whether or not it's listed yet. */
+const inventorySlugs = [
+  ...(inventoryToml.split(/^\[exclude\]/m)[0].split(/^\[include\]/m)[1] ?? '').matchAll(/^vgi-([\w.-]+)\s*=/gm),
+].map(m => m[1]);
+/** "Workers built" figure for marketing copy (/vgi), so it tracks the inventory instead of drifting. */
+export const builtWorkerCount = inventorySlugs.length;
 {
-  const include = inventoryToml.split(/^\[exclude\]/m)[0].split(/^\[include\]/m)[1] ?? '';
-  const slugs = [...include.matchAll(/^vgi-([\w.-]+)\s*=/gm)].map(m => m[1]);
-  const missing = slugs.filter(s => categoriesFor(s).length === 0);
+  const missing = inventorySlugs.filter(s => categoriesFor(s).length === 0);
   if (missing.length) {
     throw new Error(`Orchard taxonomy: inventory.toml includes workers with no category: ${missing.join(', ')} — add them to src/data/vgi-workers/taxonomy.mjs`);
   }
