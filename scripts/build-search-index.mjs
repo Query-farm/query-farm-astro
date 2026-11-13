@@ -130,7 +130,7 @@ async function main() {
         content: [d.title, d.text, d.keywords].filter(Boolean).join(' — '),
         language: 'en',
         filters: { kind: ['function'] },
-        meta: { title: d.title, extension: d.workerName ?? `vgi-${d.worker}`, kind: d.type === 'table' || d.type === 'view' ? 'Table' : 'Function' },
+        meta: { title: d.title, extension: d.workerName ?? `vgi-${d.worker}`, kind: d.type === 'table' || d.type === 'view' ? 'Table' : d.type === 'copy format' ? 'COPY format' : 'Function' },
       });
       workerObjects++;
     }

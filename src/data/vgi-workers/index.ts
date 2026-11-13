@@ -26,6 +26,59 @@ const rawResults = (resultFiles['./results.generated.json'] ?? { workers: {} }) 
   workers: Record<string, { captured_at: string; results: Record<string, RawResult> }>;
 };
 export type SampleResult = RawResult & { capturedAt: string };
+
+// COPY ... FROM / COPY ... TO formats each worker registers (scripts/vgi-workers/copy-formats.py,
+// read from vgi_copy_formats()), keyed by repo. The fleet dump doesn't record them.
+const copyFiles = import.meta.glob('./copy-formats.generated.json', { eager: true, import: 'default' });
+type RawCopyFormat = {
+  name: string;
+  direction: 'from' | 'to' | 'both';
+  ordered: boolean;
+  description: string;
+  comment: string;
+  tags: Record<string, string>;
+  handler: string;
+  options: { name: string; type: string; description: string }[];
+};
+const rawCopy = (copyFiles['./copy-formats.generated.json'] ?? { workers: {} }) as {
+  workers: Record<string, { catalog?: string; formats?: RawCopyFormat[]; error?: string }>;
+};
+export interface CopyFormat {
+  /** As advertised by the worker, e.g. `pmtiles`. */
+  name: string;
+  /** What to type in FORMAT: scoped by the ATTACH alias the page uses (the catalog name). */
+  format: string;
+  reads: boolean;
+  writes: boolean;
+  title: string;
+  summary: string;
+  docMd: string;
+  options: { name: string; type: string; description: string }[];
+  examples: { description: string; sql: string }[];
+  anchor: string;
+}
+
+function copyFormatsFor(repo: string, catalog: string): CopyFormat[] {
+  return (rawCopy.workers[repo]?.formats ?? []).map(f => {
+    let examples: { description: string; sql: string }[] = [];
+    try {
+      const ex = JSON.parse(f.tags['vgi.example_queries'] ?? '[]');
+      if (Array.isArray(ex)) examples = ex.filter(e => e && typeof e.sql === 'string').map(e => ({ description: String(e.description ?? ''), sql: e.sql }));
+    } catch { /* malformed tag: show the generated skeleton instead */ }
+    return {
+      name: f.name,
+      format: `${catalog}.${f.name}`,
+      reads: f.direction === 'from' || f.direction === 'both',
+      writes: f.direction === 'to' || f.direction === 'both',
+      title: f.tags['vgi.title'] ?? '',
+      summary: f.comment || f.description,
+      docMd: f.tags['vgi.doc_md'] ?? '',
+      options: f.options,
+      examples,
+      anchor: `copy-${f.name}`,
+    };
+  });
+}
 // Hand-picked "what you get" queries (showcase.json), keyed by slug.
 const SHOWCASE = showcaseFile as unknown as Record<string, { title: string; sql: string } | string>;
 
@@ -104,6 +157,8 @@ export interface Worker extends WorkerRecord {
   };
   /** Full secret-type declarations; empty when the worker needs none or none were harvested. */
   credentials: Credential[];
+  /** Custom COPY formats (readers and writers) the worker registers on ATTACH. */
+  copyFormats: CopyFormat[];
 }
 
 const PLATFORM_LABEL: Record<Platform, string> = {
@@ -546,6 +601,8 @@ function enrich(w: WorkerRecord): Worker {
     functions && 'scalar functions',
     macros && 'macros',
   ].filter(Boolean) as string[];
+  const copyFormats = copyFormatsFor(w.repo, w.catalog);
+  if (copyFormats.length) surfaces.push('copy formats');
   // Declared, not guessed: a secret type or a required/secret ATTACH option.
   const secretTypes = w.secret_types ?? [];
   const needsCredentials = secretTypes.length > 0 || w.attach_options.some(o => o.required || (o as { secret?: boolean }).secret);
@@ -572,6 +629,7 @@ function enrich(w: WorkerRecord): Worker {
     totals: { tables, functions, tableFunctions, macros },
     facets: { surfaces, needsCredentials, secretTypes: secretTypes.map(t => t.name), indexed: w.harvest?.status === 'ok' },
     credentials: credentialsFor(w),
+    copyFormats,
   };
 }
 
@@ -692,6 +750,21 @@ export function searchDocuments() {
         keywords: o.signature,
         fields: o.fields,
         anchor: o.anchor,
+        category: w.categoryIds.join(' '),
+        language: w.language,
+      });
+    }
+    for (const f of w.copyFormats) {
+      docs.push({
+        id: `c:${w.slug}:${f.name}`,
+        type: 'copy format',
+        worker: w.slug,
+        workerName: w.name,
+        title: f.format,
+        text: [f.title, f.summary].filter(Boolean).join(' — '),
+        keywords: [f.reads && 'COPY FROM import read', f.writes && 'COPY TO export write', f.name].filter(Boolean).join(' '),
+        fields: f.options.map(o => `${o.name} ${o.description}`).join(' '),
+        anchor: f.anchor,
         category: w.categoryIds.join(' '),
         language: w.language,
       });
