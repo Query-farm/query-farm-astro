@@ -162,7 +162,7 @@ const NAME_OVERRIDES: Record<string, string> = {
   nba: 'NBA', nfl: 'NFL', nhl: 'NHL', ufc: 'UFC', nascar: 'NASCAR', f1: 'Formula 1',
   'ncaa-basketball': 'NCAA basketball', 'ncaa-football': 'NCAA football', 'us-soccer': 'US soccer',
   // Workers in inventory.toml not yet listed (private or unreleased), named ahead of time.
-  adbc: 'ADBC', mvt: 'Vector tiles (MVT)', cdc: 'Postgres CDC', graphql: 'GraphQL', grpc: 'gRPC',
+  mvt: 'Vector tiles (MVT)', cdc: 'Postgres CDC', graphql: 'GraphQL', grpc: 'gRPC',
   ldap: 'LDAP', scim: 'SCIM', soap: 'SOAP', opa: 'OPA', fsm: 'State machines', kinesis: 'Kinesis',
 };
 export function workerName(slug: string): string {

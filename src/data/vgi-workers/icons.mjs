@@ -33,7 +33,7 @@ export const workerIcons = {
   'azure-resourcegraph': 'ph:graph', 'azure-governance': 'ph:gavel', 'azure-cost': 'ph:currency-dollar',
   'azure-files': 'ph:folder-open', github: 'ph:git-branch',
   // Databases & enterprise
-  adbc: 'ph:database', elasticsearch: 'ph:magnifying-glass-plus', odata: 'ph:plugs-connected',
+  elasticsearch: 'ph:magnifying-glass-plus', odata: 'ph:plugs-connected',
   cdc: 'ph:arrows-clockwise', kinesis: 'ph:wave-sine', graphql: 'ph:share-network',
   grpc: 'ph:plugs', soap: 'ph:envelope', ldap: 'ph:tree-structure', scim: 'ph:users-three', cache: 'ph:lightning',
   // AI & language

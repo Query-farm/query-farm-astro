@@ -45,7 +45,7 @@ export const categories = [
   {
     id: 'enterprise', group: 'sources', name: 'Databases & enterprise', icon: 'ph:database', tint: 'slate',
     description: 'Other databases, search clusters, streams, directories and enterprise APIs.',
-    members: 'adbc elasticsearch odata cdc kinesis graphql grpc soap ldap scim cache',
+    members: 'elasticsearch odata cdc kinesis graphql grpc soap ldap scim cache',
   },
   // ── Work on your data ──────────────────────────────────────────────────────
   {
