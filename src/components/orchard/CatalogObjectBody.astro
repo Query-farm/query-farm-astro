@@ -7,6 +7,8 @@
 import { marked } from 'marked';
 import { objectExamples } from '../../data/vgi-workers';
 import ObjectExamples from './ObjectExamples.astro';
+import TypeTree from './TypeTree.astro';
+import { isComplexType, typeLabel, parseResultVariants } from '../../data/vgi-workers/types';
 import type { WorkerFunction, WorkerTable } from '../../data/vgi-workers/schema';
 
 type Props =
@@ -34,6 +36,15 @@ if (t) {
 const pos = rich?.arguments.filter(a => !a.named) ?? [];
 const named = rich?.arguments.filter(a => a.named) ?? [];
 const exs = t ? objectExamples([t]) : objectExamples(group!);
+
+// Table functions: the result schema the worker declares — static
+// (vgi.result_columns_schema, harvested as result_columns) or one table per
+// variant when it depends on the arguments (vgi.result_dynamic_columns_md).
+const isTableFn = rich ? ['table', 'table_in_out'].includes(rich.kind) : false;
+const staticCols = isTableFn ? (group!.find(g => g.result_columns.length)?.result_columns ?? []) : [];
+const variants = isTableFn
+  ? parseResultVariants(group!.map(g => (g.tags as Record<string, unknown> | null)?.['vgi.result_dynamic_columns_md']).find(Boolean))
+  : [];
 ---
 
 <div class="vbody">
@@ -46,9 +57,10 @@ const exs = t ? objectExamples([t]) : objectExamples(group!);
           <div class="vcol">
             <div class="vcol-line">
               <span class="vcol-name">{col.name}{col.nullable === false && <span class="vnn" title="NOT NULL">not null</span>}</span>
-              <span class="vcol-type">{col.type}</span>
+              <span class="vcol-type">{typeLabel(col.type)}</span>
             </div>
             {col.comment && <div class="vcol-comment">{col.comment}</div>}
+            {isComplexType(col.type) && <TypeTree type={col.type} />}
           </div>
         ))}
       </div>
@@ -68,7 +80,7 @@ const exs = t ? objectExamples([t]) : objectExamples(group!);
               <div class="vcol">
                 <div class="vcol-line">
                   <span class="vcol-name">{a.name}{a.named && <span class="vargk"> :=</span>}</span>
-                  {a.type && <span class="vcol-type">{a.type}</span>}
+                  {a.type && <span class="vcol-type">{typeLabel(a.type)}</span>}
                 </div>
                 {(a.description || a.default != null) && (
                   <div class="vcol-comment">
@@ -77,6 +89,7 @@ const exs = t ? objectExamples([t]) : objectExamples(group!);
                     {a.default != null && <span class="vdef">default {String(a.default)}</span>}
                   </div>
                 )}
+                {isComplexType(a.type) && <TypeTree type={a.type} />}
               </div>
             ))}
           </div>
@@ -87,11 +100,52 @@ const exs = t ? objectExamples([t]) : objectExamples(group!);
     <>
       <div class="vlabel">Overloads</div>
       <div class="vover-list">
-        {group.map(o => <code>{o.name}({o.arguments.map(a => [a.name, a.type].filter(Boolean).join(' ')).join(', ')}){o.return_type ? ` → ${o.return_type}` : ''}</code>)}
+        {group.map(o => <code>{o.name}({o.arguments.map(a => [a.name, typeLabel(a.type)].filter(Boolean).join(' ')).join(', ')}){o.return_type ? ` → ${typeLabel(o.return_type)}` : ''}</code>)}
       </div>
     </>
   )}
-  {rich?.return_type && <div class="vreturns"><b>Returns</b><span class="vrtype">{rich.return_type}</span></div>}
+  {staticCols.length > 0 && (
+    <>
+      <div class="vlabel">Returns columns</div>
+      <div class="vcols">
+        {staticCols.map(col => (
+          <div class="vcol">
+            <div class="vcol-line">
+              <span class="vcol-name">{col.name}</span>
+              {col.type && <span class="vcol-type">{typeLabel(col.type)}</span>}
+            </div>
+            {col.description && <div class="vcol-comment">{col.description}</div>}
+            {isComplexType(col.type) && <TypeTree type={col.type} />}
+          </div>
+        ))}
+      </div>
+    </>
+  )}
+  {variants.length > 0 && (
+    <>
+      <div class="vlabel">Returns columns · depends on the arguments</div>
+      {variants.map(v => (
+        <div class="vvariant">
+          {v.caption && <div class="vvariant-cap">{v.caption}</div>}
+          <div class="vcols">
+            {v.columns.map(col => (
+              <div class="vcol">
+                <div class="vcol-line">
+                  <span class="vcol-name">{col.name}</span>
+                  {col.type && <span class="vcol-type">{typeLabel(col.type)}</span>}
+                </div>
+                {col.description && <div class="vcol-comment">{col.description}</div>}
+                {isComplexType(col.type) && <TypeTree type={col.type} />}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </>
+  )}
+  {rich?.return_type && (
+    <div class="vreturns"><b>Returns</b><span class="vrtype">{typeLabel(rich.return_type)}</span>{isComplexType(rich.return_type) && <TypeTree type={rich.return_type} />}</div>
+  )}
   <ObjectExamples examples={exs} />
   <div class="vactions"><button type="button" class="vcopy" data-sql={sql}>Copy SQL</button><a class="vlink" href={`#${anchor}`}>Link</a></div>
 </div>
@@ -122,6 +176,9 @@ const exs = t ? objectExamples([t]) : objectExamples(group!);
   .vreturns { margin-top: 10px; font-size: 12.5px; color: var(--muted); font-family: var(--font-mono); overflow-wrap: anywhere; }
   .vreturns b { color: var(--ink); font-family: var(--font-sans); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; margin-right: 8px; }
   .vrtype { color: var(--type-color); }
+  .vvariant { margin-top: 6px; }
+  .vvariant + .vvariant { margin-top: 10px; }
+  .vvariant-cap { font-size: 12px; font-weight: 600; color: var(--ink); margin-bottom: 4px; }
   .vactions { display: flex; gap: 8px; margin-top: 10px; }
   .vcopy, .vlink { font-size: 12px; border: 1px solid var(--line); border-radius: 6px; padding: 2px 9px; background: white; color: var(--color-soil-700); text-decoration: none; cursor: pointer; }
   .vcopy:hover, .vlink:hover { border-color: var(--color-sun-400); color: var(--ink); }

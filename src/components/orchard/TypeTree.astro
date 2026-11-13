@@ -1,0 +1,105 @@
+---
+// A nested DuckDB type drawn as a tree. A UNION lists each branch on its own
+// row (collapsible, with its field names as the summary, so a 42-branch union
+// stays scannable); a STRUCT lists its fields; nested types indent beneath their
+// parent, and lists keep their [] suffix. Simple types render as plain mono text.
+import { parseType, type TypeNode } from '../../data/vgi-workers/types';
+
+interface Props {
+  type?: string | null;
+  node?: TypeNode;
+  /** Set by the parent when this STRUCT is a union branch whose summary already counts its fields. */
+  bare?: boolean;
+}
+const node: TypeNode = Astro.props.node ?? parseType(Astro.props.type);
+const bare = Astro.props.bare ?? false;
+const inner = (n: TypeNode): TypeNode => (n.kind === 'list' ? inner(n.of) : n);
+const suffix = (n: TypeNode): string => (n.kind === 'list' ? suffix(n.of) + n.suffix : '');
+const core = inner(node);
+const fields = core.kind === 'union' || core.kind === 'struct' ? core.fields : [];
+const shortName = (n: TypeNode): string => {
+  const c = inner(n);
+  const s = suffix(n);
+  if (c.kind === 'union') return `UNION${s}`;
+  if (c.kind === 'struct') return `STRUCT${s}`;
+  return c.raw + s;
+};
+const fieldsOf = (n: TypeNode) => {
+  const c = inner(n);
+  return c.kind === 'union' || c.kind === 'struct' ? c.fields : [];
+};
+// Few branches: show them open; many: one line each until opened.
+const openBranches = fields.length <= 4;
+---
+
+{core.kind === 'simple' ? (
+  <span class="tt-simple">{node.raw}</span>
+) : core.kind === 'union' ? (
+  <div class="tt tt-union">
+    <div class="tt-head">
+      <span class="tt-kind">UNION{suffix(node)}</span>
+      <span class="tt-note">one of {fields.length} {fields.length === 1 ? 'branch' : 'branches'} · pick one with <code>union_value(&lt;branch&gt; := …)</code></span>
+    </div>
+    <ul class="tt-list">
+      {fields.map(f => {
+        const sub = fieldsOf(f.type);
+        return (
+          <li class="tt-item">
+            {sub.length === 0 ? (
+              <div class="tt-line"><span class="tt-branch">{f.name}</span><span class="tt-type">{shortName(f.type)}</span></div>
+            ) : (
+              <details class="tt-br" open={openBranches || undefined}>
+                <summary>
+                  <span class="tt-caret" aria-hidden="true">▸</span>
+                  <span class="tt-branch">{f.name}</span>
+                  <span class="tt-fields">{sub.map(x => x.name).join(' · ')}</span>
+                  <span class="tt-type">{shortName(f.type)}</span>
+                </summary>
+                <Astro.self node={f.type} bare />
+              </details>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  </div>
+) : (
+  <div class={`tt tt-struct${bare ? ' tt-bare' : ''}`}>
+    {!bare && (
+      <div class="tt-head">
+        <span class="tt-kind">STRUCT{suffix(node)}</span>
+        <span class="tt-note">{fields.length} {fields.length === 1 ? 'field' : 'fields'}</span>
+      </div>
+    )}
+    <ul class="tt-list">
+      {fields.map(f => (
+        <li class="tt-item">
+          <div class="tt-line"><span class="tt-field">{f.name}</span><span class="tt-type">{shortName(f.type)}</span></div>
+          {inner(f.type).kind !== 'simple' && <Astro.self node={f.type} />}
+        </li>
+      ))}
+    </ul>
+  </div>
+)}
+
+<style>
+  .tt { margin-top: 6px; border-left: 2px solid color-mix(in srgb, var(--type-color, #0e7c86) 35%, transparent); padding-left: 10px; }
+  .tt-bare { margin-top: 4px; }
+  .tt-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 11.5px; }
+  .tt-kind { font-family: var(--font-mono); font-weight: 650; color: var(--type-color, #0e7c86); }
+  .tt-note { color: var(--muted, #6b5e4b); }
+  .tt-note code { font-family: var(--font-mono); font-size: 11px; background: var(--color-soil-100); padding: 0 4px; border-radius: 3px; }
+  .tt-list { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+  .tt-union > .tt-list > .tt-item { border: 1px solid color-mix(in srgb, var(--type-color, #0e7c86) 22%, var(--line, #d9cfbf)); border-radius: 6px; padding: 4px 8px; background: white; }
+  .tt-line { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; }
+  .tt-br > summary { display: flex; align-items: baseline; gap: 8px; cursor: pointer; list-style: none; }
+  .tt-br > summary::-webkit-details-marker { display: none; }
+  .tt-caret { font-size: 10px; color: var(--muted, #6b5e4b); transition: transform .15s; display: inline-block; }
+  .tt-br[open] > summary .tt-caret { transform: rotate(90deg); }
+  .tt-fields { flex: 1 1 auto; min-width: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted, #6b5e4b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tt-br[open] > summary .tt-fields { visibility: hidden; }
+  .tt-branch { font-family: var(--font-mono); font-size: 12px; font-weight: 650; color: var(--ink, #2b2116); flex: none; }
+  .tt-field { font-family: var(--font-mono); font-size: 12px; color: var(--ink, #2b2116); }
+  .tt-type, .tt-simple { font-family: var(--font-mono); font-size: 12px; color: var(--type-color, #0e7c86); overflow-wrap: anywhere; text-align: right; flex: none; }
+  @media (max-width: 639px) { .tt-fields { display: none; } }
+</style>

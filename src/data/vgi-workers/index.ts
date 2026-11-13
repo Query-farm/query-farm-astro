@@ -754,6 +754,20 @@ export function searchDocuments() {
         language: w.language,
       });
     }
+    for (const st of w.settings) {
+      docs.push({
+        id: `s:${w.slug}:${st.name}`,
+        type: 'setting',
+        worker: w.slug,
+        workerName: w.name,
+        title: st.name,
+        text: st.description ?? '',
+        keywords: `SET setting ${st.type ?? ''}`,
+        anchor: `setting-${st.name}`,
+        category: w.categoryIds.join(' '),
+        language: w.language,
+      });
+    }
     for (const f of w.copyFormats) {
       docs.push({
         id: `c:${w.slug}:${f.name}`,

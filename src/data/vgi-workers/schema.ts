@@ -40,6 +40,8 @@ export const functionSchema = z.object({
   return_type: str,
   arguments: z.array(argumentSchema).default([]),
   examples: z.array(z.string()).default([]),
+  /** Table functions: the static result schema the worker declares (vgi.result_columns_schema). */
+  result_columns: z.array(z.object({ name: str, type: str, description: str })).default([]),
 });
 
 export const schemaSchema = z.object({
@@ -115,7 +117,7 @@ export const workerRecordSchema = z.object({
   example_queries: z.array(exampleSchema).default([]),
   agent_tasks: z.array(z.string()).default([]),
   settings: z
-    .array(z.object({ name: z.string(), type: str, description: str }))
+    .array(z.object({ name: z.string(), type: str, description: str, scope: str, value: z.unknown().optional() }))
     .default([]),
   schemas: z.array(schemaSchema).default([]),
   counts: z

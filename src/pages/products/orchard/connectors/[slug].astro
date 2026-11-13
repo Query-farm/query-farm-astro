@@ -142,12 +142,26 @@ const runsOn: { label: string; icon: string }[] = [
   ...(w.language === 'Java' ? [{ label: 'Any OS (Docker)', icon: 'simple-icons:docker' }] : []),
 ];
 
+// SET statements for the Settings section, each at its harvested default.
+const sqlLit = (type: string | null | undefined, v: unknown) =>
+  /^(BIGINT|INTEGER|SMALLINT|TINYINT|UBIGINT|UINTEGER|DOUBLE|FLOAT|REAL|DECIMAL|HUGEINT|BOOLEAN)/i.test(type ?? '') && v != null && String(v) !== ''
+    ? String(v)
+    : `'${String(v ?? '').replace(/'/g, "''")}'`;
+const settingsSql = [...w.settings]
+  .sort((a, b) => a.name.localeCompare(b.name))
+  .map(st => `SET ${st.name} = ${sqlLit(st.type, st.value)};`)
+  .concat(w.settings.length ? [`SELECT current_setting('${[...w.settings].sort((a, b) => a.name.localeCompare(b.name))[0].name}');`] : [])
+  .join('\n');
+
 const facts: [string, string][] = [
   ['Catalog', w.catalog],
   ['Language', w.language],
   ...(w.builtOn.length ? [['Built on', w.builtOn.join(', ')] as [string, string]] : []),
   ...(w.release ? [['Release', w.release.tag] as [string, string]] : []),
   ...(w.license ? [['Licence', w.license] as [string, string]] : []),
+  ...(w.settings.length
+    ? [['Settings', w.settings.map(st => st.name).sort().join(', ')] as [string, string]]
+    : []),
   ...(w.copyFormats.length
     ? [['COPY formats', w.copyFormats.map(f => `${f.format} (${[f.reads && 'FROM', f.writes && 'TO'].filter(Boolean).join(' / ')})`).join(', ')] as [string, string]]
     : []),
@@ -378,6 +392,34 @@ const H2 = 'text-2xl text-soil-900';
           </p>
           <div class="mt-5">
             <WorkerCredentials credentials={w.credentials} catalog={w.catalog} />
+          </div>
+        </section>
+      )}
+
+      <!-- Settings the catalog registers on ATTACH (duckdb_settings) -->
+      {w.settings.length > 0 && (
+        <section id="settings" class="mt-12 scroll-mt-32">
+          <h2 class={H2}>Settings</h2>
+          <p class="mt-2 text-soil-700">
+            Attaching <code class="font-mono">{w.catalog}</code> registers {w.settings.length === 1 ? 'a DuckDB setting' : `${w.settings.length} DuckDB settings`}.
+            Change one with <code class="font-mono">SET</code> for the session (or <code class="font-mono">SET GLOBAL</code>), read it back with
+            <code class="font-mono">current_setting('…')</code>, and the worker's functions pick the new value up on the next query.
+          </p>
+          <div class="mt-5 rounded-xl border border-soil-300 bg-[#fffdf7] p-4">
+            <dl class="grid grid-cols-1 gap-x-4 gap-y-2 text-sm sm:grid-cols-[auto_1fr] [&>dd]:min-w-0 [&>dd]:[overflow-wrap:anywhere] [&>dd]:mb-2 sm:[&>dd]:mb-0">
+              {[...w.settings].sort((a, b) => a.name.localeCompare(b.name)).map(st => (
+                <>
+                  <dt id={`setting-${st.name}`} class="scroll-mt-32 font-mono text-soil-900">{st.name}{st.type && <span class="ml-1.5 text-[12px] text-soil-500">{st.type}</span>}</dt>
+                  <dd class="text-soil-700">
+                    {st.description}
+                    {st.value != null && String(st.value) !== '' && <span class="ml-1 font-mono text-[12px] text-soil-500">default {String(st.value)}</span>}
+                  </dd>
+                </>
+              ))}
+            </dl>
+          </div>
+          <div class="mt-4">
+            <CodeBlock code={settingsSql} lang="sql" title="settings.sql" tryable={false} />
           </div>
         </section>
       )}

@@ -648,7 +648,8 @@ def serialize_catalog(cat: Any, con: Any) -> dict[str, Any]:
             for o in cat.attach_options
         ],
         "settings": [
-            {"name": st.name, "type": st.input_type, "description": _blank(st.description)}
+            {"name": st.name, "type": st.input_type, "description": _blank(st.description),
+             "scope": st.scope, "value": st.value}
             for st in cat.settings
         ],
         "example_queries": examples,
