@@ -395,13 +395,13 @@ function attachSql(w: WorkerRecord, location: string, comment?: string) {
 
 // Install recipes, best first. The vgi extension's transports do the fetching:
 // `github-auto://` downloads, SHA-256-checks and caches the platform binary,
-// `docker://` runs the signed image, and a uvx command builds a Python worker
-// from its tag.
+// `oci://` runs the signed image, and a uvx command builds a Python worker
+// from its tag. Java workers ship only a jar (no per-platform archive), which
+// `github-auto://` can't launch, so their pages lead with the image instead.
 function installMethods(w: WorkerRecord): InstallMethod[] {
   const out: InstallMethod[] = [];
   const assets = w.release?.assets ?? [];
   const tarballs = assets.filter(a => /_(amd64|arm64)$/.test(a.platform) && a.name.endsWith('.tar.gz'));
-  const jar = assets.find(a => a.platform === 'jar');
   const runsOnDockerOnly = w.run?.method === 'docker';
 
   // A worker verified against an HTTP(S) endpoint (e.g. a hosted Cloudflare Worker):
@@ -452,17 +452,6 @@ function installMethods(w: WorkerRecord): InstallMethod[] {
       ],
     });
 
-  if (jar)
-    out.push({
-      id: 'jar',
-      label: 'Java',
-      icon: 'simple-icons:openjdk',
-      steps: [
-        { title: 'Download the jar', description: 'Needs Java 21 or newer.', lang: 'bash', code: `curl -LO ${jar.url}` },
-        { title: 'Attach it', lang: 'sql', code: attachSql(w, `java -jar ${jar.name}`) },
-      ],
-    });
-
   if (w.image)
     out.push({
       id: 'docker',
@@ -473,7 +462,7 @@ function installMethods(w: WorkerRecord): InstallMethod[] {
           title: 'Attach the signed image',
           description: 'Needs Docker, Podman or another OCI runtime. The extension runs the container and talks to it over stdio.',
           lang: 'sql',
-          code: attachSql(w, `docker://${w.image}:${imageTag(w)}`),
+          code: attachSql(w, `oci://${w.image}:${imageTag(w)}`),
         },
       ],
     });
