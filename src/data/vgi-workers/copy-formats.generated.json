@@ -1,8 +1,12 @@
 {
- "generated_at": "2026-11-13T03:40:56+00:00",
+ "generated_at": "2026-11-14T21:37:32+00:00",
  "workers": {
   "vgi-anomaly": {
    "catalog": "anomaly",
+   "formats": []
+  },
+  "vgi-anthropic": {
+   "catalog": "anthropic",
    "formats": []
   },
   "vgi-arcgis": {
@@ -57,16 +61,65 @@
    "catalog": "barcode",
    "formats": []
   },
+  "vgi-bea": {
+   "catalog": "bea",
+   "formats": []
+  },
   "vgi-bgp": {
    "catalog": "bgp",
+   "formats": []
+  },
+  "vgi-bls": {
+   "catalog": "bls",
    "formats": []
   },
   "vgi-bluesky": {
    "catalog": "bluesky",
    "formats": []
   },
+  "vgi-boe": {
+   "catalog": "boe",
+   "formats": []
+  },
+  "vgi-boj": {
+   "catalog": "boj",
+   "formats": []
+  },
   "vgi-bson": {
    "catalog": "bson",
+   "formats": [
+    {
+     "name": "bson",
+     "direction": "both",
+     "ordered": true,
+     "description": "Read and write raw BSON files with COPY",
+     "comment": "Byte-preserving BSON file import and export",
+     "tags": {
+      "vgi.category": "Streams",
+      "vgi.doc_llm": "Import or export raw BSON documents using COPY with FORMAT 'bson.bson' (replace the first bson with your attached catalog name). Requires exactly one `BLOB` column, one complete BSON document per row. MODE defaults to 'raw'; typed rows are not supported. Local files only; reads stream in bounded batches. Invalid documents, duplicate keys, truncated files, NULL rows, and oversized documents fail the COPY. MAX_DOCUMENT_SIZE defaults to 16777216 bytes (16 MiB), and may be raised up to 2147483647. Bytes are preserved without decoding/re-encoding. Export preserves source order (use ORDER BY for deterministic ordering), stages batches in shared storage, and atomically replaces the destination only after successful writing. Empty export creates a zero-byte file.",
+      "vgi.doc_md": "Import or export raw BSON documents using COPY with FORMAT 'bson.bson' (replace the first bson with your attached catalog name). Requires exactly one `BLOB` column, one complete BSON document per row. MODE defaults to 'raw'; typed rows are not supported. Local files only; reads stream in bounded batches. Invalid documents, duplicate keys, truncated files, NULL rows, and oversized documents fail the COPY. MAX_DOCUMENT_SIZE defaults to 16777216 bytes (16 MiB), and may be raised up to 2147483647. Bytes are preserved without decoding/re-encoding. Export preserves source order (use ORDER BY for deterministic ordering), stages batches in shared storage, and atomically replaces the destination only after successful writing. Empty export creates a zero-byte file.\n\n### Import and export\n\nCreate the destination table in a writable DuckDB schema, then import a local mongodump document file. Qualify the format by the catalog's ATTACH alias.\n\n```sql\nCOPY <target_table> FROM '<input_path>' (FORMAT '<catalog>.bson');\nCOPY (<query_returning_one_blob_column>) TO '<output_path>'\n(FORMAT '<catalog>.bson', MODE 'raw');\n```\n\nA bad import aborts the statement and reports its filename and document byte offset. A bad export reports its source row and leaves an existing destination intact. COPY accepts one uncompressed file; cloud paths, globs, collection metadata and mongodump archive containers are outside this format. Paths are resolved on the worker's filesystem. MAX_DOCUMENT_SIZE can be raised explicitly for larger documents.",
+      "vgi.keywords": "[\"bson\",\"copy\",\"copy from\",\"copy to\",\"import\",\"export\",\"mongodump\",\"raw\",\"lossless\",\"bulk\",\"files\"]",
+      "vgi.result_dynamic_columns_md": "COPY FROM fills the target table's single `BLOB` column, using its name. COPY TO writes the source's single `BLOB` column. DuckDB reports the copied row count. For a target table `docs(doc BLOB)`, the imported columns are:\n\n| Name | Type | Description |\n| --- | --- | --- |\n| doc | BLOB | One complete validated BSON document, with its original bytes. |\n\nThe column name follows the target schema; the type must be `BLOB`. Invoke through COPY, not as a table function.",
+      "vgi.title": "BSON COPY"
+     },
+     "handler": "copy_bson",
+     "options": [
+      {
+       "name": "mode",
+       "type": "VARCHAR",
+       "description": "Document representation: 'raw' (default), exactly one BLOB column."
+      },
+      {
+       "name": "max_document_size",
+       "type": "BIGINT",
+       "description": "Maximum bytes per BSON document, including its prefix; default 16 MiB. Applies to import and export."
+      }
+     ]
+    }
+   ]
+  },
+  "vgi-buoys": {
+   "catalog": "buoys",
    "formats": []
   },
   "vgi-calendar": {
@@ -88,8 +141,8 @@
      "comment": "Load a CBOR row file (CBOR Sequence (RFC 8742)) into the COPY target table",
      "tags": {
       "vgi.category": "copy",
-      "vgi.doc_llm": "Bulk-move whole tables in and out of CBOR data files — the row-file counterpart to the per-blob `decode` scalar. The file is a CBOR Sequence (RFC 8742): one top-level item per row, with no container header or footer, so it appends and streams. The same format name serves both directions, and a file written by one round-trips through the other. The `FORMAT` identifier is scoped by the ATTACH alias, so it reads `<alias>.cbor`:\n\n```sql\nCOPY (<query>) TO '<path>' (FORMAT '<alias>.cbor');\nCOPY <table> FROM '<path>' (FORMAT '<alias>.cbor');\n```\n\nWith the default `row_format 'map'` each item is a map keyed by column name: self-describing, so on read the columns may appear in any order, a key absent from an item reads as NULL, and extra keys are ignored. `row_format 'array'` frames each row as an array of values in column order — more compact, but positional. Column values encode exactly as the `encode` scalar does (shortest-lossless integers and floats, `BLOB` as a byte string, `TIMESTAMP` as an epoch instant, `LIST` / `STRUCT` / `MAP` as arrays and maps) and decode back onto the COPY target's exact column types. A value that cannot be represented in its target column fails the COPY with a column-qualified message; `ignore_errors true` instead skips unusable rows and tolerates a truncated trailing item. Rows are written in source order, so an ordered source query keeps its ordering in the file. On write, `canonical 'core'` (RFC 8949 §4.2.1) or `canonical 'ctap2'` orders map keys deterministically, so the same rows always produce byte-identical output.\n\n**Paths resolve on the worker.** The file is opened by the worker process, so the path is interpreted against its filesystem and working directory — not the SQL client's. That is invisible when DuckDB spawns the worker locally, but a worker in a container or on another host cannot see the caller's paths: use a location both sides agree on (a mounted volume), and prefer absolute paths. A path the worker cannot open is reported with the directory it actually looked in.",
-      "vgi.doc_md": "Bulk import and export of CBOR row files. The file is a CBOR Sequence (RFC 8742) — one item per row, no container header — so it appends, streams, and round-trips between the two directions. The `FORMAT` identifier is scoped by the ATTACH alias:\n\n```sql\nCOPY (<query>) TO '<path>' (FORMAT '<alias>.cbor');\nCOPY <table> FROM '<path>' (FORMAT '<alias>.cbor');\n```\n\n`row_format 'map'` (the default) keys each row by column name; `row_format 'array'` is positional. On read, `ignore_errors true` skips unusable rows and tolerates a truncated tail. Writes preserve source order. On write, `canonical 'core'` (RFC 8949 §4.2.1) or `canonical 'ctap2'` orders map keys deterministically, so the same rows always produce byte-identical output.\n\nPaths are opened by the **worker** process, so they resolve against its filesystem and working directory rather than the client's — a containerized or remote worker needs a shared location, and absolute paths.",
+      "vgi.doc_llm": "Bulk-move whole tables in and out of CBOR data files — the row-file counterpart to the per-blob `decode` scalar. The file is a CBOR Sequence (RFC 8742): one top-level item per row, with no container header or footer, so it appends and streams. The same format name serves both directions, and a file written by one round-trips through the other. The `FORMAT` identifier is scoped by the ATTACH alias, so it reads `<alias>.cbor`:\n\n```sql\nCOPY (<query>) TO '<path>' (FORMAT '<alias>.cbor');\nCOPY <table> FROM '<path>' (FORMAT '<alias>.cbor');\n```\n\nWith the default `row_format 'map'` each item is a map keyed by column name: self-describing, so on read the columns may appear in any order, a key absent from an item reads as NULL, and extra keys are ignored. `row_format 'array'` frames each row as an array of values in column order — more compact, but positional. Column values encode exactly as the `encode` scalar does (shortest-lossless integers and floats, `BLOB` as a byte string, `TIMESTAMP` as an epoch instant, `LIST` / `STRUCT` / `MAP` as arrays and maps) and decode back onto the COPY target's exact column types. A value that cannot be represented in its target column fails the COPY with a column-qualified message; `ignore_errors true` instead skips unusable rows and warns about skipped data. A decode error discards that file's unreadable remainder and continues with the next source; source-open failures still fail the COPY. Rows are written in source order, so an ordered source query keeps its ordering in the file. On write, `canonical 'core'` (RFC 8949 §4.2.1) or `canonical 'ctap2'` orders map keys deterministically, so the same rows always produce byte-identical output.\n\n**Paths resolve on the worker.** The file is opened by the worker process, so the path is interpreted against its filesystem and working directory — not the SQL client's. That is invisible when DuckDB spawns the worker locally, but a worker in a container or on another host cannot see the caller's paths: use a location both sides agree on (a mounted volume), and prefer absolute paths. A path the worker cannot open is reported with the directory it actually looked in.",
+      "vgi.doc_md": "Bulk import and export of CBOR row files. The file is a CBOR Sequence (RFC 8742) — one item per row, no container header — so it appends, streams, and round-trips between the two directions. The `FORMAT` identifier is scoped by the ATTACH alias:\n\n```sql\nCOPY (<query>) TO '<path>' (FORMAT '<alias>.cbor');\nCOPY <table> FROM '<path>' (FORMAT '<alias>.cbor');\n```\n\n`row_format 'map'` (the default) keys each row by column name; `row_format 'array'` is positional. On read, `ignore_errors true` skips unusable rows with warnings. A decode error discards that file's unreadable remainder and continues with the next source; source-open failures still fail the COPY. Writes preserve source order. On write, `canonical 'core'` (RFC 8949 §4.2.1) or `canonical 'ctap2'` orders map keys deterministically, so the same rows always produce byte-identical output.\n\nPaths are opened by the **worker** process, so they resolve against its filesystem and working directory rather than the client's — a containerized or remote worker needs a shared location, and absolute paths.",
       "vgi.example_queries": "[{\"description\":\"Export query results to a CBOR row file, one item per row.\",\"sql\":\"COPY (SELECT 1 AS id, 'alpha' AS name) TO 'events.cbor' (FORMAT 'cbor.cbor')\"},{\"description\":\"Export positionally (each row an array in column order) for a more compact file.\",\"sql\":\"COPY (SELECT 1 AS id, 'alpha' AS name) TO 'events_array.cbor' (FORMAT 'cbor.cbor', row_format 'array')\"},{\"description\":\"List the COPY options this format accepts, and the directions it serves.\",\"sql\":\"SELECT format_name, direction, option_name FROM vgi_copy_formats() WHERE handler = 'cbor_copy' ORDER BY option_name\"}]",
       "vgi.keywords": "[\"cbor\",\"copy\",\"copy from\",\"copy to\",\"import\",\"export\",\"load\",\"dump\",\"bulk\",\"ingest\",\"cbor\",\"row file\",\"sequence\",\"stream\",\"encode\",\"decode\",\"serialize\",\"deserialize\"]",
       "vgi.result_dynamic_columns_md": "### Read direction — columns mirror the COPY target\n\nThe scan emits exactly the COPY target table's columns, in its declared order and types: DuckDB fixes them from the target and the reader projects each CBOR item onto them, inserting no cast. There is no independent result schema, so the shape below is one worked variant — a target declared `(id INTEGER, name VARCHAR, seen TIMESTAMP)`.\n\n| Name | Type | Description |\n|---|---|---|\n| id | INTEGER | The item's value for the `id` column — by key name under `row_format 'map'`, by position under `row_format 'array'`. |\n| name | VARCHAR | The item's value for the `name` column. A nested value lands as its JSON text. |\n| seen | TIMESTAMP | The item's value for the `seen` column, read from an epoch instant. A key absent from the item reads as `NULL`. |",
@@ -105,7 +158,7 @@
       {
        "name": "ignore_errors",
        "type": "BOOLEAN",
-       "description": "Skip rows that cannot be projected onto the target columns, and accept a truncated trailing item, instead of failing the COPY (default false)."
+       "description": "Skip incompatible rows with warnings. On a decode error, discard that file's unreadable remainder and continue with the next source (default false). Source-open failures still fail the COPY."
       },
       {
        "name": "canonical",
@@ -122,8 +175,8 @@
      "comment": "Load a MessagePack row file (concatenated MessagePack items) into the COPY target table",
      "tags": {
       "vgi.category": "copy",
-      "vgi.doc_llm": "Bulk-move whole tables in and out of MessagePack data files — the row-file counterpart to the per-blob `msgpack_decode` scalar. The file is a concatenated MessagePack items: one top-level item per row, with no container header or footer, so it appends and streams. The same format name serves both directions, and a file written by one round-trips through the other. The `FORMAT` identifier is scoped by the ATTACH alias, so it reads `<alias>.msgpack`:\n\n```sql\nCOPY (<query>) TO '<path>' (FORMAT '<alias>.msgpack');\nCOPY <table> FROM '<path>' (FORMAT '<alias>.msgpack');\n```\n\nWith the default `row_format 'map'` each item is a map keyed by column name: self-describing, so on read the columns may appear in any order, a key absent from an item reads as NULL, and extra keys are ignored. `row_format 'array'` frames each row as an array of values in column order — more compact, but positional. Column values encode exactly as the `encode` scalar does (shortest-lossless integers and floats, `BLOB` as a byte string, `TIMESTAMP` as an epoch instant, `LIST` / `STRUCT` / `MAP` as arrays and maps) and decode back onto the COPY target's exact column types. A value that cannot be represented in its target column fails the COPY with a column-qualified message; `ignore_errors true` instead skips unusable rows and tolerates a truncated trailing item. Rows are written in source order, so an ordered source query keeps its ordering in the file.\n\n**Paths resolve on the worker.** The file is opened by the worker process, so the path is interpreted against its filesystem and working directory — not the SQL client's. That is invisible when DuckDB spawns the worker locally, but a worker in a container or on another host cannot see the caller's paths: use a location both sides agree on (a mounted volume), and prefer absolute paths. A path the worker cannot open is reported with the directory it actually looked in.",
-      "vgi.doc_md": "Bulk import and export of MessagePack row files. The file is a concatenated MessagePack items — one item per row, no container header — so it appends, streams, and round-trips between the two directions. The `FORMAT` identifier is scoped by the ATTACH alias:\n\n```sql\nCOPY (<query>) TO '<path>' (FORMAT '<alias>.msgpack');\nCOPY <table> FROM '<path>' (FORMAT '<alias>.msgpack');\n```\n\n`row_format 'map'` (the default) keys each row by column name; `row_format 'array'` is positional. On read, `ignore_errors true` skips unusable rows and tolerates a truncated tail. Writes preserve source order.\n\nPaths are opened by the **worker** process, so they resolve against its filesystem and working directory rather than the client's — a containerized or remote worker needs a shared location, and absolute paths.",
+      "vgi.doc_llm": "Bulk-move whole tables in and out of MessagePack data files — the row-file counterpart to the per-blob `msgpack_decode` scalar. The file is a concatenated MessagePack items: one top-level item per row, with no container header or footer, so it appends and streams. The same format name serves both directions, and a file written by one round-trips through the other. The `FORMAT` identifier is scoped by the ATTACH alias, so it reads `<alias>.msgpack`:\n\n```sql\nCOPY (<query>) TO '<path>' (FORMAT '<alias>.msgpack');\nCOPY <table> FROM '<path>' (FORMAT '<alias>.msgpack');\n```\n\nWith the default `row_format 'map'` each item is a map keyed by column name: self-describing, so on read the columns may appear in any order, a key absent from an item reads as NULL, and extra keys are ignored. `row_format 'array'` frames each row as an array of values in column order — more compact, but positional. Column values encode exactly as the `encode` scalar does (shortest-lossless integers and floats, `BLOB` as a byte string, `TIMESTAMP` as an epoch instant, `LIST` / `STRUCT` / `MAP` as arrays and maps) and decode back onto the COPY target's exact column types. A value that cannot be represented in its target column fails the COPY with a column-qualified message; `ignore_errors true` instead skips unusable rows and warns about skipped data. A decode error discards that file's unreadable remainder and continues with the next source; source-open failures still fail the COPY. Rows are written in source order, so an ordered source query keeps its ordering in the file.\n\n**Paths resolve on the worker.** The file is opened by the worker process, so the path is interpreted against its filesystem and working directory — not the SQL client's. That is invisible when DuckDB spawns the worker locally, but a worker in a container or on another host cannot see the caller's paths: use a location both sides agree on (a mounted volume), and prefer absolute paths. A path the worker cannot open is reported with the directory it actually looked in.",
+      "vgi.doc_md": "Bulk import and export of MessagePack row files. The file is a concatenated MessagePack items — one item per row, no container header — so it appends, streams, and round-trips between the two directions. The `FORMAT` identifier is scoped by the ATTACH alias:\n\n```sql\nCOPY (<query>) TO '<path>' (FORMAT '<alias>.msgpack');\nCOPY <table> FROM '<path>' (FORMAT '<alias>.msgpack');\n```\n\n`row_format 'map'` (the default) keys each row by column name; `row_format 'array'` is positional. On read, `ignore_errors true` skips unusable rows with warnings. A decode error discards that file's unreadable remainder and continues with the next source; source-open failures still fail the COPY. Writes preserve source order.\n\nPaths are opened by the **worker** process, so they resolve against its filesystem and working directory rather than the client's — a containerized or remote worker needs a shared location, and absolute paths.",
       "vgi.example_queries": "[{\"description\":\"Export query results to a MessagePack row file, one item per row.\",\"sql\":\"COPY (SELECT 1 AS id, 'alpha' AS name) TO 'events.msgpack' (FORMAT 'cbor.msgpack')\"},{\"description\":\"Export positionally (each row an array in column order) for a more compact file.\",\"sql\":\"COPY (SELECT 1 AS id, 'alpha' AS name) TO 'events_array.msgpack' (FORMAT 'cbor.msgpack', row_format 'array')\"},{\"description\":\"List the COPY options this format accepts, and the directions it serves.\",\"sql\":\"SELECT format_name, direction, option_name FROM vgi_copy_formats() WHERE handler = 'msgpack_copy' ORDER BY option_name\"}]",
       "vgi.keywords": "[\"msgpack\",\"copy\",\"copy from\",\"copy to\",\"import\",\"export\",\"load\",\"dump\",\"bulk\",\"ingest\",\"messagepack\",\"row file\",\"sequence\",\"stream\",\"encode\",\"decode\",\"serialize\",\"deserialize\"]",
       "vgi.result_dynamic_columns_md": "### Read direction — columns mirror the COPY target\n\nThe scan emits exactly the COPY target table's columns, in its declared order and types: DuckDB fixes them from the target and the reader projects each MessagePack item onto them, inserting no cast. There is no independent result schema, so the shape below is one worked variant — a target declared `(id INTEGER, name VARCHAR, seen TIMESTAMP)`.\n\n| Name | Type | Description |\n|---|---|---|\n| id | INTEGER | The item's value for the `id` column — by key name under `row_format 'map'`, by position under `row_format 'array'`. |\n| name | VARCHAR | The item's value for the `name` column. A nested value lands as its JSON text. |\n| seen | TIMESTAMP | The item's value for the `seen` column, read from an epoch instant. A key absent from the item reads as `NULL`. |",
@@ -139,11 +192,15 @@
       {
        "name": "ignore_errors",
        "type": "BOOLEAN",
-       "description": "Skip rows that cannot be projected onto the target columns, and accept a truncated trailing item, instead of failing the COPY (default false)."
+       "description": "Skip incompatible rows with warnings. On a decode error, discard that file's unreadable remainder and continue with the next source (default false). Source-open failures still fail the COPY."
       }
      ]
     }
    ]
+  },
+  "vgi-ccxt": {
+   "catalog": "ccxt",
+   "formats": []
   },
   "vgi-charset": {
    "catalog": "charset",
@@ -155,6 +212,10 @@
   },
   "vgi-chem": {
    "catalog": "chem",
+   "formats": []
+  },
+  "vgi-cloudflare": {
+   "catalog": "cloudflare",
    "formats": []
   },
   "vgi-code": {
@@ -187,6 +248,22 @@
   },
   "vgi-docgen": {
    "catalog": "docgen",
+   "formats": []
+  },
+  "vgi-ducks": {
+   "catalog": "ducks",
+   "formats": []
+  },
+  "vgi-earth-observation": {
+   "catalog": "earth_observation",
+   "formats": []
+  },
+  "vgi-ecb": {
+   "catalog": "ecb",
+   "formats": []
+  },
+  "vgi-eia": {
+   "catalog": "eia",
    "formats": []
   },
   "vgi-elasticsearch": {
@@ -247,7 +324,165 @@
   },
   "vgi-feed": {
    "catalog": "feed",
-   "formats": []
+   "formats": [
+    {
+     "name": "atom",
+     "direction": "to",
+     "ordered": true,
+     "description": "Export SQL rows to a atom feed document using COPY TO",
+     "comment": "Export feed items to a worker-local file, preserving query order.",
+     "tags": {
+      "vgi.category": "Feed Items",
+      "vgi.doc_llm": "Export atom using COPY TO a worker-local file. Source columns are matched by feed_items column names and types. title and link options are required; RSS also requires description. Optional language and author describe the feed. Use ORDER BY to choose item order. Missing item IDs are generated deterministically; Atom dates default to the export time.",
+      "vgi.doc_md": "## Generate a atom feed\n\nExport atom using COPY TO a worker-local file. Source columns are matched by feed_items column names and types. title and link options are required; RSS also requires description. Optional language and author describe the feed. Use ORDER BY to choose item order. Missing item IDs are generated deterministically; Atom dates default to the export time.\n\n### Input and output\n\nAlias and cast source columns to the item schema; subsets are supported. This is a sink with no result columns. DuckDB reports the COPY row count. Every item needs title, summary, or content; Atom requires a title. Empty input produces a valid empty feed.\n\n### Example\n\n```sql\nCOPY (SELECT 'First post' AS title, 'https://example.com/1' AS link)\nTO '/tmp/posts.feed' (FORMAT 'feed.atom', title 'Posts', link 'https://example.com', description 'Recent posts');\n```\n\n### Limits\n\nOnly worker-local destinations are supported. Buffered input and encoded output are limited to 64 MiB, and exports to one million items. The destination is replaced after successful encoding.",
+      "vgi.keywords": "[\"feed\",\"copy\",\"import\",\"export\",\"atom\"]",
+      "vgi.result_columns_schema": "[]",
+      "vgi.title": "COPY atom feed"
+     },
+     "handler": "write_atom_copy",
+     "options": [
+      {
+       "name": "title",
+       "type": "VARCHAR",
+       "description": "Required feed title"
+      },
+      {
+       "name": "link",
+       "type": "VARCHAR",
+       "description": "Required absolute HTTP or HTTPS home-page URL"
+      },
+      {
+       "name": "description",
+       "type": "VARCHAR",
+       "description": "Feed description; required for RSS"
+      },
+      {
+       "name": "language",
+       "type": "VARCHAR",
+       "description": "Feed language code"
+      },
+      {
+       "name": "author",
+       "type": "VARCHAR",
+       "description": "Feed author name; defaults to the feed title for Atom"
+      }
+     ]
+    },
+    {
+     "name": "auto",
+     "direction": "from",
+     "ordered": false,
+     "description": "Import RSS, Atom, or JSON Feed items from a URL or file using COPY FROM",
+     "comment": "Import feed items from an HTTP(S) URL or a worker-local file; columns map by name.",
+     "tags": {
+      "vgi.category": "Feed Items",
+      "vgi.doc_llm": "Import auto feed items using COPY FROM an HTTP(S) URL or worker-local file. Target columns must be a subset of feed_items columns with matching names and types. timeout_ms defaults to 15000; max_items defaults to 0 (all items). Documents over 64 MiB or over one million items are rejected.",
+      "vgi.doc_md": "## Import feed items\n\nImport auto feed items using COPY FROM an HTTP(S) URL or worker-local file. Target columns must be a subset of feed_items columns with matching names and types. timeout_ms defaults to 15000; max_items defaults to 0 (all items). Documents over 64 MiB or over one million items are rejected.\n\n### Column mapping\n\nThe destination table chooses the output schema. Use any subset of the item columns, in any order, with matching types. Dates are plain `TIMESTAMP`; categories are `VARCHAR[]`. Unknown columns and incompatible types are errors.\n\n### Example\n\n```sql\nCREATE TABLE headlines (title VARCHAR, link VARCHAR);\nCOPY headlines FROM 'https://hnrss.org/frontpage' (FORMAT 'feed.auto', timeout_ms 5000);\n```\n\nLocal file paths refer to the worker's filesystem, including for remote workers.",
+      "vgi.keywords": "[\"feed\",\"copy\",\"import\",\"export\",\"auto\"]",
+      "vgi.result_dynamic_columns_md": "The COPY destination selects any subset and order of these columns.\n\n| Name | Type | Description |\n| --- | --- | --- |\n| seq | BIGINT | Zero-based position in the feed. |\n| guid | VARCHAR | Item ID, or empty when absent. |\n| title | VARCHAR | Item title. |\n| link | VARCHAR | Item URL. |\n| published | TIMESTAMP | Publish time in UTC; NULL when unavailable. |\n| updated | TIMESTAMP | Update time in UTC; NULL when unavailable. |\n| author | VARCHAR | Author name or email. |\n| categories | VARCHAR[] | Category names; empty list when absent. |\n| summary | VARCHAR | Item summary. |\n| content | VARCHAR | Full item content. |",
+      "vgi.title": "COPY auto feed"
+     },
+     "handler": "read_feed_copy",
+     "options": [
+      {
+       "name": "timeout_ms",
+       "type": "BIGINT",
+       "description": "HTTP timeout in milliseconds"
+      },
+      {
+       "name": "max_items",
+       "type": "BIGINT",
+       "description": "Maximum items; zero imports all items up to the safety limit"
+      }
+     ]
+    },
+    {
+     "name": "jsonfeed",
+     "direction": "to",
+     "ordered": true,
+     "description": "Export SQL rows to a jsonfeed feed document using COPY TO",
+     "comment": "Export feed items to a worker-local file, preserving query order.",
+     "tags": {
+      "vgi.category": "Feed Items",
+      "vgi.doc_llm": "Export jsonfeed using COPY TO a worker-local file. Source columns are matched by feed_items column names and types. title and link options are required; RSS also requires description. Optional language and author describe the feed. Use ORDER BY to choose item order. Missing item IDs are generated deterministically; Atom dates default to the export time.",
+      "vgi.doc_md": "## Generate a jsonfeed feed\n\nExport jsonfeed using COPY TO a worker-local file. Source columns are matched by feed_items column names and types. title and link options are required; RSS also requires description. Optional language and author describe the feed. Use ORDER BY to choose item order. Missing item IDs are generated deterministically; Atom dates default to the export time.\n\n### Input and output\n\nAlias and cast source columns to the item schema; subsets are supported. This is a sink with no result columns. DuckDB reports the COPY row count. Every item needs title, summary, or content; Atom requires a title. Empty input produces a valid empty feed.\n\n### Example\n\n```sql\nCOPY (SELECT 'First post' AS title, 'https://example.com/1' AS link)\nTO '/tmp/posts.feed' (FORMAT 'feed.jsonfeed', title 'Posts', link 'https://example.com', description 'Recent posts');\n```\n\n### Limits\n\nOnly worker-local destinations are supported. Buffered input and encoded output are limited to 64 MiB, and exports to one million items. The destination is replaced after successful encoding.",
+      "vgi.keywords": "[\"feed\",\"copy\",\"import\",\"export\",\"jsonfeed\"]",
+      "vgi.result_columns_schema": "[]",
+      "vgi.title": "COPY jsonfeed feed"
+     },
+     "handler": "write_jsonfeed_copy",
+     "options": [
+      {
+       "name": "title",
+       "type": "VARCHAR",
+       "description": "Required feed title"
+      },
+      {
+       "name": "link",
+       "type": "VARCHAR",
+       "description": "Required absolute HTTP or HTTPS home-page URL"
+      },
+      {
+       "name": "description",
+       "type": "VARCHAR",
+       "description": "Feed description; required for RSS"
+      },
+      {
+       "name": "language",
+       "type": "VARCHAR",
+       "description": "Feed language code"
+      },
+      {
+       "name": "author",
+       "type": "VARCHAR",
+       "description": "Feed author name; defaults to the feed title for Atom"
+      }
+     ]
+    },
+    {
+     "name": "rss",
+     "direction": "to",
+     "ordered": true,
+     "description": "Export SQL rows to a rss feed document using COPY TO",
+     "comment": "Export feed items to a worker-local file, preserving query order.",
+     "tags": {
+      "vgi.category": "Feed Items",
+      "vgi.doc_llm": "Export rss using COPY TO a worker-local file. Source columns are matched by feed_items column names and types. title and link options are required; RSS also requires description. Optional language and author describe the feed. Use ORDER BY to choose item order. Missing item IDs are generated deterministically; Atom dates default to the export time.",
+      "vgi.doc_md": "## Generate a rss feed\n\nExport rss using COPY TO a worker-local file. Source columns are matched by feed_items column names and types. title and link options are required; RSS also requires description. Optional language and author describe the feed. Use ORDER BY to choose item order. Missing item IDs are generated deterministically; Atom dates default to the export time.\n\n### Input and output\n\nAlias and cast source columns to the item schema; subsets are supported. This is a sink with no result columns. DuckDB reports the COPY row count. Every item needs title, summary, or content; Atom requires a title. Empty input produces a valid empty feed.\n\n### Example\n\n```sql\nCOPY (SELECT 'First post' AS title, 'https://example.com/1' AS link)\nTO '/tmp/posts.feed' (FORMAT 'feed.rss', title 'Posts', link 'https://example.com', description 'Recent posts');\n```\n\n### Limits\n\nOnly worker-local destinations are supported. Buffered input and encoded output are limited to 64 MiB, and exports to one million items. The destination is replaced after successful encoding.",
+      "vgi.keywords": "[\"feed\",\"copy\",\"import\",\"export\",\"rss\"]",
+      "vgi.result_columns_schema": "[]",
+      "vgi.title": "COPY rss feed"
+     },
+     "handler": "write_rss_copy",
+     "options": [
+      {
+       "name": "title",
+       "type": "VARCHAR",
+       "description": "Required feed title"
+      },
+      {
+       "name": "link",
+       "type": "VARCHAR",
+       "description": "Required absolute HTTP or HTTPS home-page URL"
+      },
+      {
+       "name": "description",
+       "type": "VARCHAR",
+       "description": "Feed description; required for RSS"
+      },
+      {
+       "name": "language",
+       "type": "VARCHAR",
+       "description": "Feed language code"
+      },
+      {
+       "name": "author",
+       "type": "VARCHAR",
+       "description": "Feed author name; defaults to the feed title for Atom"
+      }
+     ]
+    }
+   ]
   },
   "vgi-fhir": {
    "catalog": "fhir",
@@ -394,6 +629,10 @@
     }
    ]
   },
+  "vgi-fred": {
+   "catalog": "fred",
+   "formats": []
+  },
   "vgi-geocode": {
    "catalog": "geocode",
    "formats": []
@@ -410,6 +649,14 @@
    "catalog": "google",
    "formats": []
   },
+  "vgi-google-analytics": {
+   "catalog": "ga4",
+   "formats": []
+  },
+  "vgi-google-search-console": {
+   "catalog": "gsc",
+   "formats": []
+  },
   "vgi-grammar": {
    "catalog": "grammar",
    "formats": []
@@ -420,6 +667,10 @@
   },
   "vgi-hl7": {
    "catalog": "hl7",
+   "formats": []
+  },
+  "vgi-hydrology": {
+   "catalog": "hydrology",
    "formats": []
   },
   "vgi-ical": {
@@ -447,8 +698,14 @@
    "formats": []
   },
   "vgi-libpostal": {
-   "catalog": "postal",
+   "error": "IOException: IO Error: VGI worker exited before answering its first request (exit code 137) [worker: docker://ghcr.io/query-farm/vgi-libpostal:edge]"
+  },
+  "vgi-lidar": {
+   "catalog": "lidar",
    "formats": []
+  },
+  "vgi-lightgbm": {
+   "error": "IOException: IO Error: VGI worker exited before answering its first request (exit code 1) [worker: uv run https://raw.githubusercontent.com/Query-farm/vgi-lightgbm/main/lightgbm_worker.py]\nworker stderr:\n  Traceback (most recent call last):\n    File \"/var/folders/5z/17gt9js944s7smk125j23jr80000gn/T/lightgbm_workerHu37KR.py\", line 37, in <module>\n      from vgi_lightgbm import __version__\n  ModuleN"
   },
   "vgi-llm": {
    "catalog": "llm",
@@ -619,12 +876,20 @@
    "catalog": "nlp",
    "formats": []
   },
+  "vgi-nws": {
+   "catalog": "nws",
+   "formats": []
+  },
   "vgi-odata": {
    "catalog": "odata",
    "formats": []
   },
   "vgi-open-meteo": {
    "catalog": "open_meteo",
+   "formats": []
+  },
+  "vgi-opengraph": {
+   "catalog": "opengraph",
    "formats": []
   },
   "vgi-ortools": {
@@ -643,12 +908,20 @@
    "catalog": "perf",
    "formats": []
   },
+  "vgi-perps": {
+   "catalog": "perps",
+   "formats": []
+  },
   "vgi-pii": {
    "catalog": "pii",
    "formats": []
   },
   "vgi-poi": {
    "catalog": "excel",
+   "formats": []
+  },
+  "vgi-polymarket": {
+   "catalog": "polymarket",
    "formats": []
   },
   "vgi-pprof": {
@@ -659,8 +932,16 @@
    "catalog": "proj",
    "formats": []
   },
+  "vgi-pysal": {
+   "catalog": "pysal",
+   "formats": []
+  },
   "vgi-quant": {
    "catalog": "quant",
+   "formats": []
+  },
+  "vgi-rdf": {
+   "catalog": "rdf",
    "formats": []
   },
   "vgi-recommender": {
@@ -707,6 +988,14 @@
    "catalog": "sigma",
    "formats": []
   },
+  "vgi-slack": {
+   "catalog": "slack",
+   "formats": []
+  },
+  "vgi-snmp": {
+   "catalog": "snmp",
+   "formats": []
+  },
   "vgi-soccer": {
    "catalog": "soccer",
    "formats": []
@@ -739,8 +1028,16 @@
    "catalog": "tennis",
    "formats": []
   },
+  "vgi-terrain": {
+   "catalog": "terrain",
+   "formats": []
+  },
   "vgi-threatintel": {
    "catalog": "threatintel",
+   "formats": []
+  },
+  "vgi-tides": {
+   "catalog": "tides",
    "formats": []
   },
   "vgi-tika": {
@@ -759,8 +1056,16 @@
    "catalog": "tcal",
    "formats": []
   },
+  "vgi-trajectory": {
+   "catalog": "trajectory",
+   "formats": []
+  },
   "vgi-translate": {
    "catalog": "translate",
+   "formats": []
+  },
+  "vgi-treasury": {
+   "catalog": "treasury",
    "formats": []
   },
   "vgi-typesafe": {
@@ -793,11 +1098,39 @@
   },
   "vgi-x12": {
    "catalog": "x12",
-   "formats": []
+   "formats": [
+    {
+     "name": "x12",
+     "direction": "both",
+     "ordered": true,
+     "description": "Import and export complete X12 segment rows through the catalog's COPY format.",
+     "comment": "Complete X12 segment rows (read_x12 schema)",
+     "tags": {
+      "vgi.category": "Segment & element explode",
+      "vgi.doc_llm": "Import and export X12 with the alias-scoped x12 COPY format. FROM emits the complete read_x12 schema. TO consumes ordered segment_id, elements, element_separator, and segment_terminator columns. Paths are worker-local. The writer validates complete ASCII envelopes and publishes only after validation; recalculate_counts updates trailer counts without changing control numbers. Use read_x12 for ordinary SELECT queries.",
+      "vgi.doc_md": "## X12 COPY format\n\nThe registered handler is invoked by DuckDB's COPY machinery. It cannot be called directly as a table function. Discover the alias-scoped format using the example query.\n\n**Import.** Create the destination table from the schema of `read_x12(input)` with zero rows, then import a worker-local file or glob. Column names, order, and types must match. Reads retain malformed segments for inspection and materialize the input in memory.\n\n**Export.** Supply the four named columns `segment_id`, `elements`, `element_separator`, and `segment_terminator`, ordered by document and segment index. Other columns are informational. ISA11 and ISA16 preserve repetition and component delimiters. Empty element strings are retained; NULL values are rejected.\n\n**Validation and publication.** The writer checks ASCII text, fixed-width ISA, envelope nesting, counts, and control matches across batches. The explicit `recalculate_counts` option updates SE01/GE01/IEA01 only. A same-directory temporary file replaces the target after validation completes; failure preserves the old target. Empty input writes an empty file. This is structural validation; transaction-specific content rules remain outside scope. Formatting whitespace is normalized. EDIFACT and binary payloads are unsupported. See the repository README for the complete edit-and-export workflow.",
+      "vgi.example_queries": "[{\"description\":\"Discover the X12 COPY format, supported directions, ordering, and options.\",\"sql\":\"SELECT DISTINCT format_name, direction, ordered, option_name FROM vgi_copy_formats() WHERE handler = 'copy_x12' ORDER BY format_name, option_name;\"}]",
+      "vgi.keywords": "[\"x12\",\"edi\",\"copy\",\"segments\",\"envelopes\",\"local files\"]",
+      "vgi.result_columns_schema": "[{\"name\":\"interchange_ctrl\",\"type\":\"VARCHAR\",\"description\":\"ISA13 — interchange control number of the row's interchange.\"},{\"name\":\"group_ctrl\",\"type\":\"VARCHAR\",\"description\":\"GS06 — functional group control number of the row's group.\"},{\"name\":\"transaction_ctrl\",\"type\":\"VARCHAR\",\"description\":\"ST02 — transaction set control number of the row's transaction.\"},{\"name\":\"transaction_type\",\"type\":\"VARCHAR\",\"description\":\"ST01 — transaction set identifier ('835','837',…); UNH02 message type for EDIFACT.\"},{\"name\":\"source_path\",\"type\":\"VARCHAR\",\"description\":\"The file the row came from; NULL for inline content.\"},{\"name\":\"document_index\",\"type\":\"BIGINT\",\"description\":\"Zero-based document ordinal within this invocation; distinguishes inline and repeated input paths.\"},{\"name\":\"segment_index\",\"type\":\"BIGINT\",\"description\":\"Zero-based segment ordinal across the whole document, including all envelopes. Order by document_index, segment_index before COPY TO.\"},{\"name\":\"segment_id\",\"type\":\"VARCHAR\",\"description\":\"Raw segment identifier, including ISA, GS, ST, SE, GE, and IEA.\"},{\"name\":\"elements\",\"type\":\"VARCHAR[]\",\"description\":\"All positional element values, preserving empty values, padding, composites, and repetitions as unsplit text.\"},{\"name\":\"byte_offset\",\"type\":\"BIGINT\",\"description\":\"Start byte offset in the source document; informational after edits.\"},{\"name\":\"element_separator\",\"type\":\"VARCHAR\",\"description\":\"Element separator in force for this row's interchange.\"},{\"name\":\"segment_terminator\",\"type\":\"VARCHAR\",\"description\":\"Segment terminator in force for this row's interchange. Component and repetition separators remain in ISA16 and ISA11.\"}]",
+      "vgi.title": "X12 COPY"
+     },
+     "handler": "copy_x12",
+     "options": [
+      {
+       "name": "recalculate_counts",
+       "type": "BOOLEAN",
+       "description": "Recompute SE01, GE01, and IEA01 after edits. Defaults to false (validate existing counts). Never changes control numbers or synthesizes missing envelopes."
+      }
+     ]
+    }
+   ]
   },
   "vgi-x509": {
    "catalog": "x509",
    "formats": []
+  },
+  "vgi-xgboost": {
+   "error": "IOException: IO Error: VGI worker exited before answering its first request (exit code 1) [worker: uv run https://raw.githubusercontent.com/Query-farm/vgi-xgboost/main/xgboost_worker.py]\nworker stderr:\n  Traceback (most recent call last):\n    File \"/var/folders/5z/17gt9js944s7smk125j23jr80000gn/T/xgboost_worker3NMkzP.py\", line 37, in <module>\n      from vgi_xgboost import __version__\n  ModuleNotFo"
   },
   "vgi-xslt": {
    "catalog": "xslt",
