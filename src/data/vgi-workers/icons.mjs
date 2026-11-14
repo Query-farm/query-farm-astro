@@ -8,6 +8,15 @@
 // without the `vgi-` prefix); values are `ph:` icon names (https://phosphoricons.com).
 
 export const workerIcons = {
+  // Added 2026-11-14
+  fred: 'ph:chart-line', bea: 'ph:buildings', bls: 'ph:briefcase', eia: 'ph:lightning', treasury: 'ph:bank',
+  ecb: 'ph:currency-eur', boe: 'ph:currency-gbp', boj: 'ph:currency-jpy',
+  ccxt: 'ph:currency-btc', perps: 'ph:arrows-clockwise', polymarket: 'ph:scales',
+  opengraph: 'ph:link', nws: 'ph:cloud-lightning', buoys: 'ph:waves', tides: 'ph:waves',
+  hydrology: 'ph:drop', terrain: 'ph:mountains', lidar: 'ph:scan', 'earth-observation': 'ph:globe-hemisphere-east',
+  trajectory: 'ph:path', ducks: 'ph:bird', anthropic: 'ph:robot', cloudflare: 'ph:cloud',
+  'google-analytics': 'ph:chart-bar', 'google-search-console': 'ph:magnifying-glass', slack: 'ph:chat-circle-text',
+  rdf: 'ph:graph', snmp: 'ph:network', lightgbm: 'ph:tree-structure', xgboost: 'ph:tree-structure', pysal: 'ph:map-trifold',
   // Sports
   mlb: 'ph:baseball', nfl: 'ph:football-helmet', 'ncaa-football': 'ph:football',
   nba: 'ph:basketball', 'ncaa-basketball': 'ph:basketball', nhl: 'ph:hockey',

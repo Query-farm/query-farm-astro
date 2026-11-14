@@ -492,7 +492,24 @@ function installMethods(w: WorkerRecord): InstallMethod[] {
       ],
     });
 
-  if (w.language === 'Python' && !runsOnDockerOnly)
+  // A single-file worker script with no console entry point (vgi-lightgbm, vgi-xgboost):
+  // the harvest verified a `uv run --with <package> <script URL>` LOCATION, so show that.
+  const uvRun = w.verification?.location;
+  if (w.language === 'Python' && !runsOnDockerOnly && uvRun?.startsWith('uv run '))
+    out.push({
+      id: 'uvx',
+      label: 'uv',
+      icon: 'simple-icons:python',
+      steps: [
+        {
+          title: 'Attach with uv',
+          description: 'Needs uv. uv fetches the worker script and its package at the release tag on first attach and reuses the cached environment after that.',
+          lang: 'sql',
+          code: attachSql(w, uvRun),
+        },
+      ],
+    });
+  else if (w.language === 'Python' && !runsOnDockerOnly)
     out.push({
       id: 'uvx',
       label: 'uvx',

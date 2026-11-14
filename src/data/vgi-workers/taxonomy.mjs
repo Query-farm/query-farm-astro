@@ -25,27 +25,32 @@ export const categories = [
   {
     id: 'finance', group: 'sources', name: 'Markets & finance', icon: 'ph:chart-line-up', tint: 'gold',
     description: 'Market data, ETF holdings, prediction markets, trading calendars, pricing and payments messages.',
-    members: 'yfinance etf-schwab etf-first-trust etf-globalx etf-invesco etf-ishares etf-jpmorgan etf-spdr etf-vanguard etf-wisdomtree kalshi quant trading-calendar iso20022',
+    members: 'yfinance etf-schwab etf-first-trust etf-globalx etf-invesco etf-ishares etf-jpmorgan etf-spdr etf-vanguard etf-wisdomtree kalshi quant trading-calendar iso20022 ccxt perps polymarket',
+  },
+  {
+    id: 'economy', group: 'sources', name: 'Economic & government data', icon: 'ph:bank', tint: 'moss',
+    description: 'Official statistics from central banks and statistical agencies: national accounts, prices, labour, energy and public finance.',
+    members: 'fred bea bls eia treasury ecb boe boj',
   },
   {
     id: 'web', group: 'sources', name: 'News, social & research', icon: 'ph:newspaper', tint: 'gold',
     description: 'Web search, news, social networks, Wikipedia and scholarly literature.',
-    members: 'search news google wikipedia scholar hackernews bluesky',
+    members: 'search news google wikipedia scholar hackernews bluesky opengraph',
   },
   {
     id: 'geo', group: 'sources', name: 'Maps, places & weather', icon: 'ph:globe-hemisphere-west', tint: 'field',
     description: 'Geocoding, addresses, map services and tiles, coordinate systems and weather.',
-    members: 'geocode libpostal proj arcgis mvt open-meteo',
+    members: 'geocode libpostal proj arcgis mvt open-meteo nws buoys tides hydrology terrain lidar earth-observation trajectory ducks',
   },
   {
     id: 'cloud', group: 'sources', name: 'Cloud & SaaS', icon: 'ph:cloud', tint: 'slate',
     description: 'Microsoft Entra, Defender, Azure Monitor, cost and resource inventory, and GitHub.',
-    members: 'azure-directory azure-signins azure-defender azure-risk azure-loganalytics azure-resourcegraph azure-governance azure-cost azure-files github',
+    members: 'azure-directory azure-signins azure-defender azure-risk azure-loganalytics azure-resourcegraph azure-governance azure-cost azure-files github anthropic cloudflare google-analytics google-search-console slack',
   },
   {
     id: 'enterprise', group: 'sources', name: 'Databases & enterprise', icon: 'ph:database', tint: 'slate',
     description: 'Other databases, search clusters, streams, directories and enterprise APIs.',
-    members: 'elasticsearch odata cdc kinesis graphql grpc soap ldap scim cache',
+    members: 'elasticsearch odata cdc kinesis graphql grpc soap ldap scim cache rdf snmp',
   },
   // ── Work on your data ──────────────────────────────────────────────────────
   {
@@ -56,7 +61,7 @@ export const categories = [
   {
     id: 'analytics', group: 'compute', name: 'Statistics & ML', icon: 'ph:chart-scatter', tint: 'moss',
     description: 'Regression, survival, causal inference, anomaly detection, machine learning, optimisation and recommenders.',
-    members: 'statsmodels survival causal anomaly explain recommender scikit-learn ortools sympy match',
+    members: 'statsmodels survival causal anomaly explain recommender scikit-learn ortools sympy match lightgbm xgboost pysal',
   },
   {
     id: 'science', group: 'compute', name: 'Science & health', icon: 'ph:flask', tint: 'moss',

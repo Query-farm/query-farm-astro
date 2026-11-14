@@ -108,6 +108,23 @@ def list_org_repos() -> list[dict[str, Any]]:
     return json.loads(p.stdout)
 
 
+def worker_language(repo: str, r: dict[str, Any]) -> str:
+    """The worker's implementation language. GitHub's primary language is wrong for
+    repos whose example notebooks outweigh the code, so fall back to the largest
+    language in the repo's breakdown that a worker can be written in."""
+    lang = (r.get("primaryLanguage") or {}).get("name") or ""
+    if lang.lower() in LANG_NORMAL:
+        return LANG_NORMAL[lang.lower()]
+    try:
+        sizes = gh_api(f"repos/{ORG}/{repo}/languages")
+    except Exception:  # noqa: BLE001
+        return lang
+    for name, _ in sorted(sizes.items(), key=lambda kv: -kv[1]):
+        if name.lower() in LANG_NORMAL:
+            return LANG_NORMAL[name.lower()]
+    return lang
+
+
 def check_inventory(inv: dict[str, Any], repos: list[dict[str, Any]]) -> dict[str, Any]:
     """Classify GitHub's view against the inventory. `listable` rows feed the harvest."""
     by = {r["name"]: r for r in repos}
@@ -129,7 +146,7 @@ def check_inventory(inv: dict[str, Any], repos: list[dict[str, Any]]) -> dict[st
                    "private" if (r.get("visibility") or "").upper() != "PUBLIC" else "no release yet")
             waiting.append((repo, why))
             continue
-        lang = (r.get("primaryLanguage") or {}).get("name") or ""
+        lang = opts.get("language") or worker_language(repo, r)
         row = {"repo": repo, "language": LANG_NORMAL.get(lang.lower(), lang),
                "catalog": opts.get("catalog") or repo.removeprefix("vgi-").replace("-", "_")}
         for k in ("script", "run", "location"):
