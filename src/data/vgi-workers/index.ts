@@ -453,14 +453,12 @@ export const VGI_SETUP = {
 function attachSql(w: WorkerRecord, location: string, comment?: string) {
   const required = w.attach_options.filter(o => o.required);
   const opts = [`TYPE vgi`, `LOCATION ${quote(location)}`, ...required.map(o => `${o.name.toUpperCase()} '…'`)];
-  const starter = starterQuery(w)?.trim();
-  const first = starter && (starter.length > 80 ? formatExampleSql(starter) : starter);
+  // ATTACH only: the first query is its own Quick start step, so each block does one thing.
   return [
     ...(comment ? [`-- ${comment}`] : []),
     `ATTACH ${quote(w.catalog)} AS ${w.catalog} (`,
     opts.map(o => `  ${o}`).join(',\n'),
     ');',
-    ...(first ? ['', first.endsWith(';') ? first : `${first};`] : []),
   ].join('\n');
 }
 
