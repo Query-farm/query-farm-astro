@@ -14,6 +14,7 @@ import WorkerCredentials from '../../../../components/orchard/WorkerCredentials.
 import CopyFormats from '../../../../components/orchard/CopyFormats.astro';
 import QueryResult from '../../../../components/orchard/QueryResult.astro';
 import { formatExampleSql } from '../../../../data/vgi-workers/format-sql';
+import { objectAnchor } from '../../../../data/vgi-workers/lazy';
 import { workers, relatedWorkers, platformLabel, platformIcon, platformOrder, VGI_SETUP, exampleObjects, catalogViewSql, normSql, readableQuestions, sampleResult, resultScore, showcaseFor, type Worker } from '../../../../data/vgi-workers';
 
 export function getStaticPaths() {
@@ -42,6 +43,55 @@ function renderDoc(src: string): string {
     },
   );
 }
+// Link the worker's own objects where its docs name them, so "use alfred_observations
+// for a snapshot" jumps to that function in the catalog explorer below. Inline code that
+// names an object is linked; a bare word only when it has an underscore, since plain
+// names like `series` or `sources` are ordinary English. Code blocks and existing links
+// are left alone. When a name exists in several schemas, the default schema wins.
+const objectAnchors = (() => {
+  const m = new Map<string, string>();
+  const schemas = [...w.schemas].sort((a, b) => Number(b.name === 'main') - Number(a.name === 'main'));
+  for (const s of schemas) {
+    for (const o of [...s.tables, ...s.functions]) {
+      const key = o.name.toLowerCase();
+      const anchor = objectAnchor(s.name, o.name);
+      if (!m.has(key)) m.set(key, anchor);
+      m.set(`${s.name}.${o.name}`.toLowerCase(), anchor);
+      m.set(`${w.catalog}.${s.name}.${o.name}`.toLowerCase(), anchor);
+    }
+  }
+  return m;
+})();
+function linkObjects(html: string): string {
+  const resolve = (t: string) => objectAnchors.get(t.trim().replace(/\(.*\)$/, '').toLowerCase());
+  const parts = html.split(/(<[^>]+>)/);
+  let inA = 0;
+  let inPre = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (p.startsWith('<')) {
+      if (/^<a[\s>]/i.test(p)) inA++;
+      else if (/^<\/a>/i.test(p)) inA = Math.max(0, inA - 1);
+      else if (/^<pre[\s>]/i.test(p)) inPre++;
+      else if (/^<\/pre>/i.test(p)) inPre = Math.max(0, inPre - 1);
+      else if (/^<code>$/i.test(p) && !inA && !inPre && parts[i + 2] === '</code>') {
+        const anchor = resolve(parts[i + 1]);
+        if (anchor) {
+          parts[i] = `<a href="#${anchor}" class="doc-objlink"><code>`;
+          parts[i + 2] = '</code></a>';
+          i += 2;
+        }
+      }
+      continue;
+    }
+    if (inA || inPre || (i > 0 && /^<code/i.test(parts[i - 1]))) continue;
+    parts[i] = p.replace(/\b([a-z][a-z0-9]*_[a-z0-9_]*)\b/gi, (word: string) => {
+      const anchor = resolve(word);
+      return anchor ? `<a href="#${anchor}" class="doc-objlink"><code>${word}</code></a>` : word;
+    });
+  }
+  return parts.join('');
+}
 // The catalog comment is meant as a one-paragraph summary, but some workers put their
 // whole markdown doc there (often the same text as vgi.doc_md). Show it as the plain
 // lede only when it is plain prose that the doc doesn't already open with; markdown
@@ -53,7 +103,7 @@ const summaryInDoc = Boolean(summaryText && w.doc_md && norm(w.doc_md).includes(
 const summaryIsMd = looksMarkdown(summaryText);
 const docSource = w.doc_md || (summaryIsMd ? summaryText : '');
 const showSummary = Boolean(summaryText) && summaryText !== w.blurb && !summaryIsMd && !summaryInDoc;
-const docHtml = docSource ? renderDoc(docSource) : '';
+const docHtml = docSource ? linkObjects(renderDoc(docSource)) : '';
 const examples = w.example_queries.length
   ? w.example_queries
   : w.readme_sql
