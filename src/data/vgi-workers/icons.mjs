@@ -71,7 +71,7 @@ export const workerIcons = {
   // Dates, units & validation
   conform: 'ph:check-circle', units: 'ph:ruler', color: 'ph:palette', useragent: 'ph:browser',
   calendar: 'ph:calendar-dots', rules: 'ph:flow-arrow', opa: 'ph:lock-key', fsm: 'ph:graph',
-  // Developer, network & observability
+  // Developer & networking
   code: 'ph:code', pprof: 'ph:flame', perf: 'ph:gauge', symbols: 'ph:hash', netflow: 'ph:network',
   bgp: 'ph:globe-hemisphere-west',
 };

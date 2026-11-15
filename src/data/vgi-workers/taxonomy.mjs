@@ -28,7 +28,7 @@ export const categories = [
     members: 'yfinance etf-schwab etf-first-trust etf-globalx etf-invesco etf-ishares etf-jpmorgan etf-spdr etf-vanguard etf-wisdomtree kalshi quant trading-calendar iso20022 ccxt perps polymarket',
   },
   {
-    id: 'economy', group: 'sources', name: 'Economic & government data', icon: 'ph:bank', tint: 'moss',
+    id: 'economy', group: 'sources', name: 'Economic data', icon: 'ph:bank', tint: 'moss',
     description: 'Official statistics from central banks and statistical agencies: national accounts, prices, labour, energy and public finance.',
     members: 'fred bea bls eia treasury ecb boe boj',
   },
@@ -104,7 +104,7 @@ export const categories = [
     members: 'conform units color useragent calendar rules opa fsm',
   },
   {
-    id: 'devtools', group: 'compute', name: 'Developer, network & observability', icon: 'ph:code', tint: 'slate',
+    id: 'devtools', group: 'compute', name: 'Developer & networking', icon: 'ph:code', tint: 'slate',
     description: 'Source code, profiles, symbolication, logs, and network telemetry: NetFlow, BGP and SNMP devices.',
     members: 'code pprof perf symbols netflow bgp snmp evtx',
   },
