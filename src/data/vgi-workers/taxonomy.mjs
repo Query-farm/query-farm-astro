@@ -35,28 +35,38 @@ export const categories = [
   {
     id: 'web', group: 'sources', name: 'News, social & research', icon: 'ph:newspaper', tint: 'gold',
     description: 'Web search, news, social networks, Wikipedia and scholarly literature.',
-    members: 'search news google wikipedia scholar hackernews bluesky opengraph',
+    members: 'search news wikipedia scholar hackernews bluesky opengraph',
   },
   {
-    id: 'geo', group: 'sources', name: 'Maps, places & weather', icon: 'ph:globe-hemisphere-west', tint: 'field',
-    description: 'Geocoding, addresses, map services and tiles, coordinate systems and weather.',
-    members: 'geocode libpostal proj arcgis mvt open-meteo nws buoys tides hydrology terrain lidar earth-observation trajectory ducks',
+    id: 'geo', group: 'sources', name: 'Maps & places', icon: 'ph:map-trifold', tint: 'field',
+    description: 'Geocoding, addresses, map services and tiles, coordinate systems, elevation, point clouds and spatial statistics.',
+    members: 'geocode libpostal proj arcgis mvt terrain lidar trajectory ducks pysal',
   },
   {
-    id: 'cloud', group: 'sources', name: 'Cloud & SaaS', icon: 'ph:cloud', tint: 'slate',
-    description: 'Microsoft Entra, Defender, Azure Monitor, cost and resource inventory, and GitHub.',
-    members: 'azure-directory azure-signins azure-defender azure-risk azure-loganalytics azure-resourcegraph azure-governance azure-cost azure-files github anthropic cloudflare google-analytics google-search-console slack',
+    id: 'weather', group: 'sources', name: 'Weather, ocean & earth', icon: 'ph:cloud-sun', tint: 'moss',
+    description: 'Forecasts and observations, ocean buoys and tides, river gauges and satellite imagery.',
+    members: 'open-meteo nws buoys tides hydrology earth-observation',
+  },
+  {
+    id: 'cloud', group: 'sources', name: 'Microsoft Azure', icon: 'ph:cloud', tint: 'slate',
+    description: 'Microsoft Entra, Defender, Azure Monitor, cost and resource inventory, governance and file shares.',
+    members: 'azure-directory azure-signins azure-defender azure-risk azure-loganalytics azure-resourcegraph azure-governance azure-cost azure-files',
+  },
+  {
+    id: 'saas', group: 'sources', name: 'SaaS & APIs', icon: 'ph:plugs-connected', tint: 'plum',
+    description: 'Your accounts on hosted services: GitHub, Cloudflare, Slack, Google APIs, Analytics and Search Console.',
+    members: 'github cloudflare slack google google-analytics google-search-console',
   },
   {
     id: 'enterprise', group: 'sources', name: 'Databases & enterprise', icon: 'ph:database', tint: 'slate',
     description: 'Other databases, search clusters, streams, directories and enterprise APIs.',
-    members: 'elasticsearch odata cdc kinesis graphql grpc soap ldap scim cache rdf snmp',
+    members: 'elasticsearch odata cdc kinesis graphql grpc soap ldap scim cache rdf',
   },
   // ── Work on your data ──────────────────────────────────────────────────────
   {
     id: 'ai', group: 'compute', name: 'AI & language', icon: 'ph:brain', tint: 'plum',
-    description: 'LLMs, embeddings, reranking, tokenisation, search indexes, NLP and translation from SQL.',
-    members: 'llm embed rerank tiktoken tantivy nlp translate grammar pii typesafe',
+    description: 'LLMs (including Anthropic\'s API), embeddings, reranking, tokenisation, search indexes, NLP and translation from SQL.',
+    members: 'llm anthropic embed rerank tiktoken tantivy nlp translate grammar pii typesafe',
   },
   {
     id: 'analytics', group: 'compute', name: 'Statistics & ML', icon: 'ph:chart-scatter', tint: 'moss',
@@ -89,9 +99,9 @@ export const categories = [
     members: 'conform units color useragent calendar rules opa fsm',
   },
   {
-    id: 'devtools', group: 'compute', name: 'Developer & observability', icon: 'ph:code', tint: 'slate',
-    description: 'Source code, profiles, symbolication, logs and network telemetry.',
-    members: 'code pprof perf symbols netflow bgp evtx',
+    id: 'devtools', group: 'compute', name: 'Developer, network & observability', icon: 'ph:code', tint: 'slate',
+    description: 'Source code, profiles, symbolication, logs, and network telemetry: NetFlow, BGP and SNMP devices.',
+    members: 'code pprof perf symbols netflow bgp snmp evtx',
   },
 ].map(c => ({ ...c, members: c.members.split(/\s+/).filter(Boolean) }));
 

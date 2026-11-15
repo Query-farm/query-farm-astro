@@ -33,10 +33,10 @@ export const workerIcons = {
   search: 'ph:magnifying-glass', news: 'ph:newspaper', google: 'ph:cloud-arrow-down',
   wikipedia: 'ph:book-open-text', scholar: 'ph:graduation-cap', hackernews: 'ph:chats-circle',
   bluesky: 'ph:at',
-  // Maps, places & weather
+  // Maps, places, weather & earth
   geocode: 'ph:map-pin', libpostal: 'ph:envelope-simple', proj: 'ph:globe-simple',
   arcgis: 'ph:map-trifold', mvt: 'ph:squares-four', 'open-meteo': 'ph:cloud-sun',
-  // Cloud & SaaS
+  // Azure, SaaS & APIs
   'azure-directory': 'ph:address-book', 'azure-signins': 'ph:sign-in', 'azure-defender': 'ph:shield-warning',
   'azure-risk': 'ph:warning-diamond', 'azure-loganalytics': 'ph:list-magnifying-glass',
   'azure-resourcegraph': 'ph:graph', 'azure-governance': 'ph:gavel', 'azure-cost': 'ph:currency-dollar',
@@ -71,7 +71,7 @@ export const workerIcons = {
   // Dates, units & validation
   conform: 'ph:check-circle', units: 'ph:ruler', color: 'ph:palette', useragent: 'ph:browser',
   calendar: 'ph:calendar-dots', rules: 'ph:flow-arrow', opa: 'ph:lock-key', fsm: 'ph:graph',
-  // Developer & observability
+  // Developer, network & observability
   code: 'ph:code', pprof: 'ph:flame', perf: 'ph:gauge', symbols: 'ph:hash', netflow: 'ph:network',
   bgp: 'ph:globe-hemisphere-west',
 };
