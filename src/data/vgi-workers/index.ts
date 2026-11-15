@@ -638,7 +638,9 @@ function enrich(w: WorkerRecord): Worker {
     ...w,
     name: workerName(w.slug),
     displayTitle: w.title || w.tagline || w.repo,
-    blurb: cleanBlurb(w.slug, trimDuckdb(tag.text) || w.summary || ''),
+    // The worker's own vgi.subtitle first: the GitHub description is a fallback, since
+    // other tooling rewrites it (e.g. "vgi-fred — Query Farm VGI worker with …").
+    blurb: cleanBlurb(w.slug, w.subtitle?.trim() || trimDuckdb(tag.text) || w.summary || ''),
     builtOn: tag.builtOn,
     categoryIds: cats.map(c => c.id),
     primaryCategory: primary,

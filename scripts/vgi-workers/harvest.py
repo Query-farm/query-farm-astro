@@ -875,6 +875,9 @@ def merge_worker(g: dict[str, Any], c: dict[str, Any] | None,
         "language": g["language"],
         "title": cat.get("title") or readme_h1(readme) or repo,
         "tagline": g.get("description"),
+        # vgi.subtitle: the worker's own listing line (linted by VGI148/149). Preferred
+        # over the GitHub description, which other tooling rewrites.
+        "subtitle": cat.get("subtitle"),
         "summary": cat.get("summary"),
         "doc_md": cat.get("doc_md"),
         "keywords": cat.get("keywords") or [],

@@ -72,6 +72,7 @@ export const workerRecordSchema = z.object({
   language: z.string(),
   title: z.string().nullable().optional(),
   tagline: z.string().nullable().optional(),
+  subtitle: z.string().nullable().optional(),
   summary: z.string().nullable().optional(),
   doc_md: str,
   keywords: z.array(z.string()).default([]),
