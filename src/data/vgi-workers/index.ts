@@ -63,7 +63,7 @@ function copyFormatsFor(repo: string, catalog: string): CopyFormat[] {
     let examples: { description: string; sql: string }[] = [];
     try {
       const ex = JSON.parse(f.tags['vgi.example_queries'] ?? '[]');
-      if (Array.isArray(ex)) examples = ex.filter(e => e && typeof e.sql === 'string').map(e => ({ description: String(e.description ?? ''), sql: e.sql }));
+      if (Array.isArray(ex)) examples = ex.filter(e => e && typeof e.sql === 'string' && !introspectionOnly(e.sql)).map(e => ({ description: String(e.description ?? ''), sql: e.sql }));
     } catch { /* malformed tag: show the generated skeleton instead */ }
     return {
       name: f.name,
@@ -319,6 +319,17 @@ const readsTable = (sql: string, name: string) =>
 const mentions = (sql: string, name: string) => callsFn(sql, name) || readsTable(sql, name);
 
 /**
+ * An example that only reads DuckDB's own catalog ("SELECT function_name FROM
+ * duckdb_functions() WHERE database_name = 'fred'") shows nothing the worker does, so
+ * the directory leaves it out. Worker examples call the worker fully qualified
+ * (`fred.main.observations(...)`), so one with no three-part reference that reads a
+ * system function or table is introspection only.
+ */
+const SYSTEM_CATALOG = /\b(duckdb_\w+|vgi_copy_formats|vgi_catalogs|vgi_secret_types|information_schema|pragma_\w+)\b/i;
+const QUALIFIED_REF = /\b[a-z_]\w*\.[a-z_]\w*\.[a-z_]\w*/i;
+export const introspectionOnly = (sql: string) => SYSTEM_CATALOG.test(sql) && !QUALIFIED_REF.test(sql);
+
+/**
  * The examples an object (table, function overload group or schema) declares, deduped.
  * `vgi.example_queries` is the author's list for this object. `vgi.executable_examples` is
  * often inherited from the catalog, so for a table or function it only counts when the SQL
@@ -332,7 +343,7 @@ export function objectExamples(
   const out: ObjectExample[] = [];
   const add = (e: ObjectExample) => {
     const k = normSql(e.sql);
-    if (!k || seen.has(k)) return;
+    if (!k || seen.has(k) || introspectionOnly(e.sql)) return;
     seen.add(k);
     out.push({ ...e, sql: e.sql.trim().replace(/;?\s*$/, ';') });
   };
@@ -636,6 +647,7 @@ function enrich(w: WorkerRecord): Worker {
 
   return {
     ...w,
+    example_queries: w.example_queries.filter(e => !e.sql || !introspectionOnly(e.sql)),
     name: workerName(w.slug),
     displayTitle: w.title || w.tagline || w.repo,
     // The worker's own vgi.subtitle first: the GitHub description is a fallback, since
@@ -713,7 +725,7 @@ export function showcaseFor(w: { repo: string; example_queries: ExampleLike[] })
     if (result) return { title: pick.title, sql: pick.sql, result };
   }
   for (const e of w.example_queries) {
-    if (!e.sql) continue;
+    if (!e.sql || introspectionOnly(e.sql)) continue;
     const result = sampleResult(w, e.sql);
     if (result && result.rows.length >= 2 && result.columns.length >= 2) return { title: e.title || e.description || null, sql: e.sql, result };
   }
@@ -722,7 +734,7 @@ export function showcaseFor(w: { repo: string; example_queries: ExampleLike[] })
 
 /** The query shown under the ATTACH: the showcase if there is one, else the first example. */
 export function starterQuery(w: { repo: string; example_queries: ExampleLike[] }): string | undefined {
-  return showcaseFor(w)?.sql ?? w.example_queries.find(e => e.sql)?.sql ?? undefined;
+  return showcaseFor(w)?.sql ?? w.example_queries.find(e => e.sql && !introspectionOnly(e.sql))?.sql ?? undefined;
 }
 
 /** The captured result for one of a worker's queries, if there is one. */
