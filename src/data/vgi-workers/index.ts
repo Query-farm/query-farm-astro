@@ -221,6 +221,12 @@ const NAME_OVERRIDES: Record<string, string> = {
   nws: 'NWS', ccxt: 'CCXT', rdf: 'RDF', snmp: 'SNMP', pysal: 'PySAL', lightgbm: 'LightGBM', xgboost: 'XGBoost',
   google: 'Google APIs', 'google-analytics': 'Google Analytics', 'google-search-console': 'Google Search Console',
   opengraph: 'Open Graph', tika: 'Apache Tika',
+  // SaaS & data-stack products: their own brand casing.
+  ckan: 'CKAN', cloudquery: 'CloudQuery', dbt: 'dbt', dlt: 'dlt', datahub: 'DataHub', gitlab: 'GitLab',
+  launchdarkly: 'LaunchDarkly', pagerduty: 'PagerDuty', posthog: 'PostHog', openlineage: 'OpenLineage',
+  openmetadata: 'OpenMetadata', opendatasoft: 'Opendatasoft', rabbitmq: 'RabbitMQ', nats: 'NATS',
+  pubsub: 'Google Pub/Sub', 'focus-cost': 'FOCUS cloud costs', 'unity-catalog': 'Unity Catalog',
+  airflow: 'Apache Airflow', kubernetes: 'Kubernetes', terraform: 'Terraform',
   // Workers in inventory.toml not yet listed (private or unreleased), named ahead of time.
   mvt: 'Vector tiles (MVT)', cdc: 'Postgres CDC', graphql: 'GraphQL', grpc: 'gRPC',
   ldap: 'LDAP', scim: 'SCIM', soap: 'SOAP', opa: 'OPA', fsm: 'State machines', kinesis: 'Kinesis',

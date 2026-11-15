@@ -54,8 +54,38 @@ export const categories = [
   },
   {
     id: 'saas', group: 'sources', name: 'SaaS & APIs', icon: 'ph:plugs-connected', tint: 'plum',
-    description: 'Your accounts on hosted services: GitHub repositories and issues, Cloudflare zones and analytics, Slack workspaces.',
-    members: 'github cloudflare slack',
+    description: 'Your accounts on hosted services: GitHub and GitLab projects, Jira and Linear issues, Notion pages, Slack, Stripe, Salesforce, Okta and LaunchDarkly.',
+    members: 'github gitlab jira linear notion slack stripe salesforce okta launchdarkly',
+  },
+  {
+    id: 'pipelines', group: 'sources', name: 'Pipelines & ELT', icon: 'ph:flow-arrow', tint: 'field',
+    description: 'Connector frameworks that reach hundreds of sources at once (Airbyte, Singer, dlt, Steampipe, CloudQuery, Fivetran, Nango), and the orchestrators and transforms that run them: Airflow, Dagster, Prefect, Temporal, dbt.',
+    members: 'airbyte singer dlt steampipe cloudquery fivetran nango airflow dagster prefect temporal dbt',
+  },
+  {
+    id: 'metadata', group: 'sources', name: 'Catalogs & lineage', icon: 'ph:tree-structure', tint: 'moss',
+    description: 'Data catalogs and lineage: DataHub, OpenMetadata, OpenLineage, Unity Catalog and Databricks.',
+    members: 'datahub openmetadata openlineage unity-catalog databricks',
+  },
+  {
+    id: 'observability', group: 'sources', name: 'Observability', icon: 'ph:pulse', tint: 'clay',
+    description: 'Metrics, logs, errors and incidents: Prometheus, Loki, Grafana, Datadog, Sentry and PagerDuty.',
+    members: 'prometheus loki grafana datadog sentry pagerduty',
+  },
+  {
+    id: 'product', group: 'sources', name: 'Product analytics & BI', icon: 'ph:chart-bar', tint: 'gold',
+    description: 'Event analytics (Amplitude, Mixpanel, PostHog, Segment) and BI tools (Looker, Metabase, Tableau).',
+    members: 'amplitude mixpanel posthog segment looker metabase tableau',
+  },
+  {
+    id: 'infra', group: 'sources', name: 'Cloud & infrastructure', icon: 'ph:hard-drives', tint: 'slate',
+    description: 'Clusters, deploys and infrastructure state: Kubernetes, Terraform, Cloudflare, Netlify and Vercel, plus FOCUS cloud-cost billing data.',
+    members: 'kubernetes terraform cloudflare netlify vercel focus-cost',
+  },
+  {
+    id: 'opendata', group: 'sources', name: 'Open data portals', icon: 'ph:globe-hemisphere-west', tint: 'moss',
+    description: 'Government and city open-data portals on CKAN, Socrata and Opendatasoft.',
+    members: 'ckan socrata opendatasoft',
   },
   {
     id: 'google', group: 'sources', name: 'Google', icon: 'ph:google-logo', tint: 'gold',
@@ -64,8 +94,8 @@ export const categories = [
   },
   {
     id: 'enterprise', group: 'sources', name: 'Databases & enterprise', icon: 'ph:database', tint: 'slate',
-    description: 'Other databases, search clusters, streams, directories and enterprise APIs.',
-    members: 'elasticsearch odata cdc kinesis graphql grpc soap ldap scim cache rdf',
+    description: 'Other databases, search clusters, streams and message queues, directories and enterprise APIs.',
+    members: 'elasticsearch odata cdc kinesis nats pubsub rabbitmq graphql grpc soap ldap scim cache rdf',
   },
   // ── Work on your data ──────────────────────────────────────────────────────
   {
