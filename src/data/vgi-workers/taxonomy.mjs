@@ -54,8 +54,13 @@ export const categories = [
   },
   {
     id: 'saas', group: 'sources', name: 'SaaS & APIs', icon: 'ph:plugs-connected', tint: 'plum',
-    description: 'Your accounts on hosted services: GitHub, Cloudflare, Slack, Google APIs, Analytics and Search Console.',
-    members: 'github cloudflare slack google google-analytics google-search-console',
+    description: 'Your accounts on hosted services: GitHub repositories and issues, Cloudflare zones and analytics, Slack workspaces.',
+    members: 'github cloudflare slack',
+  },
+  {
+    id: 'google', group: 'sources', name: 'Google', icon: 'ph:google-logo', tint: 'gold',
+    description: 'Sheets, Drive, Calendar, YouTube and any Google API through Discovery, plus Analytics 4 reports and Search Console search performance.',
+    members: 'google google-analytics google-search-console',
   },
   {
     id: 'enterprise', group: 'sources', name: 'Databases & enterprise', icon: 'ph:database', tint: 'slate',
@@ -113,6 +118,11 @@ export const families = [
     id: 'azure', name: 'Microsoft Azure', icon: 'ph:cloud',
     description: 'Entra directory and sign-ins, Defender, risk, Log Analytics, Resource Graph, governance, cost and Microsoft 365 files.',
     members: 'azure-directory azure-signins azure-defender azure-risk azure-loganalytics azure-resourcegraph azure-governance azure-cost azure-files',
+  },
+  {
+    id: 'google', name: 'Google', icon: 'ph:google-logo',
+    description: 'Google APIs, Analytics 4 reports and Search Console search performance.',
+    members: 'google google-analytics google-search-console',
   },
   {
     id: 'etf', name: 'ETF holdings', icon: 'ph:chart-pie-slice',
