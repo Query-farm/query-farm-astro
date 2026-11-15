@@ -216,6 +216,11 @@ const NAME_OVERRIDES: Record<string, string> = {
   'scikit-bio': 'scikit-bio', 'scikit-learn': 'scikit-learn',
   nba: 'NBA', nfl: 'NFL', nhl: 'NHL', ufc: 'UFC', nascar: 'NASCAR', f1: 'Formula 1',
   'ncaa-basketball': 'NCAA basketball', 'ncaa-football': 'NCAA football', 'us-soccer': 'US soccer',
+  // Economic data: agencies go by their acronyms; BoE/BoJ are clearer spelled out.
+  bea: 'BEA', bls: 'BLS', ecb: 'ECB', eia: 'EIA', fred: 'FRED', boe: 'Bank of England', boj: 'Bank of Japan',
+  nws: 'NWS', ccxt: 'CCXT', rdf: 'RDF', snmp: 'SNMP', pysal: 'PySAL', lightgbm: 'LightGBM', xgboost: 'XGBoost',
+  'google-analytics': 'Google Analytics', 'google-search-console': 'Google Search Console',
+  opengraph: 'Open Graph', tika: 'Apache Tika',
   // Workers in inventory.toml not yet listed (private or unreleased), named ahead of time.
   mvt: 'Vector tiles (MVT)', cdc: 'Postgres CDC', graphql: 'GraphQL', grpc: 'gRPC',
   ldap: 'LDAP', scim: 'SCIM', soap: 'SOAP', opa: 'OPA', fsm: 'State machines', kinesis: 'Kinesis',
