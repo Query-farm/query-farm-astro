@@ -29,9 +29,14 @@ export const categories = [
     members: 'yfinance etf-schwab etf-first-trust etf-globalx etf-invesco etf-ishares etf-jpmorgan etf-spdr etf-vanguard etf-wisdomtree kalshi quant trading-calendar iso20022 ccxt perps polymarket',
   },
   {
-    id: 'economy', group: 'public', name: 'Government & economy', icon: 'ph:bank', tint: 'moss',
-    description: 'Official statistics from central banks and statistical agencies, and the open-data portals governments and cities publish on (CKAN, Socrata, Opendatasoft).',
-    members: 'fred bea bls eia treasury ecb boe boj ckan socrata opendatasoft',
+    id: 'civic', group: 'public', name: 'Government & civic', icon: 'ph:bank', tint: 'moss',
+    description: 'Congress, elections and state legislatures, United Nations statistics, federal datasets such as TSA throughput and NHTSA vehicle safety, and the open-data portals governments publish on (CKAN, Socrata, Opendatasoft).',
+    members: 'us-congress us-elections us-state-legislatures un tsa cars ckan socrata opendatasoft',
+  },
+  {
+    id: 'economy', group: 'public', name: 'Economy & labour', icon: 'ph:chart-line-up', tint: 'gold',
+    description: 'Official economic statistics from central banks and statistical agencies, including wages by occupation and metro area.',
+    members: 'fred bea bls eia treasury ecb boe boj us-wages',
   },
   {
     id: 'web', group: 'public', name: 'News, social & research', icon: 'ph:newspaper', tint: 'gold',
@@ -45,8 +50,8 @@ export const categories = [
   },
   {
     id: 'weather', group: 'public', name: 'Weather, ocean & earth', icon: 'ph:cloud-sun', tint: 'moss',
-    description: 'Forecasts and observations, ocean buoys and tides, river gauges and satellite imagery.',
-    members: 'open-meteo nws buoys tides hydrology earth-observation',
+    description: 'Forecasts and observations, ocean buoys and tides, river gauges, satellite imagery and plant hardiness zones.',
+    members: 'open-meteo nws buoys tides hydrology earth-observation us-hardiness',
   },
   // ── Your systems & SaaS ───────────────────────────────────────────────────
   {
@@ -107,8 +112,8 @@ export const categories = [
   },
   {
     id: 'science', group: 'compute', name: 'Science & health', icon: 'ph:flask', tint: 'moss',
-    description: 'Cheminformatics, bioinformatics and clinical data standards (HL7, FHIR).',
-    members: 'chem scikit-bio hl7 fhir',
+    description: 'The periodic table and isotopes, cheminformatics, bioinformatics and clinical data standards (HL7, FHIR).',
+    members: 'elements chem scikit-bio hl7 fhir',
   },
   {
     id: 'security', group: 'compute', name: 'Security & forensics', icon: 'ph:shield-check', tint: 'clay',

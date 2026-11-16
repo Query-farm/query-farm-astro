@@ -8,6 +8,10 @@
 // without the `vgi-` prefix); values are `ph:` icon names (https://phosphoricons.com).
 
 export const workerIcons = {
+  // Added 2026-11-16 (civic & reference wave)
+  cars: 'ph:car', elements: 'ph:flask', 'us-hardiness': 'ph:plant', 'us-congress': 'ph:gavel',
+  'us-elections': 'ph:check-square', 'us-state-legislatures': 'ph:users-three', 'us-wages': 'ph:money',
+  un: 'ph:globe', tsa: 'ph:airplane-takeoff',
   // Added 2026-11-14
   fred: 'ph:chart-line', bea: 'ph:buildings', bls: 'ph:briefcase', eia: 'ph:lightning', treasury: 'ph:bank',
   ecb: 'ph:currency-eur', boe: 'ph:currency-gbp', boj: 'ph:currency-jpy',

@@ -226,7 +226,9 @@ const NAME_OVERRIDES: Record<string, string> = {
   launchdarkly: 'LaunchDarkly', pagerduty: 'PagerDuty', posthog: 'PostHog', openlineage: 'OpenLineage',
   openmetadata: 'OpenMetadata', opendatasoft: 'Opendatasoft', rabbitmq: 'RabbitMQ', nats: 'NATS',
   pubsub: 'Google Pub/Sub', 'focus-cost': 'FOCUS cloud costs', 'unity-catalog': 'Unity Catalog',
-  airflow: 'Apache Airflow', kubernetes: 'Kubernetes', terraform: 'Terraform',
+  airflow: 'Apache Airflow', cars: 'Cars & vehicle safety', elements: 'Periodic table', un: 'United Nations',
+  tsa: 'TSA checkpoint volumes', 'us-congress': 'US Congress', 'us-elections': 'US elections',
+  'us-state-legislatures': 'US state legislatures', 'us-wages': 'US wages (OEWS)', 'us-hardiness': 'USDA hardiness zones', kubernetes: 'Kubernetes', terraform: 'Terraform',
   // Workers in inventory.toml not yet listed (private or unreleased), named ahead of time.
   mvt: 'Vector tiles (MVT)', cdc: 'Postgres CDC', graphql: 'GraphQL', grpc: 'gRPC',
   ldap: 'LDAP', scim: 'SCIM', soap: 'SOAP', opa: 'OPA', fsm: 'State machines', kinesis: 'Kinesis',
