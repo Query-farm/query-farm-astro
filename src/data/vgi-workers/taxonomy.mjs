@@ -8,93 +8,90 @@
 // (e.g. evtx is forensics AND log analytics), but keep that rare: the first
 // category listed for a worker is its primary one, used for the card tint.
 
-// Two groups answer the first question a visitor has: does this connector bring
-// data in from somewhere, or does it work on data I already have?
+// Three groups answer the first question a visitor has: is this public data, one of
+// my own systems, or something that works on data I already have?
 export const groups = [
-  { id: 'sources', name: 'Bring data in', description: 'Connectors that fetch from a service, an API or a published dataset.' },
+  { id: 'public', name: 'Public data', description: 'Published datasets and open APIs anyone can query: no account of your own needed.' },
+  { id: 'systems', name: 'Your systems & SaaS', description: 'Connectors that read the services your team runs or pays for, with your own credentials.' },
   { id: 'compute', name: 'Work on your data', description: 'Functions and parsers you apply to your own rows and files.' },
 ];
 
 export const categories = [
-  // ── Bring data in ──────────────────────────────────────────────────────────
+  // ── Public data ────────────────────────────────────────────────────────────
   {
-    id: 'sports', group: 'sources', name: 'Sports', icon: 'ph:trophy', tint: 'field',
+    id: 'sports', group: 'public', name: 'Sports', icon: 'ph:trophy', tint: 'field',
     description: 'Scores, standings, box scores, play-by-play and player stats across leagues.',
     members: 'mlb nfl nba nhl ncaa-football ncaa-basketball soccer us-soccer cricket rugby tennis golf f1 nascar ufc',
   },
   {
-    id: 'finance', group: 'sources', name: 'Markets & finance', icon: 'ph:chart-line-up', tint: 'gold',
+    id: 'finance', group: 'public', name: 'Markets & finance', icon: 'ph:chart-line-up', tint: 'gold',
     description: 'Market data, ETF holdings, prediction markets, trading calendars, pricing and payments messages.',
     members: 'yfinance etf-schwab etf-first-trust etf-globalx etf-invesco etf-ishares etf-jpmorgan etf-spdr etf-vanguard etf-wisdomtree kalshi quant trading-calendar iso20022 ccxt perps polymarket',
   },
   {
-    id: 'economy', group: 'sources', name: 'Economic data', icon: 'ph:bank', tint: 'moss',
-    description: 'Official statistics from central banks and statistical agencies: national accounts, prices, labour, energy and public finance.',
-    members: 'fred bea bls eia treasury ecb boe boj',
+    id: 'economy', group: 'public', name: 'Government & economy', icon: 'ph:bank', tint: 'moss',
+    description: 'Official statistics from central banks and statistical agencies, and the open-data portals governments and cities publish on (CKAN, Socrata, Opendatasoft).',
+    members: 'fred bea bls eia treasury ecb boe boj ckan socrata opendatasoft',
   },
   {
-    id: 'web', group: 'sources', name: 'News, social & research', icon: 'ph:newspaper', tint: 'gold',
+    id: 'web', group: 'public', name: 'News, social & research', icon: 'ph:newspaper', tint: 'gold',
     description: 'Web search, news, social networks, Wikipedia and scholarly literature.',
     members: 'search news wikipedia scholar hackernews bluesky opengraph',
   },
   {
-    id: 'geo', group: 'sources', name: 'Maps & places', icon: 'ph:map-trifold', tint: 'field',
+    id: 'geo', group: 'public', name: 'Maps & places', icon: 'ph:map-trifold', tint: 'field',
     description: 'Geocoding, addresses, map services and tiles, coordinate systems, elevation, point clouds and spatial statistics.',
     members: 'geocode libpostal proj arcgis mvt terrain lidar trajectory ducks pysal',
   },
   {
-    id: 'weather', group: 'sources', name: 'Weather, ocean & earth', icon: 'ph:cloud-sun', tint: 'moss',
+    id: 'weather', group: 'public', name: 'Weather, ocean & earth', icon: 'ph:cloud-sun', tint: 'moss',
     description: 'Forecasts and observations, ocean buoys and tides, river gauges and satellite imagery.',
     members: 'open-meteo nws buoys tides hydrology earth-observation',
   },
+  // ── Your systems & SaaS ───────────────────────────────────────────────────
   {
-    id: 'cloud', group: 'sources', name: 'Microsoft Azure', icon: 'ph:cloud', tint: 'slate',
-    description: 'Microsoft Entra, Defender, Azure Monitor, cost and resource inventory, governance and file shares.',
-    members: 'azure-directory azure-signins azure-defender azure-risk azure-loganalytics azure-resourcegraph azure-governance azure-cost azure-files',
+    id: 'saas', group: 'systems', name: 'Dev & collaboration', icon: 'ph:users-three', tint: 'plum',
+    description: 'Where your team works: GitHub and GitLab projects, Jira and Linear issues, Notion pages and Slack.',
+    members: 'github gitlab jira linear notion slack',
   },
   {
-    id: 'saas', group: 'sources', name: 'SaaS & APIs', icon: 'ph:plugs-connected', tint: 'plum',
-    description: 'Your accounts on hosted services: GitHub and GitLab projects, Jira and Linear issues, Notion pages, Slack, Stripe, Salesforce, Okta and LaunchDarkly.',
-    members: 'github gitlab jira linear notion slack stripe salesforce okta launchdarkly',
+    id: 'business', group: 'systems', name: 'Business & product apps', icon: 'ph:storefront', tint: 'gold',
+    description: 'Payments, CRM and identity (Stripe, Salesforce, Okta), feature flags (LaunchDarkly) and product analytics (Amplitude, Mixpanel, PostHog, Segment, Google Analytics).',
+    members: 'stripe salesforce okta launchdarkly amplitude mixpanel posthog segment google-analytics',
   },
   {
-    id: 'pipelines', group: 'sources', name: 'Pipelines & ELT', icon: 'ph:flow-arrow', tint: 'field',
+    id: 'pipelines', group: 'systems', name: 'Pipelines & ELT', icon: 'ph:flow-arrow', tint: 'field',
     description: 'Connector frameworks that reach hundreds of sources at once (Airbyte, Singer, dlt, Steampipe, CloudQuery, Fivetran, Nango), and the orchestrators and transforms that run them: Airflow, Dagster, Prefect, Temporal, dbt.',
     members: 'airbyte singer dlt steampipe cloudquery fivetran nango airflow dagster prefect temporal dbt',
   },
   {
-    id: 'metadata', group: 'sources', name: 'Catalogs & lineage', icon: 'ph:tree-structure', tint: 'moss',
-    description: 'Data catalogs and lineage: DataHub, OpenMetadata, OpenLineage, Unity Catalog and Databricks.',
-    members: 'datahub openmetadata openlineage unity-catalog databricks',
+    id: 'metadata', group: 'systems', name: 'BI & data catalogs', icon: 'ph:tree-structure', tint: 'moss',
+    description: 'Dashboards and their lineage (Looker, Metabase, Tableau) and data catalogs (DataHub, OpenMetadata, OpenLineage, Unity Catalog, Databricks).',
+    members: 'looker metabase tableau datahub openmetadata openlineage unity-catalog databricks',
   },
   {
-    id: 'observability', group: 'sources', name: 'Observability', icon: 'ph:pulse', tint: 'clay',
+    id: 'observability', group: 'systems', name: 'Observability', icon: 'ph:pulse', tint: 'clay',
     description: 'Metrics, logs, errors and incidents: Prometheus, Loki, Grafana, Datadog, Sentry and PagerDuty.',
     members: 'prometheus loki grafana datadog sentry pagerduty',
   },
   {
-    id: 'product', group: 'sources', name: 'Product analytics & BI', icon: 'ph:chart-bar', tint: 'gold',
-    description: 'Event analytics (Amplitude, Mixpanel, PostHog, Segment) and BI tools (Looker, Metabase, Tableau).',
-    members: 'amplitude mixpanel posthog segment looker metabase tableau',
-  },
-  {
-    id: 'infra', group: 'sources', name: 'Cloud & infrastructure', icon: 'ph:hard-drives', tint: 'slate',
+    id: 'infra', group: 'systems', name: 'Cloud & infrastructure', icon: 'ph:hard-drives', tint: 'slate',
     description: 'Clusters, deploys and infrastructure state: Kubernetes, Terraform, Cloudflare, Netlify and Vercel, plus FOCUS cloud-cost billing data.',
     members: 'kubernetes terraform cloudflare netlify vercel focus-cost',
   },
   {
-    id: 'opendata', group: 'sources', name: 'Open data portals', icon: 'ph:globe-hemisphere-west', tint: 'moss',
-    description: 'Government and city open-data portals on CKAN, Socrata and Opendatasoft.',
-    members: 'ckan socrata opendatasoft',
+    id: 'cloud', group: 'systems', name: 'Microsoft Azure', icon: 'ph:cloud', tint: 'slate',
+    description: 'Microsoft Entra, Defender, Azure Monitor, cost and resource inventory, governance and file shares.',
+    members: 'azure-directory azure-signins azure-defender azure-risk azure-loganalytics azure-resourcegraph azure-governance azure-cost azure-files',
   },
   {
-    id: 'google', group: 'sources', name: 'Google', icon: 'ph:google-logo', tint: 'gold',
+    id: 'google', group: 'systems', name: 'Google', icon: 'ph:google-logo', tint: 'gold',
     description: 'Sheets, Drive, Calendar, YouTube and any Google API through Discovery, plus Analytics 4 reports and Search Console search performance.',
     members: 'google google-analytics google-search-console',
   },
   {
-    id: 'enterprise', group: 'sources', name: 'Databases & enterprise', icon: 'ph:database', tint: 'slate',
-    description: 'Other databases, search clusters, streams and message queues, directories and enterprise APIs.',
+    id: 'enterprise', group: 'systems', name: 'Databases & messaging', icon: 'ph:database', tint: 'slate',
+    description: 'Other databases and search clusters, change streams and message queues (Kafka-style streams, NATS, Pub/Sub, RabbitMQ), directories and enterprise APIs.',
     members: 'elasticsearch odata cdc kinesis nats pubsub rabbitmq graphql grpc soap ldap scim cache rdf',
   },
   // ── Work on your data ──────────────────────────────────────────────────────
