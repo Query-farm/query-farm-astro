@@ -55,7 +55,7 @@ test('the allow-list needs the deployment’s own secret: missing, wrong, anothe
   assert.equal((await allowlist(call, id, 'qfg_wrong')).status, 401);
   assert.equal((await allowlist(call, 'dep_00000000-0000-4000-8000-000000000000', gate.secret)).status, 401, 'unknown deployment looks the same');
   // A second deployment's secret doesn't open the first.
-  const other = (await call('/api/orchard/deployments', { method: 'POST', cookie: user, body: { worker: 'yfinance', size: 's', instances: 1, region: 'iad' } })).body;
+  const other = (await call('/api/orchard/deployments', { method: 'POST', cookie: user, body: { worker: 'yfinance', size: 's', instances: 1, region: 'iad', allow_duplicate: true } })).body;
   const otherGate = (await call(`/api/orchard/admin/requests/${other.request_id}`, { method: 'POST', cookie: admin, body: { status: 'done', endpoint: 'https://b.fly.dev' } })).body.gate;
   assert.equal((await allowlist(call, id, otherGate.secret)).status, 401);
 

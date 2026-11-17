@@ -30,7 +30,7 @@ export const SECRET = 'test-session-secret-0123456789abcdef-xyz';
 export const ORIGIN = 'https://query.farm';
 
 export const WORKERS = [
-  { slug: 'yfinance', name: 'Yahoo Finance', catalog: 'yfinance', pricing: 'open', version: 'v0.2.0' },
+  { slug: 'yfinance', name: 'Yahoo Finance', catalog: 'yfinance', pricing: 'open', version: 'v0.2.0', versions: ['v0.2.0', 'v0.1.9'] },
   { slug: 'premium', name: 'Premium Data', catalog: 'premium', pricing: 'paid', version: 'v1.0.0' },
 ];
 

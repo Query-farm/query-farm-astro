@@ -174,3 +174,56 @@ test('unknown routes are 404', async () => {
   assert.equal((await call('/api/orchard/nope', { cookie: user })).status, 404);
   assert.equal((await call('/api/orchard/deployments/not-an-id/scale', { method: 'POST', cookie: user, body: { delta: 1 } })).status, 404);
 });
+
+test('a deployment pins a listed release: latest by default, an older one on request, never an unknown one', async () => {
+  const { call, user, db } = await setup();
+  const latest = await call('/api/orchard/deployments', { method: 'POST', cookie: user, body: NEW });
+  assert.equal(latest.status, 201);
+  assert.equal(latest.body.deployment.version, 'v0.2.0');
+
+  const unknown = await call('/api/orchard/deployments', { method: 'POST', cookie: user, body: { ...NEW, version: 'v9.9.9', allow_duplicate: true } });
+  assert.equal(unknown.status, 400);
+  assert.deepEqual(Object.keys(unknown.body.errors), ['version']);
+
+  const older = await call('/api/orchard/deployments', { method: 'POST', cookie: user, body: { ...NEW, version: 'v0.1.9', allow_duplicate: true } });
+  assert.equal(older.status, 201);
+  assert.equal(older.body.deployment.version, 'v0.1.9');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM deployments').get().n, 2);
+});
+
+test('a second deployment of the same worker is refused unless asked for, and stopped ones do not count', async () => {
+  const { e, call, user, outsider, db, fetches } = await setup();
+  await seedOrg(e.ORCHARD_DB, { id: 'org_eve', name: 'eve.example', userId: 'user_eve', email: 'eve@example.com', customer: 'cus_eve', subscription: 'sub_eve' });
+  const first = await call('/api/orchard/deployments', { method: 'POST', cookie: user, body: NEW });
+  assert.equal(first.status, 201);
+  const emails = fetches.find('POST', 'https://api.resend.com/emails').length;
+
+  const again = await call('/api/orchard/deployments', { method: 'POST', cookie: user, body: NEW });
+  assert.equal(again.status, 409);
+  assert.equal(again.body.reason, 'duplicate');
+  assert.equal(again.body.existing.length, 1);
+  assert.equal(again.body.existing[0].id, first.body.deployment.id);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM deployments').get().n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM requests').get().n, 1, 'no orphan request');
+  assert.equal(fetches.find('POST', 'https://api.resend.com/emails').length, emails, 'no email for a refused duplicate');
+
+  // Another workspace is unaffected, and a different worker is fine.
+  assert.equal((await call('/api/orchard/deployments', { method: 'POST', cookie: outsider, body: NEW })).status, 201);
+  assert.equal((await call('/api/orchard/deployments', { method: 'POST', cookie: user, body: { ...NEW, worker: 'premium' } })).status, 201);
+
+  // Explicitly asking for a separate one works.
+  const second = await call('/api/orchard/deployments', { method: 'POST', cookie: user, body: { ...NEW, region: 'fra', allow_duplicate: true } });
+  assert.equal(second.status, 201);
+
+  // Once everything for the worker is stopped, a new request goes through again.
+  db.exec("UPDATE deployments SET status = 'stopped' WHERE worker = 'yfinance' AND org_id = 'org_1'");
+  assert.equal((await call('/api/orchard/deployments', { method: 'POST', cookie: user, body: NEW })).status, 201);
+});
+
+test('two simultaneous requests for the same worker create one deployment', async () => {
+  const { call, user, db } = await setup();
+  const results = await Promise.all([1, 2, 3].map(() => call('/api/orchard/deployments', { method: 'POST', cookie: user, body: NEW })));
+  assert.deepEqual(results.map(r => r.status).sort(), [201, 409, 409]);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM deployments WHERE worker = 'yfinance'").get().n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM requests').get().n, 1);
+});

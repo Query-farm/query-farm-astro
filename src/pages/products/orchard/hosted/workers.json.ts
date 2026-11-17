@@ -1,5 +1,6 @@
 // The slim worker list the hosted Orchard console and its Functions read:
-// slug, name, ATTACH alias, open/paid and the release to deploy. The full
+// slug, name, ATTACH alias, open/paid, the latest release and the recent releases
+// a customer may pick from. The full
 // catalog.json is far too large to parse inside a Pages Function.
 import { workers } from '../../../../data/vgi-workers';
 
@@ -13,6 +14,7 @@ export function GET() {
         catalog: w.catalog,
         pricing: w.offering.pricing,
         version: w.release?.tag ?? null,
+        versions: w.release?.versions?.length ? w.release.versions : w.release?.tag ? [w.release.tag] : [],
       })),
     }),
     { headers: { 'Content-Type': 'application/json; charset=utf-8' } },

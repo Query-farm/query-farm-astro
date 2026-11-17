@@ -12,8 +12,15 @@ export interface HostedWorker {
   name: string;
   catalog: string;
   pricing: 'open' | 'paid';
+  /** Latest release tag. */
   version: string | null;
+  /** Recent published release tags, newest first; a deployment must use one of them. */
+  versions?: string[];
 }
+
+/** The releases a customer may deploy: the recent list, or just the latest. */
+export const deployableVersions = (w: HostedWorker): string[] =>
+  w.versions?.length ? w.versions : w.version ? [w.version] : [];
 
 let cached: { at: number; workers: Map<string, HostedWorker> } | null = null;
 

@@ -85,6 +85,8 @@ export const workerRecordSchema = z.object({
       tag: z.string(),
       published_at: str,
       assets: z.array(assetSchema).default([]),
+      /** Recent published release tags, newest first (the hosted console's version picker). */
+      versions: z.array(z.string()).default([]),
     })
     .nullable()
     .optional(),

@@ -241,10 +241,19 @@ def fetch_github(row: dict[str, str]) -> dict[str, Any]:
                 assets.append(
                     {"name": a["name"], "platform": plat, "url": a["browser_download_url"]}
                 )
+        # Recent published releases, newest first: the hosted console lets a
+        # customer pick which one to deploy.
+        recent = gh_api(f"repos/{ORG}/{repo}/releases?per_page=20") or []
+        versions = [r["tag_name"] for r in recent
+                    if isinstance(r, dict) and r.get("tag_name")
+                    and not r.get("draft") and not r.get("prerelease")]
+        if rel.get("tag_name") and rel["tag_name"] not in versions:
+            versions.insert(0, rel["tag_name"])
         out["release"] = {
             "tag": rel.get("tag_name"),
             "published_at": rel.get("published_at"),
             "assets": assets,
+            "versions": versions[:20],
         }
     else:
         out["release"] = None

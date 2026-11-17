@@ -58,6 +58,8 @@ const STATUS_LABEL: Record<string, string> = {
   requested: 'Requested', provisioning: 'Provisioning', live: 'Live', stopped: 'Stopped', rejected: 'Not provisioned',
   new: 'New', in_progress: 'In progress', done: 'Done',
 };
+/** Deployments that count as already running a worker. */
+const ACTIVE = ['requested', 'provisioning', 'live'];
 const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
 async function goToCheckout(returnTo: string, wrap?: Element | null) {
@@ -89,9 +91,48 @@ function wireBilling(me: Json) {
   if (me.billing.payment === 'failed') show($('[data-payment-failed]', card));
 }
 
+/** The inventory table: every deployment, live and requested first, with a monthly estimate. */
+function renderInventory(deployments: Json[]) {
+  const box = $('[data-inventory]');
+  if (!box) return;
+  show(box, deployments.length > 0);
+  if (!deployments.length) return;
+  const prices = JSON.parse(box.dataset.prices ?? '{}') as Record<string, number>;
+  const order = (d: Json) => ['live', 'provisioning', 'requested', 'stopped', 'rejected'].indexOf(d.status);
+  const sorted = [...deployments].sort((a, b) => order(a) - order(b) || a.workerName.localeCompare(b.workerName));
+  let running = 0, monthly = 0;
+  const rows = sorted.map(d => {
+    const frag = clone('tpl-inventory-row');
+    const tr = frag.firstElementChild as HTMLElement;
+    const link = $<HTMLAnchorElement>('[data-name]', tr)!;
+    link.textContent = d.workerName;
+    link.href = `#dep-${d.id}`;
+    setText(tr, '[data-version]', d.version ?? '—');
+    setText(tr, '[data-size]', d.size.toUpperCase());
+    setText(tr, '[data-region]', d.region);
+    const closed = d.status === 'stopped' || d.status === 'rejected';
+    const pendingTo = d.desiredInstances !== d.actualInstances && !closed ? ` → ${d.desiredInstances}` : '';
+    setText(tr, '[data-instances]', `${d.actualInstances}${pendingTo}`);
+    setText(tr, '[data-status]', STATUS_LABEL[d.status] ?? d.status);
+    const cost = closed ? 0 : d.actualInstances * (prices[d.size] ?? 0) + (d.paid && d.status === 'live' ? prices.license ?? 0 : 0);
+    setText(tr, '[data-monthly]', closed ? '—' : usd(cost));
+    if (closed) tr.classList.add('text-soil-500');
+    else { running += d.actualInstances; monthly += cost; }
+    return frag;
+  });
+  $('[data-inventory-rows]', box)!.replaceChildren(...rows);
+  setText(box, '[data-inventory-instances]', String(running));
+  setText(box, '[data-inventory-monthly]', usd(monthly));
+  const active = deployments.filter(d => ACTIVE.includes(d.status)).length;
+  const workers = new Set(deployments.filter(d => ACTIVE.includes(d.status)).map(d => d.worker)).size;
+  setText(box, '[data-inventory-summary]', `${active} active deployment${active === 1 ? '' : 's'} of ${workers} worker${workers === 1 ? '' : 's'}`);
+}
+
 function renderDeployment(d: Json, reload: () => void): DocumentFragment {
   const row = clone('tpl-deployment');
   const root = row.firstElementChild as HTMLElement;
+  root.id = `dep-${d.id}`;
+  root.classList.add('scroll-mt-24');
   setText(root, '[data-name]', d.workerName);
   const link = $<HTMLAnchorElement>('[data-worker-link]', root);
   if (link) link.href = `/products/orchard/connectors/${d.worker}`;
@@ -145,6 +186,7 @@ export async function initConsole() {
     const { body } = await api('deployments');
     if (!body.ok) return fail(body.error ?? 'Deployments could not be loaded.');
     list.replaceChildren(...(body.deployments as Json[]).map(d => renderDeployment(d, load)));
+    renderInventory(body.deployments as Json[]);
     show($('[data-empty]'), body.deployments.length === 0);
     const m = body.monthToDate;
     setText(document, '[data-mtd-usage]', usd(m.usageUsd));
@@ -158,7 +200,7 @@ export async function initNew() {
   const params = new URLSearchParams(location.search);
   const form = $<HTMLFormElement>('form[data-new]')!;
   // Restore choices after a round trip through sign-in or Checkout.
-  for (const name of ['worker', 'size', 'instances', 'region']) {
+  for (const name of ['worker', 'size', 'instances', 'region']) {  // version is restored once its list loads
     const value = params.get(name);
     const field = form.elements.namedItem(name) as HTMLInputElement | RadioNodeList | null;
     if (value && field) field.value = value;
@@ -170,13 +212,49 @@ export async function initNew() {
   show($('[data-state="ready"]'));
 
   const select = form.elements.namedItem('worker') as HTMLSelectElement;
+  const versionSelect = form.elements.namedItem('version') as HTMLSelectElement;
+  const allowDuplicate = form.elements.namedItem('allow_duplicate') as HTMLInputElement;
+  let bySlug = new Map<string, Json>();
+  let mine: Json[] = [];
   try {
-    const { workers } = await (await fetch('/products/orchard/hosted/workers.json')).json() as { workers: Json[] };
+    const [list, deployments] = await Promise.all([
+      fetch('/products/orchard/hosted/workers.json').then(r => r.json()) as Promise<{ workers: Json[] }>,
+      api('deployments'),
+    ]);
+    mine = deployments.body.ok ? deployments.body.deployments as Json[] : [];
+    bySlug = new Map(list.workers.map(w => [w.slug, w]));
     const wanted = params.get('worker');
-    select.replaceChildren(new Option('Choose a worker…', ''), ...workers
+    select.replaceChildren(new Option('Choose a worker…', ''), ...list.workers
       .sort((a, b) => a.name.localeCompare(b.name))
       .map(w => new Option(`${w.name}${w.pricing === 'paid' ? ' (paid)' : ''}`, w.slug, false, w.slug === wanted)));
   } catch { fail('The worker list could not be loaded.'); return; }
+
+  const describe = (d: Json) => [STATUS_LABEL[d.status] ?? d.status, d.version, `${d.size.toUpperCase()} × ${d.actualInstances || d.desiredInstances}`, d.region].filter(Boolean).join(' · ');
+  /** Show the "already have it" notice for these deployments (none hides it). */
+  const showDuplicate = (existing: Json[], name: string) => {
+    const box = $('[data-duplicate]');
+    setText(document, '[data-duplicate-name]', name);
+    $('[data-duplicate-list]')?.replaceChildren(...existing.map(d => {
+      const li = document.createElement('li');
+      li.textContent = describe(d);
+      return li;
+    }));
+    show(box, existing.length > 0);
+    if (!existing.length) allowDuplicate.checked = false;
+  };
+  const onWorker = (restoreVersion?: string | null) => {
+    const w = bySlug.get(select.value);
+    const versions: string[] = w ? (w.versions?.length ? w.versions : w.version ? [w.version] : []) : [];
+    versionSelect.replaceChildren(...(versions.length
+      ? versions.map((v, i) => new Option(i === 0 ? `${v} (latest)` : v, v, i === 0, v === restoreVersion))
+      : [new Option(w ? 'Latest release' : 'Choose a worker first', '')]));
+    if (restoreVersion && versions.includes(restoreVersion)) versionSelect.value = restoreVersion;
+    versionSelect.disabled = versions.length < 2;
+    showDuplicate(mine.filter(d => d.worker === select.value && ACTIVE.includes(d.status)), w?.name ?? '');
+  };
+  select.addEventListener('change', () => onWorker());
+  onWorker(params.get('version'));
+  if (params.get('allow_duplicate') === '1') allowDuplicate.checked = true;
 
   const billingNote = $('[data-billing-required]');
   show(billingNote, !me.body.billing.active);
@@ -193,16 +271,27 @@ export async function initNew() {
   form.addEventListener('submit', async ev => {
     ev.preventDefault();
     const data = new FormData(form);
-    const choice = { worker: String(data.get('worker')), size: String(data.get('size')), instances: Number(data.get('instances')), region: String(data.get('region')) };
+    const choice = {
+      worker: String(data.get('worker')), version: String(data.get('version') ?? ''), size: String(data.get('size')),
+      instances: Number(data.get('instances')), region: String(data.get('region')), allow_duplicate: allowDuplicate.checked,
+    };
     const button = $<HTMLButtonElement>('button[type="submit"]', form)!;
     button.disabled = true;
     form.querySelectorAll('[data-error-for]').forEach(el => { el.textContent = ''; });
     const { status, body } = await api('deployments', { method: 'POST', body: choice });
     if (status === 402) {
-      const back = `${location.pathname}?${new URLSearchParams({ ...choice, instances: String(choice.instances) })}`;
+      const back = `${location.pathname}?${new URLSearchParams({
+        ...choice, instances: String(choice.instances), allow_duplicate: choice.allow_duplicate ? '1' : '',
+      })}`;
       return goToCheckout(back, button);
     }
     button.disabled = false;
+    if (status === 409 && body.reason === 'duplicate') {
+      showDuplicate(body.existing ?? [], bySlug.get(choice.worker)?.name ?? choice.worker);
+      setText(form, '[data-form-error]', body.error);
+      $('[data-duplicate]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
     if (!body.ok) {
       for (const [field, message] of Object.entries((body.errors ?? {}) as Record<string, string>)) setText(form, `[data-error-for="${field}"]`, message);
       setText(form, '[data-form-error]', body.error ?? 'That did not work. Please try again.');

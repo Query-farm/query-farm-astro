@@ -3,7 +3,8 @@
 //
 //   GET  me                         who am I, my org, billing state
 //   GET  deployments                my org's deployments, open requests, month-to-date cost
-//   POST deployments                {worker, size, instances, region} → create request
+//   POST deployments                {worker, version?, size, instances, region, allow_duplicate?} → create request
+//                                   (409 duplicate when the workspace already runs that worker)
 //   POST deployments/:id/scale      {delta: 1 | -1} → scale request
 //   POST deployments/:id/stop       → stop request
 //   POST billing/checkout           {return_to} → Stripe Checkout URL
@@ -29,9 +30,11 @@ import { notifyTeam } from './notify';
 import { LICENSE_MONTHLY_USD, MAX_INSTANCES, SIZES, isRegion, minutesCostUsd, sizeById } from './pricing';
 import { isAdmin, requireSession, type Session } from './session';
 import { billingActive, billingConfigured, createCheckout, createPortal, syncLicenses } from './stripe';
-import { hostedWorkers } from './workers';
+import { deployableVersions, hostedWorkers } from './workers';
 
 const ID = /^[a-z]+_[0-9a-f-]{36}$/;
+/** Deployments that count as "already have it": anything not stopped or turned down. */
+const ACTIVE = new Set<DeploymentStatus>(['requested', 'provisioning', 'live']);
 
 /** The ATTACH a customer pastes. No secrets: the hosted gateway signs them in with OAuth. */
 export function attachSnippet(d: Pick<DeploymentRow, 'catalog' | 'endpoint'>): string | null {
@@ -130,25 +133,48 @@ async function createDeployment(request: Request, env: OrchardEnv, fetchImpl: Fe
   try { worker = (await hostedWorkers(env, request)).get(slug); }
   catch { return json({ ok: false, error: 'The worker list is unavailable. Please try again.' }, 503); }
   if (!worker) errors.worker = 'Choose a worker from the Orchard.';
+  const versions = worker ? deployableVersions(worker) : [];
+  const version = text(body.version, 100) || versions[0] || null;
+  if (worker && version && !versions.includes(version)) errors.version = 'Choose one of the listed releases.';
   if (Object.keys(errors).length) return json({ ok: false, error: 'Check the highlighted fields.', errors }, 400);
+  const allowDuplicate = body.allow_duplicate === true;
 
   const org = await getOrg(db, session.org);
   if (!org) return json({ ok: false, error: 'Workspace not found.' }, 404);
   if (!billingActive(org)) {
     return json({ ok: false, reason: 'billing_required', error: 'Set up billing before requesting a deployment.' }, 402);
   }
+  const duplicate = async () => {
+    const existing = (await listDeployments(db, org.id)).filter(d => d.worker === worker!.slug && ACTIVE.has(d.status));
+    if (!existing.length) return null;
+    const requests = await openRequests(db, org.id);
+    return json({
+      ok: false, reason: 'duplicate',
+      error: `Your workspace already has ${worker!.name}. Scale it from the console, or confirm you want a separate deployment.`,
+      existing: existing.map(d => publicDeployment(d, requests)),
+    }, 409);
+  };
+  if (!allowDuplicate) { const refusal = await duplicate(); if (refusal) return refusal; }
+
   const at = nowIso();
   const deploymentId = `dep_${crypto.randomUUID()}`;
   const requestId = `req_${crypto.randomUUID()}`;
-  await db.batch([
-    db.prepare(`INSERT INTO deployments (id, org_id, worker, worker_name, catalog, version, paid, size, region,
+  // Without allow_duplicate the insert re-checks inside the transaction, so two
+  // quick submits can't both create a deployment of the same worker.
+  const guard = allowDuplicate ? '' : `WHERE NOT EXISTS (SELECT 1 FROM deployments WHERE org_id = ? AND worker = ?
+      AND status IN ('requested', 'provisioning', 'live'))`;
+  const insert = db.prepare(`INSERT INTO deployments (id, org_id, worker, worker_name, catalog, version, paid, size, region,
         desired_instances, actual_instances, status, created_at, created_by, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'requested', ?, ?, ?)`)
-      .bind(deploymentId, org.id, worker!.slug, worker!.name, worker!.catalog, worker!.version, worker!.pricing === 'paid' ? 1 : 0,
-        size!.id, region, instances, at, session.uid, at),
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'requested', ?, ?, ? ${guard}`)
+    .bind(deploymentId, org.id, worker!.slug, worker!.name, worker!.catalog, version, worker!.pricing === 'paid' ? 1 : 0,
+      size!.id, region, instances, at, session.uid, at, ...(allowDuplicate ? [] : [org.id, worker!.slug]));
+  const results = await db.batch([
+    insert,
     db.prepare(`INSERT INTO requests (id, deployment_id, org_id, kind, desired_instances, status, created_at, created_by, updated_at)
-      VALUES (?, ?, ?, 'create', ?, 'new', ?, ?, ?)`).bind(requestId, deploymentId, org.id, instances, at, session.uid, at),
+      SELECT ?, ?, ?, 'create', ?, 'new', ?, ?, ? WHERE EXISTS (SELECT 1 FROM deployments WHERE id = ?)`)
+      .bind(requestId, deploymentId, org.id, instances, at, session.uid, at, deploymentId),
   ]);
+  if (!results[0]?.meta?.changes) return (await duplicate()) ?? json({ ok: false, error: 'That did not work. Please try again.' }, 409);
   const deployment = (await getDeployment(db, org.id, deploymentId))!;
   log('info', 'orchard_request', { request_id: requestId, deployment_id: deploymentId, kind: 'create', desired: instances });
   await teamRequestEmail(env, fetchImpl, session, deployment, 'create', instances);
