@@ -149,8 +149,8 @@ def check_inventory(inv: dict[str, Any], repos: list[dict[str, Any]]) -> dict[st
         lang = opts.get("language") or worker_language(repo, r)
         row = {"repo": repo, "language": LANG_NORMAL.get(lang.lower(), lang),
                "catalog": opts.get("catalog") or repo.removeprefix("vgi-").replace("-", "_")}
-        for k in ("script", "run", "location"):
-            if opts.get(k):
+        for k in ("script", "run", "location", "execute", "timeout"):
+            if k in opts and opts[k] not in (None, ""):
                 row[k] = opts[k]
         listable.append(row)
     stale_excludes = sorted(
@@ -1020,7 +1020,13 @@ def phase_manifest(args: argparse.Namespace) -> None:
         if jar_url:
             fetch.append(f'[ -f "{args.jar_dir}/{jar_url.rsplit("/", 1)[1]}" ] || '
                          f'curl -fsSL --retry 3 -o "{args.jar_dir}/{jar_url.rsplit("/", 1)[1]}" {jar_url}')
-        lines += ["[[worker]]", f'name = "{g["repo"]}"', f"location = {json.dumps(loc)}", ""]
+        lines += ["[[worker]]", f'name = "{g["repo"]}"', f"location = {json.dumps(loc)}"]
+        # Per-worker vgi-lint settings carried over from inventory.toml.
+        if g.get("execute") is False:
+            lines.append("execute = false")
+        if g.get("timeout"):
+            lines.append(f"timeout = {int(g['timeout'])}")
+        lines.append("")
     out = Path(args.out)
     out.write_text("\n".join(lines))
     (out.parent / "fetch-jars.sh").write_text("\n".join(fetch) + "\n")
