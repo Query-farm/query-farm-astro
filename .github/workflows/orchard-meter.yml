@@ -1,0 +1,51 @@
+name: Orchard usage meter
+
+# Reports hosted Orchard instance-minutes to Stripe Billing Meters once a day.
+# Pages has no cron, so this calls the site's own endpoint. Each report has a
+# deterministic identifier (orchard-<org>-<size>-<day>); re-runs and retries
+# never double-bill. By default it covers the three complete UTC days before
+# today, so a missed run catches up. See docs/orchard-hosted.md.
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Optional comma-separated UTC days to (re)report, e.g. 2026-11-14,2026-11-15'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: orchard-meter
+  cancel-in-progress: false
+
+jobs:
+  meter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Nothing to do until the endpoint and token are configured.
+    if: ${{ vars.ORCHARD_METER_URL != '' }}
+    steps:
+      - name: Report usage
+        env:
+          METER_URL: ${{ vars.ORCHARD_METER_URL }}
+          METER_TOKEN: ${{ secrets.ORCHARD_METER_TOKEN }}
+          DAYS: ${{ inputs.days }}
+        run: |
+          set -euo pipefail
+          body='{}'
+          if [ -n "${DAYS:-}" ]; then
+            body=$(jq -cn --arg d "$DAYS" '{days: ($d | split(",") | map(gsub("\\s"; "")))}')
+          fi
+          status=$(curl -sS -o response.json -w '%{http_code}' -X POST "$METER_URL" \
+            -H "Authorization: Bearer $METER_TOKEN" -H 'Content-Type: application/json' --data "$body" --retry 3 --retry-all-errors)
+          jq '{ok, days, sent, already_sent, skipped, failed}' response.json | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$status" != 200 ]; then
+            echo "::error::Meter run answered HTTP $status"
+            jq '.reports[] | select(.status == "failed")' response.json || true
+            exit 1
+          fi
