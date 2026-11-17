@@ -1,13 +1,14 @@
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { seal, SESSION_COOKIE } from '../src/lib/orchard/session.ts';
 import { resetWorkerCache } from '../src/lib/orchard/workers.ts';
 
-// The real migration on node:sqlite, behind the D1 shape the code uses.
+// The real migrations, in order, on node:sqlite behind the D1 shape the code uses.
+const MIGRATIONS = new URL('../migrations/orchard/', import.meta.url);
 export function orchardDatabase() {
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec('PRAGMA foreign_keys = ON');
-  sqlite.exec(readFileSync(new URL('../migrations/orchard/0001_init.sql', import.meta.url), 'utf8'));
+  for (const file of readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql')).sort()) sqlite.exec(readFileSync(new URL(file, MIGRATIONS), 'utf8'));
   const statement = (sql, values = []) => ({
     bind: (...next) => statement(sql, next),
     run: async () => { const result = sqlite.prepare(sql).run(...values); return { success: true, meta: { changes: Number(result.changes) } }; },

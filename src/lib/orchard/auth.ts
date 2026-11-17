@@ -5,8 +5,8 @@
 //   GET /api/auth/callback  → code exchange, organisation, lead, session cookie
 //   GET /api/auth/logout    → clear the cookie, end the WorkOS session
 //
-// On a person's first sign-in we create a WorkOS Organization for them (with
-// them as admin), record a lead row and email the team. The session is an
+// On a person's first sign-in we create a personal workspace for them (a
+// WorkOS Organization with them as admin), record a lead row and email the team. The session is an
 // AES-GCM sealed cookie (src/lib/orchard/session.ts).
 
 import { getOrg, orgForUser, upsertOrgAndMember } from './db';
@@ -61,17 +61,14 @@ export function accessTokenClaim(token: string, claim: string): string | undefin
   } catch { return undefined; }
 }
 
-const FREE_MAIL = new Set([
-  'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'yahoo.com', 'icloud.com', 'me.com',
-  'proton.me', 'protonmail.com', 'aol.com', 'gmx.com', 'fastmail.com', 'hey.com', 'pm.me', 'yandex.com', 'zoho.com',
-]);
-
-/** A first organisation name: the email domain for work addresses, else "<name>'s organization". */
+/**
+ * Every new user gets a personal workspace: a WorkOS Organization named after
+ * them, with them as admin. Workspaces are the billing and ownership unit (one
+ * Stripe customer each) and their members are a deployment's allow-list.
+ */
 export function defaultOrgName(user: WorkOSUser): string {
-  const domain = user.email.split('@')[1]?.toLowerCase() ?? '';
-  if (domain && !FREE_MAIL.has(domain)) return domain;
-  const who = user.first_name?.trim() || user.email.split('@')[0];
-  return `${who}'s organization`;
+  const who = displayName(user) || user.email.split('@')[0];
+  return `${who}'s workspace`;
 }
 
 async function workos(env: OrchardEnv, fetchImpl: Fetch, path: string, init: { method?: string; body?: unknown } = {}) {
@@ -146,9 +143,10 @@ async function resolveOrganization(env: OrchardEnv, fetchImpl: Fetch, auth: Work
       orgName = org.ok && typeof org.body.name === 'string' ? org.body.name : defaultOrgName(auth.user);
     }
   }
-  // Re-scope the session's tokens to the organisation, so the access token
-  // carries `org_id` (the hosted gateway checks it). Keep the original tokens
-  // if WorkOS declines; console access is decided by D1 membership.
+  // Re-scope the site session's tokens to the workspace. (The hosted gate
+  // doesn't rely on this: tokens issued to the VGI app never carry `org_id`,
+  // so it authorises by a user allow-list from /api/orchard/gate/….) Keep the
+  // original tokens if WorkOS declines; console access is decided by D1.
   if (auth.organization_id !== orgId) {
     const scoped = await authenticate(env, fetchImpl, { grant_type: 'refresh_token', refresh_token: auth.refresh_token, organization_id: orgId });
     if (scoped.ok && typeof scoped.body.refresh_token === 'string' && typeof scoped.body.access_token === 'string') {
@@ -220,7 +218,7 @@ export async function handleCallback(request: Request, env: OrchardEnv, fetchImp
       lines: [
         `Name:         ${name || '—'}`,
         `Email:        ${user.email}${user.email_verified ? ' (verified)' : ''}`,
-        `Organization: ${orgName} (${orgId})${resolved.created ? ' — created now' : ''}`,
+        `Workspace:    ${orgName} (${orgId})${resolved.created ? ' — created now' : ''}`,
         `Worker:       ${pending.worker || '—'}`,
         `Source page:  ${pending.source || '—'}`,
       ],

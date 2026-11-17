@@ -101,7 +101,9 @@ test('the full journey: create → admin provisions → scale requests fold → 
   assert.equal((await call(`/api/orchard/admin/requests/${reqId}`, { method: 'POST', cookie: admin, body: { status: 'done' } })).status, 400);
   assert.equal((await call(`/api/orchard/admin/requests/${reqId}`, { method: 'POST', cookie: admin, body: { status: 'done', endpoint: 'http://insecure' } })).status, 400);
   const done = await call(`/api/orchard/admin/requests/${reqId}`, { method: 'POST', cookie: admin, body: { status: 'done', endpoint: 'https://qf-org1-yfinance.fly.dev', instances: 3 } });
-  assert.deepEqual(done.body, { ok: true, instances: 3, status: 'live' });
+  assert.equal(done.body.status, 'live');
+  assert.equal(done.body.instances, 3);
+  assert.match(done.body.gate.secret, /^qfg_/, 'the gate secret is minted when first live');
   assert.equal((await call(`/api/orchard/admin/requests/${reqId}`, { method: 'POST', cookie: admin, body: { status: 'done' } })).status, 409, 'already done');
 
   const listed = (await call('/api/orchard/deployments', { cookie: user })).body;

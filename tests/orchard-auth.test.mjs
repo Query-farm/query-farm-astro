@@ -79,7 +79,7 @@ async function startLogin(e, query = '?worker=yfinance&source=/products/orchard/
 const jwt = claims => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
 const USER = { id: 'user_new', email: 'ada@lovelace.dev', email_verified: true, first_name: 'Ada', last_name: 'Lovelace' };
 
-test('first sign-in creates a WorkOS organisation, re-scopes the tokens, records a lead and emails once', async () => {
+test('first sign-in creates a personal workspace (a WorkOS organization), re-scopes the tokens, records a lead and emails once', async () => {
   const e = env();
   const { state, cookie } = await startLogin(e);
   const workos = stubFetch({
@@ -97,7 +97,7 @@ test('first sign-in creates a WorkOS organisation, re-scopes the tokens, records
   const [exchange, scope] = workos.find('POST', 'https://api.workos.com/user_management/authenticate');
   assert.deepEqual(exchange.body, { client_id: 'client_test', client_secret: 'sk_test_workos', grant_type: 'authorization_code', code: 'abc' });
   assert.deepEqual(scope.body, { client_id: 'client_test', client_secret: 'sk_test_workos', grant_type: 'refresh_token', refresh_token: 'rt_unscoped', organization_id: 'org_new' });
-  assert.equal(workos.find('POST', 'https://api.workos.com/organizations')[0].body.name, 'lovelace.dev');
+  assert.equal(workos.find('POST', 'https://api.workos.com/organizations')[0].body.name, "Ada Lovelace's workspace");
   assert.deepEqual(workos.find('POST', 'https://api.workos.com/user_management/organization_memberships')[0].body, { user_id: 'user_new', organization_id: 'org_new', role_slug: 'admin' });
 
   const session = await unseal(cookieValue(response, SESSION_COOKIE), SECRET, SESSION_COOKIE);
@@ -108,7 +108,7 @@ test('first sign-in creates a WorkOS organisation, re-scopes the tokens, records
   assert.equal(cookieValue(response, OAUTH_COOKIE), '', 'state cookie cleared');
 
   const db = e.ORCHARD_DB.sqlite;
-  assert.equal(db.prepare('SELECT name FROM orgs WHERE id = ?').get('org_new').name, 'lovelace.dev');
+  assert.equal(db.prepare('SELECT name FROM orgs WHERE id = ?').get('org_new').name, "Ada Lovelace's workspace");
   assert.equal(db.prepare('SELECT role FROM members WHERE user_id = ?').get('user_new').role, 'admin');
   const lead = db.prepare('SELECT * FROM leads').get();
   assert.equal(lead.worker, 'yfinance');
@@ -170,10 +170,10 @@ test('callback refuses a missing or mismatched state, and reports WorkOS failure
   assert.equal(cookieValue(failed, SESSION_COOKIE), null);
 });
 
-test('org names use work domains, and the person for free-mail addresses', () => {
-  assert.equal(defaultOrgName({ email: 'a@acme.io', first_name: 'A' }), 'acme.io');
-  assert.equal(defaultOrgName({ email: 'ada@gmail.com', first_name: 'Ada' }), "Ada's organization");
-  assert.equal(defaultOrgName({ email: 'ada@gmail.com' }), "ada's organization");
+test('workspaces are named after the person', () => {
+  assert.equal(defaultOrgName({ email: 'rusty@query.farm', first_name: 'Rusty', last_name: 'Conover' }), "Rusty Conover's workspace");
+  assert.equal(defaultOrgName({ email: 'ada@gmail.com', first_name: 'Ada' }), "Ada's workspace");
+  assert.equal(defaultOrgName({ email: 'ada@gmail.com' }), "ada's workspace");
 });
 
 test('logout clears the cookie and ends the WorkOS session', async () => {

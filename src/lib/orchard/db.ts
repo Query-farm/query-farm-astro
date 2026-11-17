@@ -45,6 +45,8 @@ export interface DeploymentRow {
   created_at: string;
   created_by: string;
   updated_at: string;
+  /** SHA-256 hex of the gate's allow-list secret (migration 0002). */
+  gate_secret_hash: string | null;
 }
 
 export type RequestKind = 'create' | 'scale' | 'stop';

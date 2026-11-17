@@ -10,7 +10,9 @@
 //   POST billing/portal             → Stripe Customer Portal URL
 //   GET  admin/requests             the request tracker (open + recent)
 //   POST admin/requests/:id         {status, endpoint?, instances?, note?}
+//   POST admin/deployments/:id/gate-secret   new gate secret + Fly setup (shown once)
 //   POST meter                      bearer ORCHARD_METER_TOKEN (see meter.ts)
+//   GET  gate/deployments/:id/allowlist      bearer per-deployment secret (see gate.ts)
 //
 // Fly provisioning stays manual: a request emails the team, Rusty runs
 // `fly deploy`, then marks the request done here, which writes the
@@ -21,6 +23,7 @@ import {
   type DeploymentRow, type DeploymentStatus, type RequestKind, type RequestRow,
 } from './db';
 import { json, log, nowIso, readJson, safePath, text, type Fetch, type OrchardEnv } from './http';
+import { gateSetup, handleGateAllowlist, newGateSecret } from './gate';
 import { handleMeter, monthToDate } from './meter';
 import { notifyTeam } from './notify';
 import { LICENSE_MONTHLY_USD, MAX_INSTANCES, SIZES, isRegion, minutesCostUsd, sizeById } from './pricing';
@@ -130,7 +133,7 @@ async function createDeployment(request: Request, env: OrchardEnv, fetchImpl: Fe
   if (Object.keys(errors).length) return json({ ok: false, error: 'Check the highlighted fields.', errors }, 400);
 
   const org = await getOrg(db, session.org);
-  if (!org) return json({ ok: false, error: 'Organisation not found.' }, 404);
+  if (!org) return json({ ok: false, error: 'Workspace not found.' }, 404);
   if (!billingActive(org)) {
     return json({ ok: false, reason: 'billing_required', error: 'Set up billing before requesting a deployment.' }, 402);
   }
@@ -175,13 +178,24 @@ async function listForOrg(env: OrchardEnv, session: Session): Promise<Response> 
 async function adminList(env: OrchardEnv): Promise<Response> {
   const db = env.ORCHARD_DB!;
   const rows = (await db.prepare(`SELECT r.*, d.worker, d.worker_name, d.version, d.paid, d.size, d.region, d.status AS deployment_status,
-      d.actual_instances, d.endpoint, o.name AS org_name, o.billing_status, m.email AS requester_email
+      d.actual_instances, d.endpoint, d.gate_secret_hash IS NOT NULL AS gate_configured, o.name AS org_name, o.billing_status, m.email AS requester_email
     FROM requests r JOIN deployments d ON d.id = r.deployment_id JOIN orgs o ON o.id = r.org_id
     LEFT JOIN members m ON m.org_id = r.org_id AND m.user_id = r.created_by
     WHERE r.status IN ('new', 'in_progress') OR r.updated_at >= ?
     ORDER BY CASE r.status WHEN 'new' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END, r.created_at`)
     .bind(new Date(Date.now() - 14 * 86_400_000).toISOString()).all<Record<string, unknown>>()).results;
   return json({ ok: true, requests: rows });
+}
+
+/** POST admin/deployments/:id/gate-secret — replace the gate secret; the old one stops working at once. */
+async function adminRotateGateSecret(request: Request, env: OrchardEnv, session: Session, deploymentId: string): Promise<Response> {
+  const db = env.ORCHARD_DB!;
+  const d = await db.prepare('SELECT * FROM deployments WHERE id = ?').bind(deploymentId).first<DeploymentRow>();
+  if (!d) return json({ ok: false, error: 'Deployment not found.' }, 404);
+  const { secret, hash } = await newGateSecret();
+  await db.prepare('UPDATE deployments SET gate_secret_hash = ?, updated_at = ? WHERE id = ?').bind(hash, nowIso(), d.id).run();
+  log('info', 'orchard_gate_secret_rotated', { deployment_id: d.id, actor: session.email });
+  return json({ ok: true, gate: { secret, setup: gateSetup(env, new URL(request.url).origin, d, secret) } });
 }
 
 async function adminUpdate(request: Request, env: OrchardEnv, fetchImpl: Fetch, session: Session, requestId: string): Promise<Response> {
@@ -234,17 +248,24 @@ async function adminUpdate(request: Request, env: OrchardEnv, fetchImpl: Fetch, 
     } catch { return json({ ok: false, error: 'The endpoint must be an https:// URL.', errors: { endpoint: 'Invalid URL.' } }, 400); }
   }
   const nextStatus: DeploymentStatus = instances === 0 ? 'stopped' : 'live';
+  // First time live: mint the gate's allow-list secret. It is returned once, here.
+  const gate = nextStatus === 'live' && !d.gate_secret_hash ? await newGateSecret() : null;
   await db.batch([
     db.prepare("UPDATE requests SET status = 'done', note = COALESCE(?, note), resolved_by = ?, updated_at = ? WHERE id = ?").bind(note, actor, at, r.id),
     db.prepare('UPDATE deployments SET actual_instances = ?, status = ?, endpoint = ?, updated_at = ? WHERE id = ?')
       .bind(instances, nextStatus, endpoint, at, d.id),
     db.prepare('INSERT INTO deployment_events (deployment_id, org_id, size, instances, occurred_at, request_id, actor) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(d.id, d.org_id, d.size, instances, at, r.id, actor),
+    ...(gate ? [db.prepare('UPDATE deployments SET gate_secret_hash = ? WHERE id = ?').bind(gate.hash, d.id)] : []),
   ]);
   log('info', 'orchard_request_resolved', { request_id: r.id, status, actor, instances });
   const warning = d.paid === 1 ? await syncLicenses(env, fetchImpl, d.org_id) : null;
   if (warning) log('warn', 'orchard_license_sync_failed', { org_id: d.org_id, warning });
-  return json({ ok: true, instances, status: nextStatus, ...(warning ? { warning } : {}) });
+  return json({
+    ok: true, instances, status: nextStatus,
+    ...(gate ? { gate: { secret: gate.secret, setup: gateSetup(env, new URL(request.url).origin, { id: d.id, endpoint }, gate.secret) } } : {}),
+    ...(warning ? { warning } : {}),
+  });
 }
 
 // ── Router ───────────────────────────────────────────────────────────────
@@ -259,6 +280,9 @@ export async function handleOrchardApi(request: Request, env: OrchardEnv, fetchI
     return method === 'POST' ? handleMeter(request, env, fetchImpl) : json({ ok: false }, 405, { Allow: 'POST' });
   }
   if (!env.ORCHARD_DB) return json({ ok: false, error: 'The console is not configured yet.' }, 503);
+  if (parts[0] === 'gate' && parts[1] === 'deployments' && parts[3] === 'allowlist' && parts.length === 4) {
+    return method === 'GET' ? handleGateAllowlist(request, env, parts[2]) : json({ ok: false }, 405, { Allow: 'GET' });
+  }
   const session = await requireSession(request, env);
   if (!session) return json({ ok: false, error: 'Sign in first.', reason: 'signed_out' }, 401);
   if (method !== 'GET' && !sameOrigin(request)) return json({ ok: false, error: 'Cross-origin request refused.' }, 403);
@@ -300,6 +324,9 @@ export async function handleOrchardApi(request: Request, env: OrchardEnv, fetchI
       if (!isAdmin(session, env)) return json({ ok: false, error: 'Not an Orchard admin.' }, 403);
       if (route === 'admin/requests' && method === 'GET') return await adminList(env);
       if (parts[1] === 'requests' && parts.length === 3 && method === 'POST' && ID.test(parts[2])) return await adminUpdate(request, env, fetchImpl, session, parts[2]);
+      if (parts[1] === 'deployments' && parts[3] === 'gate-secret' && parts.length === 4 && method === 'POST' && ID.test(parts[2])) {
+        return await adminRotateGateSecret(request, env, session, parts[2]);
+      }
     }
     return json({ ok: false, error: 'Not found.' }, 404);
   } catch (error) {

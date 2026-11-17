@@ -15,9 +15,9 @@ export interface OrchardEnv {
   WORKOS_API_KEY?: string;
   /** Defaults to `<origin>/api/auth/callback`. */
   WORKOS_REDIRECT_URI?: string;
-  /** Public OAuth client for DuckDB ATTACH; for the hosted gateway, unused by the site. */
+  /** Public OAuth client for DuckDB ATTACH; printed into the gate's Fly setup. */
   WORKOS_VGI_CLIENT_ID?: string;
-  /** AuthKit issuer, e.g. https://<subdomain>.authkit.app; for the hosted gateway, unused by the site. */
+  /** AuthKit issuer, e.g. https://<subdomain>.authkit.app; printed into the gate's Fly setup. */
   WORKOS_AUTHKIT_DOMAIN?: string;
   RESEND_API_KEY?: string;
   /** Where lead and request emails go (default hello@query.farm). */

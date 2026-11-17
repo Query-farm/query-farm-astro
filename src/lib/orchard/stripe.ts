@@ -60,7 +60,7 @@ export async function ensureCustomer(env: OrchardEnv, fetchImpl: Fetch, org: Org
 export async function createCheckout(env: OrchardEnv, fetchImpl: Fetch, session: Session, origin: string, returnTo: string): Promise<Response> {
   if (!billingConfigured(env)) return json({ ok: false, error: 'Billing is not configured yet. Please email hello@query.farm.' }, 503);
   const org = await getOrg(env.ORCHARD_DB!, session.org);
-  if (!org) return json({ ok: false, error: 'Organisation not found.' }, 404);
+  if (!org) return json({ ok: false, error: 'Workspace not found.' }, 404);
   if (billingActive(org)) return json({ ok: false, error: 'Billing is already set up.', reason: 'already_active' }, 409);
   const customer = await ensureCustomer(env, fetchImpl, org, session);
   const params: Params = {

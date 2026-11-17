@@ -14,18 +14,81 @@ price, regions and the instance cap all live in `src/lib/orchard/pricing.ts`.
 
 | Path | What it does |
 | --- | --- |
-| `functions/api/auth/{login,callback,logout}.ts` → `src/lib/orchard/auth.ts` | WorkOS AuthKit authorization-code flow with fetch (no SDK). First sign-in creates a WorkOS Organization (user as `admin`), a `leads` row and a Resend email. |
+| `functions/api/auth/{login,callback,logout}.ts` → `src/lib/orchard/auth.ts` | WorkOS AuthKit authorization-code flow with fetch (no SDK). First sign-in creates a personal **workspace** (a WorkOS Organization named "<name>'s workspace", user as `admin`), a `leads` row and a Resend email. |
 | `src/lib/orchard/session.ts` | AES-GCM sealed `qf_session` cookie (key from `SESSION_SECRET`; the cookie name is bound as AAD). Holds user/org ids, the org-scoped refresh token and the WorkOS `sid`. 14 days. `requireSession()` and `isAdmin()`. |
 | `functions/api/orchard/[[path]].ts` → `src/lib/orchard/api.ts` | Console API: `me`, `deployments`, scale/stop, billing checkout/portal, `admin/requests`, `meter`. |
 | `functions/api/stripe/webhook.ts` → `src/lib/orchard/stripe.ts` | Stripe signature verification (`t=…,v1=…`), subscription/payment status onto `orgs`, deduped by event id. |
+| `src/lib/orchard/gate.ts` | The hosted gate's allow-list endpoint and per-deployment secrets (below). |
 | `src/lib/orchard/meter.ts` + `.github/workflows/orchard-meter.yml` | Daily: integrate `deployment_events` into instance-minutes per (org, size, UTC day) and send Stripe meter events with identifier `orchard-<org>-<size>-<day>`. |
-| `migrations/orchard/0001_init.sql` | D1 schema: `orgs`, `members`, `deployments`, `deployment_events`, `requests`, `leads`, `stripe_events`, `meter_reports`. |
+| `migrations/orchard/0001_init.sql`, `0002_gate.sql` | D1 schema: `orgs`, `members`, `deployments` (+ `gate_secret_hash`), `deployment_events`, `requests`, `leads`, `stripe_events`, `meter_reports`. |
 | `src/pages/products/orchard/console/{index,new,admin}.astro` + `src/scripts/orchard-console.ts` | Static, `noindex` console pages; client JS calls `/api/orchard/*`. |
 | `src/pages/products/orchard/hosted/index.astro` | Product page; prices computed from `pricing.ts`. |
 | `src/pages/products/orchard/hosted/workers.json.ts` | Slim worker list (slug, name, catalog, open/paid, release) read by the console and, through `env.ASSETS`, by the Functions. The full catalog is far too big to bundle. |
 
 Every Function route is listed in `public/_routes.json`. Every route returns 503
 while a secret it needs is missing.
+
+## Workspaces and who can query a deployment
+
+Every user gets a personal workspace on first sign-in; nobody is asked to
+create an organisation. A workspace (a WorkOS Organization, the `orgs` row) is
+the unit of ownership and billing: one Stripe customer per workspace. The
+console calls it a workspace; "Invite teammates" is a placeholder for a later
+phase. A deployment's allowed users are the members of its workspace (the
+`members` table).
+
+### Facts from the WorkOS spike (staging, 2026-11-16)
+
+- DuckDB `ATTACH` with a browser sign-in through the OAuth gate works.
+- The AuthKit discovery `issuer` equals the AuthKit domain exactly
+  (`WORKOS_AUTHKIT_DOMAIN`, e.g. `https://utter-fork-33-staging.authkit.app`);
+  token endpoint `/oauth2/token`, JWKS `/oauth2/jwks`.
+- **Tokens issued to the VGI app never carry `org_id`**, even after the user
+  joins an organisation. The gate therefore authorises by **user** (`sub`)
+  allow-list, fetched from Orchard, not by an `org_id` claim.
+- Access tokens' **`aud` is the environment's client id** (`WORKOS_CLIENT_ID`,
+  the site's client), not the VGI app's.
+- The site's User Management authorize URL (`provider=authkit`) redirects to
+  AuthKit as expected.
+
+### The gate's allow-list endpoint
+
+```
+GET /api/orchard/gate/deployments/<id>/allowlist
+Authorization: Bearer <GATE_DEPLOYMENT_SECRET>
+→ 200 {"deployment_id": "dep_…", "allowed_subs": ["user_…", …]}
+→ 401 for a missing or wrong secret, or an unknown deployment (indistinguishable)
+```
+
+- The secret (`qfg_…`, 32 random bytes) is minted when a request first marks
+  the deployment **live**, returned once to the admin tracker, and stored only
+  as its SHA-256 (`deployments.gate_secret_hash`); the check hashes the
+  presented token and compares in constant time.
+- **New gate secret** in the tracker replaces it (the old one stops working at
+  once) and shows the setup again; use it if the first one was lost.
+- Membership changes show up on the next fetch. A stopped or rejected
+  deployment returns an empty list.
+- Covered by the `/api/orchard/*` entry in `public/_routes.json`.
+
+When a deployment goes live the tracker shows the exact block to paste:
+
+```
+# fly.toml
+[env]
+  GATE_UPSTREAM = "http://127.0.0.1:8000"  # the worker's --http listener in the same Machine
+  GATE_RESOURCE = "https://<app>.fly.dev"
+  GATE_AUTH_SERVER = "<WORKOS_AUTHKIT_DOMAIN>"
+  GATE_CLIENT_ID = "<WORKOS_VGI_CLIENT_ID>"
+  GATE_AUDIENCE = "<WORKOS_CLIENT_ID>"
+  GATE_AUTHZ = "allowlist"
+  GATE_ALLOWLIST_URL = "https://query.farm/api/orchard/gate/deployments/<id>/allowlist"
+
+fly secrets set GATE_DEPLOYMENT_SECRET=qfg_… --app <app>
+```
+
+`GATE_UPSTREAM` assumes the worker listens on port 8000 inside the Machine;
+change it if the image differs. The app name comes from the endpoint's
+`<app>.fly.dev` host.
 
 ## Why instance-minutes, not hours
 
@@ -71,12 +134,9 @@ In the WorkOS dashboard, for each environment:
    `src/lib/orchard/auth.ts`).
 5. **Public OAuth client for VGI** (`WORKOS_VGI_CLIENT_ID`, the "Connect" app
    DuckDB uses): public client, PKCE, loopback redirects
-   (`http://localhost` / `http://127.0.0.1`, any port). The site doesn't read it
-   yet; the hosted gateway (plan step 5) serves it in its OAuth
-   protected-resource metadata, with `WORKOS_AUTHKIT_DOMAIN` as the
-   authorization server. Verified in staging: the AuthKit discovery `issuer`
-   equals the AuthKit domain exactly; token endpoint `/oauth2/token`, JWKS
-   `/oauth2/jwks`.
+   (`http://localhost` / `http://127.0.0.1`, any port). The site only prints it
+   (and `WORKOS_AUTHKIT_DOMAIN`) into the gate setup block; the gate serves
+   them in its OAuth protected-resource metadata. See the spike facts above.
 6. Copy the API key and client ids into the secrets below.
 
 ### 3. Stripe (test mode first)
@@ -123,7 +183,7 @@ Locally, copy `.dev.vars.example` to `.dev.vars`.
 | `SESSION_SECRET` | ≥ 32 random characters (`openssl rand -base64 48`). Rotating it signs everyone out. |
 | `WORKOS_CLIENT_ID`, `WORKOS_API_KEY` | The site's confidential client and API key. |
 | `WORKOS_REDIRECT_URI` | Optional; defaults to `<origin>/api/auth/callback`. |
-| `WORKOS_VGI_CLIENT_ID`, `WORKOS_AUTHKIT_DOMAIN` | For the hosted gateway (step 5); unused by the site. |
+| `WORKOS_VGI_CLIENT_ID`, `WORKOS_AUTHKIT_DOMAIN` | Printed into the gate's Fly setup block in the tracker (placeholders if unset). |
 | `ORCHARD_ADMINS` | Comma-separated emails for the request tracker. The email must be verified in WorkOS. |
 | `RESEND_API_KEY` | Already set for the enquiry form. `ORCHARD_NOTIFY_TO` / `ORCHARD_NOTIFY_FROM` optional. |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | |
@@ -150,10 +210,12 @@ emails you) if any report fails; failed days are retried on the next run.
    deployment id, worker release and `fly --vm-size` preset.
 2. Open `/products/orchard/console/admin/`, mark it **in progress**.
 3. Deploy on Fly.io (app per deployment, the size's preset, the region, the
-   instance count; behind the OAuth gateway once step 5 exists).
+   instance count, the worker behind the OAuth gate).
 4. Mark it **done** with the `https://` endpoint and the instance count actually
    running. That writes `deployment_events`, which is what gets billed, and
-   syncs the license quantity for paid workers.
+   syncs the license quantity for paid workers. The first time, the tracker
+   shows the gate's `[env]` block and `fly secrets set GATE_DEPLOYMENT_SECRET=…`
+   line once: set them and redeploy the gate.
 
 Scale and stop requests work the same way; repeated +/− clicks fold into one
 unstarted request. Reject a request to close it without changing anything.
@@ -180,7 +242,8 @@ curl -X POST localhost:8788/api/orchard/meter -H "Authorization: Bearer $ORCHARD
 
 `npm run test:orchard` runs the real migration on `node:sqlite` with stubbed
 WorkOS, Stripe and Resend: session sealing and tampering, the callback (new
-org, multi-org selection, failures), the request/scale/admin journey, webhook
+workspace, multi-org selection, failures), the request/scale/admin journey,
+the gate allow-list (secret checks, rotation, membership changes), webhook
 signatures and ordering, checkout/portal/licenses, and meter aggregation and
 idempotency.
 

@@ -219,6 +219,18 @@ export async function initAdmin() {
   show($('[data-state="loading"]'), false);
   show($('[data-state="ready"]'));
   const list = $('[data-requests]')!;
+  const panel = $('[data-gate-panel]');
+  const showGate = (deploymentId: string, setup: string) => {
+    setText(document, '[data-gate-deployment]', deploymentId);
+    setText(document, '[data-gate-setup]', setup);
+    show(panel);
+    panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const copy = $('[data-action="gate-copy"]');
+  copy?.addEventListener('click', () => {
+    navigator.clipboard?.writeText($('[data-gate-setup]')?.textContent ?? '');
+    inner(copy)!.textContent = 'Copied';
+  });
   const load = async () => {
     const { body } = await api('admin/requests');
     if (!body.ok) return fail(body.error ?? 'Requests could not be loaded.');
@@ -246,12 +258,26 @@ export async function initAdmin() {
         if (status === 'done') { body.endpoint = endpoint.value; body.instances = Number(instances.value); }
         const result = await api(`admin/requests/${r.id}`, { method: 'POST', body });
         if (!result.body.ok) alert(result.body.error ?? 'That did not work.');
-        else if (result.body.warning) alert(result.body.warning);
+        else {
+          if (result.body.gate) showGate(r.deployment_id, result.body.gate.setup);
+          if (result.body.warning) alert(result.body.warning);
+        }
         load();
       };
       $('[data-action="progress"]', root)?.addEventListener('click', () => send('in_progress'));
       $('[data-action="done"]', root)?.addEventListener('click', () => send('done'));
       $('[data-action="reject"]', root)?.addEventListener('click', () => confirm('Reject this request?') && send('rejected'));
+      // The deployment's gate secret: minted when first marked live, rotatable here.
+      const live = r.deployment_status === 'live' || r.deployment_status === 'provisioning';
+      show($('[data-gate-row]', root), live);
+      setText(root, '[data-gate-state]', r.gate_configured ? 'Gate secret set.' : 'No gate secret yet.');
+      $('[data-action="gate-secret"]', root)?.addEventListener('click', async () => {
+        if (r.gate_configured && !confirm('Replace the gate secret? The current one stops working immediately.')) return;
+        const result = await api(`admin/deployments/${r.deployment_id}/gate-secret`, { method: 'POST', body: {} });
+        if (!result.body.ok) alert(result.body.error ?? 'That did not work.');
+        else showGate(r.deployment_id, result.body.gate.setup);
+        load();
+      });
       return row;
     }));
   };

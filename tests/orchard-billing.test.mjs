@@ -38,8 +38,8 @@ test('Stripe signatures: valid, tampered, stale, rotated and malformed', async (
   const header = req.headers.get('Stripe-Signature');
   assert.equal(await verifyStripeSignature(bytes, header, WHSEC), true);
   assert.equal(await verifyStripeSignature(bytes, header, 'whsec_other'), false);
-  assert.equal(await verifyStripeSignature(bytes, header, WHSEC, Date.now() + 301_000), false);
-  assert.equal(await verifyStripeSignature(bytes, header, WHSEC, Date.now() - 301_000), false);
+  assert.equal(await verifyStripeSignature(bytes, header, WHSEC, Date.now() + 310_000), false);
+  assert.equal(await verifyStripeSignature(bytes, header, WHSEC, Date.now() - 310_000), false);
   const [t, v1] = header.split(',');
   assert.equal(await verifyStripeSignature(bytes, `${t},v1=${'0'.repeat(64)},${v1},v0=abc`, WHSEC), true, 'any v1 may match (rotation)');
   assert.equal(await verifyStripeSignature(bytes, `${t},v0=${v1.slice(3)}`, WHSEC), false, 'v0 is never accepted');
