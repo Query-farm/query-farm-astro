@@ -8,10 +8,10 @@ export interface ExtensionFunctionCategory {
 }
 
 export const extensionFunctionPath = (extensionSlug: string, functionName: string): string =>
-  `/products/extensions/${encodeURIComponent(extensionSlug)}/functions/${encodeURIComponent(extensionNameAnchor(functionName))}`;
+  `/products/extensions/${encodeURIComponent(extensionSlug)}/functions/${encodeURIComponent(extensionNameAnchor(functionName))}/`;
 
 export const extensionFunctionCategoryPath = (extensionSlug: string, categoryName: string): string =>
-  `/products/extensions/${encodeURIComponent(extensionSlug)}/functions/category/${encodeURIComponent(extensionNameAnchor(categoryName))}`;
+  `/products/extensions/${encodeURIComponent(extensionSlug)}/functions/category/${encodeURIComponent(extensionNameAnchor(categoryName))}/`;
 
 export const extensionFunctionCategoryAnchorPath = (
   extensionSlug: string,

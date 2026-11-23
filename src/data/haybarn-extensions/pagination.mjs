@@ -6,6 +6,9 @@ export function directoryPagePath(page = 1, category = '') {
   return page > 1 ? `${base}/page/${page}` : base;
 }
 
+// Link form of directoryPagePath: the trailing slash reaches the static page without a 308 redirect.
+export const directoryPageHref = (page = 1, category = '') => `${directoryPagePath(page, category)}/`;
+
 export function pageNumbers(current, total) {
   const numbers = [...new Set([1, current - 1, current, current + 1, total])]
     .filter(page => page > 0 && page <= total).sort((a, b) => a - b);

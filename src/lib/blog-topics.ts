@@ -104,6 +104,6 @@ export function topicTheme(topic: string | undefined, steps = 6): TopicTheme | n
     chip: CHIP[accent],
     ink: INK[accent],
     bands: topicBands(topic, steps),
-    href: `/blog/tags/${tagSlug(topic)}`,
+    href: `/blog/tags/${tagSlug(topic)}/`,
   };
 }

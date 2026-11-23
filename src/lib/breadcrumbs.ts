@@ -3,16 +3,16 @@ import { DOCS_ROOT, rootOf, sectionFor } from './vgi-docs';
 // Real navigation destinations only: URL segments such as /company, /legal,
 // /blog/tags, and /functions/releases are not landing pages.
 const destinations = [
-  { name: 'Products', href: '/products' },
-  { name: 'DuckDB Extensions', href: '/products/extensions' },
-  { name: 'Haybarn', href: '/products/haybarn' },
+  { name: 'Products', href: '/products/' },
+  { name: 'DuckDB Extensions', href: '/products/extensions/' },
+  { name: 'Haybarn', href: '/products/haybarn/' },
   { name: 'Functions', href: '/products/haybarn/functions/' },
-  { name: 'Extensions', href: '/products/haybarn/extensions' },
-  { name: 'Compatibility status', href: '/products/haybarn/status' },
-  { name: 'Orchard', href: '/products/orchard' },
-  { name: 'Blog', href: '/blog' },
-  { name: 'Tutorials', href: '/tutorials' },
-  { name: 'VGI', href: '/vgi' },
+  { name: 'Extensions', href: '/products/haybarn/extensions/' },
+  { name: 'Compatibility status', href: '/products/haybarn/status/' },
+  { name: 'Orchard', href: '/products/orchard/' },
+  { name: 'Blog', href: '/blog/' },
+  { name: 'Tutorials', href: '/tutorials/' },
+  { name: 'VGI', href: '/vgi/' },
   { name: 'VGI Docs', href: DOCS_ROOT },
 ];
 

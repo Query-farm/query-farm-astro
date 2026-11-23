@@ -20,7 +20,7 @@ export const catalog = {
     .filter(entry => entry.availability.length > 0),
 };
 export const directoryPath = '/products/haybarn/extensions';
-export const categoryPath = (id: string) => `${directoryPath}/category/${id}`;
+export const categoryPath = (id: string) => `${directoryPath}/category/${id}/`;
 export const prototypes = {
   sheetreader: { ...referencePages.sheetreader, docsUrl: 'https://github.com/polydbms/sheetreader-duckdb#usage--parameters', inventory: sheetreaderInventory, docs: importedDocs.sheetreader },
   gsheets: { ...referencePages.gsheets, docsUrl: 'https://duckdb-gsheets.com', inventory: gsheetsInventory, docs: importedDocs.gsheets },

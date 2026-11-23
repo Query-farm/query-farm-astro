@@ -17,7 +17,7 @@ leadVisual:
 nextStep:
   title: "Install Haybarn 2.0"
   pitch: "Every install path, supported platform and client version, with steps for verifying the release artifacts."
-  href: "/products/haybarn/install"
+  href: "/products/haybarn/install/"
   cta: "Go to the install guide"
   repo: "https://github.com/Query-farm-haybarn/haybarn"
 ---
@@ -45,25 +45,25 @@ To try it without installing anything, open the [Haybarn shell](https://shell.ha
 <figure class="article-art"><img src="/media/posts/haybarn-2-0/art-patches.webp" alt="" width="1440" height="400" loading="lazy" decoding="async" /></figure>
 
 
-Haybarn isn't only a rebuild. It carries a set of changes on top of DuckDB, and all of them moved to 2.0.0 for this release. The main ones, each explained in more detail on [How Haybarn differs](/products/haybarn/differences):
+Haybarn isn't only a rebuild. It carries a set of changes on top of DuckDB, and all of them moved to 2.0.0 for this release. The main ones, each explained in more detail on [How Haybarn differs](/products/haybarn/differences/):
 
 **Reading remote data.** These are in Haybarn's build of httpfs, and DuckDB's has none of them.
 
-- **HTTP/2.** A multithreaded scan carries its range reads as streams on one connection, where DuckDB opens a new HTTP/1.1 connection for each. [More](/products/haybarn/differences#faster)
-- **A file that changes mid-read costs no extra bytes.** Range reads send the file's ETag as an `If-Match` precondition, so the server answers 412 without sending the range. DuckDB downloads the range first, then compares. [More](/products/haybarn/differences#conditional-reads)
-- **Compression where it's safe.** Listings and API calls negotiate gzip, brotli or zstd, while range reads stay uncompressed. [More](/products/haybarn/differences#compression)
-- **`Retry-After` is honoured** when a server or S3 throttles, instead of a fixed back-off. [More](/products/haybarn/differences#retry-after)
-- **Cancelling a query stops its downloads.** Interrupting a query aborts the HTTP requests in flight, for every method, and any retry back-off, instead of waiting them out. [More](/products/haybarn/differences#cancellation)
+- **HTTP/2.** A multithreaded scan carries its range reads as streams on one connection, where DuckDB opens a new HTTP/1.1 connection for each. [More](/products/haybarn/differences/#faster)
+- **A file that changes mid-read costs no extra bytes.** Range reads send the file's ETag as an `If-Match` precondition, so the server answers 412 without sending the range. DuckDB downloads the range first, then compares. [More](/products/haybarn/differences/#conditional-reads)
+- **Compression where it's safe.** Listings and API calls negotiate gzip, brotli or zstd, while range reads stay uncompressed. [More](/products/haybarn/differences/#compression)
+- **`Retry-After` is honoured** when a server or S3 throttles, instead of a fixed back-off. [More](/products/haybarn/differences/#retry-after)
+- **Cancelling a query stops its downloads.** Interrupting a query aborts the HTTP requests in flight, for every method, and any retry back-off, instead of waiting them out. [More](/products/haybarn/differences/#cancellation)
 
 **Installs you can reproduce.**
 
-- **Version pins stick.** `INSTALL … VERSION` is recorded, and a later `INSTALL` or `UPDATE EXTENSIONS` won't silently replace it. The pin shows as `pinned_version` in `duckdb_extensions()`. [More](/products/haybarn/differences#pinning)
-- **Extensions from npm.** An extension installed as an npm package loads straight from `node_modules`, with no network access at query time. [More](/products/haybarn/differences#node-modules)
+- **Version pins stick.** `INSTALL … VERSION` is recorded, and a later `INSTALL` or `UPDATE EXTENSIONS` won't silently replace it. The pin shows as `pinned_version` in `duckdb_extensions()`. [More](/products/haybarn/differences/#pinning)
+- **Extensions from npm.** An extension installed as an npm package loads straight from `node_modules`, with no network access at query time. [More](/products/haybarn/differences/#node-modules)
 
 **The tools you already have.**
 
-- **PostgreSQL clients connect.** Fixes to `pg_catalog` let Npgsql, pgjdbc, DBeaver, Grafana and other PostgreSQL-protocol tools connect and introspect. [More](/products/haybarn/differences#pg-catalog)
-- **Named arguments work with column inputs.** `FROM t, f(t.x, opt := 5)` failed to bind in DuckDB, because the named argument was treated as another input column. [More](/products/haybarn/differences#binder)
+- **PostgreSQL clients connect.** Fixes to `pg_catalog` let Npgsql, pgjdbc, DBeaver, Grafana and other PostgreSQL-protocol tools connect and introspect. [More](/products/haybarn/differences/#pg-catalog)
+- **Named arguments work with column inputs.** `FROM t, f(t.x, opt := 5)` failed to bind in DuckDB, because the named argument was treated as another input column. [More](/products/haybarn/differences/#binder)
 
 ## Bug fixes
 
@@ -138,7 +138,7 @@ unzip haybarn_cli-osx-arm64.zip
 ./haybarn
 ```
 
-The file names for other platforms follow the same pattern: `haybarn_cli-linux-amd64.zip`, `haybarn_cli-linux-arm64.zip` and `haybarn_cli-windows-amd64.zip`. The [security page](/products/haybarn/security) covers GPG signatures.
+The file names for other platforms follow the same pattern: `haybarn_cli-linux-amd64.zip`, `haybarn_cli-linux-arm64.zip` and `haybarn_cli-windows-amd64.zip`. The [security page](/products/haybarn/security/) covers GPG signatures.
 
 From there, it's the DuckDB you know. Extensions come from Haybarn's repositories without any configuration:
 
@@ -350,7 +350,7 @@ Download the driver for your platform from the [ODBC release page](https://githu
 
 Database files move in both directions. We wrote a file with `duckdb==2.0.0`, read and changed it with Haybarn, and read the changes back with DuckDB.
 
-DuckDB-signed extensions don't load in Haybarn by default, because Haybarn trusts its own key. Run `INSTALL` again to get the Haybarn builds, into their own directory at `~/.haybarn/extensions`. To use another repository, add it explicitly with [its own pinned key](/products/haybarn/compatibility).
+DuckDB-signed extensions don't load in Haybarn by default, because Haybarn trusts its own key. Run `INSTALL` again to get the Haybarn builds, into their own directory at `~/.haybarn/extensions`. To use another repository, add it explicitly with [its own pinned key](/products/haybarn/compatibility/).
 
 Coming from Haybarn 1.5, treat it as a DuckDB major version upgrade: extensions need 2.0 builds, and it's worth testing your application against the new engine.
 
@@ -359,7 +359,7 @@ Coming from Haybarn 1.5, treat it as a DuckDB major version upgrade: extensions 
 <figure class="article-art"><img src="/media/posts/haybarn-2-0/art-startup.webp" alt="" width="1440" height="400" loading="lazy" decoding="async" /></figure>
 
 
-We [wrote about Haybarn-Wasm's startup time](/blog/duckdb-wasm-startup-time) on the 1.5 line. That work has moved to 2.0, and DuckDB-Wasm now has a 2.0 build, so we can compare them directly. This is the same engine version, on one machine, loading the same five extensions (icu, autocomplete, spatial, iceberg and ducklake), each from its own project's repository. Times are from page start, and every bar uses the same scale:
+We [wrote about Haybarn-Wasm's startup time](/blog/duckdb-wasm-startup-time/) on the 1.5 line. That work has moved to 2.0, and DuckDB-Wasm now has a 2.0 build, so we can compare them directly. This is the same engine version, on one machine, loading the same five extensions (icu, autocomplete, spatial, iceberg and ducklake), each from its own project's repository. Times are from page start, and every bar uses the same scale:
 
 <!-- bars: stack -->
 
@@ -374,7 +374,7 @@ That missing DuckDB-Wasm bar isn't a slow result. DuckDB-Wasm's multithreaded bu
 
 These are medians on an Apple M3, so slower machines will take longer, as the Graviton numbers in the earlier post show. Measured the same way, Haybarn-Wasm 1.5.6-rc2, from before this work began, took 2.86 seconds single-threaded and 3.46 seconds multithreaded.
 
-Three things account for most of the difference, and the [earlier post](/blog/duckdb-wasm-startup-time#where-the-time-went) has the details:
+Three things account for most of the difference, and the [earlier post](/blog/duckdb-wasm-startup-time/#where-the-time-went) has the details:
 
 - **Lazy linking.** The engine exports tens of thousands of symbols to extensions, and emscripten's startup code walked all of them. Haybarn-Wasm resolves each one when it's first used.
 - **No copies.** Extensions no longer get copied onto the WebAssembly heap one byte at a time before linking.
@@ -400,7 +400,7 @@ Haybarn builds and signs its own copy of each extension, so what matters is what
 
 If you depend on something in the first two rows, stay on DuckDB for now, or [open an issue](https://github.com/Query-farm-haybarn/haybarn-community-extensions/issues) so we know it matters to you.
 
-One difference doesn't show in that table. For DuckDB 2.0 [we distribute our extensions from our own repository](/blog/duckdb-2-query-farm-repository), so about 30 of them are stubs in DuckDB's community repository, including its evalexpr_rhai and webmacro builds on the platforms above. In Haybarn, `INSTALL rapidfuzz FROM community` gets the real extension.
+One difference doesn't show in that table. For DuckDB 2.0 [we distribute our extensions from our own repository](/blog/duckdb-2-query-farm-repository/), so about 30 of them are stubs in DuckDB's community repository, including its evalexpr_rhai and webmacro builds on the platforms above. In Haybarn, `INSTALL rapidfuzz FROM community` gets the real extension.
 
 **Update, November 6:** [VGI](/vgi/) was in the "Only in Haybarn" row when this post went out. It now also runs in DuckDB 2.0, installed from the Query.Farm repository; see [Install VGI](/vgi/getting-started/#install-vgi). A few capabilities, such as named arguments in a correlated `LATERAL` call, still need Haybarn's engine.
 

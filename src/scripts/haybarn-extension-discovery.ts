@@ -1,5 +1,5 @@
 import { searchTracker } from '../lib/search-analytics';
-import { PAGE_SIZE, pageCount, directoryPagePath, pageNumbers, platformSummary } from '../data/haybarn-extensions/pagination.mjs';
+import { PAGE_SIZE, pageCount, directoryPagePath, directoryPageHref, pageNumbers, platformSummary } from '../data/haybarn-extensions/pagination.mjs';
 
 type Entry = {
   name: string; categories: string[]; queryFarm: boolean; publisherId: string; searchText: string;
@@ -63,7 +63,7 @@ function initialize() {
     const fragment = document.createDocumentFragment();
     const addLink = (number: number, label: string, relation?: string) => {
       const link = document.createElement('a');
-      const url = new URL(directoryPagePath(number, category), location.origin);
+      const url = new URL(directoryPageHref(number, category), location.origin);
       url.search = location.search;
       link.href = url.toString();
       link.textContent = label;
@@ -92,13 +92,13 @@ function initialize() {
       const article = template.content.firstElementChild!.cloneNode(true) as HTMLElement;
       article.dataset.extension = entry.name;
       const link = article.querySelector<HTMLAnchorElement>('h2 a')!;
-      link.href = entry.href; link.textContent = entry.displayName;
+      link.href = `${entry.href}/`; link.textContent = entry.displayName;
       article.querySelector<HTMLElement>('.publisher-label')!.hidden = !entry.queryFarm;
       article.querySelector('.extension-description')!.textContent = entry.description;
       article.querySelector('.extension-glyph')!.replaceChildren(icons.get(entry.icon)!.content.cloneNode(true));
       article.querySelector('.extension-topics')!.replaceChildren(...entry.topics.map(topic => {
         const link = document.createElement('a');
-        const url = new URL(directoryPagePath(1, topic.id), location.origin);
+        const url = new URL(directoryPageHref(1, topic.id), location.origin);
         url.search = location.search;
         link.href = url.toString(); link.textContent = topic.name; link.dataset.category = topic.id;
         return link;

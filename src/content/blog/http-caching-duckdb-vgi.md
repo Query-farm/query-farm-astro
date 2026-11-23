@@ -22,7 +22,7 @@ nextStep:
 
 You ask an AI agent to compare sales across countries. It looks up exchange rates, tries a query, and revises the analysis after a follow-up question. The SQL changes, but the exchange rates it needs may be exactly the ones it fetched a moment ago. Calling the service again adds another wait, and possibly another charge, without giving the agent any new information.
 
-[VGI](/vgi), the Vector Gateway Interface, makes services like this available to DuckDB as SQL functions. Imagine `rates.rates()` returns exchange rates in US dollars. An agent might inspect those rates before joining them to your sales:
+[VGI](/vgi/), the Vector Gateway Interface, makes services like this available to DuckDB as SQL functions. Imagine `rates.rates()` returns exchange rates in US dollars. An agent might inspect those rates before joining them to your sales:
 
 ```sql
 -- Inspect the exchange rates.
