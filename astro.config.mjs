@@ -6,7 +6,7 @@ import { satteri } from '@astrojs/markdown-satteri';
 import { tableBars } from './scripts/table-bars.mjs';
 import { defaultSnapshotId } from './src/haybarn-functions/data/haybarn-release.mjs';
 import { readdirSync, readFileSync } from 'node:fs';
-import { currentReferenceIds } from './scripts/haybarn-functions/canonicals.mjs';
+import { currentFunctionSlugs, currentReferenceIds } from './scripts/haybarn-functions/canonicals.mjs';
 
 import tailwindcss from '@tailwindcss/vite';
 import icon from 'astro-icon';
@@ -22,7 +22,9 @@ const GA_MEASUREMENT_ID = 'G-EZ01WJETLF';
 const GA_ENABLED = process.env.NODE_ENV === 'production';
 const articleSitemap = articleSitemapMetadata();
 const snapshotDirectory = new URL('./src/haybarn-functions/data/snapshots/', import.meta.url);
-const equivalentArchives = currentReferenceIds(readdirSync(snapshotDirectory).filter(name => name.endsWith('.json')).map(name => JSON.parse(readFileSync(new URL(name, snapshotDirectory), 'utf8'))), defaultSnapshotId);
+const referenceSnapshots = readdirSync(snapshotDirectory).filter(name => name.endsWith('.json')).map(name => JSON.parse(readFileSync(new URL(name, snapshotDirectory), 'utf8')));
+const equivalentArchives = currentReferenceIds(referenceSnapshots, defaultSnapshotId);
+const currentFunctions = currentFunctionSlugs(referenceSnapshots, defaultSnapshotId);
 
 
 // Shiki theme, retuned for the Strata Sun palette (see DESIGN_BRIEF.md).
@@ -549,8 +551,11 @@ export default defineConfig({
         if (pathname === '/research/duckdb-2-release-activity/') return false;
         // Match the rendered canonical rules; materially different archives
         // remain indexable, even when they share function names.
-        const archiveId = pathname.match(/^\/products\/haybarn\/functions\/releases\/([^/]+)(?:\/|$)/)?.[1];
+        const [, archiveId, archivedFunction] = pathname.match(/^\/products\/haybarn\/functions\/releases\/([^/]+)(?:\/([^/]+)\/)?/) ?? [];
         if (archiveId && equivalentArchives.has(archiveId)) return false;
+        // An archived function page whose function still exists names the
+        // current page as canonical (currentFunctionSlugs), so only that page is listed.
+        if (archivedFunction && currentFunctions.has(archivedFunction)) return false;
         if (pathname.startsWith('/products/haybarn/functions/compare/')) return false;
         // Article noindex rules and authored dates are applied by serialize,
         // using the same metadata as the rendered posts and tag archives.

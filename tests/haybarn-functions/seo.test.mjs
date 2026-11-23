@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
-import { snapshots, defaultSnapshot, canonicalSnapshot, categories, getFunction, functionUrl, catalogUrl, categoryUrl } from '../../src/haybarn-functions/lib/catalog.ts';
+import { snapshots, defaultSnapshot, canonicalSnapshot, categories, getFunction, getFunctions, functionUrl, catalogUrl, categoryUrl } from '../../src/haybarn-functions/lib/catalog.ts';
 import { usageGuides } from '../../src/haybarn-functions/data/usage-guides.ts';
 import { categoryGuides } from '../../src/haybarn-functions/data/category-guides.ts';
 import { exportFunction, functionMarkdown } from '../../src/haybarn-functions/lib/agent-docs.ts';
@@ -17,13 +17,27 @@ test('rendered canonicals and sitemap agree for equivalent and distinct releases
     const doc = html(archive);
     assert.ok(doc.includes(`rel="canonical" href="https://query.farm${catalogUrl(canonical)}"`), archive);
     const fn = getFunction(snapshot, 'strftime');
-    assert.ok(html(functionUrl(snapshot, fn, true)).includes(`rel="canonical" href="https://query.farm${functionUrl(canonical, fn)}"`));
+    // A function that still exists consolidates on the current page from every release.
+    assert.ok(html(functionUrl(snapshot, fn, true)).includes(`rel="canonical" href="https://query.farm${functionUrl(defaultSnapshot, fn)}"`));
+    assert.ok(!sitemap.includes(`<loc>https://query.farm${functionUrl(snapshot, fn, true)}</loc>`), `${snapshot.id} strftime archive is not listed`);
     assert.equal(sitemap.includes(`<loc>https://query.farm${archive}`), canonical !== defaultSnapshot, archive);
     titles.add(doc.match(/<title>(.*?)<\/title>/s)[1]);
     assert.ok(!doc.includes('name="robots" content="noindex'));
   }
   assert.equal(titles.size, snapshots.length, 'Each release catalog has its own descriptive title');
   assert.ok(sitemap.includes(`<loc>https://query.farm${catalogUrl()}</loc>`));
+});
+
+test('functions removed from the current release keep an indexable archive page', () => {
+  const current = new Set(getFunctions(defaultSnapshot).map(fn => fn.slug));
+  const removed = snapshots.filter(snapshot => canonicalSnapshot(snapshot) !== defaultSnapshot)
+    .flatMap(snapshot => getFunctions(snapshot).filter(fn => !current.has(fn.slug)).map(fn => ({ snapshot, fn })));
+  assert.ok(removed.length > 0, 'Expected at least one function that exists only in an older release');
+  for (const { snapshot, fn } of removed.slice(0, 20)) {
+    const path = functionUrl(snapshot, fn, true);
+    assert.ok(html(path).includes(`rel="canonical" href="https://query.farm${path}"`), path);
+    assert.ok(sitemap.includes(`<loc>https://query.farm${path}</loc>`), path);
+  }
 });
 
 test('category guides are indexable, complete, and link to existing function references', () => {

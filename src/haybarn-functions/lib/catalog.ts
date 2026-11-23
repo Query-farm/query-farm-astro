@@ -113,6 +113,13 @@ export function getFunctions(snapshot: Snapshot): FunctionDoc[] {
 }
 export function getFunction(snapshot: Snapshot, name: string) { return getFunctions(snapshot).find(f => f.name === name); }
 export function functionUrl(snapshot: Snapshot, fn: { slug: string }, pinned = false) { return snapshot.id === defaultSnapshotId && !pinned ? `/products/haybarn/functions/${fn.slug}/` : `/products/haybarn/functions/releases/${snapshot.id}/${fn.slug}/`; }
+// The canonical page for a function shown in any release. See currentFunctionSlugs.
+let currentSlugs: Set<string> | undefined;
+export function functionCanonicalUrl(snapshot: Snapshot, fn: { slug: string }) {
+  currentSlugs ??= new Set(getFunctions(defaultSnapshot).map(f => f.slug));
+  if (canonicalSnapshot(snapshot) === defaultSnapshot || currentSlugs.has(fn.slug)) return functionUrl(defaultSnapshot, fn);
+  return functionUrl(snapshot, fn, true);
+}
 export function catalogUrl(snapshot = defaultSnapshot) { return snapshot.id === defaultSnapshotId ? `/products/haybarn/functions/catalog/` : `/products/haybarn/functions/releases/${snapshot.id}/`; }
 export function categoryUrl(id: string, snapshot = defaultSnapshot) { return canonicalSnapshot(snapshot) === defaultSnapshot ? `/products/haybarn/functions/category/${id}/` : `${catalogUrl(snapshot)}?category=${id}`; }
 export function categoryInfo(id: string) { return categories.find(c => c.id === id)!; }
