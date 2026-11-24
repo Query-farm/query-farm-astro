@@ -18,7 +18,7 @@ test('only current-release extensions are listed and Query Farm entries reuse th
   expect(exported.releases.map((release: any) => release.version)).toEqual([snapshot.latestVersion]);
   expect([...new Set(exported.extensions.flatMap((extension: any) => extension.availability.map((artifact: any) => artifact.version)))]).toEqual([snapshot.latestVersion]);
   await page.locator('#extension-query').fill('rapidfuzz');
-  await expect(page.locator('[data-extension="rapidfuzz"] h2 a')).toHaveAttribute('href', '/products/extensions/rapidfuzz');
+  await expect(page.locator('[data-extension="rapidfuzz"] h2 a')).toHaveAttribute('href', '/products/extensions/rapidfuzz/');
   for (const name of snapshot.unavailable) await expect(page.locator(`[data-extension="${name}"]`)).toHaveCount(0);
 });
 

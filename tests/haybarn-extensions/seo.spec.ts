@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse } from 'parse5';
 import { categories } from '../../src/data/haybarn-extensions/taxonomy.mjs';
-import { PAGE_SIZE, pageCount, directoryPagePath } from '../../src/data/haybarn-extensions/pagination.mjs';
+import { PAGE_SIZE, pageCount, directoryPagePath, directoryPageHref } from '../../src/data/haybarn-extensions/pagination.mjs';
 import { supportsBrowserSession, browserSessionIssue } from '../../src/data/haybarn-extensions/browser.mjs';
 
 const root = '/products/haybarn/extensions';
@@ -75,7 +75,7 @@ test('directory and category HTML, canonical URLs, and structured lists agree', 
       expect(initialData.map((item: any) => item.name)).toEqual(scope.map((entry: any) => entry.name));
       expect(read('/sitemap-0.xml')).toContain(page.canonical);
       if (number < pageCount(scope.length)) {
-        expect(page.nodes.some(node => node.tagName === 'a' && attribute(node, 'href') === directoryPagePath(number + 1, category?.id))).toBe(true);
+        expect(page.nodes.some(node => node.tagName === 'a' && attribute(node, 'href') === directoryPageHref(number + 1, category?.id))).toBe(true);
       }
     }
   }
@@ -118,7 +118,7 @@ test('every extension has an indexable local destination and community guides sh
 test('category search stays scoped and carries filters through category navigation', async ({ page }) => {
   await page.goto(`${root}/category/files?q=zarr`);
   await expect(page.locator('[data-extension]:visible')).toHaveCount(1);
-  await expect(page.locator('[data-extension="zarr"] h2 a')).toHaveAttribute('href', `${root}/zarr`);
+  await expect(page.locator('[data-extension="zarr"] h2 a')).toHaveAttribute('href', `${root}/zarr/`);
   await expect(page.locator('[data-extension="rapidfuzz"]')).toHaveCount(0);
   await page.getByRole('button', { name: 'Clear filters' }).click();
   const count = catalog.extensions.filter((entry: any) => entry.categories.includes('files')).length;
