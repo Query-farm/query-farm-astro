@@ -4,7 +4,7 @@ description: "DuckDB 2.0.1 is out. Regressions are being fixed faster than befor
 pubDate: 2026-11-24
 author: "Query Farm Team"
 tags: ['DuckDB', 'Releases']
-draft: true
+draft: false
 showDescription: false
 showTableOfContents: false
 heroImage: '/media/posts/duckdb-2-0-1-upgrade-now-or-wait-for-2-0-2/social.png'
